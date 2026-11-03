@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"time"
 
 	"github.com/kisshot/falky/server/internal/platform"
 )
@@ -25,16 +26,33 @@ func Migrations() fs.FS {
 	return sub
 }
 
-// Service manages the access link.
+// Service manages the access link and the visitors it admits. Name
+// reservations live in the Service, so the server uses one Service for every
+// request.
 type Service struct {
-	db     *platform.DB
-	origin string
+	db           *platform.DB
+	origin       string
+	now          func() time.Time
+	reservations *reservations
+}
+
+// Option changes how New sets up the Service.
+type Option func(*Service)
+
+// WithClock makes the Service read the time from now instead of the system
+// clock.
+func WithClock(now func() time.Time) Option {
+	return func(s *Service) { s.now = now }
 }
 
 // New returns the service over db. publicOrigin is where visitors reach the
 // server, for example https://falky.example; links are built on it.
-func New(db *platform.DB, publicOrigin string) *Service {
-	return &Service{db: db, origin: publicOrigin}
+func New(db *platform.DB, publicOrigin string, opts ...Option) *Service {
+	s := &Service{db: db, origin: publicOrigin, now: time.Now, reservations: newReservations()}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
 }
 
 // EnsureLink creates the access link, with a new random secret and the first

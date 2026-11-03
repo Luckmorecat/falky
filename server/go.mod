@@ -9,6 +9,8 @@ tool (
 )
 
 require (
+	github.com/oapi-codegen/runtime v1.8.0
+	github.com/oklog/ulid/v2 v2.1.1
 	github.com/prometheus/client_golang v1.25.0
 	modernc.org/sqlite v1.61.1
 )
@@ -20,6 +22,7 @@ require (
 	github.com/Masterminds/semver/v3 v3.5.0 // indirect
 	github.com/a-h/templ v0.3.1070 // indirect
 	github.com/alecthomas/chroma/v2 v2.27.0 // indirect
+	github.com/apapsch/go-jsonmerge/v2 v2.0.0 // indirect
 	github.com/aymanbagabas/go-osc52/v2 v2.0.1 // indirect
 	github.com/aymerick/douceur v0.2.0 // indirect
 	github.com/bahlo/generic-list-go v0.2.0 // indirect

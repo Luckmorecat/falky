@@ -9,6 +9,7 @@ import (
 	"net/http"
 
 	"github.com/kisshot/falky/server/internal/api"
+	"github.com/kisshot/falky/server/internal/identity"
 	"github.com/kisshot/falky/server/internal/platform"
 )
 
@@ -20,24 +21,32 @@ type Handlers struct {
 	Internal http.Handler
 }
 
+// maxRequestBody bounds the body of a public request, so that no one can make
+// the server buffer an arbitrarily large one.
+const maxRequestBody = 64 << 10
+
 // Deps are what the handlers serve from.
 type Deps struct {
-	Logger  *slog.Logger
-	Health  *platform.Health
-	Metrics http.Handler
+	Logger   *slog.Logger
+	Health   *platform.Health
+	Metrics  http.Handler
+	Identity *identity.Service
+	// EnterLimit limits entering per client IP.
+	EnterLimit *platform.Limiter
 }
 
 // New returns the handlers of both listeners. Every operation of the contract
 // is routed on one mux; each listener forwards only its own path prefixes to
 // it, so an operation is reachable on exactly one listener.
 func New(deps Deps) Handlers {
-	s := &server{health: deps.Health}
+	s := &server{health: deps.Health, identity: deps.Identity, enterLimit: deps.EnterLimit}
 	errs := errorWriter{logger: deps.Logger}
+	resolve := visitorResolver{identity: deps.Identity, errs: errs}
 
 	operations := http.NewServeMux()
 	operations.HandleFunc("/", notFound)
 	api.HandlerWithOptions(
-		api.NewStrictHandlerWithOptions(s, nil, api.StrictHTTPServerOptions{
+		api.NewStrictHandlerWithOptions(s, []api.StrictMiddlewareFunc{resolve.middleware}, api.StrictHTTPServerOptions{
 			RequestErrorHandlerFunc:  errs.badRequest,
 			ResponseErrorHandlerFunc: errs.internal,
 		}),
@@ -53,11 +62,13 @@ func New(deps Deps) Handlers {
 	internal.Handle("GET /metrics", deps.Metrics)
 	internal.HandleFunc("/", notFound)
 
-	return Handlers{Public: public, Internal: internal}
+	return Handlers{Public: http.MaxBytesHandler(public, maxRequestBody), Internal: internal}
 }
 
 type server struct {
-	health *platform.Health
+	health     *platform.Health
+	identity   *identity.Service
+	enterLimit *platform.Limiter
 }
 
 var _ api.StrictServerInterface = (*server)(nil)

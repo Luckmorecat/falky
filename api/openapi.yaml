@@ -8,13 +8,118 @@ info:
 servers:
   - url: /
     description: The listener that serves the operation.
+# Every operation needs a visitor unless it says otherwise.
+security:
+  - visitorCookie: []
 tags:
   - name: health
     description: Process and dependency health, on the internal listener.
+  - name: visitors
+    description: Entering through the access link, and the current visitor.
 paths:
+  /api/enter:
+    post:
+      operationId: enter
+      security: []
+      tags: [visitors]
+      summary: Enter with the access link's secret and a name.
+      description: >-
+        Exchanges the secret from the access link (the `k` value in its URL
+        fragment) and a name for a new visitor, and sets the visitor cookie.
+        The name is reserved for 60 seconds so that no one else can enter
+        under it meanwhile. Attempts are limited per client IP, whether they
+        succeed or not.
+      requestBody:
+        description: The secret and the name to enter under.
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EnterRequest"
+      responses:
+        "201":
+          description: Entered; the body is the new visitor.
+          headers:
+            Set-Cookie:
+              description: >-
+                The visitor cookie `falky_visitor`: `HttpOnly`, `Secure`,
+                `SameSite=Strict`, for `/api`. It is valid while the access
+                link it was issued under is the current one.
+              schema:
+                type: string
+                example: falky_visitor=6GQ3VQKXHVY4HRSMBJ2TQ5W7DA; Path=/api; Max-Age=34560000; HttpOnly; Secure; SameSite=Strict
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Visitor"
+        "400":
+          $ref: "#/components/responses/InvalidName"
+        "403":
+          description: The secret is not the current access link's (`invalid_link`). No cookie is set.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          $ref: "#/components/responses/NameTaken"
+        "429":
+          description: Too many attempts from this client IP (`rate_limited`); try again later.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/me:
+    get:
+      operationId: getMe
+      tags: [visitors]
+      summary: Return the current visitor.
+      description: Returns the visitor the cookie belongs to.
+      responses:
+        "200":
+          description: The current visitor.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Visitor"
+        "401":
+          $ref: "#/components/responses/VisitorRequired"
+        default:
+          $ref: "#/components/responses/Error"
+    patch:
+      operationId: renameMe
+      tags: [visitors]
+      summary: Change the current visitor's name.
+      description: >-
+        Renames the visitor the cookie belongs to. The new name must be free;
+        the visitor's own current name always is.
+      requestBody:
+        description: The new name.
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RenameRequest"
+      responses:
+        "200":
+          description: Renamed; the body is the visitor with the new name.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Visitor"
+        "400":
+          $ref: "#/components/responses/InvalidName"
+        "401":
+          $ref: "#/components/responses/VisitorRequired"
+        "409":
+          $ref: "#/components/responses/NameTaken"
+        default:
+          $ref: "#/components/responses/Error"
   /health/live:
     get:
       operationId: getLiveness
+      security: []
       tags: [health]
       summary: Report that the process is running.
       description: Answers 200 while the process runs, whatever its dependencies.
@@ -30,6 +135,7 @@ paths:
   /health/ready:
     get:
       operationId: getReadiness
+      security: []
       tags: [health]
       summary: Report whether the server can serve requests.
       description: >-
@@ -51,9 +157,42 @@ paths:
         default:
           $ref: "#/components/responses/Error"
 components:
+  securitySchemes:
+    visitorCookie:
+      type: apiKey
+      in: cookie
+      name: falky_visitor
+      description: >-
+        The visitor cookie set by `POST /api/enter`. Requests without it, with
+        an unknown one, or with one issued under a replaced access link are
+        refused with 401 (`visitor_required`).
   responses:
     Error:
       description: The request failed; the body says why.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    InvalidName:
+      description: >-
+        The name is not allowed (`invalid_name`): empty after trimming, longer
+        than 32 characters, or containing control characters. A missing name
+        counts as empty. A body that is not JSON of the request's shape is
+        `invalid_request`.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    NameTaken:
+      description: Another visitor holds the name (`name_taken`).
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    VisitorRequired:
+      description: >-
+        The request has no valid visitor cookie (`visitor_required`); enter
+        again through the access link.
       content:
         application/json:
           schema:
@@ -68,8 +207,12 @@ components:
           type: string
           description: >-
             Stable, machine-readable error code: `not_found` (no such route),
-            `invalid_request` (the request does not match the contract) or
-            `internal` (the server failed). Operations may add their own.
+            `invalid_request` (the request does not match the contract),
+            `internal` (the server failed), `visitor_required` (no valid
+            visitor cookie), `invalid_link` (wrong access link secret),
+            `invalid_name` (a name breaks the name rules), `name_taken`
+            (another visitor holds the name) or `rate_limited` (too many
+            requests).
           example: not_found
         message:
           type: string
@@ -96,3 +239,43 @@ components:
         used.
       enum: [ok, unavailable]
       example: ok
+    Visitor:
+      type: object
+      description: A person who entered through the access link.
+      required: [id, name]
+      properties:
+        id:
+          type: string
+          description: The visitor's ID, a ULID; it never changes.
+          example: 01JBX6Z8Q3M5W2K7R9T4V1C0DE
+        name:
+          type: string
+          description: The visitor's name, trimmed.
+          example: Bob
+    EnterRequest:
+      type: object
+      description: The access link's secret and the name to enter under.
+      required: [secret, name]
+      properties:
+        secret:
+          type: string
+          description: The `k` value from the access link's URL fragment.
+          example: 6GQ3VQKXHVY4HRSMBJ2TQ5W7DA
+        name:
+          $ref: "#/components/schemas/Name"
+    RenameRequest:
+      type: object
+      description: The name the visitor changes to.
+      required: [name]
+      properties:
+        name:
+          $ref: "#/components/schemas/Name"
+    Name:
+      type: string
+      description: >-
+        A visitor's name: 1 to 32 characters once leading and trailing white
+        space is trimmed, with no control characters (the bidirectional
+        controls included). Names are compared
+        trimmed and case-insensitively, so `" Bob "` and `bob` are the same
+        name. The server checks these rules and answers `invalid_name`.
+      example: Bob

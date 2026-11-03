@@ -14,6 +14,8 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+
+	"github.com/oapi-codegen/runtime"
 )
 
 // Defines values for HealthStatus.
@@ -34,9 +36,22 @@ func (e HealthStatus) Valid() bool {
 	}
 }
 
+// EnterRequest The access link's secret and the name to enter under.
+type EnterRequest struct {
+	// Name A visitor's name: 1 to 32 characters once leading and trailing white space is trimmed, with no control characters (the bidirectional controls included). Names are compared trimmed and case-insensitively, so `" Bob "` and `bob` are the same name. The server checks these rules and answers `invalid_name`.
+	//
+	// Example: Bob
+	Name Name `json:"name"`
+
+	// Secret The `k` value from the access link's URL fragment.
+	//
+	// Example: 6GQ3VQKXHVY4HRSMBJ2TQ5W7DA
+	Secret string `json:"secret"`
+}
+
 // Error The body of every error response.
 type Error struct {
-	// Code Stable, machine-readable error code: `not_found` (no such route), `invalid_request` (the request does not match the contract) or `internal` (the server failed). Operations may add their own.
+	// Code Stable, machine-readable error code: `not_found` (no such route), `invalid_request` (the request does not match the contract), `internal` (the server failed), `visitor_required` (no valid visitor cookie), `invalid_link` (wrong access link secret), `invalid_name` (a name breaks the name rules), `name_taken` (another visitor holds the name) or `rate_limited` (too many requests).
 	//
 	// Example: not_found
 	Code string `json:"code"`
@@ -64,6 +79,47 @@ type Health struct {
 //
 // Example: ok
 type HealthStatus string
+
+// Name A visitor's name: 1 to 32 characters once leading and trailing white space is trimmed, with no control characters (the bidirectional controls included). Names are compared trimmed and case-insensitively, so `" Bob "` and `bob` are the same name. The server checks these rules and answers `invalid_name`.
+//
+// Example: Bob
+type Name = string
+
+// RenameRequest The name the visitor changes to.
+type RenameRequest struct {
+	// Name A visitor's name: 1 to 32 characters once leading and trailing white space is trimmed, with no control characters (the bidirectional controls included). Names are compared trimmed and case-insensitively, so `" Bob "` and `bob` are the same name. The server checks these rules and answers `invalid_name`.
+	//
+	// Example: Bob
+	Name Name `json:"name"`
+}
+
+// Visitor A person who entered through the access link.
+type Visitor struct {
+	// Id The visitor's ID, a ULID; it never changes.
+	//
+	// Example: 01JBX6Z8Q3M5W2K7R9T4V1C0DE
+	Id string `json:"id"`
+
+	// Name The visitor's name, trimmed.
+	//
+	// Example: Bob
+	Name string `json:"name"`
+}
+
+// InvalidName The body of every error response.
+type InvalidName = Error
+
+// NameTaken The body of every error response.
+type NameTaken = Error
+
+// VisitorRequired The body of every error response.
+type VisitorRequired = Error
+
+// EnterJSONRequestBody defines body for Enter for application/json ContentType.
+type EnterJSONRequestBody = EnterRequest
+
+// RenameMeJSONRequestBody defines body for RenameMe for application/json ContentType.
+type RenameMeJSONRequestBody = RenameRequest
 
 // RequestEditorFn is the function signature for the RequestEditor callback function
 type RequestEditorFn func(ctx context.Context, req *http.Request) error
@@ -139,6 +195,49 @@ func WithRequestEditorFn(fn RequestEditorFn) ClientOption {
 // The interface specification for the client above.
 type ClientInterface interface {
 
+	// EnterWithBody Enter with the access link's secret and a name.
+	//
+	// Exchanges the secret from the access link (the `k` value in its URL fragment) and a name for a new visitor, and sets the visitor cookie. The name is reserved for 60 seconds so that no one else can enter under it meanwhile. Attempts are limited per client IP, whether they succeed or not.
+	//
+	// Takes any type of body and a specified content type.
+	//
+	// Corresponds with POST /api/enter (the `Enter` operationId).
+	EnterWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// Enter Enter with the access link's secret and a name.
+	//
+	// Exchanges the secret from the access link (the `k` value in its URL fragment) and a name for a new visitor, and sets the visitor cookie. The name is reserved for 60 seconds so that no one else can enter under it meanwhile. Attempts are limited per client IP, whether they succeed or not.
+	//
+	// Takes a body of the `application/json` content type.
+	//
+	// Corresponds with POST /api/enter (the `Enter` operationId).
+	Enter(ctx context.Context, body EnterJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// GetMe Return the current visitor.
+	//
+	// Returns the visitor the cookie belongs to.
+	//
+	// Corresponds with GET /api/me (the `GetMe` operationId).
+	GetMe(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// RenameMeWithBody Change the current visitor's name.
+	//
+	// Renames the visitor the cookie belongs to. The new name must be free; the visitor's own current name always is.
+	//
+	// Takes any type of body and a specified content type.
+	//
+	// Corresponds with PATCH /api/me (the `RenameMe` operationId).
+	RenameMeWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// RenameMe Change the current visitor's name.
+	//
+	// Renames the visitor the cookie belongs to. The new name must be free; the visitor's own current name always is.
+	//
+	// Takes a body of the `application/json` content type.
+	//
+	// Corresponds with PATCH /api/me (the `RenameMe` operationId).
+	RenameMe(ctx context.Context, body RenameMeJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// GetLiveness Report that the process is running.
 	//
 	// Answers 200 while the process runs, whatever its dependencies.
@@ -152,6 +251,99 @@ type ClientInterface interface {
 	//
 	// Corresponds with GET /health/ready (the `GetReadiness` operationId).
 	GetReadiness(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
+}
+
+// EnterWithBody Enter with the access link's secret and a name.
+//
+// Exchanges the secret from the access link (the `k` value in its URL fragment) and a name for a new visitor, and sets the visitor cookie. The name is reserved for 60 seconds so that no one else can enter under it meanwhile. Attempts are limited per client IP, whether they succeed or not.
+//
+// Takes any type of body and a specified content type.
+//
+// Corresponds with POST /api/enter (the `Enter` operationId).
+func (c *Client) EnterWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewEnterRequestWithBody(c.Server, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// Enter Enter with the access link's secret and a name.
+//
+// Exchanges the secret from the access link (the `k` value in its URL fragment) and a name for a new visitor, and sets the visitor cookie. The name is reserved for 60 seconds so that no one else can enter under it meanwhile. Attempts are limited per client IP, whether they succeed or not.
+//
+// Takes a body of the `application/json` content type.
+//
+// Corresponds with POST /api/enter (the `Enter` operationId).
+func (c *Client) Enter(ctx context.Context, body EnterJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewEnterRequest(c.Server, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// GetMe Return the current visitor.
+//
+// Returns the visitor the cookie belongs to.
+//
+// Corresponds with GET /api/me (the `GetMe` operationId).
+func (c *Client) GetMe(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetMeRequest(c.Server)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// RenameMeWithBody Change the current visitor's name.
+//
+// Renames the visitor the cookie belongs to. The new name must be free; the visitor's own current name always is.
+//
+// Takes any type of body and a specified content type.
+//
+// Corresponds with PATCH /api/me (the `RenameMe` operationId).
+func (c *Client) RenameMeWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewRenameMeRequestWithBody(c.Server, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// RenameMe Change the current visitor's name.
+//
+// Renames the visitor the cookie belongs to. The new name must be free; the visitor's own current name always is.
+//
+// Takes a body of the `application/json` content type.
+//
+// Corresponds with PATCH /api/me (the `RenameMe` operationId).
+func (c *Client) RenameMe(ctx context.Context, body RenameMeJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewRenameMeRequest(c.Server, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
 }
 
 // GetLiveness Report that the process is running.
@@ -186,6 +378,113 @@ func (c *Client) GetReadiness(ctx context.Context, reqEditors ...RequestEditorFn
 		return nil, err
 	}
 	return c.Client.Do(req)
+}
+
+// NewEnterRequest calls the generic Enter builder with application/json body
+func NewEnterRequest(server string, body EnterJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewEnterRequestWithBody(server, "application/json", bodyReader)
+}
+
+// NewEnterRequestWithBody constructs an http.Request for the Enter method, with any body, and a specified content type
+func NewEnterRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/enter")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewGetMeRequest constructs an http.Request for the GetMe method
+func NewGetMeRequest(server string) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/me")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewRenameMeRequest calls the generic RenameMe builder with application/json body
+func NewRenameMeRequest(server string, body RenameMeJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewRenameMeRequestWithBody(server, "application/json", bodyReader)
+}
+
+// NewRenameMeRequestWithBody constructs an http.Request for the RenameMe method, with any body, and a specified content type
+func NewRenameMeRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/me")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPatch, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
 }
 
 // NewGetLivenessRequest constructs an http.Request for the GetLiveness method
@@ -286,6 +585,51 @@ func WithBaseURL(baseURL string) ClientOption {
 // ClientWithResponsesInterface is the interface specification for the client with responses above.
 type ClientWithResponsesInterface interface {
 
+	// EnterWithBodyWithResponse Enter with the access link's secret and a name.
+	//
+	// Exchanges the secret from the access link (the `k` value in its URL fragment) and a name for a new visitor, and sets the visitor cookie. The name is reserved for 60 seconds so that no one else can enter under it meanwhile. Attempts are limited per client IP, whether they succeed or not.
+	//
+	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /api/enter (the `Enter` operationId).
+	EnterWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*EnterResponse, error)
+
+	// EnterWithResponse Enter with the access link's secret and a name.
+	//
+	// Exchanges the secret from the access link (the `k` value in its URL fragment) and a name for a new visitor, and sets the visitor cookie. The name is reserved for 60 seconds so that no one else can enter under it meanwhile. Attempts are limited per client IP, whether they succeed or not.
+	//
+	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /api/enter (the `Enter` operationId).
+	EnterWithResponse(ctx context.Context, body EnterJSONRequestBody, reqEditors ...RequestEditorFn) (*EnterResponse, error)
+
+	// GetMeWithResponse Return the current visitor.
+	//
+	// Returns the visitor the cookie belongs to.
+	//
+	// Returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with GET /api/me (the `GetMe` operationId).
+	GetMeWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetMeResponse, error)
+
+	// RenameMeWithBodyWithResponse Change the current visitor's name.
+	//
+	// Renames the visitor the cookie belongs to. The new name must be free; the visitor's own current name always is.
+	//
+	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with PATCH /api/me (the `RenameMe` operationId).
+	RenameMeWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*RenameMeResponse, error)
+
+	// RenameMeWithResponse Change the current visitor's name.
+	//
+	// Renames the visitor the cookie belongs to. The new name must be free; the visitor's own current name always is.
+	//
+	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with PATCH /api/me (the `RenameMe` operationId).
+	RenameMeWithResponse(ctx context.Context, body RenameMeJSONRequestBody, reqEditors ...RequestEditorFn) (*RenameMeResponse, error)
+
 	// GetLivenessWithResponse Report that the process is running.
 	//
 	// Answers 200 while the process runs, whatever its dependencies.
@@ -303,6 +647,213 @@ type ClientWithResponsesInterface interface {
 	//
 	// Corresponds with GET /health/ready (the `GetReadiness` operationId).
 	GetReadinessWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetReadinessResponse, error)
+}
+
+// EnterResponse201Headers the declared response headers of an HTTP 201 response for Enter
+type EnterResponse201Headers struct {
+	SetCookie string
+}
+
+type EnterResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON201 the response for an HTTP 201 `application/json` response
+	JSON201 *Visitor
+	// JSON400 the response for an HTTP 400 `application/json` response
+	JSON400 *InvalidName
+	// JSON403 the response for an HTTP 403 `application/json` response
+	JSON403 *Error
+	// JSON409 the response for an HTTP 409 `application/json` response
+	JSON409 *NameTaken
+	// JSON429 the response for an HTTP 429 `application/json` response
+	JSON429 *Error
+	// JSONDefault the response for an HTTP default `application/json` response
+	JSONDefault *Error
+	// Headers201 the parsed response headers for an HTTP 201 response
+	Headers201 *EnterResponse201Headers
+}
+
+// GetJSON201 returns the response for an HTTP 201 `application/json` response
+func (r EnterResponse) GetJSON201() *Visitor {
+	return r.JSON201
+}
+
+// GetJSON400 returns the response for an HTTP 400 `application/json` response
+func (r EnterResponse) GetJSON400() *InvalidName {
+	return r.JSON400
+}
+
+// GetJSON403 returns the response for an HTTP 403 `application/json` response
+func (r EnterResponse) GetJSON403() *Error {
+	return r.JSON403
+}
+
+// GetJSON409 returns the response for an HTTP 409 `application/json` response
+func (r EnterResponse) GetJSON409() *NameTaken {
+	return r.JSON409
+}
+
+// GetJSON429 returns the response for an HTTP 429 `application/json` response
+func (r EnterResponse) GetJSON429() *Error {
+	return r.JSON429
+}
+
+// GetJSONDefault returns the response for an HTTP default `application/json` response
+func (r EnterResponse) GetJSONDefault() *Error {
+	return r.JSONDefault
+}
+
+// GetBody returns the raw response body bytes
+func (r EnterResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r EnterResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r EnterResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r EnterResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type GetMeResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *Visitor
+	// JSON401 the response for an HTTP 401 `application/json` response
+	JSON401 *VisitorRequired
+	// JSONDefault the response for an HTTP default `application/json` response
+	JSONDefault *Error
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r GetMeResponse) GetJSON200() *Visitor {
+	return r.JSON200
+}
+
+// GetJSON401 returns the response for an HTTP 401 `application/json` response
+func (r GetMeResponse) GetJSON401() *VisitorRequired {
+	return r.JSON401
+}
+
+// GetJSONDefault returns the response for an HTTP default `application/json` response
+func (r GetMeResponse) GetJSONDefault() *Error {
+	return r.JSONDefault
+}
+
+// GetBody returns the raw response body bytes
+func (r GetMeResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r GetMeResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r GetMeResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r GetMeResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type RenameMeResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *Visitor
+	// JSON400 the response for an HTTP 400 `application/json` response
+	JSON400 *InvalidName
+	// JSON401 the response for an HTTP 401 `application/json` response
+	JSON401 *VisitorRequired
+	// JSON409 the response for an HTTP 409 `application/json` response
+	JSON409 *NameTaken
+	// JSONDefault the response for an HTTP default `application/json` response
+	JSONDefault *Error
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r RenameMeResponse) GetJSON200() *Visitor {
+	return r.JSON200
+}
+
+// GetJSON400 returns the response for an HTTP 400 `application/json` response
+func (r RenameMeResponse) GetJSON400() *InvalidName {
+	return r.JSON400
+}
+
+// GetJSON401 returns the response for an HTTP 401 `application/json` response
+func (r RenameMeResponse) GetJSON401() *VisitorRequired {
+	return r.JSON401
+}
+
+// GetJSON409 returns the response for an HTTP 409 `application/json` response
+func (r RenameMeResponse) GetJSON409() *NameTaken {
+	return r.JSON409
+}
+
+// GetJSONDefault returns the response for an HTTP default `application/json` response
+func (r RenameMeResponse) GetJSONDefault() *Error {
+	return r.JSONDefault
+}
+
+// GetBody returns the raw response body bytes
+func (r RenameMeResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r RenameMeResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r RenameMeResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r RenameMeResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
 }
 
 type GetLivenessResponse struct {
@@ -408,6 +959,81 @@ func (r GetReadinessResponse) ContentType() string {
 	return ""
 }
 
+// EnterWithBodyWithResponse Enter with the access link's secret and a name.
+//
+// Exchanges the secret from the access link (the `k` value in its URL fragment) and a name for a new visitor, and sets the visitor cookie. The name is reserved for 60 seconds so that no one else can enter under it meanwhile. Attempts are limited per client IP, whether they succeed or not.
+//
+// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /api/enter (the `Enter` operationId).
+func (c *ClientWithResponses) EnterWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*EnterResponse, error) {
+	rsp, err := c.EnterWithBody(ctx, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseEnterResponse(rsp)
+}
+
+// EnterWithResponse Enter with the access link's secret and a name.
+//
+// Exchanges the secret from the access link (the `k` value in its URL fragment) and a name for a new visitor, and sets the visitor cookie. The name is reserved for 60 seconds so that no one else can enter under it meanwhile. Attempts are limited per client IP, whether they succeed or not.
+//
+// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /api/enter (the `Enter` operationId).
+func (c *ClientWithResponses) EnterWithResponse(ctx context.Context, body EnterJSONRequestBody, reqEditors ...RequestEditorFn) (*EnterResponse, error) {
+	rsp, err := c.Enter(ctx, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseEnterResponse(rsp)
+}
+
+// GetMeWithResponse Return the current visitor.
+//
+// Returns the visitor the cookie belongs to.
+//
+// Returns a wrapper object for the known response body format(s).
+//
+// Corresponds with GET /api/me (the `GetMe` operationId).
+func (c *ClientWithResponses) GetMeWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetMeResponse, error) {
+	rsp, err := c.GetMe(ctx, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseGetMeResponse(rsp)
+}
+
+// RenameMeWithBodyWithResponse Change the current visitor's name.
+//
+// Renames the visitor the cookie belongs to. The new name must be free; the visitor's own current name always is.
+//
+// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with PATCH /api/me (the `RenameMe` operationId).
+func (c *ClientWithResponses) RenameMeWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*RenameMeResponse, error) {
+	rsp, err := c.RenameMeWithBody(ctx, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseRenameMeResponse(rsp)
+}
+
+// RenameMeWithResponse Change the current visitor's name.
+//
+// Renames the visitor the cookie belongs to. The new name must be free; the visitor's own current name always is.
+//
+// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with PATCH /api/me (the `RenameMe` operationId).
+func (c *ClientWithResponses) RenameMeWithResponse(ctx context.Context, body RenameMeJSONRequestBody, reqEditors ...RequestEditorFn) (*RenameMeResponse, error) {
+	rsp, err := c.RenameMe(ctx, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseRenameMeResponse(rsp)
+}
+
 // GetLivenessWithResponse Report that the process is running.
 //
 // Answers 200 while the process runs, whatever its dependencies.
@@ -436,6 +1062,174 @@ func (c *ClientWithResponses) GetReadinessWithResponse(ctx context.Context, reqE
 		return nil, err
 	}
 	return ParseGetReadinessResponse(rsp)
+}
+
+// ParseEnterResponse parses an HTTP response from a EnterWithResponse call
+func ParseEnterResponse(rsp *http.Response) (*EnterResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &EnterResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 201:
+		var dest Visitor
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON201 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest InvalidName
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest NameTaken
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 429:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON429 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && true:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSONDefault = &dest
+
+	}
+
+	switch {
+	case rsp.StatusCode == 201:
+		var headers EnterResponse201Headers
+		if values := rsp.Header.Values("Set-Cookie"); len(values) > 0 {
+			var value string
+			if err := runtime.BindStyledParameterWithOptions("simple", "Set-Cookie", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			}
+			headers.SetCookie = value
+		}
+		response.Headers201 = &headers
+	}
+
+	return response, nil
+}
+
+// ParseGetMeResponse parses an HTTP response from a GetMeWithResponse call
+func ParseGetMeResponse(rsp *http.Response) (*GetMeResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &GetMeResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest Visitor
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest VisitorRequired
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && true:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSONDefault = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseRenameMeResponse parses an HTTP response from a RenameMeWithResponse call
+func ParseRenameMeResponse(rsp *http.Response) (*RenameMeResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &RenameMeResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest Visitor
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest InvalidName
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest VisitorRequired
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest NameTaken
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && true:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSONDefault = &dest
+
+	}
+
+	return response, nil
 }
 
 // ParseGetLivenessResponse parses an HTTP response from a GetLivenessWithResponse call
@@ -513,6 +1307,15 @@ func ParseGetReadinessResponse(rsp *http.Response) (*GetReadinessResponse, error
 
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
+	// Enter Enter with the access link's secret and a name.
+	// (POST /api/enter)
+	Enter(w http.ResponseWriter, r *http.Request)
+	// GetMe Return the current visitor.
+	// (GET /api/me)
+	GetMe(w http.ResponseWriter, r *http.Request)
+	// RenameMe Change the current visitor's name.
+	// (PATCH /api/me)
+	RenameMe(w http.ResponseWriter, r *http.Request)
 	// GetLiveness Report that the process is running.
 	// (GET /health/live)
 	GetLiveness(w http.ResponseWriter, r *http.Request)
@@ -529,6 +1332,48 @@ type ServerInterfaceWrapper struct {
 }
 
 type MiddlewareFunc func(http.Handler) http.Handler
+
+// Enter operation middleware
+func (siw *ServerInterfaceWrapper) Enter(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.Enter(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetMe operation middleware
+func (siw *ServerInterfaceWrapper) GetMe(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetMe(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// RenameMe operation middleware
+func (siw *ServerInterfaceWrapper) RenameMe(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.RenameMe(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
 
 // GetLiveness operation middleware
 func (siw *ServerInterfaceWrapper) GetLiveness(w http.ResponseWriter, r *http.Request) {
@@ -678,6 +1523,9 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 		ErrorHandlerFunc:   options.ErrorHandlerFunc,
 	}
 
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/enter", wrapper.Enter)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/me", wrapper.GetMe)
+	m.HandleFunc(http.MethodPatch+" "+options.BaseURL+"/api/me", wrapper.RenameMe)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/health/live", wrapper.GetLiveness)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/health/ready", wrapper.GetReadiness)
 
@@ -685,6 +1533,248 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 }
 
 type ErrorJSONResponse Error
+
+type InvalidNameJSONResponse Error
+
+type NameTakenJSONResponse Error
+
+type VisitorRequiredJSONResponse Error
+
+type EnterRequestObject struct {
+	Body *EnterJSONRequestBody
+}
+
+type EnterResponseObject interface {
+	VisitEnterResponse(w http.ResponseWriter) error
+}
+
+type Enter201ResponseHeaders struct {
+	SetCookie string
+}
+
+type Enter201JSONResponse struct {
+	Body    Visitor
+	Headers Enter201ResponseHeaders
+}
+
+func (response Enter201JSONResponse) VisitEnterResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Set-Cookie", fmt.Sprint(response.Headers.SetCookie))
+	w.WriteHeader(201)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type Enter400JSONResponse struct{ InvalidNameJSONResponse }
+
+func (response Enter400JSONResponse) VisitEnterResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type Enter403JSONResponse Error
+
+func (response Enter403JSONResponse) VisitEnterResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type Enter409JSONResponse struct{ NameTakenJSONResponse }
+
+func (response Enter409JSONResponse) VisitEnterResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type Enter429JSONResponse Error
+
+func (response Enter429JSONResponse) VisitEnterResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(429)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type EnterdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response EnterdefaultJSONResponse) VisitEnterResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetMeRequestObject struct {
+}
+
+type GetMeResponseObject interface {
+	VisitGetMeResponse(w http.ResponseWriter) error
+}
+
+type GetMe200JSONResponse Visitor
+
+func (response GetMe200JSONResponse) VisitGetMeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetMe401JSONResponse struct{ VisitorRequiredJSONResponse }
+
+func (response GetMe401JSONResponse) VisitGetMeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetMedefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response GetMedefaultJSONResponse) VisitGetMeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RenameMeRequestObject struct {
+	Body *RenameMeJSONRequestBody
+}
+
+type RenameMeResponseObject interface {
+	VisitRenameMeResponse(w http.ResponseWriter) error
+}
+
+type RenameMe200JSONResponse Visitor
+
+func (response RenameMe200JSONResponse) VisitRenameMeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RenameMe400JSONResponse struct{ InvalidNameJSONResponse }
+
+func (response RenameMe400JSONResponse) VisitRenameMeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RenameMe401JSONResponse struct{ VisitorRequiredJSONResponse }
+
+func (response RenameMe401JSONResponse) VisitRenameMeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RenameMe409JSONResponse struct{ NameTakenJSONResponse }
+
+func (response RenameMe409JSONResponse) VisitRenameMeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RenameMedefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response RenameMedefaultJSONResponse) VisitRenameMeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
 
 type GetLivenessRequestObject struct {
 }
@@ -778,6 +1868,15 @@ func (response GetReadinessdefaultJSONResponse) VisitGetReadinessResponse(w http
 
 // StrictServerInterface represents all server handlers.
 type StrictServerInterface interface {
+	// Enter Enter with the access link's secret and a name.
+	// (POST /api/enter)
+	Enter(ctx context.Context, request EnterRequestObject) (EnterResponseObject, error)
+	// GetMe Return the current visitor.
+	// (GET /api/me)
+	GetMe(ctx context.Context, request GetMeRequestObject) (GetMeResponseObject, error)
+	// RenameMe Change the current visitor's name.
+	// (PATCH /api/me)
+	RenameMe(ctx context.Context, request RenameMeRequestObject) (RenameMeResponseObject, error)
 	// GetLiveness Report that the process is running.
 	// (GET /health/live)
 	GetLiveness(ctx context.Context, request GetLivenessRequestObject) (GetLivenessResponseObject, error)
@@ -823,6 +1922,92 @@ type strictHandler struct {
 	ssi         StrictServerInterface
 	middlewares []StrictMiddlewareFunc
 	options     StrictHTTPServerOptions
+}
+
+// Enter operation middleware
+func (sh *strictHandler) Enter(w http.ResponseWriter, r *http.Request) {
+	var request EnterRequestObject
+
+	var body EnterJSONRequestBody
+	if err := runtime.BindJSONBody(r, &body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.Enter(ctx, request.(EnterRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "Enter")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(EnterResponseObject); ok {
+		if err := validResponse.VisitEnterResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetMe operation middleware
+func (sh *strictHandler) GetMe(w http.ResponseWriter, r *http.Request) {
+	var request GetMeRequestObject
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetMe(ctx, request.(GetMeRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetMe")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetMeResponseObject); ok {
+		if err := validResponse.VisitGetMeResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// RenameMe operation middleware
+func (sh *strictHandler) RenameMe(w http.ResponseWriter, r *http.Request) {
+	var request RenameMeRequestObject
+
+	var body RenameMeJSONRequestBody
+	if err := runtime.BindJSONBody(r, &body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.RenameMe(ctx, request.(RenameMeRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "RenameMe")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(RenameMeResponseObject); ok {
+		if err := validResponse.VisitRenameMeResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
 }
 
 // GetLiveness operation middleware

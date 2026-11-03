@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/kisshot/falky/server/internal/admin"
+	"github.com/kisshot/falky/server/internal/api"
 	"github.com/kisshot/falky/server/internal/platform"
 )
 
@@ -185,6 +186,13 @@ func env(vars map[string]string) func(string) string {
 // cfg.AdminSocket, logging to logs, until the returned stop is called.
 func startServer(t *testing.T, cfg platform.Config, logs io.Writer) (stop func()) {
 	t.Helper()
+	stop, _ = startServerOn(t, cfg, logs)
+	return stop
+}
+
+// startServerOn is startServer that also returns the public listener's URL.
+func startServerOn(t *testing.T, cfg platform.Config, logs io.Writer) (stop func(), publicURL string) {
+	t.Helper()
 	logger := platform.NewLogger(logs, 0)
 	db, ms, err := openMigrated(t.Context(), cfg, logger)
 	if err != nil {
@@ -206,7 +214,7 @@ func startServer(t *testing.T, cfg platform.Config, logs io.Writer) (stop func()
 		}
 	}
 	t.Cleanup(stop)
-	return stop
+	return stop, "http://" + ls.public.Addr().String()
 }
 
 // runLinkShow runs falky link show and returns its exit code and output.
@@ -271,5 +279,51 @@ func TestRunRefusesUnknownCommands(t *testing.T) {
 		if !strings.Contains(stderr.String(), "usage:") {
 			t.Errorf("run %q stderr = %q, want usage", args, stderr.String())
 		}
+	}
+}
+
+func TestAVisitorIsStillKnownAfterARestart(t *testing.T) {
+	dir := t.TempDir()
+	vars := map[string]string{
+		platform.EnvDBPath:      filepath.Join(dir, "falky.db"),
+		platform.EnvAdminSocket: filepath.Join(dir, "admin.sock"),
+	}
+	cfg, err := platform.LoadConfig(env(vars))
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	stop, public := startServerOn(t, cfg, io.Discard)
+	_, link, _ := runLinkShow(t, env(vars))
+	secret := strings.TrimSpace(link[strings.Index(link, "#k=")+len("#k="):])
+
+	c, err := api.NewClientWithResponses(public)
+	if err != nil {
+		t.Fatalf("NewClientWithResponses: %v", err)
+	}
+	entered, err := c.EnterWithResponse(t.Context(), api.EnterRequest{Secret: secret, Name: "Bob"})
+	if err != nil || entered.StatusCode() != http.StatusCreated || entered.JSON201 == nil {
+		t.Fatalf("Enter = %v, %v, want 201", entered, err)
+	}
+	cookies := entered.HTTPResponse.Cookies()
+	if len(cookies) != 1 {
+		t.Fatalf("Enter set %d cookies, want 1", len(cookies))
+	}
+	withCookie := func(_ context.Context, req *http.Request) error {
+		req.AddCookie(cookies[0])
+		return nil
+	}
+
+	stop()
+	_, public = startServerOn(t, cfg, io.Discard)
+	c, err = api.NewClientWithResponses(public)
+	if err != nil {
+		t.Fatalf("NewClientWithResponses: %v", err)
+	}
+	me, err := c.GetMeWithResponse(t.Context(), withCookie)
+	if err != nil {
+		t.Fatalf("GetMe: %v", err)
+	}
+	if me.StatusCode() != http.StatusOK || me.JSON200 == nil || *me.JSON200 != *entered.JSON201 {
+		t.Errorf("GetMe after restart = %d %s, want 200 with %+v", me.StatusCode(), me.Body, *entered.JSON201)
 	}
 }

@@ -47,6 +47,13 @@ var migrationSources = []fs.FS{identity.Migrations()}
 // shutdownTimeout bounds how long serve waits for in-flight requests.
 const shutdownTimeout = 10 * time.Second
 
+// Entering is limited per client IP to a burst of enterBurst attempts, then
+// one more each enterInterval.
+const (
+	enterBurst    = 10
+	enterInterval = 6 * time.Second
+)
+
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	code := run(ctx, os.Args[1:], os.Getenv, os.Stdout, os.Stderr)
@@ -181,12 +188,15 @@ type listeners struct {
 func serveOn(ctx context.Context, logger *slog.Logger, cfg platform.Config, db *platform.DB, ms platform.Migrations, ls listeners) error {
 	health := platform.NewHealth(logger)
 	health.Require("database", func(ctx context.Context) error { return db.CheckMigrated(ctx, ms) })
+	ident := identity.New(db, cfg.PublicOrigin)
 	handlers := httpapi.New(httpapi.Deps{
-		Logger:  logger,
-		Health:  health,
-		Metrics: platform.NewMetrics().Handler(),
+		Logger:     logger,
+		Health:     health,
+		Metrics:    platform.NewMetrics().Handler(),
+		Identity:   ident,
+		EnterLimit: platform.NewLimiter(enterBurst, enterInterval, time.Now),
 	})
-	adminHandler := admin.Handler(admin.Deps{Logger: logger, Identity: identity.New(db, cfg.PublicOrigin)})
+	adminHandler := admin.Handler(admin.Deps{Logger: logger, Identity: ident})
 
 	errorLog := slog.NewLogLogger(logger.Handler(), slog.LevelWarn)
 	servers := []struct {
