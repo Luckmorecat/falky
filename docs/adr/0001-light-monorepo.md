@@ -1,0 +1,3 @@
+# One repository with plain top-level folders, no JS workspace
+
+The server, the future web client, the API contract and the deployment config live in one repository as plain folders (`server/`, `web/`, `api/`, `deploy/`). We first wanted separate repos, but the contract is written spec-first and consumed by the client, and the server's deployment ships the client's build. Split repos would turn every API change into two pull requests plus a published contract version. We deliberately do not adopt the original spec's workspace layout (`apps/` + shared `packages/`): `web/` is a single Vite app with its own `package.json`, and code sharing between client packages waits until the desktop client exists.
