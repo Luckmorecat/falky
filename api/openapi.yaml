@@ -141,13 +141,7 @@ paths:
           $ref: "#/components/responses/Error"
   /api/rooms/{id}/messages:
     parameters:
-      - name: id
-        in: path
-        required: true
-        description: The room's ID.
-        schema:
-          type: string
-          example: 01JBX7A2K9D4F6H8M0P3R5T7VW
+      - $ref: "#/components/parameters/RoomId"
     get:
       operationId: listMessages
       tags: [rooms]
@@ -273,6 +267,67 @@ paths:
                 $ref: "#/components/schemas/Error"
         default:
           $ref: "#/components/responses/Error"
+  /api/rooms/{id}/voice:
+    parameters:
+      - $ref: "#/components/parameters/RoomId"
+    post:
+      operationId: joinVoice
+      tags: [rooms]
+      summary: Join a room's voice.
+      description: >-
+        Returns the LiveKit URL and a token to connect to the room's voice
+        with a LiveKit SDK. A visitor is a participant in one room at most:
+        the server first removes them from any other room's voice. Joining
+        the room again, say from a second tab, is allowed even when the room
+        is full, and the new connection replaces the earlier one.
+
+
+        The token admits the visitor to this room only, under their visitor
+        ID as participant identity and their name as display name. It may
+        publish the microphone, a screen share and the screen share's audio
+        (no camera), subscribe to the other participants, and update the
+        participant's own attributes, but not send data messages. It expires
+        10 minutes after it is issued, so connect right away; once connected,
+        LiveKit renews it.
+
+
+        Muted is the state of the microphone track. Deafened is the
+        participant attribute `deafened`: a client sets it to `"true"` while
+        it plays no one's audio, and also mutes its microphone, then sets it
+        to `"false"` again; an absent attribute means not deafened. The
+        other participants see it through the SDK, for example with
+        `room.localParticipant.setAttributes({ deafened: 'true' })` in
+        `livekit-client`.
+      responses:
+        "200":
+          description: The credentials to connect with.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VoiceCredentials"
+        "401":
+          $ref: "#/components/responses/VisitorRequired"
+        "404":
+          $ref: "#/components/responses/RoomNotFound"
+        "409":
+          description: >-
+            The room's voice already has as many participants as it admits
+            (`room_full`). The visitor stays where they were.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "503":
+          description: >-
+            The server cannot reach LiveKit (`voice_unavailable`); try again
+            later. The visitor may already have been disconnected from another
+            room's voice.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        default:
+          $ref: "#/components/responses/Error"
   /api/live:
     get:
       operationId: openLive
@@ -342,10 +397,14 @@ paths:
       summary: Report whether the server can serve requests.
       description: >-
         Checks each component the server depends on and names it in the body.
-        Answers 200 when every required component is `ok`, 503 otherwise.
+        Answers 200 when every required component is `ok`, 503 otherwise. The
+        database is required. LiveKit is not: while it cannot be reached, it
+        is `degraded`, as is the overall status, and only voice fails.
       responses:
         "200":
-          description: Every required component is available.
+          description: >-
+            Every required component is available; the status is `degraded`
+            when an optional one is not.
           content:
             application/json:
               schema:
@@ -359,6 +418,15 @@ paths:
         default:
           $ref: "#/components/responses/Error"
 components:
+  parameters:
+    RoomId:
+      name: id
+      in: path
+      required: true
+      description: The room's ID.
+      schema:
+        type: string
+        example: 01JBX7A2K9D4F6H8M0P3R5T7VW
   securitySchemes:
     visitorCookie:
       type: apiKey
@@ -422,9 +490,10 @@ components:
             (another visitor holds the name), `rate_limited` (too many
             requests), `room_not_found` (no such room), `invalid_message` (a
             message body breaks the message rules), `request_key_reused`
-            (a request key was already used for another message) or
+            (a request key was already used for another message),
             `origin_forbidden` (a live-update connection from a foreign
-            origin).
+            origin), `room_full` (a room's voice admits no more participants)
+            or `voice_unavailable` (the server cannot reach LiveKit).
           example: not_found
         message:
           type: string
@@ -444,12 +513,15 @@ components:
             $ref: "#/components/schemas/HealthStatus"
           example:
             database: ok
+            livekit: ok
     HealthStatus:
       type: string
       description: >-
-        `ok` when available; `unavailable` when a required component cannot be
-        used.
-      enum: [ok, unavailable]
+        `ok` when available; `degraded` when an optional component cannot be
+        used, or overall when the server is ready although one cannot;
+        `unavailable` when a required component cannot be used, or overall
+        when the server is not ready because one cannot.
+      enum: [ok, degraded, unavailable]
       example: ok
     Visitor:
       type: object
@@ -546,6 +618,23 @@ components:
           type: string
           description: The participant's name.
           example: Bob
+    VoiceCredentials:
+      type: object
+      description: What a client connects to a room's voice with.
+      required: [url, token]
+      properties:
+        url:
+          type: string
+          description: >-
+            Where to reach LiveKit, a `wss://` URL (`ws://` when run locally);
+            pass it to the SDK as is.
+          example: wss://falky.example
+        token:
+          type: string
+          description: >-
+            The LiveKit access token, a JWT; it admits the visitor to this
+            room's voice for 10 minutes.
+          example: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIwMUpCWDZaOFEzTTVXMks3UjlUNFYxQzBERSJ9.c2lnbmF0dXJl
     Message:
       type: object
       description: >-

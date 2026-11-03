@@ -35,6 +35,7 @@ import (
 	"github.com/kisshot/falky/server/internal/platform"
 	"github.com/kisshot/falky/server/internal/realtime"
 	"github.com/kisshot/falky/server/internal/rooms"
+	"github.com/kisshot/falky/server/internal/voice"
 )
 
 const usage = `usage: falky <command>
@@ -198,6 +199,9 @@ func migrate(ctx context.Context, cfg platform.Config, logger *slog.Logger) erro
 }
 
 func serve(ctx context.Context, cfg platform.Config, logger *slog.Logger) (err error) {
+	if cfg.LiveKitAPIKey == "" || cfg.LiveKitAPISecret == "" {
+		return errors.New(platform.EnvLiveKitAPIKey + " and " + platform.EnvLiveKitAPISecret + " must be set")
+	}
 	db, ms, err := openMigrated(ctx, cfg, logger)
 	if err != nil {
 		return err
@@ -232,6 +236,10 @@ type listeners struct {
 func serveOn(ctx context.Context, logger *slog.Logger, cfg platform.Config, db *platform.DB, ms platform.Migrations, ls listeners) error {
 	health := platform.NewHealth(logger)
 	health.Require("database", func(ctx context.Context) error { return db.CheckMigrated(ctx, ms) })
+	vs := voice.New(voice.NewClient(cfg.LiveKitAPIURL, cfg.LiveKitAPIKey, cfg.LiveKitAPISecret), voice.Config{
+		URL: cfg.LiveKitURL, APIKey: cfg.LiveKitAPIKey, APISecret: cfg.LiveKitAPISecret, RoomCap: cfg.VoiceRoomCap,
+	})
+	health.Optional("livekit", vs.Check)
 	ident := identity.New(db, cfg.PublicOrigin)
 	hub := realtime.New(realtime.WithLogger(logger))
 	events := httpapi.Events{Hub: hub, Logger: logger}
@@ -245,6 +253,7 @@ func serveOn(ctx context.Context, logger *slog.Logger, cfg platform.Config, db *
 		Chat: chat.New(db,
 			chat.WithPostLimit(platform.NewLimiter(postBurst, postInterval, time.Now)),
 			chat.WithPublisher(events.MessageCreated)),
+		Voice:        vs,
 		EnterLimit:   platform.NewLimiter(enterBurst, enterInterval, time.Now),
 		Live:         hub,
 		PublicOrigin: cfg.PublicOrigin,

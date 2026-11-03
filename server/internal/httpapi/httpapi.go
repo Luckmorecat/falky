@@ -14,6 +14,7 @@ import (
 	"github.com/kisshot/falky/server/internal/platform"
 	"github.com/kisshot/falky/server/internal/realtime"
 	"github.com/kisshot/falky/server/internal/rooms"
+	"github.com/kisshot/falky/server/internal/voice"
 )
 
 // Handlers are the handlers of the two listeners.
@@ -36,6 +37,7 @@ type Deps struct {
 	Identity *identity.Service
 	Rooms    *rooms.Service
 	Chat     *chat.Service
+	Voice    *voice.Service
 	// EnterLimit limits entering per client IP. Posting is limited by Chat,
 	// which knows whether it only repeats a stored message.
 	EnterLimit *platform.Limiter
@@ -52,10 +54,12 @@ type Deps struct {
 // it, so an operation is reachable on exactly one listener.
 func New(deps Deps) Handlers {
 	s := &server{
+		logger:     deps.Logger,
 		health:     deps.Health,
 		identity:   deps.Identity,
 		rooms:      deps.Rooms,
 		chat:       deps.Chat,
+		voice:      deps.Voice,
 		enterLimit: deps.EnterLimit,
 	}
 	errs := errorWriter{logger: deps.Logger}
@@ -87,10 +91,12 @@ func New(deps Deps) Handlers {
 }
 
 type server struct {
+	logger     *slog.Logger
 	health     *platform.Health
 	identity   *identity.Service
 	rooms      *rooms.Service
 	chat       *chat.Service
+	voice      *voice.Service
 	enterLimit *platform.Limiter
 }
 

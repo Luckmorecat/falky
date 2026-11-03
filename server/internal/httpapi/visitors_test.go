@@ -1,13 +1,14 @@
 package httpapi
 
 import (
+	"bytes"
 	"context"
-	"io"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -17,15 +18,47 @@ import (
 	"github.com/kisshot/falky/server/internal/platform"
 	"github.com/kisshot/falky/server/internal/realtime"
 	"github.com/kisshot/falky/server/internal/rooms"
+	"github.com/kisshot/falky/server/internal/voice"
+	"github.com/kisshot/falky/server/internal/voice/voicetest"
 )
 
 // publicServer is the public listener over TLS (the visitor cookie is
-// Secure) with real identity, rooms and chat services on a temporary database.
+// Secure) with real identity, rooms, chat and voice services on a temporary
+// database, voice over an in-memory LiveKit.
 type publicServer struct {
-	srv    *httptest.Server
-	secret string
-	rooms  *rooms.Service
+	srv     *httptest.Server
+	secret  string
+	rooms   *rooms.Service
+	livekit *voicetest.LiveKit
+	// logs holds what the server logged.
+	logs *syncBuffer
 }
+
+// syncBuffer is a bytes.Buffer that is safe for concurrent use.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+// Voice settings of the test server.
+const (
+	testLiveKitURL    = "wss://falky.example"
+	testLiveKitKey    = "falky"
+	testLiveKitSecret = "a-secret-of-at-least-32-characters"
+	testRoomCap       = 8
+)
 
 // startPublic serves the public listener, limiting entering to enterBurst
 // attempts per client IP with no refill during the test, and posting
@@ -63,17 +96,23 @@ func startPublicLimited(t *testing.T, enterBurst, postBurst int) publicServer {
 	if err != nil {
 		t.Fatalf("Link: %v", err)
 	}
-	logger := platform.NewLogger(io.Discard, 0)
+	logs := &syncBuffer{}
+	logger := platform.NewLogger(logs, 0)
 	start := time.Now()
 	hub := realtime.New()
 	events := Events{Hub: hub, Logger: logger}
 	rs := rooms.New(db, rooms.WithPublisher(events.RoomChanged))
+	lk := voicetest.New()
+	vs := voice.New(lk, voice.Config{
+		URL: testLiveKitURL, APIKey: testLiveKitKey, APISecret: testLiveKitSecret, RoomCap: testRoomCap,
+	})
 	h := New(Deps{
 		Logger:   logger,
 		Health:   platform.NewHealth(logger),
 		Metrics:  platform.NewMetrics().Handler(),
 		Identity: ident,
 		Rooms:    rs,
+		Voice:    vs,
 		Chat: chat.New(db,
 			chat.WithPostLimit(platform.NewLimiter(postBurst, time.Hour, func() time.Time { return start })),
 			chat.WithPublisher(events.MessageCreated)),
@@ -90,7 +129,9 @@ func startPublicLimited(t *testing.T, enterBurst, postBurst int) publicServer {
 			t.Errorf("Shutdown: %v", err)
 		}
 	})
-	return publicServer{srv: srv, secret: strings.TrimPrefix(link, testOrigin+"/#k="), rooms: rs}
+	return publicServer{
+		srv: srv, secret: strings.TrimPrefix(link, testOrigin+"/#k="), rooms: rs, livekit: lk, logs: logs,
+	}
 }
 
 // testOrigin is the public origin the test server is configured with.

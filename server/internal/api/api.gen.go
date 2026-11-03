@@ -55,6 +55,7 @@ func (e EventType) Valid() bool {
 
 // Defines values for HealthStatus.
 const (
+	HealthStatusDegraded    HealthStatus = "degraded"
 	HealthStatusOk          HealthStatus = "ok"
 	HealthStatusUnavailable HealthStatus = "unavailable"
 )
@@ -62,6 +63,8 @@ const (
 // Valid indicates whether the value is a known member of the HealthStatus enum.
 func (e HealthStatus) Valid() bool {
 	switch e {
+	case HealthStatusDegraded:
+		return true
 	case HealthStatusOk:
 		return true
 	case HealthStatusUnavailable:
@@ -86,7 +89,7 @@ type EnterRequest struct {
 
 // Error The body of every error response.
 type Error struct {
-	// Code Stable, machine-readable error code: `not_found` (no such route), `invalid_request` (the request does not match the contract), `internal` (the server failed), `visitor_required` (no valid visitor cookie), `invalid_link` (wrong access link secret), `invalid_name` (a name breaks the name rules), `name_taken` (another visitor holds the name), `rate_limited` (too many requests), `room_not_found` (no such room), `invalid_message` (a message body breaks the message rules), `request_key_reused` (a request key was already used for another message) or `origin_forbidden` (a live-update connection from a foreign origin).
+	// Code Stable, machine-readable error code: `not_found` (no such route), `invalid_request` (the request does not match the contract), `internal` (the server failed), `visitor_required` (no valid visitor cookie), `invalid_link` (wrong access link secret), `invalid_name` (a name breaks the name rules), `name_taken` (another visitor holds the name), `rate_limited` (too many requests), `room_not_found` (no such room), `invalid_message` (a message body breaks the message rules), `request_key_reused` (a request key was already used for another message), `origin_forbidden` (a live-update connection from a foreign origin), `room_full` (a room's voice admits no more participants) or `voice_unavailable` (the server cannot reach LiveKit).
 	//
 	// Example: not_found
 	Code string `json:"code"`
@@ -149,16 +152,16 @@ type EventType string
 type Health struct {
 	// Components Status of each checked component, by component name.
 	//
-	// Example: {"database":"ok"}
+	// Example: {"database":"ok","livekit":"ok"}
 	Components map[string]HealthStatus `json:"components,omitempty"`
 
-	// Status `ok` when available; `unavailable` when a required component cannot be used.
+	// Status `ok` when available; `degraded` when an optional component cannot be used, or overall when the server is ready although one cannot; `unavailable` when a required component cannot be used, or overall when the server is not ready because one cannot.
 	//
 	// Example: ok
 	Status HealthStatus `json:"status"`
 }
 
-// HealthStatus `ok` when available; `unavailable` when a required component cannot be used.
+// HealthStatus `ok` when available; `degraded` when an optional component cannot be used, or overall when the server is ready although one cannot; `unavailable` when a required component cannot be used, or overall when the server is not ready because one cannot.
 //
 // Example: ok
 type HealthStatus string
@@ -294,6 +297,22 @@ type Visitor struct {
 	// Example: Bob
 	Name string `json:"name"`
 }
+
+// VoiceCredentials What a client connects to a room's voice with.
+type VoiceCredentials struct {
+	// Token The LiveKit access token, a JWT; it admits the visitor to this room's voice for 10 minutes.
+	//
+	// Example: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIwMUpCWDZaOFEzTTVXMks3UjlUNFYxQzBERSJ9.c2lnbmF0dXJl
+	Token string `json:"token"`
+
+	// Url Where to reach LiveKit, a `wss://` URL (`ws://` when run locally); pass it to the SDK as is.
+	//
+	// Example: wss://falky.example
+	Url string `json:"url"`
+}
+
+// RoomId Example: 01JBX7A2K9D4F6H8M0P3R5T7VW
+type RoomId = string
 
 // InvalidName The body of every error response.
 type InvalidName = Error
@@ -519,7 +538,7 @@ type ClientInterface interface {
 	// Returns up to `limit` messages of the room. With `before`, the messages posted before that message, newest first, for paging back through history. With `after`, the messages posted after it, oldest first, for catching up. With neither, the newest messages, newest first. Message IDs sort in the order the messages were posted, so the last ID of one page is the cursor of the next.
 	//
 	// Corresponds with GET /api/rooms/{id}/messages (the `ListMessages` operationId).
-	ListMessages(ctx context.Context, id string, params *ListMessagesParams, reqEditors ...RequestEditorFn) (*http.Response, error)
+	ListMessages(ctx context.Context, id RoomId, params *ListMessagesParams, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// PostMessageWithBody Post a message in a room's chat.
 	//
@@ -528,7 +547,7 @@ type ClientInterface interface {
 	// Takes any type of body and a specified content type.
 	//
 	// Corresponds with POST /api/rooms/{id}/messages (the `PostMessage` operationId).
-	PostMessageWithBody(ctx context.Context, id string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+	PostMessageWithBody(ctx context.Context, id RoomId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// PostMessage Post a message in a room's chat.
 	//
@@ -537,7 +556,18 @@ type ClientInterface interface {
 	// Takes a body of the `application/json` content type.
 	//
 	// Corresponds with POST /api/rooms/{id}/messages (the `PostMessage` operationId).
-	PostMessage(ctx context.Context, id string, body PostMessageJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+	PostMessage(ctx context.Context, id RoomId, body PostMessageJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// JoinVoice Join a room's voice.
+	//
+	// Returns the LiveKit URL and a token to connect to the room's voice with a LiveKit SDK. A visitor is a participant in one room at most: the server first removes them from any other room's voice. Joining the room again, say from a second tab, is allowed even when the room is full, and the new connection replaces the earlier one.
+	//
+	// The token admits the visitor to this room only, under their visitor ID as participant identity and their name as display name. It may publish the microphone, a screen share and the screen share's audio (no camera), subscribe to the other participants, and update the participant's own attributes, but not send data messages. It expires 10 minutes after it is issued, so connect right away; once connected, LiveKit renews it.
+	//
+	// Muted is the state of the microphone track. Deafened is the participant attribute `deafened`: a client sets it to `"true"` while it plays no one's audio, and also mutes its microphone, then sets it to `"false"` again; an absent attribute means not deafened. The other participants see it through the SDK, for example with `room.localParticipant.setAttributes({ deafened: 'true' })` in `livekit-client`.
+	//
+	// Corresponds with POST /api/rooms/{id}/voice (the `JoinVoice` operationId).
+	JoinVoice(ctx context.Context, id RoomId, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// GetLiveness Report that the process is running.
 	//
@@ -548,7 +578,7 @@ type ClientInterface interface {
 
 	// GetReadiness Report whether the server can serve requests.
 	//
-	// Checks each component the server depends on and names it in the body. Answers 200 when every required component is `ok`, 503 otherwise.
+	// Checks each component the server depends on and names it in the body. Answers 200 when every required component is `ok`, 503 otherwise. The database is required. LiveKit is not: while it cannot be reached, it is `degraded`, as is the overall status, and only voice fails.
 	//
 	// Corresponds with GET /health/ready (the `GetReadiness` operationId).
 	GetReadiness(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -669,7 +699,7 @@ func (c *Client) ListRooms(ctx context.Context, reqEditors ...RequestEditorFn) (
 // Returns up to `limit` messages of the room. With `before`, the messages posted before that message, newest first, for paging back through history. With `after`, the messages posted after it, oldest first, for catching up. With neither, the newest messages, newest first. Message IDs sort in the order the messages were posted, so the last ID of one page is the cursor of the next.
 //
 // Corresponds with GET /api/rooms/{id}/messages (the `ListMessages` operationId).
-func (c *Client) ListMessages(ctx context.Context, id string, params *ListMessagesParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+func (c *Client) ListMessages(ctx context.Context, id RoomId, params *ListMessagesParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewListMessagesRequest(c.Server, id, params)
 	if err != nil {
 		return nil, err
@@ -688,7 +718,7 @@ func (c *Client) ListMessages(ctx context.Context, id string, params *ListMessag
 // Takes any type of body and a specified content type.
 //
 // Corresponds with POST /api/rooms/{id}/messages (the `PostMessage` operationId).
-func (c *Client) PostMessageWithBody(ctx context.Context, id string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+func (c *Client) PostMessageWithBody(ctx context.Context, id RoomId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewPostMessageRequestWithBody(c.Server, id, contentType, body)
 	if err != nil {
 		return nil, err
@@ -707,8 +737,29 @@ func (c *Client) PostMessageWithBody(ctx context.Context, id string, contentType
 // Takes a body of the `application/json` content type.
 //
 // Corresponds with POST /api/rooms/{id}/messages (the `PostMessage` operationId).
-func (c *Client) PostMessage(ctx context.Context, id string, body PostMessageJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+func (c *Client) PostMessage(ctx context.Context, id RoomId, body PostMessageJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewPostMessageRequest(c.Server, id, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// JoinVoice Join a room's voice.
+//
+// Returns the LiveKit URL and a token to connect to the room's voice with a LiveKit SDK. A visitor is a participant in one room at most: the server first removes them from any other room's voice. Joining the room again, say from a second tab, is allowed even when the room is full, and the new connection replaces the earlier one.
+//
+// The token admits the visitor to this room only, under their visitor ID as participant identity and their name as display name. It may publish the microphone, a screen share and the screen share's audio (no camera), subscribe to the other participants, and update the participant's own attributes, but not send data messages. It expires 10 minutes after it is issued, so connect right away; once connected, LiveKit renews it.
+//
+// Muted is the state of the microphone track. Deafened is the participant attribute `deafened`: a client sets it to `"true"` while it plays no one's audio, and also mutes its microphone, then sets it to `"false"` again; an absent attribute means not deafened. The other participants see it through the SDK, for example with `room.localParticipant.setAttributes({ deafened: 'true' })` in `livekit-client`.
+//
+// Corresponds with POST /api/rooms/{id}/voice (the `JoinVoice` operationId).
+func (c *Client) JoinVoice(ctx context.Context, id RoomId, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewJoinVoiceRequest(c.Server, id)
 	if err != nil {
 		return nil, err
 	}
@@ -738,7 +789,7 @@ func (c *Client) GetLiveness(ctx context.Context, reqEditors ...RequestEditorFn)
 
 // GetReadiness Report whether the server can serve requests.
 //
-// Checks each component the server depends on and names it in the body. Answers 200 when every required component is `ok`, 503 otherwise.
+// Checks each component the server depends on and names it in the body. Answers 200 when every required component is `ok`, 503 otherwise. The database is required. LiveKit is not: while it cannot be reached, it is `degraded`, as is the overall status, and only voice fails.
 //
 // Corresponds with GET /health/ready (the `GetReadiness` operationId).
 func (c *Client) GetReadiness(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
@@ -888,7 +939,7 @@ func NewListRoomsRequest(server string) (*http.Request, error) {
 }
 
 // NewListMessagesRequest constructs an http.Request for the ListMessages method
-func NewListMessagesRequest(server string, id string, params *ListMessagesParams) (*http.Request, error) {
+func NewListMessagesRequest(server string, id RoomId, params *ListMessagesParams) (*http.Request, error) {
 	var err error
 
 	var pathParam0 string
@@ -965,7 +1016,7 @@ func NewListMessagesRequest(server string, id string, params *ListMessagesParams
 }
 
 // NewPostMessageRequest calls the generic PostMessage builder with application/json body
-func NewPostMessageRequest(server string, id string, body PostMessageJSONRequestBody) (*http.Request, error) {
+func NewPostMessageRequest(server string, id RoomId, body PostMessageJSONRequestBody) (*http.Request, error) {
 	var bodyReader io.Reader
 	buf, err := json.Marshal(body)
 	if err != nil {
@@ -976,7 +1027,7 @@ func NewPostMessageRequest(server string, id string, body PostMessageJSONRequest
 }
 
 // NewPostMessageRequestWithBody constructs an http.Request for the PostMessage method, with any body, and a specified content type
-func NewPostMessageRequestWithBody(server string, id string, contentType string, body io.Reader) (*http.Request, error) {
+func NewPostMessageRequestWithBody(server string, id RoomId, contentType string, body io.Reader) (*http.Request, error) {
 	var err error
 
 	var pathParam0 string
@@ -1007,6 +1058,40 @@ func NewPostMessageRequestWithBody(server string, id string, contentType string,
 	}
 
 	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewJoinVoiceRequest constructs an http.Request for the JoinVoice method
+func NewJoinVoiceRequest(server string, id RoomId) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "id", id, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/rooms/%s/voice", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
 
 	return req, nil
 }
@@ -1170,7 +1255,7 @@ type ClientWithResponsesInterface interface {
 	// Returns a wrapper object for the known response body format(s).
 	//
 	// Corresponds with GET /api/rooms/{id}/messages (the `ListMessages` operationId).
-	ListMessagesWithResponse(ctx context.Context, id string, params *ListMessagesParams, reqEditors ...RequestEditorFn) (*ListMessagesResponse, error)
+	ListMessagesWithResponse(ctx context.Context, id RoomId, params *ListMessagesParams, reqEditors ...RequestEditorFn) (*ListMessagesResponse, error)
 
 	// PostMessageWithBodyWithResponse Post a message in a room's chat.
 	//
@@ -1179,7 +1264,7 @@ type ClientWithResponsesInterface interface {
 	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
 	//
 	// Corresponds with POST /api/rooms/{id}/messages (the `PostMessage` operationId).
-	PostMessageWithBodyWithResponse(ctx context.Context, id string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PostMessageResponse, error)
+	PostMessageWithBodyWithResponse(ctx context.Context, id RoomId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PostMessageResponse, error)
 
 	// PostMessageWithResponse Post a message in a room's chat.
 	//
@@ -1188,7 +1273,20 @@ type ClientWithResponsesInterface interface {
 	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
 	//
 	// Corresponds with POST /api/rooms/{id}/messages (the `PostMessage` operationId).
-	PostMessageWithResponse(ctx context.Context, id string, body PostMessageJSONRequestBody, reqEditors ...RequestEditorFn) (*PostMessageResponse, error)
+	PostMessageWithResponse(ctx context.Context, id RoomId, body PostMessageJSONRequestBody, reqEditors ...RequestEditorFn) (*PostMessageResponse, error)
+
+	// JoinVoiceWithResponse Join a room's voice.
+	//
+	// Returns the LiveKit URL and a token to connect to the room's voice with a LiveKit SDK. A visitor is a participant in one room at most: the server first removes them from any other room's voice. Joining the room again, say from a second tab, is allowed even when the room is full, and the new connection replaces the earlier one.
+	//
+	// The token admits the visitor to this room only, under their visitor ID as participant identity and their name as display name. It may publish the microphone, a screen share and the screen share's audio (no camera), subscribe to the other participants, and update the participant's own attributes, but not send data messages. It expires 10 minutes after it is issued, so connect right away; once connected, LiveKit renews it.
+	//
+	// Muted is the state of the microphone track. Deafened is the participant attribute `deafened`: a client sets it to `"true"` while it plays no one's audio, and also mutes its microphone, then sets it to `"false"` again; an absent attribute means not deafened. The other participants see it through the SDK, for example with `room.localParticipant.setAttributes({ deafened: 'true' })` in `livekit-client`.
+	//
+	// Returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /api/rooms/{id}/voice (the `JoinVoice` operationId).
+	JoinVoiceWithResponse(ctx context.Context, id RoomId, reqEditors ...RequestEditorFn) (*JoinVoiceResponse, error)
 
 	// GetLivenessWithResponse Report that the process is running.
 	//
@@ -1201,7 +1299,7 @@ type ClientWithResponsesInterface interface {
 
 	// GetReadinessWithResponse Report whether the server can serve requests.
 	//
-	// Checks each component the server depends on and names it in the body. Answers 200 when every required component is `ok`, 503 otherwise.
+	// Checks each component the server depends on and names it in the body. Answers 200 when every required component is `ok`, 503 otherwise. The database is required. LiveKit is not: while it cannot be reached, it is `degraded`, as is the overall status, and only voice fails.
 	//
 	// Returns a wrapper object for the known response body format(s).
 	//
@@ -1630,6 +1728,82 @@ func (r PostMessageResponse) ContentType() string {
 	return ""
 }
 
+type JoinVoiceResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *VoiceCredentials
+	// JSON401 the response for an HTTP 401 `application/json` response
+	JSON401 *VisitorRequired
+	// JSON404 the response for an HTTP 404 `application/json` response
+	JSON404 *RoomNotFound
+	// JSON409 the response for an HTTP 409 `application/json` response
+	JSON409 *Error
+	// JSON503 the response for an HTTP 503 `application/json` response
+	JSON503 *Error
+	// JSONDefault the response for an HTTP default `application/json` response
+	JSONDefault *Error
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r JoinVoiceResponse) GetJSON200() *VoiceCredentials {
+	return r.JSON200
+}
+
+// GetJSON401 returns the response for an HTTP 401 `application/json` response
+func (r JoinVoiceResponse) GetJSON401() *VisitorRequired {
+	return r.JSON401
+}
+
+// GetJSON404 returns the response for an HTTP 404 `application/json` response
+func (r JoinVoiceResponse) GetJSON404() *RoomNotFound {
+	return r.JSON404
+}
+
+// GetJSON409 returns the response for an HTTP 409 `application/json` response
+func (r JoinVoiceResponse) GetJSON409() *Error {
+	return r.JSON409
+}
+
+// GetJSON503 returns the response for an HTTP 503 `application/json` response
+func (r JoinVoiceResponse) GetJSON503() *Error {
+	return r.JSON503
+}
+
+// GetJSONDefault returns the response for an HTTP default `application/json` response
+func (r JoinVoiceResponse) GetJSONDefault() *Error {
+	return r.JSONDefault
+}
+
+// GetBody returns the raw response body bytes
+func (r JoinVoiceResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r JoinVoiceResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r JoinVoiceResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r JoinVoiceResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
 type GetLivenessResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
@@ -1830,7 +2004,7 @@ func (c *ClientWithResponses) ListRoomsWithResponse(ctx context.Context, reqEdit
 // Returns a wrapper object for the known response body format(s).
 //
 // Corresponds with GET /api/rooms/{id}/messages (the `ListMessages` operationId).
-func (c *ClientWithResponses) ListMessagesWithResponse(ctx context.Context, id string, params *ListMessagesParams, reqEditors ...RequestEditorFn) (*ListMessagesResponse, error) {
+func (c *ClientWithResponses) ListMessagesWithResponse(ctx context.Context, id RoomId, params *ListMessagesParams, reqEditors ...RequestEditorFn) (*ListMessagesResponse, error) {
 	rsp, err := c.ListMessages(ctx, id, params, reqEditors...)
 	if err != nil {
 		return nil, err
@@ -1845,7 +2019,7 @@ func (c *ClientWithResponses) ListMessagesWithResponse(ctx context.Context, id s
 // Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
 //
 // Corresponds with POST /api/rooms/{id}/messages (the `PostMessage` operationId).
-func (c *ClientWithResponses) PostMessageWithBodyWithResponse(ctx context.Context, id string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PostMessageResponse, error) {
+func (c *ClientWithResponses) PostMessageWithBodyWithResponse(ctx context.Context, id RoomId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PostMessageResponse, error) {
 	rsp, err := c.PostMessageWithBody(ctx, id, contentType, body, reqEditors...)
 	if err != nil {
 		return nil, err
@@ -1860,12 +2034,31 @@ func (c *ClientWithResponses) PostMessageWithBodyWithResponse(ctx context.Contex
 // Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
 //
 // Corresponds with POST /api/rooms/{id}/messages (the `PostMessage` operationId).
-func (c *ClientWithResponses) PostMessageWithResponse(ctx context.Context, id string, body PostMessageJSONRequestBody, reqEditors ...RequestEditorFn) (*PostMessageResponse, error) {
+func (c *ClientWithResponses) PostMessageWithResponse(ctx context.Context, id RoomId, body PostMessageJSONRequestBody, reqEditors ...RequestEditorFn) (*PostMessageResponse, error) {
 	rsp, err := c.PostMessage(ctx, id, body, reqEditors...)
 	if err != nil {
 		return nil, err
 	}
 	return ParsePostMessageResponse(rsp)
+}
+
+// JoinVoiceWithResponse Join a room's voice.
+//
+// Returns the LiveKit URL and a token to connect to the room's voice with a LiveKit SDK. A visitor is a participant in one room at most: the server first removes them from any other room's voice. Joining the room again, say from a second tab, is allowed even when the room is full, and the new connection replaces the earlier one.
+//
+// The token admits the visitor to this room only, under their visitor ID as participant identity and their name as display name. It may publish the microphone, a screen share and the screen share's audio (no camera), subscribe to the other participants, and update the participant's own attributes, but not send data messages. It expires 10 minutes after it is issued, so connect right away; once connected, LiveKit renews it.
+//
+// Muted is the state of the microphone track. Deafened is the participant attribute `deafened`: a client sets it to `"true"` while it plays no one's audio, and also mutes its microphone, then sets it to `"false"` again; an absent attribute means not deafened. The other participants see it through the SDK, for example with `room.localParticipant.setAttributes({ deafened: 'true' })` in `livekit-client`.
+//
+// Returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /api/rooms/{id}/voice (the `JoinVoice` operationId).
+func (c *ClientWithResponses) JoinVoiceWithResponse(ctx context.Context, id RoomId, reqEditors ...RequestEditorFn) (*JoinVoiceResponse, error) {
+	rsp, err := c.JoinVoice(ctx, id, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseJoinVoiceResponse(rsp)
 }
 
 // GetLivenessWithResponse Report that the process is running.
@@ -1885,7 +2078,7 @@ func (c *ClientWithResponses) GetLivenessWithResponse(ctx context.Context, reqEd
 
 // GetReadinessWithResponse Report whether the server can serve requests.
 //
-// Checks each component the server depends on and names it in the body. Answers 200 when every required component is `ok`, 503 otherwise.
+// Checks each component the server depends on and names it in the body. Answers 200 when every required component is `ok`, 503 otherwise. The database is required. LiveKit is not: while it cannot be reached, it is `degraded`, as is the overall status, and only voice fails.
 //
 // Returns a wrapper object for the known response body format(s).
 //
@@ -2235,6 +2428,67 @@ func ParsePostMessageResponse(rsp *http.Response) (*PostMessageResponse, error) 
 	return response, nil
 }
 
+// ParseJoinVoiceResponse parses an HTTP response from a JoinVoiceWithResponse call
+func ParseJoinVoiceResponse(rsp *http.Response) (*JoinVoiceResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &JoinVoiceResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest VoiceCredentials
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest VisitorRequired
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest RoomNotFound
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON503 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && true:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSONDefault = &dest
+
+	}
+
+	return response, nil
+}
+
 // ParseGetLivenessResponse parses an HTTP response from a GetLivenessWithResponse call
 func ParseGetLivenessResponse(rsp *http.Response) (*GetLivenessResponse, error) {
 	bodyBytes, err := io.ReadAll(rsp.Body)
@@ -2324,10 +2578,13 @@ type ServerInterface interface {
 	ListRooms(w http.ResponseWriter, r *http.Request)
 	// ListMessages Read a page of a room's chat.
 	// (GET /api/rooms/{id}/messages)
-	ListMessages(w http.ResponseWriter, r *http.Request, id string, params ListMessagesParams)
+	ListMessages(w http.ResponseWriter, r *http.Request, id RoomId, params ListMessagesParams)
 	// PostMessage Post a message in a room's chat.
 	// (POST /api/rooms/{id}/messages)
-	PostMessage(w http.ResponseWriter, r *http.Request, id string)
+	PostMessage(w http.ResponseWriter, r *http.Request, id RoomId)
+	// JoinVoice Join a room's voice.
+	// (POST /api/rooms/{id}/voice)
+	JoinVoice(w http.ResponseWriter, r *http.Request, id RoomId)
 	// GetLiveness Report that the process is running.
 	// (GET /health/live)
 	GetLiveness(w http.ResponseWriter, r *http.Request)
@@ -2408,7 +2665,7 @@ func (siw *ServerInterfaceWrapper) ListMessages(w http.ResponseWriter, r *http.R
 	_ = err
 
 	// ------------- Path parameter "id" -------------
-	var id string
+	var id RoomId
 
 	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
 	if err != nil {
@@ -2476,7 +2733,7 @@ func (siw *ServerInterfaceWrapper) PostMessage(w http.ResponseWriter, r *http.Re
 	_ = err
 
 	// ------------- Path parameter "id" -------------
-	var id string
+	var id RoomId
 
 	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
 	if err != nil {
@@ -2486,6 +2743,32 @@ func (siw *ServerInterfaceWrapper) PostMessage(w http.ResponseWriter, r *http.Re
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.PostMessage(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// JoinVoice operation middleware
+func (siw *ServerInterfaceWrapper) JoinVoice(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id RoomId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.JoinVoice(w, r, id)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -2649,6 +2932,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/rooms", wrapper.ListRooms)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/rooms/{id}/messages", wrapper.ListMessages)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/rooms/{id}/messages", wrapper.PostMessage)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/rooms/{id}/voice", wrapper.JoinVoice)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/health/live", wrapper.GetLiveness)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/health/ready", wrapper.GetReadiness)
 
@@ -2954,7 +3238,7 @@ func (response ListRoomsdefaultJSONResponse) VisitListRoomsResponse(w http.Respo
 }
 
 type ListMessagesRequestObject struct {
-	Id     string `json:"id"`
+	Id     RoomId `json:"id"`
 	Params ListMessagesParams
 }
 
@@ -3036,7 +3320,7 @@ func (response ListMessagesdefaultJSONResponse) VisitListMessagesResponse(w http
 }
 
 type PostMessageRequestObject struct {
-	Id   string `json:"id"`
+	Id   RoomId `json:"id"`
 	Body *PostMessageJSONRequestBody
 }
 
@@ -3159,6 +3443,101 @@ func (response PostMessagedefaultJSONResponse) VisitPostMessageResponse(w http.R
 	return err
 }
 
+type JoinVoiceRequestObject struct {
+	Id RoomId `json:"id"`
+}
+
+type JoinVoiceResponseObject interface {
+	VisitJoinVoiceResponse(w http.ResponseWriter) error
+}
+
+type JoinVoice200JSONResponse VoiceCredentials
+
+func (response JoinVoice200JSONResponse) VisitJoinVoiceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type JoinVoice401JSONResponse struct{ VisitorRequiredJSONResponse }
+
+func (response JoinVoice401JSONResponse) VisitJoinVoiceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type JoinVoice404JSONResponse struct{ RoomNotFoundJSONResponse }
+
+func (response JoinVoice404JSONResponse) VisitJoinVoiceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type JoinVoice409JSONResponse Error
+
+func (response JoinVoice409JSONResponse) VisitJoinVoiceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type JoinVoice503JSONResponse Error
+
+func (response JoinVoice503JSONResponse) VisitJoinVoiceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(503)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type JoinVoicedefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response JoinVoicedefaultJSONResponse) VisitJoinVoiceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type GetLivenessRequestObject struct {
 }
 
@@ -3269,6 +3648,9 @@ type StrictServerInterface interface {
 	// PostMessage Post a message in a room's chat.
 	// (POST /api/rooms/{id}/messages)
 	PostMessage(ctx context.Context, request PostMessageRequestObject) (PostMessageResponseObject, error)
+	// JoinVoice Join a room's voice.
+	// (POST /api/rooms/{id}/voice)
+	JoinVoice(ctx context.Context, request JoinVoiceRequestObject) (JoinVoiceResponseObject, error)
 	// GetLiveness Report that the process is running.
 	// (GET /health/live)
 	GetLiveness(ctx context.Context, request GetLivenessRequestObject) (GetLivenessResponseObject, error)
@@ -3427,7 +3809,7 @@ func (sh *strictHandler) ListRooms(w http.ResponseWriter, r *http.Request) {
 }
 
 // ListMessages operation middleware
-func (sh *strictHandler) ListMessages(w http.ResponseWriter, r *http.Request, id string, params ListMessagesParams) {
+func (sh *strictHandler) ListMessages(w http.ResponseWriter, r *http.Request, id RoomId, params ListMessagesParams) {
 	var request ListMessagesRequestObject
 
 	request.Id = id
@@ -3454,7 +3836,7 @@ func (sh *strictHandler) ListMessages(w http.ResponseWriter, r *http.Request, id
 }
 
 // PostMessage operation middleware
-func (sh *strictHandler) PostMessage(w http.ResponseWriter, r *http.Request, id string) {
+func (sh *strictHandler) PostMessage(w http.ResponseWriter, r *http.Request, id RoomId) {
 	var request PostMessageRequestObject
 
 	request.Id = id
@@ -3479,6 +3861,32 @@ func (sh *strictHandler) PostMessage(w http.ResponseWriter, r *http.Request, id 
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(PostMessageResponseObject); ok {
 		if err := validResponse.VisitPostMessageResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// JoinVoice operation middleware
+func (sh *strictHandler) JoinVoice(w http.ResponseWriter, r *http.Request, id RoomId) {
+	var request JoinVoiceRequestObject
+
+	request.Id = id
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.JoinVoice(ctx, request.(JoinVoiceRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "JoinVoice")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(JoinVoiceResponseObject); ok {
+		if err := validResponse.VisitJoinVoiceResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

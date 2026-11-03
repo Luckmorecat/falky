@@ -20,9 +20,16 @@ type listeners struct {
 
 func start(t *testing.T, probe func(context.Context) error) listeners {
 	t.Helper()
+	return startWith(t, probe, func(context.Context) error { return nil })
+}
+
+// startWith is start that also checks LiveKit with livekitProbe.
+func startWith(t *testing.T, probe, livekitProbe func(context.Context) error) listeners {
+	t.Helper()
 	logger := platform.NewLogger(io.Discard, 0)
 	health := platform.NewHealth(logger)
 	health.Require("database", probe)
+	health.Optional("livekit", livekitProbe)
 	h := New(Deps{Logger: logger, Health: health, Metrics: platform.NewMetrics().Handler()})
 	l := listeners{public: httptest.NewServer(h.Public), internal: httptest.NewServer(h.Internal)}
 	t.Cleanup(l.public.Close)
@@ -75,6 +82,21 @@ func TestReadinessFailsWhileARequiredComponentIsUnavailable(t *testing.T) {
 	}
 	if res.JSON503.Status != api.HealthStatusUnavailable || res.JSON503.Components["database"] != api.HealthStatusUnavailable {
 		t.Errorf("body = %s, want status unavailable and database unavailable", res.Body)
+	}
+}
+
+func TestReadinessStaysReadyButDegradedWhileLiveKitIsUnreachable(t *testing.T) {
+	l := startWith(t, func(context.Context) error { return nil }, func(context.Context) error { return errors.New("connection refused") })
+	res, err := client(t, l.internal).GetReadinessWithResponse(t.Context())
+	if err != nil {
+		t.Fatalf("GetReadiness: %v", err)
+	}
+	if res.StatusCode() != http.StatusOK || res.JSON200 == nil {
+		t.Fatalf("GetReadiness = %d %s, want 200", res.StatusCode(), res.Body)
+	}
+	if res.JSON200.Status != api.HealthStatusDegraded || res.JSON200.Components["database"] != api.HealthStatusOk ||
+		res.JSON200.Components["livekit"] != api.HealthStatusDegraded {
+		t.Errorf("body = %s, want status degraded, database ok and livekit degraded", res.Body)
 	}
 }
 

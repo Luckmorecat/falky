@@ -103,8 +103,10 @@ func TestServeAnswersOnItsListenersAndStopsCleanly(t *testing.T) {
 	if code, body := get(t, internal+"/health/live"); code != http.StatusOK {
 		t.Errorf("internal /health/live = %d %s, want 200", code, body)
 	}
-	if code, body := get(t, internal+"/health/ready"); code != http.StatusOK || !strings.Contains(body, `"database":"ok"`) {
-		t.Errorf("internal /health/ready = %d %s, want 200 naming database ok", code, body)
+	// No LiveKit is configured, so voice is degraded but the server ready.
+	if code, body := get(t, internal+"/health/ready"); code != http.StatusOK || !strings.Contains(body, `"database":"ok"`) ||
+		!strings.Contains(body, `"livekit":"degraded"`) {
+		t.Errorf("internal /health/ready = %d %s, want 200 naming database ok and livekit degraded", code, body)
 	}
 	if code, body := get(t, internal+"/metrics"); code != http.StatusOK || !strings.Contains(body, "go_goroutines") {
 		t.Errorf("internal /metrics = %d, want 200 with Go metrics", code)
@@ -164,6 +166,17 @@ func TestServeReadinessFailsWhenTheDatabaseIsGone(t *testing.T) {
 	if code, body := get(t, "http://"+ls.internal.Addr().String()+"/health/ready"); code != http.StatusServiceUnavailable ||
 		!strings.Contains(body, `"database":"unavailable"`) {
 		t.Errorf("/health/ready = %d %s, want 503 naming database unavailable", code, body)
+	}
+}
+
+func TestServeRefusesToStartWithoutTheLiveKitKeys(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "falky.db")
+	code, stdout, _ := runCommand(t, env(map[string]string{platform.EnvDBPath: dbPath}), "serve")
+	if code != 1 || !strings.Contains(stdout, platform.EnvLiveKitAPISecret) {
+		t.Errorf("serve = exit %d, logs %q, want 1 naming %s", code, stdout, platform.EnvLiveKitAPISecret)
+	}
+	if _, err := os.Stat(dbPath); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("database file: %v, want none created", err)
 	}
 }
 
