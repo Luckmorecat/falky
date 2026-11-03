@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/kisshot/falky/server/internal/admin"
+	"github.com/kisshot/falky/server/internal/chat"
 	"github.com/kisshot/falky/server/internal/httpapi"
 	"github.com/kisshot/falky/server/internal/identity"
 	"github.com/kisshot/falky/server/internal/platform"
@@ -49,7 +50,7 @@ Quote a name that has spaces: falky room create "Living room"
 
 // migrationSources lists the embedded migrations of each module that owns
 // tables; platform applies them as one sequence ordered by version.
-var migrationSources = []fs.FS{identity.Migrations(), rooms.Migrations()}
+var migrationSources = []fs.FS{identity.Migrations(), rooms.Migrations(), chat.Migrations()}
 
 // shutdownTimeout bounds how long serve waits for in-flight requests.
 const shutdownTimeout = 10 * time.Second
@@ -59,6 +60,13 @@ const shutdownTimeout = 10 * time.Second
 const (
 	enterBurst    = 10
 	enterInterval = 6 * time.Second
+)
+
+// Posting is limited per visitor to a burst of postBurst messages, then one
+// more each postInterval.
+const (
+	postBurst    = 10
+	postInterval = time.Second
 )
 
 func main() {
@@ -231,6 +239,7 @@ func serveOn(ctx context.Context, logger *slog.Logger, cfg platform.Config, db *
 		Metrics:    platform.NewMetrics().Handler(),
 		Identity:   ident,
 		Rooms:      rs,
+		Chat:       chat.New(db, chat.WithPostLimit(platform.NewLimiter(postBurst, postInterval, time.Now))),
 		EnterLimit: platform.NewLimiter(enterBurst, enterInterval, time.Now),
 	})
 	adminHandler := admin.Handler(admin.Deps{Logger: logger, Identity: ident, Rooms: rs})

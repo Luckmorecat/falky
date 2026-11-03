@@ -9,11 +9,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/oapi-codegen/runtime"
 )
@@ -51,7 +53,7 @@ type EnterRequest struct {
 
 // Error The body of every error response.
 type Error struct {
-	// Code Stable, machine-readable error code: `not_found` (no such route), `invalid_request` (the request does not match the contract), `internal` (the server failed), `visitor_required` (no valid visitor cookie), `invalid_link` (wrong access link secret), `invalid_name` (a name breaks the name rules), `name_taken` (another visitor holds the name) or `rate_limited` (too many requests).
+	// Code Stable, machine-readable error code: `not_found` (no such route), `invalid_request` (the request does not match the contract), `internal` (the server failed), `visitor_required` (no valid visitor cookie), `invalid_link` (wrong access link secret), `invalid_name` (a name breaks the name rules), `name_taken` (another visitor holds the name), `rate_limited` (too many requests), `room_not_found` (no such room), `invalid_message` (a message body breaks the message rules) or `request_key_reused` (a request key was already used for another message).
 	//
 	// Example: not_found
 	Code string `json:"code"`
@@ -80,6 +82,47 @@ type Health struct {
 // Example: ok
 type HealthStatus string
 
+// Message A piece of text a visitor posted in a room's chat, under the name they had when posting.
+type Message struct {
+	// AuthorId The visitor ID of the author.
+	//
+	// Example: 01JBX6Z8Q3M5W2K7R9T4V1C0DE
+	AuthorId string `json:"authorId"`
+
+	// AuthorName The author's name when they posted; a later rename does not change it.
+	//
+	// Example: Bob
+	AuthorName string `json:"authorName"`
+
+	// Body The text, as posted.
+	//
+	// Example: Anyone up for a game?
+	Body string `json:"body"`
+
+	// CreatedAt When the message was posted, in UTC.
+	//
+	// Example: 2026-11-04T18:30:05.123Z
+	CreatedAt time.Time `json:"createdAt"`
+
+	// Id The message's ID, a ULID. IDs sort in the order messages were posted, and serve as history cursors.
+	//
+	// Example: 01JBX8C4N2F6H8K0P3R5T7W9YZ
+	Id string `json:"id"`
+
+	// RoomId The ID of the room the message was posted in.
+	//
+	// Example: 01JBX7A2K9D4F6H8M0P3R5T7VW
+	RoomId string `json:"roomId"`
+}
+
+// MessageList A page of a room's chat.
+type MessageList struct {
+	// Messages The messages, in the order the request asked for.
+	//
+	// Example: [{"authorId":"01JBX6Z8Q3M5W2K7R9T4V1C0DE","authorName":"Bob","body":"Anyone up for a game?","createdAt":"2026-11-04T18:30:05.123Z","id":"01JBX8C4N2F6H8K0P3R5T7W9YZ","roomId":"01JBX7A2K9D4F6H8M0P3R5T7VW"}]
+	Messages []Message `json:"messages"`
+}
+
 // Name A visitor's name: 1 to 32 characters once leading and trailing white space is trimmed, with no control characters (the bidirectional controls included). Names are compared trimmed and case-insensitively, so `" Bob "` and `bob` are the same name. The server checks these rules and answers `invalid_name`.
 //
 // Example: Bob
@@ -96,6 +139,19 @@ type Participant struct {
 	//
 	// Example: 01JBX6Z8Q3M5W2K7R9T4V1C0DE
 	VisitorId string `json:"visitorId"`
+}
+
+// PostMessageRequest A message to post and the key that makes retrying it safe.
+type PostMessageRequest struct {
+	// Body The text: 1 to 4000 characters, not only white space. It is kept as sent, untrimmed.
+	//
+	// Example: Anyone up for a game?
+	Body string `json:"body"`
+
+	// RequestKey Chosen by the client, new for each message and reused only to retry the same post, for example a random UUID: 1 to 64 letters, digits, `-` or `_`. Keys are per visitor.
+	//
+	// Example: 3f1c2a9e-7b4d-4e8a-9c61-2d5f0b8e7a13
+	RequestKey string `json:"requestKey"`
 }
 
 // RenameRequest The name the visitor changes to.
@@ -151,14 +207,32 @@ type InvalidName = Error
 // NameTaken The body of every error response.
 type NameTaken = Error
 
+// RoomNotFound The body of every error response.
+type RoomNotFound = Error
+
 // VisitorRequired The body of every error response.
 type VisitorRequired = Error
+
+// ListMessagesParams defines parameters for ListMessages.
+type ListMessagesParams struct {
+	// Before A message ID; only messages posted before it are returned. Cannot be combined with `after`. An empty value counts as absent.
+	Before string `form:"before,omitempty" json:"before,omitempty"`
+
+	// After A message ID; only messages posted after it are returned. Cannot be combined with `before`. An empty value counts as absent.
+	After string `form:"after,omitempty" json:"after,omitempty"`
+
+	// Limit The most messages to return; larger values are refused.
+	Limit *int `form:"limit,omitempty" json:"limit,omitempty"`
+}
 
 // EnterJSONRequestBody defines body for Enter for application/json ContentType.
 type EnterJSONRequestBody = EnterRequest
 
 // RenameMeJSONRequestBody defines body for RenameMe for application/json ContentType.
 type RenameMeJSONRequestBody = RenameRequest
+
+// PostMessageJSONRequestBody defines body for PostMessage for application/json ContentType.
+type PostMessageJSONRequestBody = PostMessageRequest
 
 // RequestEditorFn is the function signature for the RequestEditor callback function
 type RequestEditorFn func(ctx context.Context, req *http.Request) error
@@ -284,6 +358,31 @@ type ClientInterface interface {
 	// Corresponds with GET /api/rooms (the `ListRooms` operationId).
 	ListRooms(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
 
+	// ListMessages Read a page of a room's chat.
+	//
+	// Returns up to `limit` messages of the room. With `before`, the messages posted before that message, newest first, for paging back through history. With `after`, the messages posted after it, oldest first, for catching up. With neither, the newest messages, newest first. Message IDs sort in the order the messages were posted, so the last ID of one page is the cursor of the next.
+	//
+	// Corresponds with GET /api/rooms/{id}/messages (the `ListMessages` operationId).
+	ListMessages(ctx context.Context, id string, params *ListMessagesParams, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// PostMessageWithBody Post a message in a room's chat.
+	//
+	// Posts a message under the visitor's current name. Posting is idempotent by request key: posting again with the same key and body, say after a lost response, returns the message posted first and creates nothing. New messages are limited per visitor; such a repeat is not.
+	//
+	// Takes any type of body and a specified content type.
+	//
+	// Corresponds with POST /api/rooms/{id}/messages (the `PostMessage` operationId).
+	PostMessageWithBody(ctx context.Context, id string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// PostMessage Post a message in a room's chat.
+	//
+	// Posts a message under the visitor's current name. Posting is idempotent by request key: posting again with the same key and body, say after a lost response, returns the message posted first and creates nothing. New messages are limited per visitor; such a repeat is not.
+	//
+	// Takes a body of the `application/json` content type.
+	//
+	// Corresponds with POST /api/rooms/{id}/messages (the `PostMessage` operationId).
+	PostMessage(ctx context.Context, id string, body PostMessageJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// GetLiveness Report that the process is running.
 	//
 	// Answers 200 while the process runs, whatever its dependencies.
@@ -399,6 +498,61 @@ func (c *Client) RenameMe(ctx context.Context, body RenameMeJSONRequestBody, req
 // Corresponds with GET /api/rooms (the `ListRooms` operationId).
 func (c *Client) ListRooms(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewListRoomsRequest(c.Server)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// ListMessages Read a page of a room's chat.
+//
+// Returns up to `limit` messages of the room. With `before`, the messages posted before that message, newest first, for paging back through history. With `after`, the messages posted after it, oldest first, for catching up. With neither, the newest messages, newest first. Message IDs sort in the order the messages were posted, so the last ID of one page is the cursor of the next.
+//
+// Corresponds with GET /api/rooms/{id}/messages (the `ListMessages` operationId).
+func (c *Client) ListMessages(ctx context.Context, id string, params *ListMessagesParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewListMessagesRequest(c.Server, id, params)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// PostMessageWithBody Post a message in a room's chat.
+//
+// Posts a message under the visitor's current name. Posting is idempotent by request key: posting again with the same key and body, say after a lost response, returns the message posted first and creates nothing. New messages are limited per visitor; such a repeat is not.
+//
+// Takes any type of body and a specified content type.
+//
+// Corresponds with POST /api/rooms/{id}/messages (the `PostMessage` operationId).
+func (c *Client) PostMessageWithBody(ctx context.Context, id string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewPostMessageRequestWithBody(c.Server, id, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// PostMessage Post a message in a room's chat.
+//
+// Posts a message under the visitor's current name. Posting is idempotent by request key: posting again with the same key and body, say after a lost response, returns the message posted first and creates nothing. New messages are limited per visitor; such a repeat is not.
+//
+// Takes a body of the `application/json` content type.
+//
+// Corresponds with POST /api/rooms/{id}/messages (the `PostMessage` operationId).
+func (c *Client) PostMessage(ctx context.Context, id string, body PostMessageJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewPostMessageRequest(c.Server, id, body)
 	if err != nil {
 		return nil, err
 	}
@@ -577,6 +731,130 @@ func NewListRoomsRequest(server string) (*http.Request, error) {
 	return req, nil
 }
 
+// NewListMessagesRequest constructs an http.Request for the ListMessages method
+func NewListMessagesRequest(server string, id string, params *ListMessagesParams) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "id", id, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/rooms/%s/messages", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	if params != nil {
+		// queryValues collects non-styled parameters (passthrough, JSON)
+		// that are safe to round-trip through url.Values.Encode().
+		queryValues := queryURL.Query()
+		// rawQueryFragments collects pre-encoded query fragments from
+		// styled parameters, preserving literal commas as delimiters
+		// per the OpenAPI spec (e.g. "color=blue,black,brown").
+		var rawQueryFragments []string
+
+		if queryFrag, err := runtime.StyleParamWithOptions("form", true, "before", params.Before, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "string", Format: ""}); err != nil {
+			return nil, err
+		} else {
+			for _, qp := range strings.Split(queryFrag, "&") {
+				rawQueryFragments = append(rawQueryFragments, qp)
+			}
+		}
+
+		if queryFrag, err := runtime.StyleParamWithOptions("form", true, "after", params.After, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "string", Format: ""}); err != nil {
+			return nil, err
+		} else {
+			for _, qp := range strings.Split(queryFrag, "&") {
+				rawQueryFragments = append(rawQueryFragments, qp)
+			}
+		}
+
+		if params.Limit != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "limit", *params.Limit, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "integer", Format: ""}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if encoded := queryValues.Encode(); encoded != "" {
+			rawQueryFragments = append(rawQueryFragments, encoded)
+		}
+		queryURL.RawQuery = strings.Join(rawQueryFragments, "&")
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewPostMessageRequest calls the generic PostMessage builder with application/json body
+func NewPostMessageRequest(server string, id string, body PostMessageJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewPostMessageRequestWithBody(server, id, "application/json", bodyReader)
+}
+
+// NewPostMessageRequestWithBody constructs an http.Request for the PostMessage method, with any body, and a specified content type
+func NewPostMessageRequestWithBody(server string, id string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "id", id, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/rooms/%s/messages", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
 // NewGetLivenessRequest constructs an http.Request for the GetLiveness method
 func NewGetLivenessRequest(server string) (*http.Request, error) {
 	var err error
@@ -728,6 +1006,33 @@ type ClientWithResponsesInterface interface {
 	//
 	// Corresponds with GET /api/rooms (the `ListRooms` operationId).
 	ListRoomsWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListRoomsResponse, error)
+
+	// ListMessagesWithResponse Read a page of a room's chat.
+	//
+	// Returns up to `limit` messages of the room. With `before`, the messages posted before that message, newest first, for paging back through history. With `after`, the messages posted after it, oldest first, for catching up. With neither, the newest messages, newest first. Message IDs sort in the order the messages were posted, so the last ID of one page is the cursor of the next.
+	//
+	// Returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with GET /api/rooms/{id}/messages (the `ListMessages` operationId).
+	ListMessagesWithResponse(ctx context.Context, id string, params *ListMessagesParams, reqEditors ...RequestEditorFn) (*ListMessagesResponse, error)
+
+	// PostMessageWithBodyWithResponse Post a message in a room's chat.
+	//
+	// Posts a message under the visitor's current name. Posting is idempotent by request key: posting again with the same key and body, say after a lost response, returns the message posted first and creates nothing. New messages are limited per visitor; such a repeat is not.
+	//
+	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /api/rooms/{id}/messages (the `PostMessage` operationId).
+	PostMessageWithBodyWithResponse(ctx context.Context, id string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PostMessageResponse, error)
+
+	// PostMessageWithResponse Post a message in a room's chat.
+	//
+	// Posts a message under the visitor's current name. Posting is idempotent by request key: posting again with the same key and body, say after a lost response, returns the message posted first and creates nothing. New messages are limited per visitor; such a repeat is not.
+	//
+	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /api/rooms/{id}/messages (the `PostMessage` operationId).
+	PostMessageWithResponse(ctx context.Context, id string, body PostMessageJSONRequestBody, reqEditors ...RequestEditorFn) (*PostMessageResponse, error)
 
 	// GetLivenessWithResponse Report that the process is running.
 	//
@@ -1010,6 +1315,165 @@ func (r ListRoomsResponse) ContentType() string {
 	return ""
 }
 
+type ListMessagesResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *MessageList
+	// JSON400 the response for an HTTP 400 `application/json` response
+	JSON400 *Error
+	// JSON401 the response for an HTTP 401 `application/json` response
+	JSON401 *VisitorRequired
+	// JSON404 the response for an HTTP 404 `application/json` response
+	JSON404 *RoomNotFound
+	// JSONDefault the response for an HTTP default `application/json` response
+	JSONDefault *Error
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r ListMessagesResponse) GetJSON200() *MessageList {
+	return r.JSON200
+}
+
+// GetJSON400 returns the response for an HTTP 400 `application/json` response
+func (r ListMessagesResponse) GetJSON400() *Error {
+	return r.JSON400
+}
+
+// GetJSON401 returns the response for an HTTP 401 `application/json` response
+func (r ListMessagesResponse) GetJSON401() *VisitorRequired {
+	return r.JSON401
+}
+
+// GetJSON404 returns the response for an HTTP 404 `application/json` response
+func (r ListMessagesResponse) GetJSON404() *RoomNotFound {
+	return r.JSON404
+}
+
+// GetJSONDefault returns the response for an HTTP default `application/json` response
+func (r ListMessagesResponse) GetJSONDefault() *Error {
+	return r.JSONDefault
+}
+
+// GetBody returns the raw response body bytes
+func (r ListMessagesResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r ListMessagesResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ListMessagesResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r ListMessagesResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type PostMessageResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *Message
+	// JSON201 the response for an HTTP 201 `application/json` response
+	JSON201 *Message
+	// JSON400 the response for an HTTP 400 `application/json` response
+	JSON400 *Error
+	// JSON401 the response for an HTTP 401 `application/json` response
+	JSON401 *VisitorRequired
+	// JSON404 the response for an HTTP 404 `application/json` response
+	JSON404 *RoomNotFound
+	// JSON409 the response for an HTTP 409 `application/json` response
+	JSON409 *Error
+	// JSON429 the response for an HTTP 429 `application/json` response
+	JSON429 *Error
+	// JSONDefault the response for an HTTP default `application/json` response
+	JSONDefault *Error
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r PostMessageResponse) GetJSON200() *Message {
+	return r.JSON200
+}
+
+// GetJSON201 returns the response for an HTTP 201 `application/json` response
+func (r PostMessageResponse) GetJSON201() *Message {
+	return r.JSON201
+}
+
+// GetJSON400 returns the response for an HTTP 400 `application/json` response
+func (r PostMessageResponse) GetJSON400() *Error {
+	return r.JSON400
+}
+
+// GetJSON401 returns the response for an HTTP 401 `application/json` response
+func (r PostMessageResponse) GetJSON401() *VisitorRequired {
+	return r.JSON401
+}
+
+// GetJSON404 returns the response for an HTTP 404 `application/json` response
+func (r PostMessageResponse) GetJSON404() *RoomNotFound {
+	return r.JSON404
+}
+
+// GetJSON409 returns the response for an HTTP 409 `application/json` response
+func (r PostMessageResponse) GetJSON409() *Error {
+	return r.JSON409
+}
+
+// GetJSON429 returns the response for an HTTP 429 `application/json` response
+func (r PostMessageResponse) GetJSON429() *Error {
+	return r.JSON429
+}
+
+// GetJSONDefault returns the response for an HTTP default `application/json` response
+func (r PostMessageResponse) GetJSONDefault() *Error {
+	return r.JSONDefault
+}
+
+// GetBody returns the raw response body bytes
+func (r PostMessageResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r PostMessageResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r PostMessageResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r PostMessageResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
 type GetLivenessResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
@@ -1201,6 +1665,51 @@ func (c *ClientWithResponses) ListRoomsWithResponse(ctx context.Context, reqEdit
 		return nil, err
 	}
 	return ParseListRoomsResponse(rsp)
+}
+
+// ListMessagesWithResponse Read a page of a room's chat.
+//
+// Returns up to `limit` messages of the room. With `before`, the messages posted before that message, newest first, for paging back through history. With `after`, the messages posted after it, oldest first, for catching up. With neither, the newest messages, newest first. Message IDs sort in the order the messages were posted, so the last ID of one page is the cursor of the next.
+//
+// Returns a wrapper object for the known response body format(s).
+//
+// Corresponds with GET /api/rooms/{id}/messages (the `ListMessages` operationId).
+func (c *ClientWithResponses) ListMessagesWithResponse(ctx context.Context, id string, params *ListMessagesParams, reqEditors ...RequestEditorFn) (*ListMessagesResponse, error) {
+	rsp, err := c.ListMessages(ctx, id, params, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseListMessagesResponse(rsp)
+}
+
+// PostMessageWithBodyWithResponse Post a message in a room's chat.
+//
+// Posts a message under the visitor's current name. Posting is idempotent by request key: posting again with the same key and body, say after a lost response, returns the message posted first and creates nothing. New messages are limited per visitor; such a repeat is not.
+//
+// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /api/rooms/{id}/messages (the `PostMessage` operationId).
+func (c *ClientWithResponses) PostMessageWithBodyWithResponse(ctx context.Context, id string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PostMessageResponse, error) {
+	rsp, err := c.PostMessageWithBody(ctx, id, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParsePostMessageResponse(rsp)
+}
+
+// PostMessageWithResponse Post a message in a room's chat.
+//
+// Posts a message under the visitor's current name. Posting is idempotent by request key: posting again with the same key and body, say after a lost response, returns the message posted first and creates nothing. New messages are limited per visitor; such a repeat is not.
+//
+// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /api/rooms/{id}/messages (the `PostMessage` operationId).
+func (c *ClientWithResponses) PostMessageWithResponse(ctx context.Context, id string, body PostMessageJSONRequestBody, reqEditors ...RequestEditorFn) (*PostMessageResponse, error) {
+	rsp, err := c.PostMessage(ctx, id, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParsePostMessageResponse(rsp)
 }
 
 // GetLivenessWithResponse Report that the process is running.
@@ -1441,6 +1950,135 @@ func ParseListRoomsResponse(rsp *http.Response) (*ListRoomsResponse, error) {
 	return response, nil
 }
 
+// ParseListMessagesResponse parses an HTTP response from a ListMessagesWithResponse call
+func ParseListMessagesResponse(rsp *http.Response) (*ListMessagesResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ListMessagesResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest MessageList
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest VisitorRequired
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest RoomNotFound
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && true:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSONDefault = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParsePostMessageResponse parses an HTTP response from a PostMessageWithResponse call
+func ParsePostMessageResponse(rsp *http.Response) (*PostMessageResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &PostMessageResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest Message
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 201:
+		var dest Message
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON201 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest VisitorRequired
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest RoomNotFound
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 429:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON429 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && true:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSONDefault = &dest
+
+	}
+
+	return response, nil
+}
+
 // ParseGetLivenessResponse parses an HTTP response from a GetLivenessWithResponse call
 func ParseGetLivenessResponse(rsp *http.Response) (*GetLivenessResponse, error) {
 	bodyBytes, err := io.ReadAll(rsp.Body)
@@ -1528,6 +2166,12 @@ type ServerInterface interface {
 	// ListRooms List every room with its occupancy.
 	// (GET /api/rooms)
 	ListRooms(w http.ResponseWriter, r *http.Request)
+	// ListMessages Read a page of a room's chat.
+	// (GET /api/rooms/{id}/messages)
+	ListMessages(w http.ResponseWriter, r *http.Request, id string, params ListMessagesParams)
+	// PostMessage Post a message in a room's chat.
+	// (POST /api/rooms/{id}/messages)
+	PostMessage(w http.ResponseWriter, r *http.Request, id string)
 	// GetLiveness Report that the process is running.
 	// (GET /health/live)
 	GetLiveness(w http.ResponseWriter, r *http.Request)
@@ -1592,6 +2236,100 @@ func (siw *ServerInterfaceWrapper) ListRooms(w http.ResponseWriter, r *http.Requ
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.ListRooms(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListMessages operation middleware
+func (siw *ServerInterfaceWrapper) ListMessages(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListMessagesParams
+
+	// ------------- Optional query parameter "before" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "before", r.URL.Query(), &params.Before, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "before"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "before", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "after" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "after", r.URL.Query(), &params.After, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "after"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "after", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "limit" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "limit", r.URL.Query(), &params.Limit, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "limit"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "limit", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListMessages(w, r, id, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// PostMessage operation middleware
+func (siw *ServerInterfaceWrapper) PostMessage(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.PostMessage(w, r, id)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -1753,6 +2491,8 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/me", wrapper.GetMe)
 	m.HandleFunc(http.MethodPatch+" "+options.BaseURL+"/api/me", wrapper.RenameMe)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/rooms", wrapper.ListRooms)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/rooms/{id}/messages", wrapper.ListMessages)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/rooms/{id}/messages", wrapper.PostMessage)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/health/live", wrapper.GetLiveness)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/health/ready", wrapper.GetReadiness)
 
@@ -1764,6 +2504,8 @@ type ErrorJSONResponse Error
 type InvalidNameJSONResponse Error
 
 type NameTakenJSONResponse Error
+
+type RoomNotFoundJSONResponse Error
 
 type VisitorRequiredJSONResponse Error
 
@@ -2055,6 +2797,212 @@ func (response ListRoomsdefaultJSONResponse) VisitListRoomsResponse(w http.Respo
 	return err
 }
 
+type ListMessagesRequestObject struct {
+	Id     string `json:"id"`
+	Params ListMessagesParams
+}
+
+type ListMessagesResponseObject interface {
+	VisitListMessagesResponse(w http.ResponseWriter) error
+}
+
+type ListMessages200JSONResponse MessageList
+
+func (response ListMessages200JSONResponse) VisitListMessagesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListMessages400JSONResponse Error
+
+func (response ListMessages400JSONResponse) VisitListMessagesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListMessages401JSONResponse struct{ VisitorRequiredJSONResponse }
+
+func (response ListMessages401JSONResponse) VisitListMessagesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListMessages404JSONResponse struct{ RoomNotFoundJSONResponse }
+
+func (response ListMessages404JSONResponse) VisitListMessagesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListMessagesdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response ListMessagesdefaultJSONResponse) VisitListMessagesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type PostMessageRequestObject struct {
+	Id   string `json:"id"`
+	Body *PostMessageJSONRequestBody
+}
+
+type PostMessageResponseObject interface {
+	VisitPostMessageResponse(w http.ResponseWriter) error
+}
+
+type PostMessage200JSONResponse Message
+
+func (response PostMessage200JSONResponse) VisitPostMessageResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type PostMessage201JSONResponse Message
+
+func (response PostMessage201JSONResponse) VisitPostMessageResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(201)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type PostMessage400JSONResponse Error
+
+func (response PostMessage400JSONResponse) VisitPostMessageResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type PostMessage401JSONResponse struct{ VisitorRequiredJSONResponse }
+
+func (response PostMessage401JSONResponse) VisitPostMessageResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type PostMessage404JSONResponse struct{ RoomNotFoundJSONResponse }
+
+func (response PostMessage404JSONResponse) VisitPostMessageResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type PostMessage409JSONResponse Error
+
+func (response PostMessage409JSONResponse) VisitPostMessageResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type PostMessage429JSONResponse Error
+
+func (response PostMessage429JSONResponse) VisitPostMessageResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(429)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type PostMessagedefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response PostMessagedefaultJSONResponse) VisitPostMessageResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type GetLivenessRequestObject struct {
 }
 
@@ -2159,6 +3107,12 @@ type StrictServerInterface interface {
 	// ListRooms List every room with its occupancy.
 	// (GET /api/rooms)
 	ListRooms(ctx context.Context, request ListRoomsRequestObject) (ListRoomsResponseObject, error)
+	// ListMessages Read a page of a room's chat.
+	// (GET /api/rooms/{id}/messages)
+	ListMessages(ctx context.Context, request ListMessagesRequestObject) (ListMessagesResponseObject, error)
+	// PostMessage Post a message in a room's chat.
+	// (POST /api/rooms/{id}/messages)
+	PostMessage(ctx context.Context, request PostMessageRequestObject) (PostMessageResponseObject, error)
 	// GetLiveness Report that the process is running.
 	// (GET /health/live)
 	GetLiveness(ctx context.Context, request GetLivenessRequestObject) (GetLivenessResponseObject, error)
@@ -2309,6 +3263,66 @@ func (sh *strictHandler) ListRooms(w http.ResponseWriter, r *http.Request) {
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(ListRoomsResponseObject); ok {
 		if err := validResponse.VisitListRoomsResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ListMessages operation middleware
+func (sh *strictHandler) ListMessages(w http.ResponseWriter, r *http.Request, id string, params ListMessagesParams) {
+	var request ListMessagesRequestObject
+
+	request.Id = id
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListMessages(ctx, request.(ListMessagesRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListMessages")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListMessagesResponseObject); ok {
+		if err := validResponse.VisitListMessagesResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// PostMessage operation middleware
+func (sh *strictHandler) PostMessage(w http.ResponseWriter, r *http.Request, id string) {
+	var request PostMessageRequestObject
+
+	request.Id = id
+
+	var body PostMessageJSONRequestBody
+	if err := runtime.BindJSONBody(r, &body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.PostMessage(ctx, request.(PostMessageRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "PostMessage")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(PostMessageResponseObject); ok {
+		if err := validResponse.VisitPostMessageResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

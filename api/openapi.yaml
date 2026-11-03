@@ -137,6 +137,140 @@ paths:
           $ref: "#/components/responses/VisitorRequired"
         default:
           $ref: "#/components/responses/Error"
+  /api/rooms/{id}/messages:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: The room's ID.
+        schema:
+          type: string
+          example: 01JBX7A2K9D4F6H8M0P3R5T7VW
+    get:
+      operationId: listMessages
+      tags: [rooms]
+      summary: Read a page of a room's chat.
+      description: >-
+        Returns up to `limit` messages of the room. With `before`, the
+        messages posted before that message, newest first, for paging back
+        through history. With `after`, the messages posted after it, oldest
+        first, for catching up. With neither, the newest messages, newest
+        first. Message IDs sort in the order the messages were posted, so the
+        last ID of one page is the cursor of the next.
+      parameters:
+        - name: before
+          in: query
+          required: false
+          description: >-
+            A message ID; only messages posted before it are returned. Cannot
+            be combined with `after`. An empty value counts as absent.
+          schema:
+            type: string
+            example: 01JBX8C4N2F6H8K0P3R5T7W9YZ
+        - name: after
+          in: query
+          required: false
+          description: >-
+            A message ID; only messages posted after it are returned. Cannot be
+            combined with `before`. An empty value counts as absent.
+          schema:
+            type: string
+            example: 01JBX8C4N2F6H8K0P3R5T7W9YZ
+        - name: limit
+          in: query
+          required: false
+          description: The most messages to return; larger values are refused.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 50
+            x-go-type-skip-optional-pointer: false
+      responses:
+        "200":
+          description: The page of messages.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageList"
+        "400":
+          description: >-
+            The query is not allowed (`invalid_request`): `before` and `after`
+            together, a cursor that is not a message ID, or a limit out of
+            range.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          $ref: "#/components/responses/VisitorRequired"
+        "404":
+          $ref: "#/components/responses/RoomNotFound"
+        default:
+          $ref: "#/components/responses/Error"
+    post:
+      operationId: postMessage
+      tags: [rooms]
+      summary: Post a message in a room's chat.
+      description: >-
+        Posts a message under the visitor's current name. Posting is
+        idempotent by request key: posting again with the same key and body,
+        say after a lost response, returns the message posted first and
+        creates nothing. New messages are limited per visitor;
+        such a repeat is not.
+      requestBody:
+        description: The message and its request key.
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PostMessageRequest"
+      responses:
+        "200":
+          description: >-
+            The visitor already posted this request key with this body in this
+            room; the body is that message.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Message"
+        "201":
+          description: Posted; the body is the new message.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Message"
+        "400":
+          description: >-
+            The message body breaks the message rules (`invalid_message`): empty
+            or only white space, or longer than 4000 characters. A missing body
+            counts as empty. A request key
+            that breaks its rules, or a body that is not JSON of the request's
+            shape, is `invalid_request`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          $ref: "#/components/responses/VisitorRequired"
+        "404":
+          $ref: "#/components/responses/RoomNotFound"
+        "409":
+          description: >-
+            The visitor already used this request key for a different body or
+            in another room (`request_key_reused`).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "429":
+          description: Too many messages from this visitor (`rate_limited`); try again later.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        default:
+          $ref: "#/components/responses/Error"
   /health/live:
     get:
       operationId: getLiveness
@@ -210,6 +344,12 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/Error"
+    RoomNotFound:
+      description: No room has this ID (`room_not_found`).
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
     VisitorRequired:
       description: >-
         The request has no valid visitor cookie (`visitor_required`); enter
@@ -232,8 +372,10 @@ components:
             `internal` (the server failed), `visitor_required` (no valid
             visitor cookie), `invalid_link` (wrong access link secret),
             `invalid_name` (a name breaks the name rules), `name_taken`
-            (another visitor holds the name) or `rate_limited` (too many
-            requests).
+            (another visitor holds the name), `rate_limited` (too many
+            requests), `room_not_found` (no such room), `invalid_message` (a
+            message body breaks the message rules) or `request_key_reused`
+            (a request key was already used for another message).
           example: not_found
         message:
           type: string
@@ -355,3 +497,73 @@ components:
           type: string
           description: The participant's name.
           example: Bob
+    Message:
+      type: object
+      description: >-
+        A piece of text a visitor posted in a room's chat, under the name they
+        had when posting.
+      required: [id, roomId, authorId, authorName, body, createdAt]
+      properties:
+        id:
+          type: string
+          description: >-
+            The message's ID, a ULID. IDs sort in the order messages were
+            posted, and serve as history cursors.
+          example: 01JBX8C4N2F6H8K0P3R5T7W9YZ
+        roomId:
+          type: string
+          description: The ID of the room the message was posted in.
+          example: 01JBX7A2K9D4F6H8M0P3R5T7VW
+        authorId:
+          type: string
+          description: The visitor ID of the author.
+          example: 01JBX6Z8Q3M5W2K7R9T4V1C0DE
+        authorName:
+          type: string
+          description: The author's name when they posted; a later rename does not change it.
+          example: Bob
+        body:
+          type: string
+          description: The text, as posted.
+          example: Anyone up for a game?
+        createdAt:
+          type: string
+          format: date-time
+          description: When the message was posted, in UTC.
+          example: "2026-11-04T18:30:05.123Z"
+    MessageList:
+      type: object
+      description: A page of a room's chat.
+      required: [messages]
+      properties:
+        messages:
+          type: array
+          description: The messages, in the order the request asked for.
+          items:
+            $ref: "#/components/schemas/Message"
+          example:
+            - id: 01JBX8C4N2F6H8K0P3R5T7W9YZ
+              roomId: 01JBX7A2K9D4F6H8M0P3R5T7VW
+              authorId: 01JBX6Z8Q3M5W2K7R9T4V1C0DE
+              authorName: Bob
+              body: Anyone up for a game?
+              createdAt: "2026-11-04T18:30:05.123Z"
+    PostMessageRequest:
+      type: object
+      description: A message to post and the key that makes retrying it safe.
+      required: [requestKey, body]
+      properties:
+        requestKey:
+          type: string
+          description: >-
+            Chosen by the client, new for each message and reused only to
+            retry the same post, for example a random UUID: 1 to 64 letters,
+            digits, `-` or `_`. Keys are per visitor.
+          pattern: "^[A-Za-z0-9_-]{1,64}$"
+          example: 3f1c2a9e-7b4d-4e8a-9c61-2d5f0b8e7a13
+        body:
+          type: string
+          description: >-
+            The text: 1 to 4000 characters, not only white space. It is kept as
+            sent, untrimmed.
+          example: Anyone up for a game?

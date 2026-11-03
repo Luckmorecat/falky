@@ -293,7 +293,7 @@ func TestRunRefusesUnknownCommands(t *testing.T) {
 	}
 }
 
-func TestAVisitorIsStillKnownAfterARestart(t *testing.T) {
+func TestMessagesRoomsAndVisitorsSurviveARestart(t *testing.T) {
 	dir := t.TempDir()
 	vars := map[string]string{
 		platform.EnvDBPath:      filepath.Join(dir, "falky.db"),
@@ -306,6 +306,8 @@ func TestAVisitorIsStillKnownAfterARestart(t *testing.T) {
 	stop, public := startServerOn(t, cfg, io.Discard)
 	_, link, _ := runLinkShow(t, env(vars))
 	secret := strings.TrimSpace(link[strings.Index(link, "#k=")+len("#k="):])
+	_, out, _ := runCommand(t, env(vars), "room", "create", "Lounge")
+	roomID := strings.TrimSpace(out)
 
 	c, err := api.NewClientWithResponses(public)
 	if err != nil {
@@ -323,6 +325,10 @@ func TestAVisitorIsStillKnownAfterARestart(t *testing.T) {
 		req.AddCookie(cookies[0])
 		return nil
 	}
+	posted, err := c.PostMessageWithResponse(t.Context(), roomID, api.PostMessageRequest{RequestKey: "k1", Body: "hello"}, withCookie)
+	if err != nil || posted.StatusCode() != http.StatusCreated || posted.JSON201 == nil {
+		t.Fatalf("PostMessage = %v, %v, want 201", posted, err)
+	}
 
 	stop()
 	_, public = startServerOn(t, cfg, io.Discard)
@@ -336,6 +342,22 @@ func TestAVisitorIsStillKnownAfterARestart(t *testing.T) {
 	}
 	if me.StatusCode() != http.StatusOK || me.JSON200 == nil || *me.JSON200 != *entered.JSON201 {
 		t.Errorf("GetMe after restart = %d %s, want 200 with %+v", me.StatusCode(), me.Body, *entered.JSON201)
+	}
+	rooms, err := c.ListRoomsWithResponse(t.Context(), withCookie)
+	if err != nil {
+		t.Fatalf("ListRooms: %v", err)
+	}
+	if rooms.StatusCode() != http.StatusOK || rooms.JSON200 == nil || len(rooms.JSON200.Rooms) != 1 ||
+		rooms.JSON200.Rooms[0].Id != roomID || rooms.JSON200.Rooms[0].Name != "Lounge" {
+		t.Errorf("ListRooms after restart = %d %s, want Lounge with ID %s", rooms.StatusCode(), rooms.Body, roomID)
+	}
+	history, err := c.ListMessagesWithResponse(t.Context(), roomID, nil, withCookie)
+	if err != nil {
+		t.Fatalf("ListMessages: %v", err)
+	}
+	if history.StatusCode() != http.StatusOK || history.JSON200 == nil || len(history.JSON200.Messages) != 1 ||
+		history.JSON200.Messages[0] != *posted.JSON201 {
+		t.Errorf("ListMessages after restart = %d %s, want only %+v", history.StatusCode(), history.Body, *posted.JSON201)
 	}
 }
 

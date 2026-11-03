@@ -12,13 +12,14 @@ import (
 	"time"
 
 	"github.com/kisshot/falky/server/internal/api"
+	"github.com/kisshot/falky/server/internal/chat"
 	"github.com/kisshot/falky/server/internal/identity"
 	"github.com/kisshot/falky/server/internal/platform"
 	"github.com/kisshot/falky/server/internal/rooms"
 )
 
 // publicServer is the public listener over TLS (the visitor cookie is
-// Secure) with real identity and rooms services on a temporary database.
+// Secure) with real identity, rooms and chat services on a temporary database.
 type publicServer struct {
 	srv    *httptest.Server
 	secret string
@@ -26,10 +27,18 @@ type publicServer struct {
 }
 
 // startPublic serves the public listener, limiting entering to enterBurst
-// attempts per client IP with no refill during the test.
+// attempts per client IP with no refill during the test, and posting
+// generously.
 func startPublic(t *testing.T, enterBurst int) publicServer {
 	t.Helper()
-	ms, err := platform.LoadMigrations(identity.Migrations(), rooms.Migrations())
+	return startPublicLimited(t, enterBurst, 1000)
+}
+
+// startPublicLimited is startPublic that also limits posting to postBurst
+// messages per visitor with no refill during the test.
+func startPublicLimited(t *testing.T, enterBurst, postBurst int) publicServer {
+	t.Helper()
+	ms, err := platform.LoadMigrations(identity.Migrations(), rooms.Migrations(), chat.Migrations())
 	if err != nil {
 		t.Fatalf("LoadMigrations: %v", err)
 	}
@@ -62,6 +71,7 @@ func startPublic(t *testing.T, enterBurst int) publicServer {
 		Metrics:    platform.NewMetrics().Handler(),
 		Identity:   ident,
 		Rooms:      rs,
+		Chat:       chat.New(db, chat.WithPostLimit(platform.NewLimiter(postBurst, time.Hour, func() time.Time { return start }))),
 		EnterLimit: platform.NewLimiter(enterBurst, time.Hour, func() time.Time { return start }),
 	})
 	srv := httptest.NewTLSServer(h.Public)
