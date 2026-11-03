@@ -46,21 +46,31 @@ func (v visitorResolver) middleware(next api.StrictHandlerFunc, operationID stri
 		if openOperations[operationID] {
 			return next(ctx, w, r, request)
 		}
-		var token string
-		if c, err := r.Cookie(cookieName); err == nil {
-			token = c.Value
-		}
-		visitor, err := v.identity.Resolve(ctx, token)
-		if errors.Is(err, identity.ErrNoVisitor) {
-			writeError(w, http.StatusUnauthorized, visitorRequired.Code, visitorRequired.Message)
-			return nil, nil
-		}
-		if err != nil {
-			v.errs.internal(w, r, err)
+		visitor, ok := v.visitor(w, r.WithContext(ctx))
+		if !ok {
 			return nil, nil
 		}
 		return next(context.WithValue(ctx, visitorKey{}, visitor), w, r, request)
 	}
+}
+
+// visitor resolves the visitor cookie of r. When it does not resolve, it
+// answers 401 (or 500 when resolving fails) and reports false.
+func (v visitorResolver) visitor(w http.ResponseWriter, r *http.Request) (identity.Visitor, bool) {
+	var token string
+	if c, err := r.Cookie(cookieName); err == nil {
+		token = c.Value
+	}
+	visitor, err := v.identity.Resolve(r.Context(), token)
+	if errors.Is(err, identity.ErrNoVisitor) {
+		writeError(w, http.StatusUnauthorized, visitorRequired.Code, visitorRequired.Message)
+		return identity.Visitor{}, false
+	}
+	if err != nil {
+		v.errs.internal(w, r, err)
+		return identity.Visitor{}, false
+	}
+	return visitor, true
 }
 
 // currentVisitor is the visitor the middleware resolved for this request.

@@ -20,6 +20,39 @@ import (
 	"github.com/oapi-codegen/runtime"
 )
 
+// Defines values for EventV.
+const (
+	EventVN1 EventV = 1
+)
+
+// Valid indicates whether the value is a known member of the EventV enum.
+func (e EventV) Valid() bool {
+	switch e {
+	case EventVN1:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for EventType.
+const (
+	EventTypeMessageCreated EventType = "message.created"
+	EventTypeRoomChanged    EventType = "room.changed"
+)
+
+// Valid indicates whether the value is a known member of the EventType enum.
+func (e EventType) Valid() bool {
+	switch e {
+	case EventTypeMessageCreated:
+		return true
+	case EventTypeRoomChanged:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for HealthStatus.
 const (
 	HealthStatusOk          HealthStatus = "ok"
@@ -53,7 +86,7 @@ type EnterRequest struct {
 
 // Error The body of every error response.
 type Error struct {
-	// Code Stable, machine-readable error code: `not_found` (no such route), `invalid_request` (the request does not match the contract), `internal` (the server failed), `visitor_required` (no valid visitor cookie), `invalid_link` (wrong access link secret), `invalid_name` (a name breaks the name rules), `name_taken` (another visitor holds the name), `rate_limited` (too many requests), `room_not_found` (no such room), `invalid_message` (a message body breaks the message rules) or `request_key_reused` (a request key was already used for another message).
+	// Code Stable, machine-readable error code: `not_found` (no such route), `invalid_request` (the request does not match the contract), `internal` (the server failed), `visitor_required` (no valid visitor cookie), `invalid_link` (wrong access link secret), `invalid_name` (a name breaks the name rules), `name_taken` (another visitor holds the name), `rate_limited` (too many requests), `room_not_found` (no such room), `invalid_message` (a message body breaks the message rules), `request_key_reused` (a request key was already used for another message) or `origin_forbidden` (a live-update connection from a foreign origin).
 	//
 	// Example: not_found
 	Code string `json:"code"`
@@ -63,6 +96,54 @@ type Error struct {
 	// Example: no such route
 	Message string `json:"message"`
 }
+
+// Event A live update, as sent over `GET /api/live`. `type` says what happened and which schema `payload` has: `message.created` carries a `Message`, `room.changed` a `RoomChange`. Clients ignore event types they do not know.
+//
+// Example: {"eventId":"01JBX8C4P0G7J9M1Q4S6V8X0ZA","payload":{"authorId":"01JBX6Z8Q3M5W2K7R9T4V1C0DE","authorName":"Bob","body":"Anyone up for a game?","createdAt":"2026-11-04T18:30:05.123Z","id":"01JBX8C4N2F6H8K0P3R5T7W9YZ","roomId":"01JBX7A2K9D4F6H8M0P3R5T7VW"},"roomId":"01JBX7A2K9D4F6H8M0P3R5T7VW","timestamp":"2026-11-04T18:30:05.140Z","type":"message.created","v":1}
+type Event struct {
+	// EventId The event's ID, a ULID, unique to this event.
+	//
+	// Example: 01JBX8C4P0G7J9M1Q4S6V8X0ZA
+	EventId string `json:"eventId"`
+
+	// Payload What happened, in the schema `type` names.
+	Payload Event_Payload `json:"payload"`
+
+	// RoomId Set on events about what happens inside one room, such as a new message: the room's ID. Such events reach only the visitors allowed into that room.
+	//
+	// Example: 01JBX7A2K9D4F6H8M0P3R5T7VW
+	RoomId string `json:"roomId,omitempty"`
+
+	// Timestamp When the server published the event, in UTC.
+	//
+	// Example: 2026-11-04T18:30:05.140Z
+	Timestamp time.Time `json:"timestamp"`
+
+	// Type What an event reports: `message.created`, a message was posted (its payload is the `Message`); `room.changed`, a room was created or renamed (its payload is the `RoomChange`).
+	//
+	// Example: message.created
+	Type EventType `json:"type"`
+
+	// V The version of this envelope.
+	//
+	// Example: 1
+	V EventV `json:"v"`
+}
+
+// Event_Payload What happened, in the schema `type` names.
+type Event_Payload struct {
+	union json.RawMessage
+}
+
+// EventV The version of this envelope.
+//
+// Example: 1
+type EventV int
+
+// EventType What an event reports: `message.created`, a message was posted (its payload is the `Message`); `room.changed`, a room was created or renamed (its payload is the `RoomChange`).
+//
+// Example: message.created
+type EventType string
 
 // Health Overall health and, for readiness, each checked component.
 type Health struct {
@@ -180,6 +261,19 @@ type Room struct {
 	Occupancy []Participant `json:"occupancy"`
 }
 
+// RoomChange A room as it is after being created or renamed.
+type RoomChange struct {
+	// Id The ID of the room created or renamed.
+	//
+	// Example: 01JBX7A2K9D4F6H8M0P3R5T7VW
+	Id string `json:"id"`
+
+	// Name The room's name now.
+	//
+	// Example: Lounge
+	Name string `json:"name"`
+}
+
 // RoomList The list of rooms.
 type RoomList struct {
 	// Rooms The rooms, in the order they were created.
@@ -233,6 +327,68 @@ type RenameMeJSONRequestBody = RenameRequest
 
 // PostMessageJSONRequestBody defines body for PostMessage for application/json ContentType.
 type PostMessageJSONRequestBody = PostMessageRequest
+
+// AsMessage returns the union data inside the Event_Payload as a Message
+func (t Event_Payload) AsMessage() (Message, error) {
+	var body Message
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromMessage overwrites any union data inside the Event_Payload as the provided Message
+func (t *Event_Payload) FromMessage(v Message) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeMessage performs a merge with any union data inside the Event_Payload, using the provided Message
+func (t *Event_Payload) MergeMessage(v Message) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsRoomChange returns the union data inside the Event_Payload as a RoomChange
+func (t Event_Payload) AsRoomChange() (RoomChange, error) {
+	var body RoomChange
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromRoomChange overwrites any union data inside the Event_Payload as the provided RoomChange
+func (t *Event_Payload) FromRoomChange(v RoomChange) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeRoomChange performs a merge with any union data inside the Event_Payload, using the provided RoomChange
+func (t *Event_Payload) MergeRoomChange(v RoomChange) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+func (t Event_Payload) MarshalJSON() ([]byte, error) {
+	b, err := t.union.MarshalJSON()
+	return b, err
+}
+
+func (t *Event_Payload) UnmarshalJSON(b []byte) error {
+	err := t.union.UnmarshalJSON(b)
+	return err
+}
 
 // RequestEditorFn is the function signature for the RequestEditor callback function
 type RequestEditorFn func(ctx context.Context, req *http.Request) error

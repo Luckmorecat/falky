@@ -17,6 +17,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/coder/websocket"
+
 	"github.com/kisshot/falky/server/internal/admin"
 	"github.com/kisshot/falky/server/internal/api"
 	"github.com/kisshot/falky/server/internal/platform"
@@ -369,7 +371,29 @@ func runCommand(t *testing.T, getenv func(string) string, args ...string) (code 
 	return code, out.String(), errOut.String()
 }
 
-func TestRoomCommandsChangeTheRoomListAtOnce(t *testing.T) {
+// roomChanged reads the next event from ws and returns its room change,
+// failing the test unless it is a room.changed event that comes within a
+// second.
+func roomChanged(t *testing.T, ws *websocket.Conn) api.RoomChange {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	_, data, err := ws.Read(ctx)
+	if err != nil {
+		t.Fatalf("no live update within a second: %v", err)
+	}
+	var e api.Event
+	if err := json.Unmarshal(data, &e); err != nil || e.Type != api.EventTypeRoomChanged {
+		t.Fatalf("live update %s (%v), want room.changed", data, err)
+	}
+	r, err := e.Payload.AsRoomChange()
+	if err != nil {
+		t.Fatalf("room.changed payload %s: %v", data, err)
+	}
+	return r
+}
+
+func TestRoomCommandsChangeTheRoomListAndTellConnectedVisitors(t *testing.T) {
 	dir := t.TempDir()
 	vars := map[string]string{
 		platform.EnvDBPath:      filepath.Join(dir, "falky.db"),
@@ -402,6 +426,13 @@ func TestRoomCommandsChangeTheRoomListAtOnce(t *testing.T) {
 		}
 		return res.JSON200.Rooms
 	}
+	ws, _, err := websocket.Dial(t.Context(), public+"/api/live", &websocket.DialOptions{ //nolint:bodyclose // Dial closes the body on success
+		HTTPHeader: http.Header{"Origin": {cfg.PublicOrigin}, "Cookie": {cookie.Name + "=" + cookie.Value}},
+	})
+	if err != nil {
+		t.Fatalf("Dial /api/live: %v", err)
+	}
+	defer func() { _ = ws.CloseNow() }()
 
 	code, out, stderr := runCommand(t, env(vars), "room", "create", "Lounge")
 	id := strings.TrimSuffix(out, "\n")
@@ -411,12 +442,18 @@ func TestRoomCommandsChangeTheRoomListAtOnce(t *testing.T) {
 	if rooms := listRooms(); len(rooms) != 1 || rooms[0].Id != id || rooms[0].Name != "Lounge" {
 		t.Errorf("rooms after room create = %+v, want Lounge with ID %s", rooms, id)
 	}
+	if got := roomChanged(t, ws); got != (api.RoomChange{Id: id, Name: "Lounge"}) {
+		t.Errorf("live update after room create = %+v, want Lounge with ID %s", got, id)
+	}
 
 	if code, out, stderr := runCommand(t, env(vars), "room", "rename", id, "Living room"); code != 0 || out != "" {
 		t.Fatalf("room rename = exit %d, stdout %q, stderr %q; want 0 and no output", code, out, stderr)
 	}
 	if rooms := listRooms(); len(rooms) != 1 || rooms[0].Id != id || rooms[0].Name != "Living room" {
 		t.Errorf("rooms after room rename = %+v, want Living room with ID %s", rooms, id)
+	}
+	if got := roomChanged(t, ws); got != (api.RoomChange{Id: id, Name: "Living room"}) {
+		t.Errorf("live update after room rename = %+v, want Living room with ID %s", got, id)
 	}
 
 	if code, out, stderr := runCommand(t, env(vars), "room", "create", "living ROOM"); code == 0 || out != "" ||
@@ -440,5 +477,60 @@ func TestRoomCommandsFailWhenNoServerIsRunning(t *testing.T) {
 		if code, out, stderr := runCommand(t, getenv, args...); code == 0 || out != "" || !strings.Contains(stderr, "not running") {
 			t.Errorf("%q = exit %d, stdout %q, stderr %q; want non-zero saying the server is not running", args, code, out, stderr)
 		}
+	}
+}
+
+func TestServeClosesLiveConnectionsWhenItStops(t *testing.T) {
+	dir := t.TempDir()
+	vars := map[string]string{
+		platform.EnvDBPath:      filepath.Join(dir, "falky.db"),
+		platform.EnvAdminSocket: filepath.Join(dir, "admin.sock"),
+	}
+	cfg, err := platform.LoadConfig(env(vars))
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	stop, public := startServerOn(t, cfg, io.Discard)
+	_, link, _ := runLinkShow(t, env(vars))
+	secret := strings.TrimSpace(link[strings.Index(link, "#k=")+len("#k="):])
+	c, err := api.NewClientWithResponses(public)
+	if err != nil {
+		t.Fatalf("NewClientWithResponses: %v", err)
+	}
+	entered, err := c.EnterWithResponse(t.Context(), api.EnterRequest{Secret: secret, Name: "Bob"})
+	if err != nil || entered.StatusCode() != http.StatusCreated {
+		t.Fatalf("Enter = %v, %v, want 201", entered, err)
+	}
+	cookie := entered.HTTPResponse.Cookies()[0]
+	ws, _, err := websocket.Dial(t.Context(), public+"/api/live", &websocket.DialOptions{ //nolint:bodyclose // Dial closes the body on success
+		HTTPHeader: http.Header{"Origin": {cfg.PublicOrigin}, "Cookie": {cookie.Name + "=" + cookie.Value}},
+	})
+	if err != nil {
+		t.Fatalf("Dial /api/live: %v", err)
+	}
+	defer func() { _ = ws.CloseNow() }()
+	closed := make(chan error, 1)
+	go func() {
+		_, _, err := ws.Read(context.Background())
+		closed <- err
+	}()
+
+	stopped := make(chan struct{})
+	go func() {
+		stop()
+		close(stopped)
+	}()
+	select {
+	case err := <-closed:
+		if websocket.CloseStatus(err) != websocket.StatusGoingAway {
+			t.Errorf("live connection ended with %v, want close status going away", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("live connection still open 5 s after the server began to stop")
+	}
+	select {
+	case <-stopped:
+	case <-time.After(5 * time.Second):
+		t.Fatal("server did not stop")
 	}
 }

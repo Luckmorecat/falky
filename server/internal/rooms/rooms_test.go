@@ -5,7 +5,9 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/kisshot/falky/server/internal/identity"
 	"github.com/kisshot/falky/server/internal/platform"
@@ -162,5 +164,90 @@ func TestAuthorizeAllowsEverythingInAKnownRoomOnly(t *testing.T) {
 		if err := s.Authorize(t.Context(), bob, "01JBX6Z8Q3M5W2K7R9T4V1C0DF", action); !errors.Is(err, rooms.ErrNotFound) {
 			t.Errorf("Authorize(%v) in an unknown room = %v, want ErrNotFound", action, err)
 		}
+	}
+}
+
+func TestCreatingAndRenamingPublishTheCommittedRoom(t *testing.T) {
+	var published, listedThen []rooms.Room
+	var s *rooms.Service
+	s = rooms.New(openDB(t, filepath.Join(t.TempDir(), "falky.db")), rooms.WithPublisher(func(r rooms.Room) {
+		published = append(published, r)
+		listedThen = list(t, s)
+	}))
+
+	lounge := create(t, s, " Lounge ")
+	if !slices.Equal(published, []rooms.Room{lounge}) || lounge.Name != "Lounge" {
+		t.Fatalf("published after Create = %+v, want the created room %+v", published, lounge)
+	}
+	if !slices.Equal(listedThen, []rooms.Room{lounge}) {
+		t.Errorf("rooms listed while publishing the creation = %+v, want it committed", listedThen)
+	}
+
+	renamed, err := s.Rename(t.Context(), lounge.ID, "Living room")
+	if err != nil {
+		t.Fatalf("Rename: %v", err)
+	}
+	if !slices.Equal(published, []rooms.Room{lounge, renamed}) || renamed != (rooms.Room{ID: lounge.ID, Name: "Living room"}) {
+		t.Fatalf("published after Rename = %+v, want the renamed room last", published)
+	}
+	if !slices.Equal(listedThen, []rooms.Room{renamed}) {
+		t.Errorf("rooms listed while publishing the rename = %+v, want it committed", listedThen)
+	}
+
+	create(t, s, "Games")
+	published = nil
+	for name, attempt := range map[string]func() error{
+		"Create with a taken name": func() error { _, err := s.Create(t.Context(), "games"); return err },
+		"Create with no name":      func() error { _, err := s.Create(t.Context(), " "); return err },
+		"Rename to a taken name":   func() error { _, err := s.Rename(t.Context(), lounge.ID, "GAMES"); return err },
+		"Rename an unknown room":   func() error { _, err := s.Rename(t.Context(), "01JBX6Z8Q3M5W2K7R9T4V1C0DE", "Den"); return err },
+	} {
+		if err := attempt(); err == nil {
+			t.Errorf("%s succeeded, want an error", name)
+		}
+	}
+	if len(published) != 0 {
+		t.Errorf("refused changes published %+v, want nothing", published)
+	}
+}
+
+func TestChangesArePublishedInTheOrderTheyAreCommitted(t *testing.T) {
+	created := make(chan rooms.Room, 1)
+	release := make(chan struct{})
+	var mu sync.Mutex
+	calls := 0
+	var published []rooms.Room
+	s := rooms.New(openDB(t, filepath.Join(t.TempDir(), "falky.db")), rooms.WithPublisher(func(r rooms.Room) {
+		mu.Lock()
+		calls++
+		holds := calls == 1 // the creation is slow to publish
+		mu.Unlock()
+		if holds {
+			created <- r
+			<-release
+		}
+		mu.Lock()
+		published = append(published, r)
+		mu.Unlock()
+	}))
+
+	var wg sync.WaitGroup
+	wg.Go(func() { create(t, s, "Lounge") })
+	lounge := <-created
+	// While the creation is still being published, the room is renamed; the
+	// old name must not be published after the new one.
+	wg.Go(func() {
+		if _, err := s.Rename(t.Context(), lounge.ID, "Living room"); err != nil {
+			t.Errorf("Rename: %v", err)
+		}
+	})
+	time.Sleep(50 * time.Millisecond)
+	close(release)
+	wg.Wait()
+
+	mu.Lock()
+	defer mu.Unlock()
+	if want := []rooms.Room{lounge, {ID: lounge.ID, Name: "Living room"}}; !slices.Equal(published, want) {
+		t.Errorf("published %+v, want %+v", published, want)
 	}
 }

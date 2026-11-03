@@ -33,6 +33,7 @@ import (
 	"github.com/kisshot/falky/server/internal/httpapi"
 	"github.com/kisshot/falky/server/internal/identity"
 	"github.com/kisshot/falky/server/internal/platform"
+	"github.com/kisshot/falky/server/internal/realtime"
 	"github.com/kisshot/falky/server/internal/rooms"
 )
 
@@ -232,15 +233,21 @@ func serveOn(ctx context.Context, logger *slog.Logger, cfg platform.Config, db *
 	health := platform.NewHealth(logger)
 	health.Require("database", func(ctx context.Context) error { return db.CheckMigrated(ctx, ms) })
 	ident := identity.New(db, cfg.PublicOrigin)
-	rs := rooms.New(db)
+	hub := realtime.New(realtime.WithLogger(logger))
+	events := httpapi.Events{Hub: hub, Logger: logger}
+	rs := rooms.New(db, rooms.WithPublisher(events.RoomChanged))
 	handlers := httpapi.New(httpapi.Deps{
-		Logger:     logger,
-		Health:     health,
-		Metrics:    platform.NewMetrics().Handler(),
-		Identity:   ident,
-		Rooms:      rs,
-		Chat:       chat.New(db, chat.WithPostLimit(platform.NewLimiter(postBurst, postInterval, time.Now))),
-		EnterLimit: platform.NewLimiter(enterBurst, enterInterval, time.Now),
+		Logger:   logger,
+		Health:   health,
+		Metrics:  platform.NewMetrics().Handler(),
+		Identity: ident,
+		Rooms:    rs,
+		Chat: chat.New(db,
+			chat.WithPostLimit(platform.NewLimiter(postBurst, postInterval, time.Now)),
+			chat.WithPublisher(events.MessageCreated)),
+		EnterLimit:   platform.NewLimiter(enterBurst, enterInterval, time.Now),
+		Live:         hub,
+		PublicOrigin: cfg.PublicOrigin,
 	})
 	adminHandler := admin.Handler(admin.Deps{Logger: logger, Identity: ident, Rooms: rs})
 
@@ -272,6 +279,10 @@ func serveOn(ctx context.Context, logger *slog.Logger, cfg platform.Config, db *
 		if e := s.srv.Shutdown(shutdownCtx); e != nil {
 			err = errors.Join(err, fmt.Errorf("shut down %s listener: %w", s.name, e))
 		}
+	}
+	// The servers do not track the WebSocket connections they handed over.
+	if e := hub.Shutdown(shutdownCtx); e != nil {
+		err = errors.Join(err, fmt.Errorf("shut down live updates: %w", e))
 	}
 	if err == nil {
 		logger.Info("stopped")

@@ -11,6 +11,7 @@ import (
 	"io/fs"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -89,6 +90,10 @@ type Service struct {
 	db        *platform.DB
 	now       func() time.Time
 	postLimit *platform.Limiter
+	publish   func(Message)
+	// publishing holds each Post from its write until it has published, so
+	// messages are published in the order they are committed.
+	publishing sync.Mutex
 }
 
 // Option changes how New sets up the Service.
@@ -106,9 +111,16 @@ func WithPostLimit(limiter *platform.Limiter) Option {
 	return func(s *Service) { s.postLimit = limiter }
 }
 
+// WithPublisher makes Post hand each message it creates to publish once the
+// message is committed, in the order they are committed; a repeated request
+// creates nothing and publishes nothing. publish must not block.
+func WithPublisher(publish func(Message)) Option {
+	return func(s *Service) { s.publish = publish }
+}
+
 // New returns the service over db.
 func New(db *platform.DB, opts ...Option) *Service {
-	s := &Service{db: db, now: time.Now}
+	s := &Service{db: db, now: time.Now, publish: func(Message) {}}
 	for _, opt := range opts {
 		opt(s)
 	}
@@ -133,6 +145,8 @@ func (s *Service) Post(ctx context.Context, author identity.Visitor, roomID, req
 	}
 	var m Message
 	created := false
+	s.publishing.Lock()
+	defer s.publishing.Unlock()
 	err := s.db.Write(ctx, func(tx *sql.Tx) error {
 		existing, err := scanMessage(tx.QueryRowContext(ctx,
 			selectMessages+" WHERE author_id = ? AND request_key = ?", author.ID, requestKey))
@@ -175,6 +189,9 @@ func (s *Service) Post(ctx context.Context, author identity.Visitor, roomID, req
 	}
 	if err != nil {
 		return Message{}, false, fmt.Errorf("post message: %w", err)
+	}
+	if created {
+		s.publish(m)
 	}
 	return m, created, nil
 }

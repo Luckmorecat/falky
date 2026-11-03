@@ -18,6 +18,8 @@ tags:
     description: Entering through the access link, and the current visitor.
   - name: rooms
     description: The rooms visitors talk in by voice and chat.
+  - name: live
+    description: Live updates the server pushes over a WebSocket.
 paths:
   /api/enter:
     post:
@@ -271,6 +273,51 @@ paths:
                 $ref: "#/components/schemas/Error"
         default:
           $ref: "#/components/responses/Error"
+  /api/live:
+    get:
+      operationId: openLive
+      # A WebSocket upgrade succeeds with 101, which the linter does not count.
+      x-lint-ignore: operation-success-response
+      tags: [live]
+      summary: Open the live-update WebSocket.
+      description: >-
+        Upgrades to a WebSocket over which the server sends live updates, each
+        an `Event` as one JSON text message. The connection carries events from
+        the server only: messages from the client are ignored, though one over
+        32 KiB closes the connection with close code 1009. The upgrade's
+        `Origin` must be the server's public origin. The server pings every 20
+        seconds and closes a connection that does not answer within 10
+        seconds. Each connection has a bounded queue of events waiting to be
+        sent; a client that lets it fill up is disconnected with close code
+        4000. When the server shuts down it closes connections with close code
+        1001. Events are not replayed: after any disconnection a client
+        reconnects first and then catches up through the other operations,
+        reading each room's messages with `after` set to the last message ID
+        it saw and the room list again. Events that arrive while it catches up
+        may repeat what it reads; it keeps one message per message ID.
+      parameters:
+        - name: Origin
+          in: header
+          required: true
+          description: The page's origin; it must be the server's public origin.
+          schema:
+            type: string
+            example: https://falky.example
+      responses:
+        "101":
+          description: Switched to the WebSocket protocol; events follow.
+        "401":
+          $ref: "#/components/responses/VisitorRequired"
+        "403":
+          description: >-
+            The `Origin` is missing or is not the server's public origin
+            (`origin_forbidden`). No WebSocket is opened.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        default:
+          $ref: "#/components/responses/Error"
   /health/live:
     get:
       operationId: getLiveness
@@ -374,8 +421,10 @@ components:
             `invalid_name` (a name breaks the name rules), `name_taken`
             (another visitor holds the name), `rate_limited` (too many
             requests), `room_not_found` (no such room), `invalid_message` (a
-            message body breaks the message rules) or `request_key_reused`
-            (a request key was already used for another message).
+            message body breaks the message rules), `request_key_reused`
+            (a request key was already used for another message) or
+            `origin_forbidden` (a live-update connection from a foreign
+            origin).
           example: not_found
         message:
           type: string
@@ -567,3 +616,76 @@ components:
             The text: 1 to 4000 characters, not only white space. It is kept as
             sent, untrimmed.
           example: Anyone up for a game?
+    Event:
+      # Sent over the WebSocket, which no operation can reference.
+      x-lint-ignore: oas3-unused-component
+      type: object
+      description: >-
+        A live update, as sent over `GET /api/live`. `type` says what happened
+        and which schema `payload` has: `message.created` carries a `Message`,
+        `room.changed` a `RoomChange`. Clients ignore event types they do not
+        know.
+      required: [v, type, eventId, payload, timestamp]
+      properties:
+        v:
+          type: integer
+          description: The version of this envelope.
+          enum: [1]
+          example: 1
+        type:
+          $ref: "#/components/schemas/EventType"
+        eventId:
+          type: string
+          description: The event's ID, a ULID, unique to this event.
+          example: 01JBX8C4P0G7J9M1Q4S6V8X0ZA
+        roomId:
+          type: string
+          description: >-
+            Set on events about what happens inside one room, such as a new
+            message: the room's ID. Such events reach only the visitors
+            allowed into that room.
+          example: 01JBX7A2K9D4F6H8M0P3R5T7VW
+        payload:
+          description: What happened, in the schema `type` names.
+          oneOf:
+            - $ref: "#/components/schemas/Message"
+            - $ref: "#/components/schemas/RoomChange"
+        timestamp:
+          type: string
+          format: date-time
+          description: When the server published the event, in UTC.
+          example: "2026-11-04T18:30:05.140Z"
+      example:
+        v: 1
+        type: message.created
+        eventId: 01JBX8C4P0G7J9M1Q4S6V8X0ZA
+        roomId: 01JBX7A2K9D4F6H8M0P3R5T7VW
+        payload:
+          id: 01JBX8C4N2F6H8K0P3R5T7W9YZ
+          roomId: 01JBX7A2K9D4F6H8M0P3R5T7VW
+          authorId: 01JBX6Z8Q3M5W2K7R9T4V1C0DE
+          authorName: Bob
+          body: Anyone up for a game?
+          createdAt: "2026-11-04T18:30:05.123Z"
+        timestamp: "2026-11-04T18:30:05.140Z"
+    EventType:
+      type: string
+      description: >-
+        What an event reports: `message.created`, a message was posted (its
+        payload is the `Message`); `room.changed`, a room was created or
+        renamed (its payload is the `RoomChange`).
+      enum: [message.created, room.changed]
+      example: message.created
+    RoomChange:
+      type: object
+      description: A room as it is after being created or renamed.
+      required: [id, name]
+      properties:
+        id:
+          type: string
+          description: The ID of the room created or renamed.
+          example: 01JBX7A2K9D4F6H8M0P3R5T7VW
+        name:
+          type: string
+          description: The room's name now.
+          example: Lounge

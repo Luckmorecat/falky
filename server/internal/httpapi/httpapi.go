@@ -12,6 +12,7 @@ import (
 	"github.com/kisshot/falky/server/internal/chat"
 	"github.com/kisshot/falky/server/internal/identity"
 	"github.com/kisshot/falky/server/internal/platform"
+	"github.com/kisshot/falky/server/internal/realtime"
 	"github.com/kisshot/falky/server/internal/rooms"
 )
 
@@ -38,6 +39,12 @@ type Deps struct {
 	// EnterLimit limits entering per client IP. Posting is limited by Chat,
 	// which knows whether it only repeats a stored message.
 	EnterLimit *platform.Limiter
+	// Live is the hub GET /api/live connects to; the modules publish to it
+	// through Events.
+	Live *realtime.Hub
+	// PublicOrigin is where visitors reach the server, as scheme://host; a
+	// live-update connection from any other origin is refused.
+	PublicOrigin string
 }
 
 // New returns the handlers of both listeners. Every operation of the contract
@@ -65,6 +72,9 @@ func New(deps Deps) Handlers {
 	)
 
 	public := http.NewServeMux()
+	public.Handle("GET /api/live", live{
+		origin: deps.PublicOrigin, resolve: resolve, rooms: deps.Rooms, hub: deps.Live, logger: deps.Logger,
+	})
 	public.Handle("/api/", operations)
 	public.HandleFunc("/", notFound)
 

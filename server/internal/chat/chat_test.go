@@ -282,3 +282,82 @@ func TestPostLimitCountsNewMessagesOnly(t *testing.T) {
 	}
 	f.post(t, ann, f.lounge, "k3", "Ann has her own limit")
 }
+
+func TestPostingPublishesCommittedNewMessagesOnly(t *testing.T) {
+	var published []chat.Message
+	var historyThen []string
+	var f fixture
+	f = newFixture(t,
+		chat.WithPostLimit(platform.NewLimiter(2, time.Hour, time.Now)),
+		chat.WithPublisher(func(m chat.Message) {
+			published = append(published, m)
+			historyThen = ids(f.history(t, rooms.Room{ID: m.RoomID}, chat.Page{Limit: chat.MaxLimit}))
+		}))
+
+	m := f.post(t, bob, f.lounge, "k1", "hello")
+	if !slices.Equal(published, []chat.Message{m}) {
+		t.Fatalf("published after Post = %+v, want the new message %+v", published, m)
+	}
+	if !slices.Equal(historyThen, []string{m.ID}) {
+		t.Errorf("history while publishing = %v, want the message committed", historyThen)
+	}
+
+	published = nil
+	if _, created, err := f.chat.Post(t.Context(), bob, f.lounge.ID, "k1", "hello"); err != nil || created {
+		t.Fatalf("repeated Post = created %v, %v; want the stored message", created, err)
+	}
+	f.post(t, bob, f.lounge, "k2", "second") // spends the limit
+	published = nil
+	for name, attempt := range map[string]func() error{
+		"repeat":         func() error { _, _, err := f.chat.Post(t.Context(), bob, f.lounge.ID, "k2", "second"); return err },
+		"key reused":     func() error { _, _, err := f.chat.Post(t.Context(), bob, f.lounge.ID, "k1", "other"); return err },
+		"empty body":     func() error { _, _, err := f.chat.Post(t.Context(), bob, f.lounge.ID, "k3", " "); return err },
+		"over the limit": func() error { _, _, err := f.chat.Post(t.Context(), bob, f.lounge.ID, "k4", "third"); return err },
+		"invalid key":    func() error { _, _, err := f.chat.Post(t.Context(), bob, f.lounge.ID, "", "x"); return err },
+	} {
+		_ = attempt()
+		if len(published) != 0 {
+			t.Errorf("%s published %+v, want nothing", name, published)
+			published = nil
+		}
+	}
+}
+
+func TestMessagesArePublishedInTheOrderTheyAreCommitted(t *testing.T) {
+	publishing := make(chan string, 1)
+	release := make(chan struct{})
+	var mu sync.Mutex
+	calls := 0
+	var published []string
+	f := newFixture(t, chat.WithPublisher(func(m chat.Message) {
+		mu.Lock()
+		calls++
+		holds := calls == 1 // the first message is slow to publish
+		mu.Unlock()
+		if holds {
+			publishing <- m.ID
+			<-release
+		}
+		mu.Lock()
+		published = append(published, m.ID)
+		mu.Unlock()
+	}))
+
+	var wg sync.WaitGroup
+	wg.Go(func() { f.post(t, bob, f.lounge, "k1", "first") })
+	first := <-publishing
+	// While the first message is still being published, a second one is
+	// posted; it must not be published ahead of the first.
+	wg.Go(func() { f.post(t, ann, f.lounge, "k1", "second") })
+	time.Sleep(50 * time.Millisecond)
+	close(release)
+	wg.Wait()
+
+	mu.Lock()
+	defer mu.Unlock()
+	committed := ids(f.history(t, f.lounge, chat.Page{Limit: chat.MaxLimit}))
+	slices.Reverse(committed) // the history lists the newest first
+	if len(published) != 2 || published[0] != first || !slices.Equal(published, committed) {
+		t.Errorf("published %v, want the commit order %v with %s first", published, committed, first)
+	}
+}

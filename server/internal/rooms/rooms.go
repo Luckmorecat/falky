@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"sync"
 
 	"github.com/oklog/ulid/v2"
 
@@ -59,12 +60,30 @@ const (
 
 // Service manages the rooms.
 type Service struct {
-	db *platform.DB
+	db      *platform.DB
+	publish func(Room)
+	// publishing holds each change from its write until it has published, so
+	// changes are published in the order they are committed.
+	publishing sync.Mutex
+}
+
+// Option changes how New sets up the Service.
+type Option func(*Service)
+
+// WithPublisher makes Create and Rename hand the room they changed to publish
+// once the change is committed, in the order they are committed. publish
+// must not block.
+func WithPublisher(publish func(Room)) Option {
+	return func(s *Service) { s.publish = publish }
 }
 
 // New returns the service over db.
-func New(db *platform.DB) *Service {
-	return &Service{db: db}
+func New(db *platform.DB, opts ...Option) *Service {
+	s := &Service{db: db, publish: func(Room) {}}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
 }
 
 // List returns every room, in the order they were created.
@@ -89,6 +108,8 @@ func (s *Service) Create(ctx context.Context, name string) (Room, error) {
 		return Room{}, err
 	}
 	r := Room{ID: ulid.Make().String(), Name: name}
+	s.publishing.Lock()
+	defer s.publishing.Unlock()
 	err = s.db.Write(ctx, func(tx *sql.Tx) error {
 		if err := checkNameFree(ctx, tx, name, ""); err != nil {
 			return err
@@ -103,6 +124,7 @@ func (s *Service) Create(ctx context.Context, name string) (Room, error) {
 	if err != nil {
 		return Room{}, fmt.Errorf("create room: %w", err)
 	}
+	s.publish(r)
 	return r, nil
 }
 
@@ -114,6 +136,8 @@ func (s *Service) Rename(ctx context.Context, id, name string) (Room, error) {
 	if err != nil {
 		return Room{}, err
 	}
+	s.publishing.Lock()
+	defer s.publishing.Unlock()
 	err = s.db.Write(ctx, func(tx *sql.Tx) error {
 		if err := checkExists(ctx, tx, id); err != nil {
 			return err
@@ -130,7 +154,9 @@ func (s *Service) Rename(ctx context.Context, id, name string) (Room, error) {
 	if err != nil {
 		return Room{}, fmt.Errorf("rename room: %w", err)
 	}
-	return Room{ID: id, Name: name}, nil
+	r := Room{ID: id, Name: name}
+	s.publish(r)
+	return r, nil
 }
 
 // checkNameFree fails with ErrNameTaken when a room other than exceptID has a

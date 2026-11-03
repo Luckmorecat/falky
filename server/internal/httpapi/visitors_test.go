@@ -15,6 +15,7 @@ import (
 	"github.com/kisshot/falky/server/internal/chat"
 	"github.com/kisshot/falky/server/internal/identity"
 	"github.com/kisshot/falky/server/internal/platform"
+	"github.com/kisshot/falky/server/internal/realtime"
 	"github.com/kisshot/falky/server/internal/rooms"
 )
 
@@ -54,7 +55,7 @@ func startPublicLimited(t *testing.T, enterBurst, postBurst int) publicServer {
 	if _, err := db.Migrate(t.Context(), ms); err != nil {
 		t.Fatalf("Migrate: %v", err)
 	}
-	ident := identity.New(db, "https://falky.example")
+	ident := identity.New(db, testOrigin)
 	if _, err := ident.EnsureLink(t.Context()); err != nil {
 		t.Fatalf("EnsureLink: %v", err)
 	}
@@ -64,34 +65,58 @@ func startPublicLimited(t *testing.T, enterBurst, postBurst int) publicServer {
 	}
 	logger := platform.NewLogger(io.Discard, 0)
 	start := time.Now()
-	rs := rooms.New(db)
+	hub := realtime.New()
+	events := Events{Hub: hub, Logger: logger}
+	rs := rooms.New(db, rooms.WithPublisher(events.RoomChanged))
 	h := New(Deps{
-		Logger:     logger,
-		Health:     platform.NewHealth(logger),
-		Metrics:    platform.NewMetrics().Handler(),
-		Identity:   ident,
-		Rooms:      rs,
-		Chat:       chat.New(db, chat.WithPostLimit(platform.NewLimiter(postBurst, time.Hour, func() time.Time { return start }))),
-		EnterLimit: platform.NewLimiter(enterBurst, time.Hour, func() time.Time { return start }),
+		Logger:   logger,
+		Health:   platform.NewHealth(logger),
+		Metrics:  platform.NewMetrics().Handler(),
+		Identity: ident,
+		Rooms:    rs,
+		Chat: chat.New(db,
+			chat.WithPostLimit(platform.NewLimiter(postBurst, time.Hour, func() time.Time { return start })),
+			chat.WithPublisher(events.MessageCreated)),
+		EnterLimit:   platform.NewLimiter(enterBurst, time.Hour, func() time.Time { return start }),
+		Live:         hub,
+		PublicOrigin: testOrigin,
 	})
 	srv := httptest.NewTLSServer(h.Public)
 	t.Cleanup(srv.Close)
-	return publicServer{srv: srv, secret: strings.TrimPrefix(link, "https://falky.example/#k="), rooms: rs}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := hub.Shutdown(ctx); err != nil {
+			t.Errorf("Shutdown: %v", err)
+		}
+	})
+	return publicServer{srv: srv, secret: strings.TrimPrefix(link, testOrigin+"/#k="), rooms: rs}
 }
+
+// testOrigin is the public origin the test server is configured with.
+const testOrigin = "https://falky.example"
 
 // browser is a generated client with its own cookie jar, like one browser.
 func (p publicServer) browser(t *testing.T) *api.ClientWithResponses {
+	t.Helper()
+	c, _ := p.browserWithHTTP(t)
+	return c
+}
+
+// browserWithHTTP is browser that also returns the HTTP client, which holds
+// the cookie jar.
+func (p publicServer) browserWithHTTP(t *testing.T) (*api.ClientWithResponses, *http.Client) {
 	t.Helper()
 	jar, err := cookiejar.New(nil)
 	if err != nil {
 		t.Fatalf("cookiejar: %v", err)
 	}
-	c, err := api.NewClientWithResponses(p.srv.URL,
-		api.WithHTTPClient(&http.Client{Transport: p.srv.Client().Transport, Jar: jar}))
+	hc := &http.Client{Transport: p.srv.Client().Transport, Jar: jar}
+	c, err := api.NewClientWithResponses(p.srv.URL, api.WithHTTPClient(hc))
 	if err != nil {
 		t.Fatalf("NewClientWithResponses: %v", err)
 	}
-	return c
+	return c, hc
 }
 
 func forwardedFor(value string) api.RequestEditorFn {
