@@ -23,11 +23,11 @@ var ErrInvalidName = errors.New("invalid name")
 // ErrNameTaken reports a name another visitor holds.
 var ErrNameTaken = errors.New("name taken")
 
-// cleanName trims white space from both ends of raw and checks the name rules:
+// CleanName trims white space from both ends of raw and checks the name rules:
 // 1 to 32 characters, none of them control characters. The bidirectional
 // controls count as control characters, since they can make a name read as
 // another.
-func cleanName(raw string) (string, error) {
+func CleanName(raw string) (string, error) {
 	name := strings.TrimSpace(raw)
 	switch n := utf8.RuneCountInString(name); {
 	case n == 0:
@@ -46,9 +46,9 @@ func isControl(r rune) bool {
 	return unicode.IsControl(r) || unicode.Is(unicode.Bidi_Control, r)
 }
 
-// nameKey is what names are compared by: trimmed and case-folded, so " Bob "
+// NameKey is what names are compared by: trimmed and case-folded, so " Bob "
 // and "bob" have the same key.
-func nameKey(name string) string {
+func NameKey(name string) string {
 	return strings.Map(foldRune, strings.TrimSpace(name))
 }
 

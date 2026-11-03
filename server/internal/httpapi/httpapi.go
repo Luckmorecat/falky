@@ -11,6 +11,7 @@ import (
 	"github.com/kisshot/falky/server/internal/api"
 	"github.com/kisshot/falky/server/internal/identity"
 	"github.com/kisshot/falky/server/internal/platform"
+	"github.com/kisshot/falky/server/internal/rooms"
 )
 
 // Handlers are the handlers of the two listeners.
@@ -31,6 +32,7 @@ type Deps struct {
 	Health   *platform.Health
 	Metrics  http.Handler
 	Identity *identity.Service
+	Rooms    *rooms.Service
 	// EnterLimit limits entering per client IP.
 	EnterLimit *platform.Limiter
 }
@@ -39,7 +41,7 @@ type Deps struct {
 // is routed on one mux; each listener forwards only its own path prefixes to
 // it, so an operation is reachable on exactly one listener.
 func New(deps Deps) Handlers {
-	s := &server{health: deps.Health, identity: deps.Identity, enterLimit: deps.EnterLimit}
+	s := &server{health: deps.Health, identity: deps.Identity, rooms: deps.Rooms, enterLimit: deps.EnterLimit}
 	errs := errorWriter{logger: deps.Logger}
 	resolve := visitorResolver{identity: deps.Identity, errs: errs}
 
@@ -68,6 +70,7 @@ func New(deps Deps) Handlers {
 type server struct {
 	health     *platform.Health
 	identity   *identity.Service
+	rooms      *rooms.Service
 	enterLimit *platform.Limiter
 }
 

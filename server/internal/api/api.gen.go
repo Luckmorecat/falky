@@ -85,12 +85,51 @@ type HealthStatus string
 // Example: Bob
 type Name = string
 
+// Participant A visitor connected to a room's voice.
+type Participant struct {
+	// Name The participant's name.
+	//
+	// Example: Bob
+	Name string `json:"name"`
+
+	// VisitorId The participant's visitor ID.
+	//
+	// Example: 01JBX6Z8Q3M5W2K7R9T4V1C0DE
+	VisitorId string `json:"visitorId"`
+}
+
 // RenameRequest The name the visitor changes to.
 type RenameRequest struct {
 	// Name A visitor's name: 1 to 32 characters once leading and trailing white space is trimmed, with no control characters (the bidirectional controls included). Names are compared trimmed and case-insensitively, so `" Bob "` and `bob` are the same name. The server checks these rules and answers `invalid_name`.
 	//
 	// Example: Bob
 	Name Name `json:"name"`
+}
+
+// Room A named place where visitors talk by voice and chat.
+type Room struct {
+	// Id The room's ID, a ULID; it never changes.
+	//
+	// Example: 01JBX7A2K9D4F6H8M0P3R5T7VW
+	Id string `json:"id"`
+
+	// Name The room's name. No two rooms have names that are the same when compared as visitor names are.
+	//
+	// Example: Lounge
+	Name string `json:"name"`
+
+	// Occupancy The participants in the room's voice; empty when no one is in it.
+	//
+	// Example: [{"name":"Bob","visitorId":"01JBX6Z8Q3M5W2K7R9T4V1C0DE"}]
+	Occupancy []Participant `json:"occupancy"`
+}
+
+// RoomList The list of rooms.
+type RoomList struct {
+	// Rooms The rooms, in the order they were created.
+	//
+	// Example: [{"id":"01JBX7A2K9D4F6H8M0P3R5T7VW","name":"Lounge","occupancy":[{"name":"Bob","visitorId":"01JBX6Z8Q3M5W2K7R9T4V1C0DE"}]},{"id":"01JBX7B3M1E5G7J9N2Q4S6V8XY","name":"Games","occupancy":[]}]
+	Rooms []Room `json:"rooms"`
 }
 
 // Visitor A person who entered through the access link.
@@ -238,6 +277,13 @@ type ClientInterface interface {
 	// Corresponds with PATCH /api/me (the `RenameMe` operationId).
 	RenameMe(ctx context.Context, body RenameMeJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
+	// ListRooms List every room with its occupancy.
+	//
+	// Returns every room, in the order they were created, each with the participants in its voice. The operator creates and renames rooms.
+	//
+	// Corresponds with GET /api/rooms (the `ListRooms` operationId).
+	ListRooms(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// GetLiveness Report that the process is running.
 	//
 	// Answers 200 while the process runs, whatever its dependencies.
@@ -336,6 +382,23 @@ func (c *Client) RenameMeWithBody(ctx context.Context, contentType string, body 
 // Corresponds with PATCH /api/me (the `RenameMe` operationId).
 func (c *Client) RenameMe(ctx context.Context, body RenameMeJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewRenameMeRequest(c.Server, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// ListRooms List every room with its occupancy.
+//
+// Returns every room, in the order they were created, each with the participants in its voice. The operator creates and renames rooms.
+//
+// Corresponds with GET /api/rooms (the `ListRooms` operationId).
+func (c *Client) ListRooms(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewListRoomsRequest(c.Server)
 	if err != nil {
 		return nil, err
 	}
@@ -487,6 +550,33 @@ func NewRenameMeRequestWithBody(server string, contentType string, body io.Reade
 	return req, nil
 }
 
+// NewListRoomsRequest constructs an http.Request for the ListRooms method
+func NewListRoomsRequest(server string) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/rooms")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
 // NewGetLivenessRequest constructs an http.Request for the GetLiveness method
 func NewGetLivenessRequest(server string) (*http.Request, error) {
 	var err error
@@ -629,6 +719,15 @@ type ClientWithResponsesInterface interface {
 	//
 	// Corresponds with PATCH /api/me (the `RenameMe` operationId).
 	RenameMeWithResponse(ctx context.Context, body RenameMeJSONRequestBody, reqEditors ...RequestEditorFn) (*RenameMeResponse, error)
+
+	// ListRoomsWithResponse List every room with its occupancy.
+	//
+	// Returns every room, in the order they were created, each with the participants in its voice. The operator creates and renames rooms.
+	//
+	// Returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with GET /api/rooms (the `ListRooms` operationId).
+	ListRoomsWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListRoomsResponse, error)
 
 	// GetLivenessWithResponse Report that the process is running.
 	//
@@ -856,6 +955,61 @@ func (r RenameMeResponse) ContentType() string {
 	return ""
 }
 
+type ListRoomsResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *RoomList
+	// JSON401 the response for an HTTP 401 `application/json` response
+	JSON401 *VisitorRequired
+	// JSONDefault the response for an HTTP default `application/json` response
+	JSONDefault *Error
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r ListRoomsResponse) GetJSON200() *RoomList {
+	return r.JSON200
+}
+
+// GetJSON401 returns the response for an HTTP 401 `application/json` response
+func (r ListRoomsResponse) GetJSON401() *VisitorRequired {
+	return r.JSON401
+}
+
+// GetJSONDefault returns the response for an HTTP default `application/json` response
+func (r ListRoomsResponse) GetJSONDefault() *Error {
+	return r.JSONDefault
+}
+
+// GetBody returns the raw response body bytes
+func (r ListRoomsResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r ListRoomsResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ListRoomsResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r ListRoomsResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
 type GetLivenessResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
@@ -1032,6 +1186,21 @@ func (c *ClientWithResponses) RenameMeWithResponse(ctx context.Context, body Ren
 		return nil, err
 	}
 	return ParseRenameMeResponse(rsp)
+}
+
+// ListRoomsWithResponse List every room with its occupancy.
+//
+// Returns every room, in the order they were created, each with the participants in its voice. The operator creates and renames rooms.
+//
+// Returns a wrapper object for the known response body format(s).
+//
+// Corresponds with GET /api/rooms (the `ListRooms` operationId).
+func (c *ClientWithResponses) ListRoomsWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListRoomsResponse, error) {
+	rsp, err := c.ListRooms(ctx, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseListRoomsResponse(rsp)
 }
 
 // GetLivenessWithResponse Report that the process is running.
@@ -1232,6 +1401,46 @@ func ParseRenameMeResponse(rsp *http.Response) (*RenameMeResponse, error) {
 	return response, nil
 }
 
+// ParseListRoomsResponse parses an HTTP response from a ListRoomsWithResponse call
+func ParseListRoomsResponse(rsp *http.Response) (*ListRoomsResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ListRoomsResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest RoomList
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest VisitorRequired
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && true:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSONDefault = &dest
+
+	}
+
+	return response, nil
+}
+
 // ParseGetLivenessResponse parses an HTTP response from a GetLivenessWithResponse call
 func ParseGetLivenessResponse(rsp *http.Response) (*GetLivenessResponse, error) {
 	bodyBytes, err := io.ReadAll(rsp.Body)
@@ -1316,6 +1525,9 @@ type ServerInterface interface {
 	// RenameMe Change the current visitor's name.
 	// (PATCH /api/me)
 	RenameMe(w http.ResponseWriter, r *http.Request)
+	// ListRooms List every room with its occupancy.
+	// (GET /api/rooms)
+	ListRooms(w http.ResponseWriter, r *http.Request)
 	// GetLiveness Report that the process is running.
 	// (GET /health/live)
 	GetLiveness(w http.ResponseWriter, r *http.Request)
@@ -1366,6 +1578,20 @@ func (siw *ServerInterfaceWrapper) RenameMe(w http.ResponseWriter, r *http.Reque
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.RenameMe(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListRooms operation middleware
+func (siw *ServerInterfaceWrapper) ListRooms(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListRooms(w, r)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -1526,6 +1752,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/enter", wrapper.Enter)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/me", wrapper.GetMe)
 	m.HandleFunc(http.MethodPatch+" "+options.BaseURL+"/api/me", wrapper.RenameMe)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/rooms", wrapper.ListRooms)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/health/live", wrapper.GetLiveness)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/health/ready", wrapper.GetReadiness)
 
@@ -1776,6 +2003,58 @@ func (response RenameMedefaultJSONResponse) VisitRenameMeResponse(w http.Respons
 	return err
 }
 
+type ListRoomsRequestObject struct {
+}
+
+type ListRoomsResponseObject interface {
+	VisitListRoomsResponse(w http.ResponseWriter) error
+}
+
+type ListRooms200JSONResponse RoomList
+
+func (response ListRooms200JSONResponse) VisitListRoomsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListRooms401JSONResponse struct{ VisitorRequiredJSONResponse }
+
+func (response ListRooms401JSONResponse) VisitListRoomsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListRoomsdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response ListRoomsdefaultJSONResponse) VisitListRoomsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type GetLivenessRequestObject struct {
 }
 
@@ -1877,6 +2156,9 @@ type StrictServerInterface interface {
 	// RenameMe Change the current visitor's name.
 	// (PATCH /api/me)
 	RenameMe(ctx context.Context, request RenameMeRequestObject) (RenameMeResponseObject, error)
+	// ListRooms List every room with its occupancy.
+	// (GET /api/rooms)
+	ListRooms(ctx context.Context, request ListRoomsRequestObject) (ListRoomsResponseObject, error)
 	// GetLiveness Report that the process is running.
 	// (GET /health/live)
 	GetLiveness(ctx context.Context, request GetLivenessRequestObject) (GetLivenessResponseObject, error)
@@ -2003,6 +2285,30 @@ func (sh *strictHandler) RenameMe(w http.ResponseWriter, r *http.Request) {
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(RenameMeResponseObject); ok {
 		if err := validResponse.VisitRenameMeResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ListRooms operation middleware
+func (sh *strictHandler) ListRooms(w http.ResponseWriter, r *http.Request) {
+	var request ListRoomsRequestObject
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListRooms(ctx, request.(ListRoomsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListRooms")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListRoomsResponseObject); ok {
+		if err := validResponse.VisitListRoomsResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

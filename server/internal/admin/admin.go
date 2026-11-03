@@ -4,19 +4,23 @@
 package admin
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"syscall"
 	"time"
 
 	"github.com/kisshot/falky/server/internal/identity"
+	"github.com/kisshot/falky/server/internal/rooms"
 )
 
 // Listen listens on the Unix socket at path, readable and writable by the
@@ -69,10 +73,22 @@ func removeStale(ctx context.Context, path string) error {
 type Deps struct {
 	Logger   *slog.Logger
 	Identity *identity.Service
+	Rooms    *rooms.Service
 }
 
 type linkBody struct {
 	Link string `json:"link"`
+}
+
+// roomNameBody is the body of a request that creates or renames a room.
+type roomNameBody struct {
+	Name string `json:"name"`
+}
+
+// roomBody is a room, as answered to creating or renaming one.
+type roomBody struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
 }
 
 type errorBody struct {
@@ -91,10 +107,55 @@ func Handler(deps Deps) http.Handler {
 		}
 		writeJSON(w, http.StatusOK, linkBody{Link: link})
 	})
+	mux.HandleFunc("POST /rooms", func(w http.ResponseWriter, r *http.Request) {
+		var body roomNameBody
+		if !decode(w, r, &body) {
+			return
+		}
+		room, err := deps.Rooms.Create(r.Context(), body.Name)
+		writeRoom(w, deps.Logger, "create room", room, err)
+	})
+	mux.HandleFunc("PATCH /rooms/{id}", func(w http.ResponseWriter, r *http.Request) {
+		var body roomNameBody
+		if !decode(w, r, &body) {
+			return
+		}
+		id := r.PathValue("id")
+		room, err := deps.Rooms.Rename(r.Context(), id, body.Name)
+		if errors.Is(err, rooms.ErrNotFound) {
+			writeJSON(w, http.StatusNotFound, errorBody{Error: fmt.Sprintf("no room has the ID %q", id)})
+			return
+		}
+		writeRoom(w, deps.Logger, "rename room", room, err)
+	})
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, errorBody{Error: "unknown admin request " + r.Method + " " + r.URL.Path})
 	})
 	return mux
+}
+
+// decode reads the JSON request body into v, or answers 400 and reports false.
+func decode(w http.ResponseWriter, r *http.Request, v any) bool {
+	if err := json.NewDecoder(r.Body).Decode(v); err != nil {
+		writeJSON(w, http.StatusBadRequest, errorBody{Error: "invalid request body: " + err.Error()})
+		return false
+	}
+	return true
+}
+
+// writeRoom answers with room, or with what err says went wrong doing what.
+func writeRoom(w http.ResponseWriter, logger *slog.Logger, what string, room rooms.Room, err error) {
+	switch {
+	case errors.Is(err, rooms.ErrInvalidName):
+		writeJSON(w, http.StatusBadRequest, errorBody{Error: err.Error()})
+	case errors.Is(err, rooms.ErrNameTaken):
+		writeJSON(w, http.StatusConflict, errorBody{Error: err.Error()})
+	case err != nil:
+		logger.Error("admin: "+what, "error", err)
+		writeJSON(w, http.StatusInternalServerError, errorBody{Error: "cannot " + what})
+	default:
+		writeJSON(w, http.StatusOK, roomBody{ID: room.ID, Name: room.Name})
+	}
 }
 
 func writeJSON(w http.ResponseWriter, status int, body any) {
@@ -132,17 +193,45 @@ func NewClient(path string) *Client {
 // Link returns the current access link.
 func (c *Client) Link(ctx context.Context) (string, error) {
 	var body linkBody
-	if err := c.do(ctx, http.MethodGet, "/link", &body); err != nil {
+	if err := c.do(ctx, http.MethodGet, "/link", nil, &body); err != nil {
 		return "", err
 	}
 	return body.Link, nil
 }
 
-func (c *Client) do(ctx context.Context, method, path string, out any) (err error) {
+// CreateRoom creates a room named name and returns its ID.
+func (c *Client) CreateRoom(ctx context.Context, name string) (string, error) {
+	var body roomBody
+	if err := c.do(ctx, http.MethodPost, "/rooms", roomNameBody{Name: name}, &body); err != nil {
+		return "", err
+	}
+	return body.ID, nil
+}
+
+// RenameRoom renames the room id to name.
+func (c *Client) RenameRoom(ctx context.Context, id, name string) error {
+	var body roomBody
+	return c.do(ctx, http.MethodPatch, "/rooms/"+url.PathEscape(id), roomNameBody{Name: name}, &body)
+}
+
+// do sends a request with in, if not nil, as its JSON body, and decodes the
+// answer into out.
+func (c *Client) do(ctx context.Context, method, path string, in, out any) (err error) {
+	var reqBody io.Reader
+	if in != nil {
+		b, err := json.Marshal(in)
+		if err != nil {
+			return fmt.Errorf("admin request: %w", err)
+		}
+		reqBody = bytes.NewReader(b)
+	}
 	// The host is ignored: the transport always dials the socket.
-	req, err := http.NewRequestWithContext(ctx, method, "http://falky"+path, nil)
+	req, err := http.NewRequestWithContext(ctx, method, "http://falky"+path, reqBody)
 	if err != nil {
 		return fmt.Errorf("admin request: %w", err)
+	}
+	if in != nil {
+		req.Header.Set("Content-Type", "application/json")
 	}
 	res, err := c.http.Do(req)
 	if errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ECONNREFUSED) {

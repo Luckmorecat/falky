@@ -14,20 +14,22 @@ import (
 	"github.com/kisshot/falky/server/internal/api"
 	"github.com/kisshot/falky/server/internal/identity"
 	"github.com/kisshot/falky/server/internal/platform"
+	"github.com/kisshot/falky/server/internal/rooms"
 )
 
 // publicServer is the public listener over TLS (the visitor cookie is
-// Secure) with a real identity service on a temporary database.
+// Secure) with real identity and rooms services on a temporary database.
 type publicServer struct {
 	srv    *httptest.Server
 	secret string
+	rooms  *rooms.Service
 }
 
 // startPublic serves the public listener, limiting entering to enterBurst
 // attempts per client IP with no refill during the test.
 func startPublic(t *testing.T, enterBurst int) publicServer {
 	t.Helper()
-	ms, err := platform.LoadMigrations(identity.Migrations())
+	ms, err := platform.LoadMigrations(identity.Migrations(), rooms.Migrations())
 	if err != nil {
 		t.Fatalf("LoadMigrations: %v", err)
 	}
@@ -53,16 +55,18 @@ func startPublic(t *testing.T, enterBurst int) publicServer {
 	}
 	logger := platform.NewLogger(io.Discard, 0)
 	start := time.Now()
+	rs := rooms.New(db)
 	h := New(Deps{
 		Logger:     logger,
 		Health:     platform.NewHealth(logger),
 		Metrics:    platform.NewMetrics().Handler(),
 		Identity:   ident,
+		Rooms:      rs,
 		EnterLimit: platform.NewLimiter(enterBurst, time.Hour, func() time.Time { return start }),
 	})
 	srv := httptest.NewTLSServer(h.Public)
 	t.Cleanup(srv.Close)
-	return publicServer{srv: srv, secret: strings.TrimPrefix(link, "https://falky.example/#k=")}
+	return publicServer{srv: srv, secret: strings.TrimPrefix(link, "https://falky.example/#k="), rooms: rs}
 }
 
 // browser is a generated client with its own cookie jar, like one browser.

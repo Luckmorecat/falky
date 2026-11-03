@@ -220,9 +220,7 @@ func startServerOn(t *testing.T, cfg platform.Config, logs io.Writer) (stop func
 // runLinkShow runs falky link show and returns its exit code and output.
 func runLinkShow(t *testing.T, getenv func(string) string) (code int, stdout, stderr string) {
 	t.Helper()
-	var out, errOut bytes.Buffer
-	code = run(t.Context(), []string{"link", "show"}, getenv, &out, &errOut)
-	return code, out.String(), errOut.String()
+	return runCommand(t, getenv, "link", "show")
 }
 
 func TestLinkShowPrintsTheSameLinkAcrossRestarts(t *testing.T) {
@@ -271,7 +269,20 @@ func TestLinkShowFailsWhenNoServerIsRunning(t *testing.T) {
 }
 
 func TestRunRefusesUnknownCommands(t *testing.T) {
-	for _, args := range [][]string{nil, {"frobnicate"}, {"serve", "extra"}, {"link"}, {"link", "rotate"}, {"link", "show", "extra"}} {
+	for _, args := range [][]string{
+		nil,
+		{"frobnicate"},
+		{"serve", "extra"},
+		{"link"},
+		{"link", "rotate"},
+		{"link", "show", "extra"},
+		{"room"},
+		{"room", "create"},
+		{"room", "create", "Living", "room"},
+		{"room", "rename", "01JBX6Z8Q3M5W2K7R9T4V1C0DE"},
+		{"room", "rename", "01JBX6Z8Q3M5W2K7R9T4V1C0DE", "Living", "room"},
+		{"room", "delete", "x"},
+	} {
 		var stdout, stderr bytes.Buffer
 		if code := run(t.Context(), args, func(string) string { return "" }, &stdout, &stderr); code != 2 {
 			t.Errorf("run %q = %d, want 2", args, code)
@@ -325,5 +336,87 @@ func TestAVisitorIsStillKnownAfterARestart(t *testing.T) {
 	}
 	if me.StatusCode() != http.StatusOK || me.JSON200 == nil || *me.JSON200 != *entered.JSON201 {
 		t.Errorf("GetMe after restart = %d %s, want 200 with %+v", me.StatusCode(), me.Body, *entered.JSON201)
+	}
+}
+
+// runCommand runs falky with args and returns its exit code and output.
+func runCommand(t *testing.T, getenv func(string) string, args ...string) (code int, stdout, stderr string) {
+	t.Helper()
+	var out, errOut bytes.Buffer
+	code = run(t.Context(), args, getenv, &out, &errOut)
+	return code, out.String(), errOut.String()
+}
+
+func TestRoomCommandsChangeTheRoomListAtOnce(t *testing.T) {
+	dir := t.TempDir()
+	vars := map[string]string{
+		platform.EnvDBPath:      filepath.Join(dir, "falky.db"),
+		platform.EnvAdminSocket: filepath.Join(dir, "admin.sock"),
+	}
+	cfg, err := platform.LoadConfig(env(vars))
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	_, public := startServerOn(t, cfg, io.Discard)
+	_, link, _ := runLinkShow(t, env(vars))
+	secret := strings.TrimSpace(link[strings.Index(link, "#k=")+len("#k="):])
+	c, err := api.NewClientWithResponses(public)
+	if err != nil {
+		t.Fatalf("NewClientWithResponses: %v", err)
+	}
+	entered, err := c.EnterWithResponse(t.Context(), api.EnterRequest{Secret: secret, Name: "Bob"})
+	if err != nil || entered.StatusCode() != http.StatusCreated {
+		t.Fatalf("Enter = %v, %v, want 201", entered, err)
+	}
+	cookie := entered.HTTPResponse.Cookies()[0]
+	listRooms := func() []api.Room {
+		t.Helper()
+		res, err := c.ListRoomsWithResponse(t.Context(), func(_ context.Context, req *http.Request) error {
+			req.AddCookie(cookie)
+			return nil
+		})
+		if err != nil || res.StatusCode() != http.StatusOK || res.JSON200 == nil {
+			t.Fatalf("ListRooms = %v, %v, want 200", res, err)
+		}
+		return res.JSON200.Rooms
+	}
+
+	code, out, stderr := runCommand(t, env(vars), "room", "create", "Lounge")
+	id := strings.TrimSuffix(out, "\n")
+	if code != 0 || id == "" || strings.ContainsAny(id, " \n") {
+		t.Fatalf("room create = exit %d, stdout %q, stderr %q; want 0 and the ID on one line", code, out, stderr)
+	}
+	if rooms := listRooms(); len(rooms) != 1 || rooms[0].Id != id || rooms[0].Name != "Lounge" {
+		t.Errorf("rooms after room create = %+v, want Lounge with ID %s", rooms, id)
+	}
+
+	if code, out, stderr := runCommand(t, env(vars), "room", "rename", id, "Living room"); code != 0 || out != "" {
+		t.Fatalf("room rename = exit %d, stdout %q, stderr %q; want 0 and no output", code, out, stderr)
+	}
+	if rooms := listRooms(); len(rooms) != 1 || rooms[0].Id != id || rooms[0].Name != "Living room" {
+		t.Errorf("rooms after room rename = %+v, want Living room with ID %s", rooms, id)
+	}
+
+	if code, out, stderr := runCommand(t, env(vars), "room", "create", "living ROOM"); code == 0 || out != "" ||
+		!strings.HasPrefix(stderr, "falky room create: ") || !strings.Contains(stderr, "another room has this name") {
+		t.Errorf("room create with a taken name = exit %d, stdout %q, stderr %q; want non-zero and why", code, out, stderr)
+	}
+	unknown := "01JBX6Z8Q3M5W2K7R9T4V1C0DE"
+	if code, out, stderr := runCommand(t, env(vars), "room", "rename", unknown, "Den"); code == 0 || out != "" ||
+		!strings.HasPrefix(stderr, "falky room rename: ") || !strings.Contains(stderr, unknown) {
+		t.Errorf("room rename of an unknown room = exit %d, stdout %q, stderr %q; want non-zero naming the ID", code, out, stderr)
+	}
+	if rooms := listRooms(); len(rooms) != 1 || rooms[0].Name != "Living room" {
+		t.Errorf("rooms after the refusals = %+v, want only Living room", rooms)
+	}
+}
+
+func TestRoomCommandsFailWhenNoServerIsRunning(t *testing.T) {
+	socket := filepath.Join(t.TempDir(), "admin.sock")
+	getenv := env(map[string]string{platform.EnvAdminSocket: socket})
+	for _, args := range [][]string{{"room", "create", "Lounge"}, {"room", "rename", "01JBX6Z8Q3M5W2K7R9T4V1C0DE", "Den"}} {
+		if code, out, stderr := runCommand(t, getenv, args...); code == 0 || out != "" || !strings.Contains(stderr, "not running") {
+			t.Errorf("%q = exit %d, stdout %q, stderr %q; want non-zero saying the server is not running", args, code, out, stderr)
+		}
 	}
 }

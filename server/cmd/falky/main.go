@@ -2,9 +2,11 @@
 //
 // Usage:
 //
-//	falky serve       run the server (applies pending migrations first)
-//	falky migrate     apply pending migrations and exit
-//	falky link show   print the access link of the running server
+//	falky serve                     run the server (applies pending migrations first)
+//	falky migrate                   apply pending migrations and exit
+//	falky room create <name>        create a room in the running server and print its ID
+//	falky room rename <id> <name>   rename a room in the running server
+//	falky link show                 print the access link of the running server
 //
 // Configuration comes from FALKY_* environment variables; see
 // internal/platform.LoadConfig.
@@ -30,19 +32,24 @@ import (
 	"github.com/kisshot/falky/server/internal/httpapi"
 	"github.com/kisshot/falky/server/internal/identity"
 	"github.com/kisshot/falky/server/internal/platform"
+	"github.com/kisshot/falky/server/internal/rooms"
 )
 
 const usage = `usage: falky <command>
 
 commands:
-  serve       run the server (applies pending migrations first)
-  migrate     apply pending migrations and exit
-  link show   print the access link of the running server
+  serve                     run the server (applies pending migrations first)
+  migrate                   apply pending migrations and exit
+  room create <name>        create a room in the running server and print its ID
+  room rename <id> <name>   rename a room in the running server
+  link show                 print the access link of the running server
+
+Quote a name that has spaces: falky room create "Living room"
 `
 
 // migrationSources lists the embedded migrations of each module that owns
 // tables; platform applies them as one sequence ordered by version.
-var migrationSources = []fs.FS{identity.Migrations()}
+var migrationSources = []fs.FS{identity.Migrations(), rooms.Migrations()}
 
 // shutdownTimeout bounds how long serve waits for in-flight requests.
 const shutdownTimeout = 10 * time.Second
@@ -69,7 +76,9 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 		_, _ = fmt.Fprint(stderr, usage)
 		return 2
 	}
-	name := strings.Join(args, " ")
+	// command is the command as messages show it, without the arguments of
+	// the commands that take some.
+	command := strings.Join(args, " ")
 	var (
 		server   func(context.Context, platform.Config, *slog.Logger) error
 		operator func(context.Context, platform.Config, io.Writer) error
@@ -79,13 +88,23 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 		server = serve
 	case slices.Equal(args, []string{"migrate"}):
 		server = migrate
+	case len(args) == 3 && slices.Equal(args[:2], []string{"room", "create"}):
+		command = "room create"
+		operator = func(ctx context.Context, cfg platform.Config, stdout io.Writer) error {
+			return roomCreate(ctx, cfg, stdout, args[2])
+		}
+	case len(args) == 4 && slices.Equal(args[:2], []string{"room", "rename"}):
+		command = "room rename"
+		operator = func(ctx context.Context, cfg platform.Config, _ io.Writer) error {
+			return roomRename(ctx, cfg, args[2], args[3])
+		}
 	case slices.Equal(args, []string{"link", "show"}):
 		operator = linkShow
 	case len(args) == 1 && slices.Contains([]string{"help", "-h", "--help"}, args[0]):
 		_, _ = fmt.Fprint(stdout, usage)
 		return 0
 	default:
-		_, _ = fmt.Fprintf(stderr, "falky: unknown command %q\n\n%s", name, usage)
+		_, _ = fmt.Fprintf(stderr, "falky: unknown command %q\n\n%s", command, usage)
 		return 2
 	}
 
@@ -96,17 +115,33 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 	}
 	if operator != nil {
 		if err := operator(ctx, cfg, stdout); err != nil {
-			_, _ = fmt.Fprintf(stderr, "falky %s: %v\n", name, err)
+			_, _ = fmt.Fprintf(stderr, "falky %s: %v\n", command, err)
 			return 1
 		}
 		return 0
 	}
 	logger := platform.NewLogger(stdout, cfg.LogLevel)
 	if err := server(ctx, cfg, logger); err != nil {
-		logger.Error("falky "+name+" failed", "error", err)
+		logger.Error("falky "+command+" failed", "error", err)
 		return 1
 	}
 	return 0
+}
+
+// roomCreate creates a room named name in the running server and prints its
+// ID.
+func roomCreate(ctx context.Context, cfg platform.Config, stdout io.Writer, name string) error {
+	id, err := admin.NewClient(cfg.AdminSocket).CreateRoom(ctx, name)
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprintln(stdout, id)
+	return err
+}
+
+// roomRename renames the room id to name in the running server.
+func roomRename(ctx context.Context, cfg platform.Config, id, name string) error {
+	return admin.NewClient(cfg.AdminSocket).RenameRoom(ctx, id, name)
 }
 
 // linkShow prints the access link the running server answers with.
@@ -189,14 +224,16 @@ func serveOn(ctx context.Context, logger *slog.Logger, cfg platform.Config, db *
 	health := platform.NewHealth(logger)
 	health.Require("database", func(ctx context.Context) error { return db.CheckMigrated(ctx, ms) })
 	ident := identity.New(db, cfg.PublicOrigin)
+	rs := rooms.New(db)
 	handlers := httpapi.New(httpapi.Deps{
 		Logger:     logger,
 		Health:     health,
 		Metrics:    platform.NewMetrics().Handler(),
 		Identity:   ident,
+		Rooms:      rs,
 		EnterLimit: platform.NewLimiter(enterBurst, enterInterval, time.Now),
 	})
-	adminHandler := admin.Handler(admin.Deps{Logger: logger, Identity: ident})
+	adminHandler := admin.Handler(admin.Deps{Logger: logger, Identity: ident, Rooms: rs})
 
 	errorLog := slog.NewLogLogger(logger.Handler(), slog.LevelWarn)
 	servers := []struct {

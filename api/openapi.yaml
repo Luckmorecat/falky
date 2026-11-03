@@ -16,6 +16,8 @@ tags:
     description: Process and dependency health, on the internal listener.
   - name: visitors
     description: Entering through the access link, and the current visitor.
+  - name: rooms
+    description: The rooms visitors talk in by voice and chat.
 paths:
   /api/enter:
     post:
@@ -114,6 +116,25 @@ paths:
           $ref: "#/components/responses/VisitorRequired"
         "409":
           $ref: "#/components/responses/NameTaken"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/rooms:
+    get:
+      operationId: listRooms
+      tags: [rooms]
+      summary: List every room with its occupancy.
+      description: >-
+        Returns every room, in the order they were created, each with the
+        participants in its voice. The operator creates and renames rooms.
+      responses:
+        "200":
+          description: Every room.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RoomList"
+        "401":
+          $ref: "#/components/responses/VisitorRequired"
         default:
           $ref: "#/components/responses/Error"
   /health/live:
@@ -279,3 +300,58 @@ components:
         trimmed and case-insensitively, so `" Bob "` and `bob` are the same
         name. The server checks these rules and answers `invalid_name`.
       example: Bob
+    RoomList:
+      type: object
+      description: The list of rooms.
+      required: [rooms]
+      properties:
+        rooms:
+          type: array
+          description: The rooms, in the order they were created.
+          items:
+            $ref: "#/components/schemas/Room"
+          example:
+            - id: 01JBX7A2K9D4F6H8M0P3R5T7VW
+              name: Lounge
+              occupancy:
+                - visitorId: 01JBX6Z8Q3M5W2K7R9T4V1C0DE
+                  name: Bob
+            - id: 01JBX7B3M1E5G7J9N2Q4S6V8XY
+              name: Games
+              occupancy: []
+    Room:
+      type: object
+      description: A named place where visitors talk by voice and chat.
+      required: [id, name, occupancy]
+      properties:
+        id:
+          type: string
+          description: The room's ID, a ULID; it never changes.
+          example: 01JBX7A2K9D4F6H8M0P3R5T7VW
+        name:
+          type: string
+          description: >-
+            The room's name. No two rooms have names that are the same when
+            compared as visitor names are.
+          example: Lounge
+        occupancy:
+          type: array
+          description: The participants in the room's voice; empty when no one is in it.
+          items:
+            $ref: "#/components/schemas/Participant"
+          example:
+            - visitorId: 01JBX6Z8Q3M5W2K7R9T4V1C0DE
+              name: Bob
+    Participant:
+      type: object
+      description: A visitor connected to a room's voice.
+      required: [visitorId, name]
+      properties:
+        visitorId:
+          type: string
+          description: The participant's visitor ID.
+          example: 01JBX6Z8Q3M5W2K7R9T4V1C0DE
+        name:
+          type: string
+          description: The participant's name.
+          example: Bob

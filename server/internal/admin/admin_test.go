@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -16,13 +17,14 @@ import (
 	"github.com/kisshot/falky/server/internal/admin"
 	"github.com/kisshot/falky/server/internal/identity"
 	"github.com/kisshot/falky/server/internal/platform"
+	"github.com/kisshot/falky/server/internal/rooms"
 )
 
-// newIdentity returns the identity service over a fresh migrated database
-// that already has its access link.
-func newIdentity(t *testing.T) *identity.Service {
+// newDeps returns the services over a fresh migrated database that already
+// has its access link.
+func newDeps(t *testing.T) admin.Deps {
 	t.Helper()
-	ms, err := platform.LoadMigrations(identity.Migrations())
+	ms, err := platform.LoadMigrations(identity.Migrations(), rooms.Migrations())
 	if err != nil {
 		t.Fatalf("LoadMigrations: %v", err)
 	}
@@ -42,14 +44,14 @@ func newIdentity(t *testing.T) *identity.Service {
 	if _, err := ident.EnsureLink(t.Context()); err != nil {
 		t.Fatalf("EnsureLink: %v", err)
 	}
-	return ident
+	return admin.Deps{Logger: platform.NewLogger(io.Discard, 0), Identity: ident, Rooms: rooms.New(db)}
 }
 
 // serve serves the admin handler on ln until the returned stop is called.
-func serve(t *testing.T, ln net.Listener, ident *identity.Service) (stop func()) {
+func serve(t *testing.T, ln net.Listener, deps admin.Deps) (stop func()) {
 	t.Helper()
 	srv := &http.Server{
-		Handler:           admin.Handler(admin.Deps{Logger: platform.NewLogger(io.Discard, 0), Identity: ident}),
+		Handler:           admin.Handler(deps),
 		ReadHeaderTimeout: time.Second,
 	}
 	done := make(chan error, 1)
@@ -96,13 +98,13 @@ func staleSocket(t *testing.T, path string) {
 }
 
 func TestTheClientShowsTheCurrentLink(t *testing.T) {
-	ident := newIdentity(t)
-	want, err := ident.Link(t.Context())
+	deps := newDeps(t)
+	want, err := deps.Identity.Link(t.Context())
 	if err != nil {
 		t.Fatalf("Link: %v", err)
 	}
 	path := filepath.Join(t.TempDir(), "admin.sock")
-	serve(t, listen(t, path), ident)
+	serve(t, listen(t, path), deps)
 
 	client := admin.NewClient(path)
 	for i := range 2 {
@@ -118,7 +120,7 @@ func TestTheClientShowsTheCurrentLink(t *testing.T) {
 
 func TestTheSocketIsOwnerOnlyAndRemovedOnShutdown(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "admin.sock")
-	stop := serve(t, listen(t, path), newIdentity(t))
+	stop := serve(t, listen(t, path), newDeps(t))
 
 	fi, err := os.Lstat(path)
 	if err != nil {
@@ -138,7 +140,7 @@ func TestListenReplacesAStaleSocket(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "admin.sock")
 	staleSocket(t, path)
 
-	serve(t, listen(t, path), newIdentity(t))
+	serve(t, listen(t, path), newDeps(t))
 	if _, err := admin.NewClient(path).Link(t.Context()); err != nil {
 		t.Errorf("client Link over the replaced socket: %v", err)
 	}
@@ -146,7 +148,7 @@ func TestListenReplacesAStaleSocket(t *testing.T) {
 
 func TestListenRefusesASocketInUse(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "admin.sock")
-	serve(t, listen(t, path), newIdentity(t))
+	serve(t, listen(t, path), newDeps(t))
 
 	if ln, err := admin.Listen(t.Context(), path); err == nil {
 		_ = ln.Close()
@@ -191,7 +193,7 @@ func TestTheClientSaysWhenNoServerIsRunning(t *testing.T) {
 
 func TestUnknownAdminRequestsAreRefused(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "admin.sock")
-	serve(t, listen(t, path), newIdentity(t))
+	serve(t, listen(t, path), newDeps(t))
 
 	client := &http.Client{Transport: &http.Transport{
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
@@ -213,5 +215,64 @@ func TestUnknownAdminRequestsAreRefused(t *testing.T) {
 	}
 	if res.StatusCode == http.StatusOK || !strings.Contains(string(body), `"error"`) {
 		t.Errorf("POST /link = %d %s, want a refusal with an error body", res.StatusCode, body)
+	}
+}
+
+func TestTheClientCreatesAndRenamesRooms(t *testing.T) {
+	deps := newDeps(t)
+	path := filepath.Join(t.TempDir(), "admin.sock")
+	serve(t, listen(t, path), deps)
+	client := admin.NewClient(path)
+
+	id, err := client.CreateRoom(t.Context(), " Lounge ")
+	if err != nil {
+		t.Fatalf("CreateRoom: %v", err)
+	}
+	if err := client.RenameRoom(t.Context(), id, "Living room"); err != nil {
+		t.Fatalf("RenameRoom: %v", err)
+	}
+	got, err := deps.Rooms.List(t.Context())
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if want := []rooms.Room{{ID: id, Name: "Living room"}}; !slices.Equal(got, want) {
+		t.Errorf("List = %+v, want %+v", got, want)
+	}
+}
+
+func TestTheClientReportsWhyARoomChangeIsRefused(t *testing.T) {
+	deps := newDeps(t)
+	path := filepath.Join(t.TempDir(), "admin.sock")
+	serve(t, listen(t, path), deps)
+	client := admin.NewClient(path)
+	lounge, err := deps.Rooms.Create(t.Context(), "Lounge")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	games, err := deps.Rooms.Create(t.Context(), "Games")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	if _, err := client.CreateRoom(t.Context(), "lounge"); err == nil || !strings.Contains(err.Error(), "another room has this name") {
+		t.Errorf("CreateRoom with a taken name = %v, want it refused as taken", err)
+	}
+	if err := client.RenameRoom(t.Context(), games.ID, " LOUNGE"); err == nil || !strings.Contains(err.Error(), "another room has this name") {
+		t.Errorf("RenameRoom to a taken name = %v, want it refused as taken", err)
+	}
+	if _, err := client.CreateRoom(t.Context(), " "); err == nil || !strings.Contains(err.Error(), "invalid name") {
+		t.Errorf("CreateRoom with an empty name = %v, want it refused as invalid", err)
+	}
+	unknown := "01JBX6Z8Q3M5W2K7R9T4V1C0DE"
+	if err := client.RenameRoom(t.Context(), unknown, "Den"); err == nil || !strings.Contains(err.Error(), unknown) {
+		t.Errorf("RenameRoom of an unknown room = %v, want a refusal naming %s", err, unknown)
+	}
+
+	got, err := deps.Rooms.List(t.Context())
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if want := []rooms.Room{lounge, games}; !slices.Equal(got, want) {
+		t.Errorf("List after the refusals = %+v, want %+v", got, want)
 	}
 }

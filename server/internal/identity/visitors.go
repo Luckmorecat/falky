@@ -33,8 +33,8 @@ var ErrNoVisitor = errors.New("no such visitor")
 // It fails with ErrWrongSecret, an ErrInvalidName, or ErrNameTaken. The secret
 // is checked first, so a caller without it learns nothing about names.
 func (s *Service) Enter(ctx context.Context, secret, name string) (Visitor, string, error) {
-	name, nameErr := cleanName(name)
-	key := nameKey(name)
+	name, nameErr := CleanName(name)
+	key := NameKey(name)
 	v := Visitor{ID: ulid.Make().String(), Name: name}
 	token := rand.Text()
 
@@ -119,11 +119,11 @@ func (s *Service) HasAccess(ctx context.Context, visitorID string) (bool, error)
 // visitor's reservation, if any, to it. It fails with an ErrInvalidName,
 // ErrNameTaken, or ErrNoVisitor for an unknown visitor.
 func (s *Service) Rename(ctx context.Context, visitorID, name string) (Visitor, error) {
-	name, err := cleanName(name)
+	name, err := CleanName(name)
 	if err != nil {
 		return Visitor{}, err
 	}
-	key := nameKey(name)
+	key := NameKey(name)
 
 	s.reservations.mu.Lock()
 	defer s.reservations.mu.Unlock()
