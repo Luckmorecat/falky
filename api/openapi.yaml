@@ -1,0 +1,98 @@
+openapi: 3.0.3
+info:
+  title: Falky
+  version: 0.1.0
+  description: >-
+    HTTP contract of the Falky server. Operations under `/api/` are served on
+    the public listener; the others are served on the internal listener only.
+servers:
+  - url: /
+    description: The listener that serves the operation.
+tags:
+  - name: health
+    description: Process and dependency health, on the internal listener.
+paths:
+  /health/live:
+    get:
+      operationId: getLiveness
+      tags: [health]
+      summary: Report that the process is running.
+      description: Answers 200 while the process runs, whatever its dependencies.
+      responses:
+        "200":
+          description: The process is running.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Health"
+        default:
+          $ref: "#/components/responses/Error"
+  /health/ready:
+    get:
+      operationId: getReadiness
+      tags: [health]
+      summary: Report whether the server can serve requests.
+      description: >-
+        Checks each component the server depends on and names it in the body.
+        Answers 200 when every required component is `ok`, 503 otherwise.
+      responses:
+        "200":
+          description: Every required component is available.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Health"
+        "503":
+          description: At least one required component is unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Health"
+        default:
+          $ref: "#/components/responses/Error"
+components:
+  responses:
+    Error:
+      description: The request failed; the body says why.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+  schemas:
+    Error:
+      type: object
+      description: The body of every error response.
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          description: >-
+            Stable, machine-readable error code: `not_found` (no such route),
+            `invalid_request` (the request does not match the contract) or
+            `internal` (the server failed). Operations may add their own.
+          example: not_found
+        message:
+          type: string
+          description: Human-readable explanation; not meant for parsing.
+          example: no such route
+    Health:
+      type: object
+      description: Overall health and, for readiness, each checked component.
+      required: [status]
+      properties:
+        status:
+          $ref: "#/components/schemas/HealthStatus"
+        components:
+          type: object
+          description: Status of each checked component, by component name.
+          additionalProperties:
+            $ref: "#/components/schemas/HealthStatus"
+          example:
+            database: ok
+    HealthStatus:
+      type: string
+      description: >-
+        `ok` when available; `unavailable` when a required component cannot be
+        used.
+      enum: [ok, unavailable]
+      example: ok

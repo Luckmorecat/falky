@@ -1,0 +1,6 @@
+# Only go.mod, go.sum, cmd/ and internal/ are copied; keep the context small.
+*
+!go.mod
+!go.sum
+!cmd/
+!internal/
