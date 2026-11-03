@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"os"
 	"path/filepath"
 
 	_ "modernc.org/sqlite" // registers the "sqlite" driver
@@ -22,11 +23,20 @@ type DB struct {
 	reader *sql.DB
 }
 
-// OpenDB opens (creating if needed) the database file at path.
+// OpenDB opens (creating if needed) the database file at path. A new file is
+// readable and writable by its owner only, as are the WAL and shared-memory
+// files SQLite creates beside it, since the database holds secrets.
 func OpenDB(ctx context.Context, path string) (*DB, error) {
 	abs, err := filepath.Abs(path)
 	if err != nil {
 		return nil, fmt.Errorf("database path: %w", err)
+	}
+	f, err := os.OpenFile(abs, os.O_RDWR|os.O_CREATE, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("open database %s: %w", abs, err)
+	}
+	if err := f.Close(); err != nil {
+		return nil, fmt.Errorf("open database %s: %w", abs, err)
 	}
 	writer, err := sql.Open("sqlite", dsn(abs, "immediate",
 		"busy_timeout(5000)", "foreign_keys(1)", "journal_mode(WAL)", "synchronous(NORMAL)"))

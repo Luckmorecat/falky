@@ -7,14 +7,17 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"io/fs"
 	"net"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/kisshot/falky/server/internal/admin"
 	"github.com/kisshot/falky/server/internal/platform"
 )
 
@@ -54,17 +57,28 @@ func get(t *testing.T, url string) (int, string) {
 	return res.StatusCode, string(body)
 }
 
-func TestServeAnswersOnBothListenersAndStopsCleanly(t *testing.T) {
+// newListeners listens on loopback for the public and internal listeners and
+// on an admin socket at socketPath.
+func newListeners(t *testing.T, socketPath string) listeners {
+	t.Helper()
 	var lc net.ListenConfig
-	listen := func() net.Listener {
+	tcp := func() net.Listener {
 		ln, err := lc.Listen(t.Context(), "tcp", "127.0.0.1:0")
 		if err != nil {
 			t.Fatalf("listen: %v", err)
 		}
 		return ln
 	}
-	publicLn, internalLn := listen(), listen()
-	public, internal := "http://"+publicLn.Addr().String(), "http://"+internalLn.Addr().String()
+	adminLn, err := admin.Listen(t.Context(), socketPath)
+	if err != nil {
+		t.Fatalf("admin listen: %v", err)
+	}
+	return listeners{public: tcp(), internal: tcp(), admin: adminLn}
+}
+
+func TestServeAnswersOnItsListenersAndStopsCleanly(t *testing.T) {
+	ls := newListeners(t, filepath.Join(t.TempDir(), "admin.sock"))
+	public, internal := "http://"+ls.public.Addr().String(), "http://"+ls.internal.Addr().String()
 
 	var logs syncBuffer
 	logger := platform.NewLogger(&logs, 0)
@@ -81,7 +95,7 @@ func TestServeAnswersOnBothListenersAndStopsCleanly(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
-	go func() { done <- serveOn(ctx, logger, db, ms, publicLn, internalLn) }()
+	go func() { done <- serveOn(ctx, logger, cfg, db, ms, ls) }()
 
 	if code, body := get(t, internal+"/health/live"); code != http.StatusOK {
 		t.Errorf("internal /health/live = %d %s, want 200", code, body)
@@ -123,17 +137,10 @@ func TestServeAnswersOnBothListenersAndStopsCleanly(t *testing.T) {
 }
 
 func TestServeReadinessFailsWhenTheDatabaseIsGone(t *testing.T) {
-	var lc net.ListenConfig
-	publicLn, err := lc.Listen(t.Context(), "tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("listen: %v", err)
-	}
-	internalLn, err := lc.Listen(t.Context(), "tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("listen: %v", err)
-	}
+	ls := newListeners(t, filepath.Join(t.TempDir(), "admin.sock"))
 	logger := platform.NewLogger(io.Discard, 0)
-	db, ms, err := openMigrated(t.Context(), platform.Config{DBPath: filepath.Join(t.TempDir(), "falky.db")}, logger)
+	cfg := platform.Config{DBPath: filepath.Join(t.TempDir(), "falky.db")}
+	db, ms, err := openMigrated(t.Context(), cfg, logger)
 	if err != nil {
 		t.Fatalf("openMigrated: %v", err)
 	}
@@ -143,7 +150,7 @@ func TestServeReadinessFailsWhenTheDatabaseIsGone(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
-	go func() { done <- serveOn(ctx, logger, db, ms, publicLn, internalLn) }()
+	go func() { done <- serveOn(ctx, logger, cfg, db, ms, ls) }()
 	t.Cleanup(func() {
 		cancel()
 		if err := <-done; err != nil {
@@ -151,30 +158,112 @@ func TestServeReadinessFailsWhenTheDatabaseIsGone(t *testing.T) {
 		}
 	})
 
-	if code, body := get(t, "http://"+internalLn.Addr().String()+"/health/ready"); code != http.StatusServiceUnavailable ||
+	if code, body := get(t, "http://"+ls.internal.Addr().String()+"/health/ready"); code != http.StatusServiceUnavailable ||
 		!strings.Contains(body, `"database":"unavailable"`) {
 		t.Errorf("/health/ready = %d %s, want 503 naming database unavailable", code, body)
 	}
 }
 
-func TestMigrateCommandIsIdempotent(t *testing.T) {
-	dbPath := filepath.Join(t.TempDir(), "falky.db")
-	getenv := func(k string) string {
-		if k == platform.EnvDBPath {
-			return dbPath
-		}
-		return ""
-	}
-	for i := range 2 {
+func TestMigrateCommandIsIdempotentAndCreatesTheLinkOnce(t *testing.T) {
+	getenv := env(map[string]string{platform.EnvDBPath: filepath.Join(t.TempDir(), "falky.db")})
+	for i, wantCreated := range []bool{true, false} {
 		var stdout, stderr bytes.Buffer
 		if code := run(t.Context(), []string{"migrate"}, getenv, &stdout, &stderr); code != 0 {
 			t.Fatalf("migrate run %d: exit %d, stdout %q, stderr %q", i+1, code, stdout.String(), stderr.String())
 		}
+		if created := strings.Contains(stdout.String(), "access link created"); created != wantCreated {
+			t.Errorf("migrate run %d: link created = %v, want %v; logs %q", i+1, created, wantCreated, stdout.String())
+		}
+	}
+}
+
+func env(vars map[string]string) func(string) string {
+	return func(k string) string { return vars[k] }
+}
+
+// startServer serves the database at cfg.DBPath, with its admin socket at
+// cfg.AdminSocket, logging to logs, until the returned stop is called.
+func startServer(t *testing.T, cfg platform.Config, logs io.Writer) (stop func()) {
+	t.Helper()
+	logger := platform.NewLogger(logs, 0)
+	db, ms, err := openMigrated(t.Context(), cfg, logger)
+	if err != nil {
+		t.Fatalf("openMigrated: %v", err)
+	}
+	ls := newListeners(t, cfg.AdminSocket)
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- serveOn(ctx, logger, cfg, db, ms, ls) }()
+	stopped := false
+	stop = func() {
+		if stopped {
+			return
+		}
+		stopped = true
+		cancel()
+		if err := errors.Join(<-done, db.Close()); err != nil {
+			t.Errorf("server: %v", err)
+		}
+	}
+	t.Cleanup(stop)
+	return stop
+}
+
+// runLinkShow runs falky link show and returns its exit code and output.
+func runLinkShow(t *testing.T, getenv func(string) string) (code int, stdout, stderr string) {
+	t.Helper()
+	var out, errOut bytes.Buffer
+	code = run(t.Context(), []string{"link", "show"}, getenv, &out, &errOut)
+	return code, out.String(), errOut.String()
+}
+
+func TestLinkShowPrintsTheSameLinkAcrossRestarts(t *testing.T) {
+	dir := t.TempDir()
+	vars := map[string]string{
+		platform.EnvDBPath:       filepath.Join(dir, "falky.db"),
+		platform.EnvAdminSocket:  filepath.Join(dir, "admin.sock"),
+		platform.EnvPublicOrigin: "https://falky.example",
+	}
+	cfg, err := platform.LoadConfig(env(vars))
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	var logs syncBuffer
+	stop := startServer(t, cfg, &logs)
+
+	code, link, stderr := runLinkShow(t, env(vars))
+	if code != 0 || !strings.HasPrefix(link, "https://falky.example/#k=") || !strings.HasSuffix(link, "\n") {
+		t.Fatalf("link show = exit %d, stdout %q, stderr %q; want 0 and the link on one line", code, link, stderr)
+	}
+	if code, again, _ := runLinkShow(t, env(vars)); code != 0 || again != link {
+		t.Errorf("second link show = exit %d, %q, want 0, %q", code, again, link)
+	}
+
+	stop()
+	if _, err := os.Lstat(cfg.AdminSocket); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("admin socket after shutdown: Lstat = %v, want it removed", err)
+	}
+	startServer(t, cfg, &logs)
+	if code, again, _ := runLinkShow(t, env(vars)); code != 0 || again != link {
+		t.Errorf("link show after restart = exit %d, %q, want 0, %q", code, again, link)
+	}
+
+	secret := strings.TrimSpace(strings.TrimPrefix(link, "https://falky.example/#k="))
+	if strings.Contains(logs.String(), secret) {
+		t.Errorf("server logs contain the link secret: %q", logs.String())
+	}
+}
+
+func TestLinkShowFailsWhenNoServerIsRunning(t *testing.T) {
+	socket := filepath.Join(t.TempDir(), "admin.sock")
+	code, stdout, stderr := runLinkShow(t, env(map[string]string{platform.EnvAdminSocket: socket}))
+	if code == 0 || stdout != "" || !strings.Contains(stderr, "not running") || !strings.Contains(stderr, socket) {
+		t.Errorf("link show = exit %d, stdout %q, stderr %q; want non-zero, no link, and a message naming %s", code, stdout, stderr, socket)
 	}
 }
 
 func TestRunRefusesUnknownCommands(t *testing.T) {
-	for _, args := range [][]string{nil, {"frobnicate"}, {"serve", "extra"}} {
+	for _, args := range [][]string{nil, {"frobnicate"}, {"serve", "extra"}, {"link"}, {"link", "rotate"}, {"link", "show", "extra"}} {
 		var stdout, stderr bytes.Buffer
 		if code := run(t.Context(), args, func(string) string { return "" }, &stdout, &stderr); code != 2 {
 			t.Errorf("run %q = %d, want 2", args, code)

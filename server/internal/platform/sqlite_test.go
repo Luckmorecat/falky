@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -33,6 +34,34 @@ func TestOpenDBUsesWALOnBothPools(t *testing.T) {
 		}
 		if mode != "wal" {
 			t.Errorf("%s: journal_mode = %q, want wal", name, mode)
+		}
+	}
+}
+
+func TestANewDatabaseIsOwnerOnly(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "test.db")
+	db, err := OpenDB(t.Context(), path)
+	if err != nil {
+		t.Fatalf("OpenDB: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Errorf("Close: %v", err)
+		}
+	})
+	if err := db.Write(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(), "CREATE TABLE t (n INTEGER)")
+		return err
+	}); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	for _, p := range []string{path, path + "-wal", path + "-shm"} {
+		fi, err := os.Stat(p)
+		if err != nil {
+			t.Fatalf("Stat: %v", err)
+		}
+		if fi.Mode().Perm() != 0o600 {
+			t.Errorf("%s mode = %v, want 0600", filepath.Base(p), fi.Mode().Perm())
 		}
 	}
 }

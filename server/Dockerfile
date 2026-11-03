@@ -9,16 +9,19 @@ COPY internal ./internal
 RUN --mount=type=cache,target=/root/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/falky ./cmd/falky
-# The database directory, owned by the runtime user.
-RUN mkdir -p /out/data
+# The database directory and the admin socket's directory, owned by the
+# runtime user; only that user may enter the socket's directory.
+RUN mkdir -p /out/data /out/run/falky && chmod 0700 /out/run/falky
 
 FROM gcr.io/distroless/static-debian13:nonroot@sha256:25ac8f0c3b2334a9eb05452266bd4697864a8c8ef0ef71e5e6480d7f92868329
 COPY --from=build /out/falky /falky
 COPY --from=build --chown=nonroot:nonroot /out/data /data
+COPY --from=build --chown=nonroot:nonroot /out/run/falky /run/falky
 USER nonroot:nonroot
 ENV FALKY_PUBLIC_ADDR=:8080 \
     FALKY_INTERNAL_ADDR=:9090 \
-    FALKY_DB_PATH=/data/falky.db
+    FALKY_DB_PATH=/data/falky.db \
+    FALKY_ADMIN_SOCKET=/run/falky/admin.sock
 EXPOSE 8080 9090
 ENTRYPOINT ["/falky"]
 CMD ["serve"]
