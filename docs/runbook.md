@@ -96,7 +96,7 @@ docker compose exec falky /falky <command>
 | Command | What it does |
 | --- | --- |
 | `link show` | Prints the access link. |
-| `link rotate` | Replaces the access link and prints the new one. It ends every visitor's access at once: their cookies are refused, their live updates close and their voice ends. Everyone must enter again through the new link. |
+| `link rotate` | Replaces the access link and prints the new one. It ends every visitor's access at once: their cookies are refused, their live updates close and their voice ends. Everyone must enter again through the new link. To also stop voice tokens handed out before, see *Full rotation*. |
 | `room create "<name>"` | Creates a room and prints its ID. Keep the ID for renaming. |
 | `room rename <id> "<name>"` | Renames a room. Visitors see the new name at once. |
 | `snapshot` | Takes a snapshot of the database (see *Snapshots*). |
@@ -105,6 +105,55 @@ docker compose exec falky /falky <command>
 Room names are unique, ignoring case and surrounding spaces. Quote names that
 have spaces. `restore` is the one command that runs while the server is
 stopped (see *Restore*).
+
+### Full rotation
+
+`link rotate` ends everyone's voice, but LiveKit cannot take back a voice
+token it has handed out. A visitor may have kept one from before the rotation,
+and a modified client could rejoin voice with it until the server's check
+removes it again, as often as it tries. Replacing LiveKit's key pair as well
+ends that: LiveKit then refuses every token signed with the old pair. Do a
+full rotation instead of `link rotate` when someone who should no longer get
+in may have joined voice before, for example after the link leaked.
+
+1. Rotate the link:
+
+   ```sh
+   docker compose exec falky /falky link rotate
+   ```
+
+2. Write a new key pair into `deploy/.env`, replacing the lines
+   `FALKY_LIVEKIT_API_KEY=` and `FALKY_LIVEKIT_API_SECRET=`. Generate it with
+   the same commands as in *Deploy*:
+
+   ```sh
+   echo "FALKY_LIVEKIT_API_KEY=falky$(openssl rand -hex 6)"
+   echo "FALKY_LIVEKIT_API_SECRET=$(openssl rand -hex 32)"
+   ```
+
+   Update your private copy of `deploy/.env` too (see *What else to keep*).
+
+3. Recreate `livekit` and `falky` with the new pair, waiting until the server
+   is ready:
+
+   ```sh
+   docker compose up -d --wait
+   ```
+
+4. Check that the server is ready and that LiveKit accepts the new pair: the
+   report shows `livekit` as `ok`, not `degraded`:
+
+   ```sh
+   docker compose exec falky /falky health ready
+   ```
+
+5. Hand out the new link, which `docker compose exec falky /falky link show`
+   prints.
+
+What it costs: everyone's voice ends and everyone must enter again through
+the new link, as with `link rotate`. The server and LiveKit restart, so for a
+few seconds the API does not answer, and the live updates of anyone who
+already entered again close and reconnect.
 
 ## Snapshots
 
@@ -231,7 +280,8 @@ rebuilding the host:
   - The domain and the node IP can simply be written again.
   - A new key pair works, but only once both `livekit` and `falky` have
     restarted with it. `docker compose up -d` recreates both. Voice tokens
-    handed out before stop working, so participants join voice again.
+    handed out before stop working, so participants join voice again. This
+    is also how *Full rotation* ends held voice tokens.
 - **The volume `falky_caddy_data`.** It holds Caddy's certificates and its
   ACME account. If it is lost, Caddy requests new certificates when it
   starts. Certificate authorities limit how often they issue them (Let's
