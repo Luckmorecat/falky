@@ -1,0 +1,90 @@
+# The Falky stack on one host: Caddy serves HTTPS and proxies the API and
+# LiveKit's signalling; LiveKit carries voice and screen share; the server keeps
+# the rooms, chat and visitors.
+#
+#   cp deploy/.env.example deploy/.env   # then fill it in
+#   docker compose -f deploy/compose.yaml up -d --build
+#   docker compose -f deploy/compose.yaml exec falky /falky link show
+#
+# Only Caddy's ports and LiveKit's media ports are published. The server's
+# public listener is reached only through Caddy, its internal listener (health,
+# metrics, LiveKit's webhooks) only from this Compose network, and its admin
+# socket only inside its container. LiveKit's API port stays on this network.
+
+name: falky
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: 10m
+    max-file: "3"
+
+services:
+  caddy:
+    image: caddy:2.11.7@sha256:36c24ad91a7ff7bc4c87fe22bfa8df3c4b18da0773d73fc12ee2c52b98c0bb7e
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      FALKY_DOMAIN: ${FALKY_DOMAIN:?set FALKY_DOMAIN in deploy/.env}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      falky:
+        condition: service_healthy
+      livekit:
+        condition: service_started
+    logging: *logging
+
+  falky:
+    build: ../server
+    image: falky-server:local
+    restart: unless-stopped
+    environment:
+      FALKY_PUBLIC_ORIGIN: https://${FALKY_DOMAIN:?set FALKY_DOMAIN in deploy/.env}
+      FALKY_LIVEKIT_API_URL: http://livekit:7880
+      FALKY_LIVEKIT_API_KEY: ${FALKY_LIVEKIT_API_KEY:?set FALKY_LIVEKIT_API_KEY in deploy/.env}
+      FALKY_LIVEKIT_API_SECRET: ${FALKY_LIVEKIT_API_SECRET:?set FALKY_LIVEKIT_API_SECRET in deploy/.env}
+    volumes:
+      - falky_data:/data
+    # Ready means the database is open and migrated; LiveKit being unreachable
+    # leaves the server ready, with voice reported degraded.
+    healthcheck:
+      test: ["CMD", "/falky", "health", "ready"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+      start_interval: 2s
+    # Longer than the server's own shutdown timeout.
+    stop_grace_period: 15s
+    logging: *logging
+
+  livekit:
+    image: livekit/livekit-server:v1.13.11@sha256:25cd902de7cacbd5f1f779f6a6ac1eae20ba8f56b0935934ce6b0ab80d1e3d20
+    restart: unless-stopped
+    command: ["--config", "/etc/livekit.yaml"]
+    environment:
+      # The same key pair the server signs tokens and verifies webhooks with.
+      # LiveKit reads each config key from LIVEKIT_<KEY> as well (listed by
+      # `livekit-server help-verbose`): LIVEKIT_WEBHOOK_API_KEY is
+      # webhook.api_key, the key its webhooks are signed with.
+      LIVEKIT_KEYS: "${FALKY_LIVEKIT_API_KEY:?set FALKY_LIVEKIT_API_KEY in deploy/.env}: ${FALKY_LIVEKIT_API_SECRET:?set FALKY_LIVEKIT_API_SECRET in deploy/.env}"
+      LIVEKIT_WEBHOOK_API_KEY: ${FALKY_LIVEKIT_API_KEY:?set FALKY_LIVEKIT_API_KEY in deploy/.env}
+      # The address clients send media to.
+      NODE_IP: ${LIVEKIT_NODE_IP:?set LIVEKIT_NODE_IP in deploy/.env}
+    volumes:
+      - ./livekit.yaml:/etc/livekit.yaml:ro
+    ports:
+      - "7881:7881/tcp"
+      - "7882:7882/udp"
+    logging: *logging
+
+volumes:
+  caddy_data:
+  caddy_config:
+  falky_data:

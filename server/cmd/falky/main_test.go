@@ -142,7 +142,7 @@ func TestServeAnswersOnItsListenersAndStopsCleanly(t *testing.T) {
 	}
 }
 
-func TestServeReadinessFailsWhenTheDatabaseIsGone(t *testing.T) {
+func TestReadinessAndTheHealthCommandFailWhenTheDatabaseIsGone(t *testing.T) {
 	ls := newListeners(t, filepath.Join(t.TempDir(), "admin.sock"))
 	logger := platform.NewLogger(io.Discard, 0)
 	cfg := platform.Config{DBPath: filepath.Join(t.TempDir(), "falky.db")}
@@ -167,6 +167,17 @@ func TestServeReadinessFailsWhenTheDatabaseIsGone(t *testing.T) {
 	if code, body := get(t, "http://"+ls.internal.Addr().String()+"/health/ready"); code != http.StatusServiceUnavailable ||
 		!strings.Contains(body, `"database":"unavailable"`) {
 		t.Errorf("/health/ready = %d %s, want 503 naming database unavailable", code, body)
+	}
+
+	// The health command fails readiness with the report, and still passes
+	// liveness.
+	getenv := healthEnv(t, ls)
+	if code, stdout, stderr := runCommand(t, getenv, "health", "ready"); code != 1 ||
+		!strings.Contains(stdout, `"database":"unavailable"`) || !strings.Contains(stderr, "503") {
+		t.Errorf("health ready = exit %d, stdout %q, stderr %q; want 1, the report naming database unavailable and the status", code, stdout, stderr)
+	}
+	if code, stdout, stderr := runCommand(t, getenv, "health", "live"); code != 0 {
+		t.Errorf("health live = exit %d, stdout %q, stderr %q; want 0", code, stdout, stderr)
 	}
 }
 
@@ -209,12 +220,18 @@ func startServer(t *testing.T, cfg platform.Config, logs io.Writer) (stop func()
 // startServerOn is startServer that also returns the public listener's URL.
 func startServerOn(t *testing.T, cfg platform.Config, logs io.Writer) (stop func(), publicURL string) {
 	t.Helper()
+	ls := newListeners(t, cfg.AdminSocket)
+	return startServerWith(t, cfg, logs, ls), "http://" + ls.public.Addr().String()
+}
+
+// startServerWith is startServer on the listeners ls.
+func startServerWith(t *testing.T, cfg platform.Config, logs io.Writer, ls listeners) (stop func()) {
+	t.Helper()
 	logger := platform.NewLogger(logs, 0)
 	db, ms, err := openMigrated(t.Context(), cfg, logger)
 	if err != nil {
 		t.Fatalf("openMigrated: %v", err)
 	}
-	ls := newListeners(t, cfg.AdminSocket)
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
 	go func() { done <- serveOn(ctx, logger, cfg, db, ms, ls) }()
@@ -230,7 +247,7 @@ func startServerOn(t *testing.T, cfg platform.Config, logs io.Writer) (stop func
 		}
 	}
 	t.Cleanup(stop)
-	return stop, "http://" + ls.public.Addr().String()
+	return stop
 }
 
 // runLinkShow runs falky link show and returns its exit code and output.
@@ -298,6 +315,9 @@ func TestRunRefusesUnknownCommands(t *testing.T) {
 		{"room", "rename", "01JBX6Z8Q3M5W2K7R9T4V1C0DE"},
 		{"room", "rename", "01JBX6Z8Q3M5W2K7R9T4V1C0DE", "Living", "room"},
 		{"room", "delete", "x"},
+		{"health"},
+		{"health", "metrics"},
+		{"health", "ready", "extra"},
 	} {
 		var stdout, stderr bytes.Buffer
 		if code := run(t.Context(), args, func(string) string { return "" }, &stdout, &stderr); code != 2 {
@@ -634,5 +654,54 @@ func TestLinkRotateFailsWhenNoServerIsRunning(t *testing.T) {
 	code, stdout, stderr := runCommand(t, env(map[string]string{platform.EnvAdminSocket: socket}), "link", "rotate")
 	if code == 0 || stdout != "" || !strings.Contains(stderr, "not running") {
 		t.Errorf("link rotate = exit %d, stdout %q, stderr %q; want non-zero saying the server is not running", code, stdout, stderr)
+	}
+}
+
+// healthEnv returns the environment of a server whose internal listener is
+// ls.internal, named by port only as the image names it.
+func healthEnv(t *testing.T, ls listeners) func(string) string {
+	t.Helper()
+	_, port, err := net.SplitHostPort(ls.internal.Addr().String())
+	if err != nil {
+		t.Fatalf("SplitHostPort: %v", err)
+	}
+	return env(map[string]string{
+		platform.EnvInternalAddr: ":" + port,
+		platform.EnvDBPath:       filepath.Join(t.TempDir(), "falky.db"),
+	})
+}
+
+func TestHealthCommandSucceedsWhileTheServerIsReady(t *testing.T) {
+	ls := newListeners(t, filepath.Join(t.TempDir(), "admin.sock"))
+	getenv := healthEnv(t, ls)
+	cfg, err := platform.LoadConfig(getenv)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	startServerWith(t, cfg, io.Discard, ls)
+
+	if code, stdout, stderr := runCommand(t, getenv, "health", "live"); code != 0 {
+		t.Errorf("health live = exit %d, stdout %q, stderr %q; want 0", code, stdout, stderr)
+	}
+	// No LiveKit is configured: the server is ready and says voice is degraded.
+	code, stdout, stderr := runCommand(t, getenv, "health", "ready")
+	if code != 0 || !strings.Contains(stdout, `"livekit":"degraded"`) {
+		t.Errorf("health ready = exit %d, stdout %q, stderr %q; want 0 and the report naming livekit degraded", code, stdout, stderr)
+	}
+}
+
+func TestHealthCommandFailsWhenNoServerIsRunning(t *testing.T) {
+	var lc net.ListenConfig
+	ln, err := lc.Listen(t.Context(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	addr := ln.Addr().String()
+	if err := ln.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	code, stdout, stderr := runCommand(t, env(map[string]string{platform.EnvInternalAddr: addr}), "health", "live")
+	if code != 1 || stdout != "" || !strings.Contains(stderr, addr) {
+		t.Errorf("health live = exit %d, stdout %q, stderr %q; want 1 and a message naming %s", code, stdout, stderr, addr)
 	}
 }

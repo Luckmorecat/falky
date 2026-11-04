@@ -8,6 +8,7 @@
 //	falky room rename <id> <name>   rename a room in the running server
 //	falky link show                 print the access link of the running server
 //	falky link rotate               replace the access link, ending everyone's access, and print it
+//	falky health live|ready         probe the running server's health and fail unless it is live or ready
 //
 // Configuration comes from FALKY_* environment variables; see
 // internal/platform.LoadConfig.
@@ -48,6 +49,7 @@ commands:
   room rename <id> <name>   rename a room in the running server
   link show                 print the access link of the running server
   link rotate               replace the access link, ending everyone's access, and print it
+  health live|ready         probe the running server's health and fail unless it is live or ready
 
 Quote a name that has spaces: falky room create "Living room"
 `
@@ -114,6 +116,10 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 		operator = linkShow
 	case slices.Equal(args, []string{"link", "rotate"}):
 		operator = linkRotate
+	case len(args) == 2 && args[0] == "health" && slices.Contains([]string{"live", "ready"}, args[1]):
+		operator = func(ctx context.Context, cfg platform.Config, stdout io.Writer) error {
+			return health(ctx, cfg, stdout, args[1])
+		}
 	case len(args) == 1 && slices.Contains([]string{"help", "-h", "--help"}, args[0]):
 		_, _ = fmt.Fprint(stdout, usage)
 		return 0
@@ -177,6 +183,46 @@ func linkRotate(ctx context.Context, cfg platform.Config, stdout io.Writer) erro
 	}
 	_, err = fmt.Fprintln(stdout, link)
 	return err
+}
+
+// healthTimeout bounds the health command's request.
+const healthTimeout = 5 * time.Second
+
+// health asks the running server's internal listener whether it is live or
+// ready (probe) and prints the report it answers with. It fails unless the
+// answer is 200, so a container healthcheck can run it: the image has no
+// shell or HTTP client of its own.
+func health(ctx context.Context, cfg platform.Config, stdout io.Writer, probe string) error {
+	host, port, err := net.SplitHostPort(cfg.InternalAddr)
+	if err != nil {
+		return fmt.Errorf("%s: %w", platform.EnvInternalAddr, err)
+	}
+	// A listener on every interface is reached on loopback.
+	if ip := net.ParseIP(host); host == "" || ip != nil && ip.IsUnspecified() {
+		host = "127.0.0.1"
+	}
+	url := "http://" + net.JoinHostPort(host, port) + "/health/" + probe
+	ctx, cancel := context.WithTimeout(ctx, healthTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return err
+	}
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	body, err := io.ReadAll(res.Body)
+	if err := errors.Join(err, res.Body.Close()); err != nil {
+		return fmt.Errorf("read %s: %w", url, err)
+	}
+	if _, err := stdout.Write(body); err != nil {
+		return err
+	}
+	if res.StatusCode != http.StatusOK {
+		return fmt.Errorf("%s answered %s", url, res.Status)
+	}
+	return nil
 }
 
 // openMigrated opens the database, applies pending migrations and creates the

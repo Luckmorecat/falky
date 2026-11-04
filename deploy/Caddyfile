@@ -1,0 +1,33 @@
+# HTTPS for the Falky stack. Caddy gets a certificate for FALKY_DOMAIN, or
+# uses its own local authority for localhost.
+#
+# Only the API and LiveKit's signalling are proxied. Never route LiveKit's
+# API (/twirp), ingest (/whip), /agent, /debug or its health (/), nor the
+# server's internal routes (/livekit/webhook, /health, /metrics).
+#
+# Leave trusted_proxies unset: Caddy then replaces any X-Forwarded-For a
+# client sends with the address it connected from, which the server's
+# per-address limit on entering relies on.
+
+{
+	# The container cannot install the local authority into a trust store.
+	skip_install_trust
+}
+
+{$FALKY_DOMAIN} {
+	# The API, including the live-update WebSocket at /api/live.
+	handle /api/* {
+		reverse_proxy falky:8080
+	}
+
+	# LiveKit's signalling: WebSocket connections, and the plain GET
+	# requests clients make to /rtc/validate after a failed connection.
+	@rtc path /rtc /rtc/*
+	handle @rtc {
+		reverse_proxy livekit:7880
+	}
+
+	handle {
+		respond 404
+	}
+}

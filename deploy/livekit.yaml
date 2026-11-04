@@ -1,0 +1,24 @@
+# LiveKit for the Falky stack. The API key and secret, the webhook's API key
+# and the address clients send media to come from the environment
+# (compose.yaml).
+
+# Signalling and API; reached only on the Compose network (Caddy proxies the
+# signalling).
+port: 7880
+
+rtc:
+  # ICE over TCP, for networks that block UDP.
+  tcp_port: 7881
+  # All UDP media on one port.
+  udp_port: 7882
+  use_external_ip: false
+
+# Participant and room events, signed with the shared key, to the server's
+# internal listener.
+webhook:
+  urls:
+    - http://falky:9090/livekit/webhook
+
+logging:
+  json: true
+  level: info

@@ -9,3 +9,6 @@
 *.sqlite
 *.sqlite-shm
 *.sqlite-wal
+
+# Deployment settings with secrets (deploy/.env.example is the template)
+/deploy/.env
