@@ -168,3 +168,27 @@ func TestAReturningVisitorWhoseNameIsTakenIsKeptOutOfLiveUpdatesAndVoiceUntilThe
 	p.connectLive(t, xHTTP)
 	joinedVoice(t, x, lounge.ID)
 }
+
+func TestAReservationFromEnteringLeavesAReturningVisitorInAndTheReserverIsInConflictOnceTheyConnect(t *testing.T) {
+	p := startPublic(t, 1000)
+	lounge := p.createRoom(t, "Lounge")
+	x, xHTTP := p.browserWithHTTP(t)
+	p.enter(t, x, "Bob")
+	closeLive(t, p.connectLive(t, xHTTP))
+	y, yHTTP := p.browserWithHTTP(t)
+	p.enterOnceFree(t, y, "bob") // and never connects
+
+	if got := me(t, x); got.NameTaken {
+		t.Errorf("GetMe for X while Y only reserved bob = %+v, want nameTaken false", got)
+	}
+	p.connectLive(t, xHTTP)
+	joinedVoice(t, x, lounge.ID)
+
+	if got := me(t, y); !got.NameTaken {
+		t.Errorf("GetMe for Y once X connected = %+v, want nameTaken", got)
+	}
+	status, body := p.upgradeRequest(t, yHTTP, testOrigin)
+	wantError(t, "GET /api/live for Y", status, body, http.StatusConflict, "name_taken")
+	join := joinVoice(t, y, lounge.ID)
+	wantError(t, "JoinVoice for Y", join.StatusCode(), join.Body, http.StatusConflict, "name_taken")
+}

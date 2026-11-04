@@ -171,5 +171,5 @@ func nameTaken() api.NameTakenJSONResponse {
 }
 
 // yourNameTaken is the answer refusing live updates or voice to a visitor
-// whose name another visitor holds.
+// whose name another connected visitor holds.
 var yourNameTaken = api.Error{Code: "name_taken", Message: "another visitor has your name; rename first"}

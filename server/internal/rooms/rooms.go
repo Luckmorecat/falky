@@ -80,7 +80,8 @@ func WithPublisher(publish func(Room)) Option {
 
 // WithNameCheck makes Authorize refuse joining voice, with
 // identity.ErrNameTaken, to a visitor for whom nameTaken reports that another
-// visitor holds their name: voice stays closed to them until they rename.
+// connected visitor holds their name: voice stays closed to them until they
+// rename.
 func WithNameCheck(nameTaken func(identity.Visitor) bool) Option {
 	return func(s *Service) { s.nameTaken = nameTaken }
 }
@@ -203,8 +204,8 @@ func scanRooms(rows *sql.Rows) (rooms []Room, err error) {
 // Authorize is the one check of whether visitor may do action in the room
 // roomID; every handler of a room-scoped request calls it first. It fails
 // with ErrNotFound for an unknown room, and with identity.ErrNameTaken when
-// the visitor would join voice under a name another visitor holds. Otherwise
-// every visitor may do everything in every room.
+// the visitor would join voice under a name another connected visitor holds.
+// Otherwise every visitor may do everything in every room.
 func (s *Service) Authorize(ctx context.Context, visitor identity.Visitor, roomID string, action Action) error {
 	err := checkExists(ctx, s.db.Read(), roomID)
 	if err != nil && !errors.Is(err, ErrNotFound) {

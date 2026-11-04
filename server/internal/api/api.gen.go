@@ -373,7 +373,7 @@ type Visitor struct {
 	// Example: Bob
 	Name string `json:"name"`
 
-	// NameTaken Whether another visitor holds this name: one took it while this visitor was not connected. Live updates and voice stay closed to this visitor until they rename; reading and posting messages stay open.
+	// NameTaken Whether another connected visitor holds this name: one took it while this visitor was not connected. Another visitor's reservation from entering does not count. Live updates and voice stay closed to this visitor until they rename; reading and posting messages stay open.
 	//
 	// Example: false
 	NameTaken bool `json:"nameTaken"`
@@ -636,7 +636,7 @@ type ClientInterface interface {
 
 	// GetMe Return the current visitor.
 	//
-	// Returns the visitor the cookie belongs to, and whether another visitor now holds their name (`nameTaken`). Such a visitor cannot open live updates or join voice until they rename.
+	// Returns the visitor the cookie belongs to, and whether another connected visitor now holds their name (`nameTaken`). Such a visitor cannot open live updates or join voice until they rename. Another visitor's reservation from entering does not count.
 	//
 	// Corresponds with GET /api/me (the `GetMe` operationId).
 	GetMe(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -757,7 +757,7 @@ func (c *Client) Enter(ctx context.Context, body EnterJSONRequestBody, reqEditor
 
 // GetMe Return the current visitor.
 //
-// Returns the visitor the cookie belongs to, and whether another visitor now holds their name (`nameTaken`). Such a visitor cannot open live updates or join voice until they rename.
+// Returns the visitor the cookie belongs to, and whether another connected visitor now holds their name (`nameTaken`). Such a visitor cannot open live updates or join voice until they rename. Another visitor's reservation from entering does not count.
 //
 // Corresponds with GET /api/me (the `GetMe` operationId).
 func (c *Client) GetMe(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
@@ -1347,7 +1347,7 @@ type ClientWithResponsesInterface interface {
 
 	// GetMeWithResponse Return the current visitor.
 	//
-	// Returns the visitor the cookie belongs to, and whether another visitor now holds their name (`nameTaken`). Such a visitor cannot open live updates or join voice until they rename.
+	// Returns the visitor the cookie belongs to, and whether another connected visitor now holds their name (`nameTaken`). Such a visitor cannot open live updates or join voice until they rename. Another visitor's reservation from entering does not count.
 	//
 	// Returns a wrapper object for the known response body format(s).
 	//
@@ -2072,7 +2072,7 @@ func (c *ClientWithResponses) EnterWithResponse(ctx context.Context, body EnterJ
 
 // GetMeWithResponse Return the current visitor.
 //
-// Returns the visitor the cookie belongs to, and whether another visitor now holds their name (`nameTaken`). Such a visitor cannot open live updates or join voice until they rename.
+// Returns the visitor the cookie belongs to, and whether another connected visitor now holds their name (`nameTaken`). Such a visitor cannot open live updates or join voice until they rename. Another visitor's reservation from entering does not count.
 //
 // Returns a wrapper object for the known response body format(s).
 //

@@ -160,9 +160,11 @@ func TestAParticipantWhoMayNotStayIsRemovedAndNotListed(t *testing.T) {
 	joinedVoice(t, b, lounge.ID)
 
 	// Bob never connects live updates, so once his reservation lapses
-	// another visitor enters under his name.
+	// another visitor enters under his name and connects.
 	p.clock.Advance(time.Minute)
-	p.enter(t, p.browser(t), "bob")
+	other, otherHTTP := p.browserWithHTTP(t)
+	p.enter(t, other, "bob")
+	p.connectLive(t, otherHTTP)
 	taken := p.livekit.AddParticipant(lounge.ID, bob.Id)
 	p.applied(t, voicetest.Joined(taken))
 	unknown := p.livekit.AddParticipant(lounge.ID, "01JBX6ZZZZZZZZZZZZZZZZZZZZ")
@@ -170,6 +172,42 @@ func TestAParticipantWhoMayNotStayIsRemovedAndNotListed(t *testing.T) {
 
 	if got, want := p.livekit.Removed(), []voice.Participant{taken, unknown}; !slices.Equal(got, want) {
 		t.Errorf("removed %+v, want %+v", got, want)
+	}
+	if got := occupancy(t, b, lounge.ID); len(got) != 0 {
+		t.Errorf("lounge occupancy = %+v, want none", got)
+	}
+}
+
+func TestAParticipantStaysWhileAnotherVisitorOnlyReservesTheirNameAndIsRemovedOnceTheyConnect(t *testing.T) {
+	p := startPublic(t, 1000)
+	lounge := p.createRoom(t, "Lounge")
+	b := p.browser(t)
+	bob := p.enter(t, b, "Bob")
+	joinedVoice(t, b, lounge.ID)
+
+	// Bob never connects live updates, so once his reservation lapses
+	// another visitor enters under his name, but does not connect yet.
+	p.clock.Advance(time.Minute)
+	other, otherHTTP := p.browserWithHTTP(t)
+	p.enter(t, other, "bob")
+	inVoice := p.livekit.AddParticipant(lounge.ID, bob.Id)
+	p.applied(t, voicetest.Joined(inVoice))
+	if err := p.voice.Refresh(t.Context()); err != nil {
+		t.Fatalf("Refresh: %v", err)
+	}
+	if got := p.livekit.Removed(); len(got) != 0 {
+		t.Errorf("removed %+v while bob is only reserved, want no one", got)
+	}
+	if got, want := occupancy(t, b, lounge.ID), []api.Participant{{VisitorId: bob.Id, Name: "Bob"}}; !slices.Equal(got, want) {
+		t.Errorf("lounge occupancy = %+v, want %+v", got, want)
+	}
+
+	p.connectLive(t, otherHTTP)
+	if err := p.voice.Refresh(t.Context()); err != nil {
+		t.Fatalf("Refresh: %v", err)
+	}
+	if got := p.livekit.Removed(); !slices.Equal(got, []voice.Participant{inVoice}) {
+		t.Errorf("removed %+v once the other bob connected, want %+v", got, inVoice)
 	}
 	if got := occupancy(t, b, lounge.ID); len(got) != 0 {
 		t.Errorf("lounge occupancy = %+v, want none", got)

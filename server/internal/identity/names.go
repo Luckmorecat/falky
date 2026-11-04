@@ -91,11 +91,19 @@ func newReservations() *reservations {
 	return &reservations{held: map[string]hold{}}
 }
 
-// takenBy reports whether a visitor other than visitorID holds key at now.
-// The caller holds n.mu.
+// takenBy reports whether a visitor other than visitorID holds key at now,
+// connected or by a reservation from entering. The caller holds n.mu.
 func (n *reservations) takenBy(key, visitorID string, now time.Time) bool {
 	h, ok := n.held[key]
 	return ok && h.visitorID != visitorID && h.inForce(now)
+}
+
+// takenByConnected reports whether a connected visitor other than visitorID
+// holds key. A reservation from entering does not count. The caller holds
+// n.mu.
+func (n *reservations) takenByConnected(key, visitorID string) bool {
+	h, ok := n.held[key]
+	return ok && h.visitorID != visitorID && h.connections > 0
 }
 
 // reserve makes visitorID hold key until now plus reservationTime, and drops
@@ -122,8 +130,9 @@ func (n *reservations) move(key, visitorID string) {
 }
 
 // connect counts one more connection of visitorID, whose name has key: the
-// visitor holds key while it lasts. The caller holds n.mu and has checked
-// that no one else holds key.
+// visitor holds key while it lasts, and another visitor's reservation of key
+// ends. The caller holds n.mu and has checked that no other connected
+// visitor holds key.
 func (n *reservations) connect(key, visitorID string) {
 	h := n.held[key]
 	if h.visitorID != visitorID {

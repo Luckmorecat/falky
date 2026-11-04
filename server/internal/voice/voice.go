@@ -60,8 +60,8 @@ type Visitors interface {
 type Rooms interface {
 	// Authorize fails when visitor may not do action in the room roomID:
 	// with rooms.ErrNotFound for an unknown room, identity.ErrNameTaken for a
-	// visitor whose name another visitor holds, or another error when it
-	// could not tell.
+	// visitor whose name another connected visitor holds, or another error
+	// when it could not tell.
 	Authorize(ctx context.Context, visitor identity.Visitor, roomID string, action rooms.Action) error
 }
 

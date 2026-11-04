@@ -162,11 +162,14 @@ func (s *Service) Rename(ctx context.Context, visitorID, name string) (Visitor, 
 // connected while they have one: a connected visitor holds their name, and a
 // connection that opens takes over the reservation from entering. The caller
 // calls disconnect once the connection has ended, saying whether it opened:
-// one whose upgrade failed leaves the reservation as it was.
+// one whose upgrade failed leaves the visitor's own reservation as it was.
 //
-// It fails with ErrNameTaken when another visitor holds the visitor's name,
-// or ErrNoVisitor for an unknown visitor. Checking the name and holding it
-// are one step, so two visitors with the same name cannot both connect.
+// It fails with ErrNameTaken when another connected visitor holds the
+// visitor's name, or ErrNoVisitor for an unknown visitor. Another visitor's
+// reservation from entering does not keep the visitor out: connecting ends
+// it, and that visitor is then the one whose name is taken. Checking the name
+// and holding it are one step, so two visitors with the same name cannot both
+// connect.
 func (s *Service) Connect(ctx context.Context, visitorID string) (disconnect func(opened bool), err error) {
 	s.reservations.mu.Lock()
 	defer s.reservations.mu.Unlock()
@@ -180,7 +183,7 @@ func (s *Service) Connect(ctx context.Context, visitorID string) (disconnect fun
 		return nil, fmt.Errorf("connect visitor: %w", err)
 	}
 	key := NameKey(name)
-	if s.reservations.takenBy(key, visitorID, s.now()) {
+	if s.reservations.takenByConnected(key, visitorID) {
 		return nil, ErrNameTaken
 	}
 	s.reservations.connect(key, visitorID)
@@ -191,13 +194,14 @@ func (s *Service) Connect(ctx context.Context, visitorID string) (disconnect fun
 	}, nil
 }
 
-// NameTaken reports whether a visitor other than v holds v's name, as happens
-// to a visitor who returns after another took their name while they were
-// away. Connect refuses such a visitor until they rename.
+// NameTaken reports whether another connected visitor holds v's name, as
+// happens to a visitor who returns after another took their name while they
+// were away. A reservation from entering does not count. Connect refuses such
+// a visitor until they rename.
 func (s *Service) NameTaken(v Visitor) bool {
 	s.reservations.mu.Lock()
 	defer s.reservations.mu.Unlock()
-	return s.reservations.takenBy(NameKey(v.Name), v.ID, s.now())
+	return s.reservations.takenByConnected(NameKey(v.Name), v.ID)
 }
 
 func hashToken(token string) []byte {

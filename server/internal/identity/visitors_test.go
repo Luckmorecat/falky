@@ -401,17 +401,34 @@ func TestAReturningVisitorWhoseNameIsTakenCannotConnectUntilTheyRename(t *testin
 	f.connect(t, renamed)
 }
 
-func TestAReservationFromEnteringKeepsAReturningVisitorOut(t *testing.T) {
+func TestAReturningVisitorConnectsOverAReservationFromEnteringAndTheReserverIsThenInConflict(t *testing.T) {
 	f := newFixture(t, filepath.Join(t.TempDir(), "falky.db"))
 	x, _ := f.enter(t, "Bob")
 	f.clock.Advance(time.Minute)
-	f.enter(t, "bob")
+	y, _ := f.enter(t, "bob")
 
-	if _, err := f.ident.Connect(t.Context(), x.ID); !errors.Is(err, identity.ErrNameTaken) {
-		t.Errorf("Connect(X) while bob is reserved = %v, want ErrNameTaken", err)
+	// Y only reserved the name: no one else may enter under it, but X, who
+	// had it first, is not in conflict.
+	if _, _, err := f.ident.Enter(t.Context(), f.secret, "BOB"); !errors.Is(err, identity.ErrNameTaken) {
+		t.Errorf("Enter(BOB) while bob is reserved = %v, want ErrNameTaken", err)
 	}
-	f.clock.Advance(time.Minute)
+	if f.ident.NameTaken(x) {
+		t.Error("NameTaken(X) while Y only reserved bob = true, want false")
+	}
+	if f.ident.NameTaken(y) {
+		t.Error("NameTaken(Y) before X connected = true, want false")
+	}
 	f.connect(t, x)
+
+	if f.ident.NameTaken(x) {
+		t.Error("NameTaken(X) once X connected = true, want false")
+	}
+	if !f.ident.NameTaken(y) {
+		t.Error("NameTaken(Y) once X connected = false, want true")
+	}
+	if _, err := f.ident.Connect(t.Context(), y.ID); !errors.Is(err, identity.ErrNameTaken) {
+		t.Errorf("Connect(Y) once X connected = %v, want ErrNameTaken", err)
+	}
 }
 
 func TestOnlyOneOfTwoVisitorsWithTheSameNameConnects(t *testing.T) {

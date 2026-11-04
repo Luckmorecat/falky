@@ -83,9 +83,10 @@ paths:
       tags: [visitors]
       summary: Return the current visitor.
       description: >-
-        Returns the visitor the cookie belongs to, and whether another visitor
-        now holds their name (`nameTaken`). Such a visitor cannot open live
-        updates or join voice until they rename.
+        Returns the visitor the cookie belongs to, and whether another
+        connected visitor now holds their name (`nameTaken`). Such a visitor
+        cannot open live updates or join voice until they rename. Another
+        visitor's reservation from entering does not count.
       responses:
         "200":
           description: The current visitor.
@@ -319,8 +320,9 @@ paths:
         "409":
           description: >-
             The room's voice already has as many participants as it admits
-            (`room_full`), or another visitor holds this visitor's name
-            (`name_taken`; rename first). The visitor stays where they were.
+            (`room_full`), or another connected visitor holds this visitor's
+            name (`name_taken`; rename first). The visitor stays where they
+            were.
           content:
             application/json:
               schema:
@@ -389,8 +391,9 @@ paths:
                 $ref: "#/components/schemas/Error"
         "409":
           description: >-
-            Another visitor holds this visitor's name (`name_taken`), as
-            `GET /api/me` reports; rename first. No WebSocket is opened.
+            Another connected visitor holds this visitor's name
+            (`name_taken`), as `GET /api/me` reports; rename first. No
+            WebSocket is opened.
           content:
             application/json:
               schema:
@@ -457,9 +460,9 @@ paths:
         received again changes nothing more. A participant who may not be in
         that room's voice is removed from it instead of entering the view: a
         visitor without access under the current access link, one whose name
-        another visitor holds, or one in another room than the one the server
-        last issued them a token for. A change of occupancy is sent to every
-        live-update connection as `occupancy.changed`.
+        another connected visitor holds, or one in another room than the one
+        the server last issued them a token for. A change of occupancy is sent
+        to every live-update connection as `occupancy.changed`.
       requestBody:
         description: The event, as LiveKit sends it.
         required: true
@@ -619,10 +622,11 @@ components:
         nameTaken:
           type: boolean
           description: >-
-            Whether another visitor holds this name: one took it while this
-            visitor was not connected. Live updates and voice stay closed to
-            this visitor until they rename; reading and posting messages stay
-            open.
+            Whether another connected visitor holds this name: one took it
+            while this visitor was not connected. Another visitor's
+            reservation from entering does not count. Live updates and voice
+            stay closed to this visitor until they rename; reading and posting
+            messages stay open.
           example: false
     EnterRequest:
       type: object
