@@ -37,14 +37,17 @@ func (e EventV) Valid() bool {
 
 // Defines values for EventType.
 const (
-	EventTypeMessageCreated EventType = "message.created"
-	EventTypeRoomChanged    EventType = "room.changed"
+	EventTypeMessageCreated   EventType = "message.created"
+	EventTypeOccupancyChanged EventType = "occupancy.changed"
+	EventTypeRoomChanged      EventType = "room.changed"
 )
 
 // Valid indicates whether the value is a known member of the EventType enum.
 func (e EventType) Valid() bool {
 	switch e {
 	case EventTypeMessageCreated:
+		return true
+	case EventTypeOccupancyChanged:
 		return true
 	case EventTypeRoomChanged:
 		return true
@@ -100,7 +103,7 @@ type Error struct {
 	Message string `json:"message"`
 }
 
-// Event A live update, as sent over `GET /api/live`. `type` says what happened and which schema `payload` has: `message.created` carries a `Message`, `room.changed` a `RoomChange`. Clients ignore event types they do not know.
+// Event A live update, as sent over `GET /api/live`. `type` says what happened and which schema `payload` has: `message.created` carries a `Message`, `room.changed` a `RoomChange`, `occupancy.changed` an `OccupancyChange`. Clients ignore event types they do not know.
 //
 // Example: {"eventId":"01JBX8C4P0G7J9M1Q4S6V8X0ZA","payload":{"authorId":"01JBX6Z8Q3M5W2K7R9T4V1C0DE","authorName":"Bob","body":"Anyone up for a game?","createdAt":"2026-11-04T18:30:05.123Z","id":"01JBX8C4N2F6H8K0P3R5T7W9YZ","roomId":"01JBX7A2K9D4F6H8M0P3R5T7VW"},"roomId":"01JBX7A2K9D4F6H8M0P3R5T7VW","timestamp":"2026-11-04T18:30:05.140Z","type":"message.created","v":1}
 type Event struct {
@@ -122,7 +125,7 @@ type Event struct {
 	// Example: 2026-11-04T18:30:05.140Z
 	Timestamp time.Time `json:"timestamp"`
 
-	// Type What an event reports: `message.created`, a message was posted (its payload is the `Message`); `room.changed`, a room was created or renamed (its payload is the `RoomChange`).
+	// Type What an event reports: `message.created`, a message was posted (its payload is the `Message`); `room.changed`, a room was created or renamed (its payload is the `RoomChange`); `occupancy.changed`, someone joined or left a room's voice, or a participant's new name reached it (its payload is the `OccupancyChange`).
 	//
 	// Example: message.created
 	Type EventType `json:"type"`
@@ -143,7 +146,7 @@ type Event_Payload struct {
 // Example: 1
 type EventV int
 
-// EventType What an event reports: `message.created`, a message was posted (its payload is the `Message`); `room.changed`, a room was created or renamed (its payload is the `RoomChange`).
+// EventType What an event reports: `message.created`, a message was posted (its payload is the `Message`); `room.changed`, a room was created or renamed (its payload is the `RoomChange`); `occupancy.changed`, someone joined or left a room's voice, or a participant's new name reached it (its payload is the `OccupancyChange`).
 //
 // Example: message.created
 type EventType string
@@ -165,6 +168,35 @@ type Health struct {
 //
 // Example: ok
 type HealthStatus string
+
+// LiveKitEvent A LiveKit `WebhookEvent` in protobuf's JSON form. The server reads `event`, `room.name` and the `participant`'s `sid` and `identity`, and ignores everything else.
+type LiveKitEvent struct {
+	// Event What happened: `participant_joined`, `participant_left`, `participant_connection_aborted` and `room_finished` are applied.
+	//
+	// Example: participant_joined
+	Event string `json:"event,omitempty"`
+
+	// Participant The participant the event is about.
+	Participant struct {
+		// Identity The visitor ID the participant's token was issued to.
+		//
+		// Example: 01JBX6Z8Q3M5W2K7R9T4V1C0DE
+		Identity string `json:"identity,omitempty"`
+
+		// Sid LiveKit's ID of this connection to the room's voice.
+		//
+		// Example: PA_hEkRvX33WBhh
+		Sid string `json:"sid,omitempty"`
+	} `json:"participant,omitempty"`
+
+	// Room The LiveKit room, named by the room's ID.
+	Room struct {
+		// Name The ID of the room whose voice this is.
+		//
+		// Example: 01JBX7A2K9D4F6H8M0P3R5T7VW
+		Name string `json:"name,omitempty"`
+	} `json:"room,omitempty"`
+}
 
 // Message A piece of text a visitor posted in a room's chat, under the name they had when posting.
 type Message struct {
@@ -211,6 +243,19 @@ type MessageList struct {
 //
 // Example: Bob
 type Name = string
+
+// OccupancyChange A room's occupancy as it is after someone joined or left its voice: the whole list, so the latest event of a room is all a client keeps.
+type OccupancyChange struct {
+	// Occupancy The participants in the room's voice now, by name; empty when no one is in it.
+	//
+	// Example: [{"name":"Bob","visitorId":"01JBX6Z8Q3M5W2K7R9T4V1C0DE"}]
+	Occupancy []Participant `json:"occupancy"`
+
+	// RoomId The ID of the room.
+	//
+	// Example: 01JBX7A2K9D4F6H8M0P3R5T7VW
+	RoomId string `json:"roomId"`
+}
 
 // Participant A visitor connected to a room's voice.
 type Participant struct {
@@ -394,6 +439,32 @@ func (t *Event_Payload) FromRoomChange(v RoomChange) error {
 
 // MergeRoomChange performs a merge with any union data inside the Event_Payload, using the provided RoomChange
 func (t *Event_Payload) MergeRoomChange(v RoomChange) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsOccupancyChange returns the union data inside the Event_Payload as a OccupancyChange
+func (t Event_Payload) AsOccupancyChange() (OccupancyChange, error) {
+	var body OccupancyChange
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromOccupancyChange overwrites any union data inside the Event_Payload as the provided OccupancyChange
+func (t *Event_Payload) FromOccupancyChange(v OccupancyChange) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeOccupancyChange performs a merge with any union data inside the Event_Payload, using the provided OccupancyChange
+func (t *Event_Payload) MergeOccupancyChange(v OccupancyChange) error {
 	b, err := json.Marshal(v)
 	if err != nil {
 		return err

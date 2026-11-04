@@ -9,7 +9,9 @@ output-options:
   prefer-skip-optional-pointer: true
   # The live-update WebSocket is served by a plain handler: an upgrade has no
   # request or response body for the generated server or client to handle.
-  exclude-operation-ids: [openLive]
+  # So is the LiveKit webhook: verifying its signature needs the body as
+  # sent, before anything decodes it.
+  exclude-operation-ids: [openLive, receiveLiveKitWebhook]
   # Keep the event schemas, which no operation references.
   skip-prune: true
 compatibility:

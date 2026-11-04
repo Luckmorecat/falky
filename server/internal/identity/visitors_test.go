@@ -146,27 +146,33 @@ func replaceLink(t *testing.T, db *platform.DB) {
 func TestAccessEndsWhenTheLinkIsReplaced(t *testing.T) {
 	f := newFixture(t, filepath.Join(t.TempDir(), "falky.db"))
 	v, token := f.enter(t, "Bob")
-	if ok, err := f.ident.HasAccess(t.Context(), v.ID); err != nil || !ok {
-		t.Fatalf("HasAccess before replacing the link = %v, %v, want true", ok, err)
+	if got, err := f.ident.Visitor(t.Context(), v.ID); err != nil || got != v {
+		t.Fatalf("Visitor before replacing the link = %+v, %v, want %+v", got, err, v)
 	}
 
 	replaceLink(t, f.db)
 	if got, err := f.ident.Resolve(t.Context(), token); !errors.Is(err, identity.ErrNoVisitor) {
 		t.Errorf("Resolve after replacing the link = %+v, %v, want ErrNoVisitor", got, err)
 	}
-	if ok, err := f.ident.HasAccess(t.Context(), v.ID); err != nil || ok {
-		t.Errorf("HasAccess after replacing the link = %v, %v, want false", ok, err)
+	if got, err := f.ident.Visitor(t.Context(), v.ID); !errors.Is(err, identity.ErrNoVisitor) {
+		t.Errorf("Visitor after replacing the link = %+v, %v, want ErrNoVisitor", got, err)
 	}
 	if _, _, err := f.ident.Enter(t.Context(), f.secret, "Ann"); !errors.Is(err, identity.ErrWrongSecret) {
 		t.Errorf("Enter with the replaced secret = %v, want ErrWrongSecret", err)
 	}
 }
 
-func TestHasAccessIsFalseForUnknownVisitors(t *testing.T) {
+func TestVisitorHasTheCurrentNameAndFailsForUnknownVisitors(t *testing.T) {
 	f := newFixture(t, filepath.Join(t.TempDir(), "falky.db"))
-	f.enter(t, "Bob")
-	if ok, err := f.ident.HasAccess(t.Context(), "01JBX6Z8Q3M5W2K7R9T4V1C0DE"); err != nil || ok {
-		t.Errorf("HasAccess(unknown) = %v, %v, want false", ok, err)
+	v, _ := f.enter(t, "Bob")
+	if _, err := f.ident.Rename(t.Context(), v.ID, "Robert"); err != nil {
+		t.Fatalf("Rename: %v", err)
+	}
+	if got, err := f.ident.Visitor(t.Context(), v.ID); err != nil || got != (identity.Visitor{ID: v.ID, Name: "Robert"}) {
+		t.Errorf("Visitor after renaming = %+v, %v, want Robert", got, err)
+	}
+	if got, err := f.ident.Visitor(t.Context(), "01JBX6Z8Q3M5W2K7R9T4V1C0DE"); !errors.Is(err, identity.ErrNoVisitor) {
+		t.Errorf("Visitor(unknown) = %+v, %v, want ErrNoVisitor", got, err)
 	}
 }
 

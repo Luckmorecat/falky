@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/kisshot/falky/server/internal/api"
+	"github.com/kisshot/falky/server/internal/identity"
 )
 
 func (s *server) ListRooms(ctx context.Context, _ api.ListRoomsRequestObject) (api.ListRoomsResponseObject, error) {
@@ -13,8 +14,17 @@ func (s *server) ListRooms(ctx context.Context, _ api.ListRoomsRequestObject) (a
 	}
 	body := api.RoomList{Rooms: make([]api.Room, 0, len(list))}
 	for _, r := range list {
-		// No occupancy is known yet, so every room is listed empty.
-		body.Rooms = append(body.Rooms, api.Room{Id: r.ID, Name: r.Name, Occupancy: []api.Participant{}})
+		body.Rooms = append(body.Rooms, api.Room{Id: r.ID, Name: r.Name, Occupancy: participants(s.voice.Occupancy(r.ID))})
 	}
 	return api.ListRooms200JSONResponse(body), nil
+}
+
+// participants is occupancy as the contract has it, an empty list when no one
+// is in the room's voice.
+func participants(occupancy []identity.Visitor) []api.Participant {
+	ps := make([]api.Participant, 0, len(occupancy))
+	for _, v := range occupancy {
+		ps = append(ps, api.Participant{VisitorId: v.ID, Name: v.Name})
+	}
+	return ps
 }

@@ -21,7 +21,8 @@ import (
 type Handlers struct {
 	// Public serves /api/; it sits behind the reverse proxy.
 	Public http.Handler
-	// Internal serves health checks and metrics; it is never exposed.
+	// Internal serves health checks, metrics and LiveKit's webhooks; it is
+	// never exposed.
 	Internal http.Handler
 }
 
@@ -86,6 +87,8 @@ func New(deps Deps) Handlers {
 	internal := http.NewServeMux()
 	internal.Handle("/health/", operations)
 	internal.Handle("GET /metrics", deps.Metrics)
+	internal.Handle("POST /livekit/webhook",
+		http.MaxBytesHandler(liveKitWebhook{voice: deps.Voice, logger: deps.Logger}, maxWebhookBody))
 	internal.HandleFunc("/", notFound)
 
 	return Handlers{Public: http.MaxBytesHandler(public, maxRequestBody), Internal: internal}

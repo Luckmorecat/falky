@@ -101,18 +101,24 @@ func (s *Service) Resolve(ctx context.Context, token string) (Visitor, error) {
 	return v, nil
 }
 
-// HasAccess reports whether visitorID is a visitor with current access: one
-// holding a token issued under the current link generation.
-func (s *Service) HasAccess(ctx context.Context, visitorID string) (bool, error) {
-	var ok bool
-	err := s.db.Read().QueryRowContext(ctx, `SELECT EXISTS (SELECT 1
-		FROM visitor_tokens t
-		JOIN access a ON a.id = 1 AND a.generation = t.generation
-		WHERE t.visitor_id = ?)`, visitorID).Scan(&ok)
-	if err != nil {
-		return false, fmt.Errorf("check visitor access: %w", err)
+// Visitor returns the visitor visitorID, under their current name, while they
+// have current access: while they hold a token issued under the current link
+// generation. It fails with ErrNoVisitor otherwise.
+func (s *Service) Visitor(ctx context.Context, visitorID string) (Visitor, error) {
+	var v Visitor
+	err := s.db.Read().QueryRowContext(ctx, `SELECT v.id, v.name
+		FROM visitors v
+		WHERE v.id = ? AND EXISTS (SELECT 1
+			FROM visitor_tokens t
+			JOIN access a ON a.id = 1 AND a.generation = t.generation
+			WHERE t.visitor_id = v.id)`, visitorID).Scan(&v.ID, &v.Name)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Visitor{}, ErrNoVisitor
 	}
-	return ok, nil
+	if err != nil {
+		return Visitor{}, fmt.Errorf("look up visitor: %w", err)
+	}
+	return v, nil
 }
 
 // Rename changes the name of the visitor visitorID to name, and moves the

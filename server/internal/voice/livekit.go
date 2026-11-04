@@ -36,7 +36,7 @@ func (c *Client) Participants(ctx context.Context) ([]Participant, error) {
 			return nil, fmt.Errorf("list participants of room %s: %w", room.GetName(), err)
 		}
 		for _, p := range res.GetParticipants() {
-			participants = append(participants, Participant{Room: room.GetName(), Identity: p.GetIdentity()})
+			participants = append(participants, Participant{Room: room.GetName(), Identity: p.GetIdentity(), SID: p.GetSid()})
 		}
 	}
 	return participants, nil

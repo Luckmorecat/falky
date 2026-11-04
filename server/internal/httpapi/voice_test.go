@@ -94,9 +94,9 @@ func TestJoiningAnotherRoomsVoiceRemovesTheVisitorFromThePreviousOne(t *testing.
 	bob := p.enter(t, b, "Bob")
 
 	joinedVoice(t, b, lounge.ID)
-	p.livekit.AddParticipant(lounge.ID, bob.Id)
+	inLounge := p.livekit.AddParticipant(lounge.ID, bob.Id)
 	joinedVoice(t, b, games.ID)
-	want := []voice.Participant{{Room: lounge.ID, Identity: bob.Id}}
+	want := []voice.Participant{inLounge}
 	if got := p.livekit.Removed(); !slices.Equal(got, want) {
 		t.Errorf("removed = %+v, want %+v", got, want)
 	}

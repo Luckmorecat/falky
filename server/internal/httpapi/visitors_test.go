@@ -24,12 +24,14 @@ import (
 
 // publicServer is the public listener over TLS (the visitor cookie is
 // Secure) with real identity, rooms, chat and voice services on a temporary
-// database, voice over an in-memory LiveKit.
+// database, voice over an in-memory LiveKit, and the internal listener
+// beside it.
 type publicServer struct {
-	srv     *httptest.Server
-	secret  string
-	rooms   *rooms.Service
-	livekit *voicetest.LiveKit
+	srv      *httptest.Server
+	internal *httptest.Server
+	secret   string
+	rooms    *rooms.Service
+	livekit  *voicetest.LiveKit
 	// clock is the time identity reads, which the test moves by hand.
 	clock *clock
 	// logs holds what the server logged.
@@ -124,9 +126,9 @@ func startPublicLimited(t *testing.T, enterBurst, postBurst int) publicServer {
 	events := Events{Hub: hub, Logger: logger}
 	rs := rooms.New(db, rooms.WithPublisher(events.RoomChanged), rooms.WithNameCheck(ident.NameTaken))
 	lk := voicetest.New()
-	vs := voice.New(lk, voice.Config{
+	vs := voice.New(lk, ident, rs, voice.Config{
 		URL: testLiveKitURL, APIKey: testLiveKitKey, APISecret: testLiveKitSecret, RoomCap: testRoomCap,
-	})
+	}, voice.WithPublisher(events.OccupancyChanged))
 	h := New(Deps{
 		Logger:   logger,
 		Health:   platform.NewHealth(logger),
@@ -143,6 +145,8 @@ func startPublicLimited(t *testing.T, enterBurst, postBurst int) publicServer {
 	})
 	srv := httptest.NewTLSServer(h.Public)
 	t.Cleanup(srv.Close)
+	internal := httptest.NewServer(h.Internal)
+	t.Cleanup(internal.Close)
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -151,7 +155,8 @@ func startPublicLimited(t *testing.T, enterBurst, postBurst int) publicServer {
 		}
 	})
 	return publicServer{
-		srv: srv, secret: strings.TrimPrefix(link, testOrigin+"/#k="), rooms: rs, livekit: lk, clock: clk, logs: logs,
+		srv: srv, internal: internal, secret: strings.TrimPrefix(link, testOrigin+"/#k="), rooms: rs, livekit: lk,
+		clock: clk, logs: logs,
 	}
 }
 

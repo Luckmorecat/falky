@@ -20,6 +20,8 @@ tags:
     description: The rooms visitors talk in by voice and chat.
   - name: live
     description: Live updates the server pushes over a WebSocket.
+  - name: voice
+    description: Who is in each room's voice, as LiveKit reports it, on the internal listener.
 paths:
   /api/enter:
     post:
@@ -436,6 +438,54 @@ paths:
                 $ref: "#/components/schemas/Health"
         default:
           $ref: "#/components/responses/Error"
+  /livekit/webhook:
+    post:
+      operationId: receiveLiveKitWebhook
+      security:
+        - liveKitSignature: []
+      tags: [voice]
+      summary: Receive an event from LiveKit.
+      description: >-
+        LiveKit reports here who joins and leaves each room's voice; the
+        server keeps its view of every room's occupancy from these events and
+        from LiveKit's participant listing, read when the server starts and
+        every 30 seconds. A participant joined, left or failed to connect, or
+        a room's voice closed; other events change nothing, and an event
+        received again changes nothing more. A participant who may not be in
+        that room's voice is removed from it instead of entering the view: a
+        visitor without access under the current access link, one whose name
+        another visitor holds, or one in another room than the one the server
+        last issued them a token for. A change of occupancy is sent to every
+        live-update connection as `occupancy.changed`.
+      requestBody:
+        description: The event, as LiveKit sends it.
+        required: true
+        content:
+          application/webhook+json:
+            schema:
+              $ref: "#/components/schemas/LiveKitEvent"
+      responses:
+        "204":
+          description: The event was applied.
+        "400":
+          description: >-
+            The body is signed but is not a LiveKit event
+            (`invalid_request`).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: >-
+            The request is not signed with the LiveKit API key, or its body
+            does not match the signature (`webhook_unverified`). Nothing
+            changes.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        default:
+          $ref: "#/components/responses/Error"
 components:
   parameters:
     RoomId:
@@ -455,6 +505,14 @@ components:
         The visitor cookie set by `POST /api/enter`. Requests without it, with
         an unknown one, or with one issued under a replaced access link are
         refused with 401 (`visitor_required`).
+    liveKitSignature:
+      type: apiKey
+      in: header
+      name: Authorization
+      description: >-
+        LiveKit's signature of a webhook: a JWT, without a `Bearer` prefix,
+        signed with the LiveKit API secret, whose `sha256` claim is the
+        base64 SHA-256 of the body.
   responses:
     Error:
       description: The request failed; the body says why.
@@ -739,8 +797,8 @@ components:
       description: >-
         A live update, as sent over `GET /api/live`. `type` says what happened
         and which schema `payload` has: `message.created` carries a `Message`,
-        `room.changed` a `RoomChange`. Clients ignore event types they do not
-        know.
+        `room.changed` a `RoomChange`, `occupancy.changed` an
+        `OccupancyChange`. Clients ignore event types they do not know.
       required: [v, type, eventId, payload, timestamp]
       properties:
         v:
@@ -766,6 +824,7 @@ components:
           oneOf:
             - $ref: "#/components/schemas/Message"
             - $ref: "#/components/schemas/RoomChange"
+            - $ref: "#/components/schemas/OccupancyChange"
         timestamp:
           type: string
           format: date-time
@@ -789,8 +848,10 @@ components:
       description: >-
         What an event reports: `message.created`, a message was posted (its
         payload is the `Message`); `room.changed`, a room was created or
-        renamed (its payload is the `RoomChange`).
-      enum: [message.created, room.changed]
+        renamed (its payload is the `RoomChange`); `occupancy.changed`,
+        someone joined or left a room's voice, or a participant's new name
+        reached it (its payload is the `OccupancyChange`).
+      enum: [message.created, room.changed, occupancy.changed]
       example: message.created
     RoomChange:
       type: object
@@ -805,3 +866,55 @@ components:
           type: string
           description: The room's name now.
           example: Lounge
+    OccupancyChange:
+      type: object
+      description: >-
+        A room's occupancy as it is after someone joined or left its voice:
+        the whole list, so the latest event of a room is all a client keeps.
+      required: [roomId, occupancy]
+      properties:
+        roomId:
+          type: string
+          description: The ID of the room.
+          example: 01JBX7A2K9D4F6H8M0P3R5T7VW
+        occupancy:
+          type: array
+          description: The participants in the room's voice now, by name; empty when no one is in it.
+          items:
+            $ref: "#/components/schemas/Participant"
+          example:
+            - visitorId: 01JBX6Z8Q3M5W2K7R9T4V1C0DE
+              name: Bob
+    LiveKitEvent:
+      type: object
+      description: >-
+        A LiveKit `WebhookEvent` in protobuf's JSON form. The server reads
+        `event`, `room.name` and the `participant`'s `sid` and `identity`,
+        and ignores everything else.
+      properties:
+        event:
+          type: string
+          description: >-
+            What happened: `participant_joined`, `participant_left`,
+            `participant_connection_aborted` and `room_finished` are applied.
+          example: participant_joined
+        room:
+          type: object
+          description: The LiveKit room, named by the room's ID.
+          properties:
+            name:
+              type: string
+              description: The ID of the room whose voice this is.
+              example: 01JBX7A2K9D4F6H8M0P3R5T7VW
+        participant:
+          type: object
+          description: The participant the event is about.
+          properties:
+            sid:
+              type: string
+              description: LiveKit's ID of this connection to the room's voice.
+              example: PA_hEkRvX33WBhh
+            identity:
+              type: string
+              description: The visitor ID the participant's token was issued to.
+              example: 01JBX6Z8Q3M5W2K7R9T4V1C0DE

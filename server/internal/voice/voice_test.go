@@ -1,9 +1,11 @@
 package voice_test
 
 import (
+	"context"
 	"errors"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -11,6 +13,7 @@ import (
 	"github.com/livekit/protocol/livekit"
 
 	"github.com/kisshot/falky/server/internal/identity"
+	"github.com/kisshot/falky/server/internal/rooms"
 	"github.com/kisshot/falky/server/internal/voice"
 	"github.com/kisshot/falky/server/internal/voice/voicetest"
 )
@@ -25,9 +28,86 @@ const (
 
 var bob = identity.Visitor{ID: "01JBX6Z8Q3M5W2K7R9T4V1C0DE", Name: "Bob"}
 
+// access is the visitors and rooms a test's Service checks participants
+// against: visitors with current access, the rooms that exist, and the
+// visitors whose name another visitor holds.
+type access struct {
+	mu        sync.Mutex
+	visitors  map[string]identity.Visitor
+	rooms     []string
+	nameTaken map[string]bool
+	err       error
+}
+
+// newAccess returns the access of the given visitors to roomA and roomB.
+func newAccess(visitors ...identity.Visitor) *access {
+	a := &access{visitors: map[string]identity.Visitor{}, rooms: []string{roomA, roomB}, nameTaken: map[string]bool{}}
+	for _, v := range visitors {
+		a.visitors[v.ID] = v
+	}
+	return a
+}
+
+// set gives v current access under v's name.
+func (a *access) set(v identity.Visitor) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.visitors[v.ID] = v
+}
+
+// revoke ends the access of the visitor visitorID.
+func (a *access) revoke(visitorID string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	delete(a.visitors, visitorID)
+}
+
+// takeName makes another visitor hold the name of the visitor visitorID.
+func (a *access) takeName(visitorID string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.nameTaken[visitorID] = true
+}
+
+// fail makes every check fail with err until it is called with nil.
+func (a *access) fail(err error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.err = err
+}
+
+func (a *access) Visitor(_ context.Context, visitorID string) (identity.Visitor, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.err != nil {
+		return identity.Visitor{}, a.err
+	}
+	v, ok := a.visitors[visitorID]
+	if !ok {
+		return identity.Visitor{}, identity.ErrNoVisitor
+	}
+	return v, nil
+}
+
+func (a *access) Authorize(_ context.Context, v identity.Visitor, roomID string, action rooms.Action) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	switch {
+	case a.err != nil:
+		return a.err
+	case !slices.Contains(a.rooms, roomID):
+		return rooms.ErrNotFound
+	case action == rooms.JoinVoice && a.nameTaken[v.ID]:
+		return identity.ErrNameTaken
+	}
+	return nil
+}
+
 func newService(roomCap int) (*voice.Service, *voicetest.LiveKit) {
 	lk := voicetest.New()
-	return voice.New(lk, voice.Config{URL: testURL, APIKey: testKey, APISecret: testSecret, RoomCap: roomCap}), lk
+	return voice.New(lk, newAccess(bob), newAccess(bob), voice.Config{
+		URL: testURL, APIKey: testKey, APISecret: testSecret, RoomCap: roomCap,
+	}), lk
 }
 
 // decodeToken verifies token with the test secret and returns what it grants and
@@ -110,12 +190,12 @@ func TestJoinRecordsTheRoomLastIssued(t *testing.T) {
 
 func TestJoiningAnotherRoomRemovesTheVisitorFromThePreviousOne(t *testing.T) {
 	s, lk := newService(8)
-	lk.AddParticipant(roomA, bob.ID)
+	inA := lk.AddParticipant(roomA, bob.ID)
 	lk.AddParticipant(roomA, "alice")
 	if _, err := s.Join(t.Context(), bob, roomB); err != nil {
 		t.Fatalf("Join: %v", err)
 	}
-	want := []voice.Participant{{Room: roomA, Identity: bob.ID}}
+	want := []voice.Participant{inA}
 	if got := lk.Removed(); !slices.Equal(got, want) {
 		t.Errorf("removed = %+v, want %+v", got, want)
 	}

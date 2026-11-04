@@ -88,6 +88,14 @@ func (e Events) RoomChanged(r rooms.Room) {
 	})
 }
 
+// OccupancyChanged publishes occupancy.changed for the room roomID, whose
+// voice now has occupancy, to every visitor.
+func (e Events) OccupancyChanged(roomID string, occupancy []identity.Visitor) {
+	e.publish(api.EventTypeOccupancyChanged, "", func(p *api.Event_Payload) error {
+		return p.FromOccupancyChange(api.OccupancyChange{RoomId: roomID, Occupancy: participants(occupancy)})
+	})
+}
+
 // publish publishes an event of type typ whose payload setPayload fills in;
 // roomID is the room the event is about, if it is about what happens inside
 // one.
