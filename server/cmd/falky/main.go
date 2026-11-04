@@ -243,7 +243,7 @@ func serveOn(ctx context.Context, logger *slog.Logger, cfg platform.Config, db *
 	ident := identity.New(db, cfg.PublicOrigin)
 	hub := realtime.New(realtime.WithLogger(logger))
 	events := httpapi.Events{Hub: hub, Logger: logger}
-	rs := rooms.New(db, rooms.WithPublisher(events.RoomChanged))
+	rs := rooms.New(db, rooms.WithPublisher(events.RoomChanged), rooms.WithNameCheck(ident.NameTaken))
 	handlers := httpapi.New(httpapi.Deps{
 		Logger:   logger,
 		Health:   health,

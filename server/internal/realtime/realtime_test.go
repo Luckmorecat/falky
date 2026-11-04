@@ -26,6 +26,8 @@ type testHub struct {
 	hub     *realtime.Hub
 	srv     *httptest.Server
 	changes chan change
+	// served gets what each Serve call reported, once it returns.
+	served chan bool
 }
 
 // startHub serves a hub with opts. A connection's visitor is the query
@@ -34,13 +36,14 @@ type testHub struct {
 func startHub(t *testing.T, opts ...realtime.Option) testHub {
 	t.Helper()
 	changes := make(chan change, 100)
+	served := make(chan bool, 100)
 	opts = append(opts, realtime.WithConnectedFunc(func(id string, connected bool) {
 		changes <- change{id, connected}
 	}))
 	hub := realtime.New(opts...)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		deny := r.URL.Query()["deny"]
-		hub.Serve(w, r, realtime.Subscriber{
+		served <- hub.Serve(w, r, realtime.Subscriber{
 			VisitorID: r.URL.Query().Get("visitor"),
 			MayReceive: func(_ context.Context, roomID string) bool {
 				return !slices.Contains(deny, roomID)
@@ -55,7 +58,7 @@ func startHub(t *testing.T, opts ...realtime.Option) testHub {
 			t.Errorf("Shutdown: %v", err)
 		}
 	})
-	return testHub{hub: hub, srv: srv, changes: changes}
+	return testHub{hub: hub, srv: srv, changes: changes, served: served}
 }
 
 // dial opens a connection for visitor; the hub has it once dial returns.
@@ -97,6 +100,20 @@ func (h testHub) wantNoChange(t *testing.T, within time.Duration) {
 	case c := <-h.changes:
 		t.Fatalf("connected func got %+v, want no call", c)
 	case <-time.After(within):
+	}
+}
+
+// wantServed fails the test unless the next Serve call to return reports
+// want within a second.
+func (h testHub) wantServed(t *testing.T, want bool) {
+	t.Helper()
+	select {
+	case got := <-h.served:
+		if got != want {
+			t.Fatalf("Serve reported opened %v, want %v", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Serve did not return within a second")
 	}
 }
 
@@ -178,6 +195,8 @@ func TestTheHubReportsAVisitorsFirstAndLastConnection(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 	h.wantChange(t, change{"bob", false}, time.Second)
+	h.wantServed(t, true)
+	h.wantServed(t, true)
 
 	h.dial(t, "bob")
 	h.wantChange(t, change{"bob", true}, time.Second)
@@ -201,6 +220,7 @@ func TestAFailedUpgradeOpensNoConnection(t *testing.T) {
 		t.Errorf("upgrade without a key = %d, want 400", res.StatusCode)
 	}
 	h.wantNoChange(t, 50*time.Millisecond)
+	h.wantServed(t, false)
 }
 
 func TestAConnectionThatMissesHeartbeatsIsClosed(t *testing.T) {

@@ -128,13 +128,13 @@ func (s *server) Enter(ctx context.Context, req api.EnterRequestObject) (api.Ent
 		SameSite: http.SameSiteStrictMode,
 	}
 	return api.Enter201JSONResponse{
-		Body:    visitorBody(v),
+		Body:    s.visitorBody(v),
 		Headers: api.Enter201ResponseHeaders{SetCookie: cookie.String()},
 	}, nil
 }
 
 func (s *server) GetMe(ctx context.Context, _ api.GetMeRequestObject) (api.GetMeResponseObject, error) {
-	return api.GetMe200JSONResponse(visitorBody(currentVisitor(ctx))), nil
+	return api.GetMe200JSONResponse(s.visitorBody(currentVisitor(ctx))), nil
 }
 
 func (s *server) RenameMe(ctx context.Context, req api.RenameMeRequestObject) (api.RenameMeResponseObject, error) {
@@ -149,7 +149,7 @@ func (s *server) RenameMe(ctx context.Context, req api.RenameMeRequestObject) (a
 	case err != nil:
 		return nil, err
 	}
-	return api.RenameMe200JSONResponse(visitorBody(v)), nil
+	return api.RenameMe200JSONResponse(s.visitorBody(v)), nil
 }
 
 // visitorRequired is the answer to a request without a valid visitor cookie.
@@ -157,8 +157,9 @@ var visitorRequired = api.VisitorRequiredJSONResponse{
 	Code: "visitor_required", Message: "no valid visitor cookie; enter through the access link",
 }
 
-func visitorBody(v identity.Visitor) api.Visitor {
-	return api.Visitor{Id: v.ID, Name: v.Name}
+// visitorBody is v as the contract shows it.
+func (s *server) visitorBody(v identity.Visitor) api.Visitor {
+	return api.Visitor{Id: v.ID, Name: v.Name, NameTaken: s.identity.NameTaken(v)}
 }
 
 func invalidName(err error) api.InvalidNameJSONResponse {
@@ -168,3 +169,7 @@ func invalidName(err error) api.InvalidNameJSONResponse {
 func nameTaken() api.NameTakenJSONResponse {
 	return api.NameTakenJSONResponse{Code: "name_taken", Message: "another visitor has this name"}
 }
+
+// yourNameTaken is the answer refusing live updates or voice to a visitor
+// whose name another visitor holds.
+var yourNameTaken = api.Error{Code: "name_taken", Message: "another visitor has your name; rename first"}

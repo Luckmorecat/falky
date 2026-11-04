@@ -26,9 +26,9 @@ func Migrations() fs.FS {
 	return sub
 }
 
-// Service manages the access link and the visitors it admits. Name
-// reservations live in the Service, so the server uses one Service for every
-// request.
+// Service manages the access link and the visitors it admits. Which visitor
+// holds which name lives in the Service's memory, so the server uses one
+// Service for every request.
 type Service struct {
 	db           *platform.DB
 	origin       string

@@ -60,8 +60,9 @@ const (
 
 // Service manages the rooms.
 type Service struct {
-	db      *platform.DB
-	publish func(Room)
+	db        *platform.DB
+	publish   func(Room)
+	nameTaken func(identity.Visitor) bool
 	// publishing holds each change from its write until it has published, so
 	// changes are published in the order they are committed.
 	publishing sync.Mutex
@@ -77,9 +78,16 @@ func WithPublisher(publish func(Room)) Option {
 	return func(s *Service) { s.publish = publish }
 }
 
+// WithNameCheck makes Authorize refuse joining voice, with
+// identity.ErrNameTaken, to a visitor for whom nameTaken reports that another
+// visitor holds their name: voice stays closed to them until they rename.
+func WithNameCheck(nameTaken func(identity.Visitor) bool) Option {
+	return func(s *Service) { s.nameTaken = nameTaken }
+}
+
 // New returns the service over db.
 func New(db *platform.DB, opts ...Option) *Service {
-	s := &Service{db: db, publish: func(Room) {}}
+	s := &Service{db: db, publish: func(Room) {}, nameTaken: func(identity.Visitor) bool { return false }}
 	for _, opt := range opts {
 		opt(s)
 	}
@@ -194,12 +202,16 @@ func scanRooms(rows *sql.Rows) (rooms []Room, err error) {
 
 // Authorize is the one check of whether visitor may do action in the room
 // roomID; every handler of a room-scoped request calls it first. It fails
-// with ErrNotFound for an unknown room. Every visitor may do everything in
-// every room, so it fails for no other reason.
-func (s *Service) Authorize(ctx context.Context, _ identity.Visitor, roomID string, _ Action) error {
+// with ErrNotFound for an unknown room, and with identity.ErrNameTaken when
+// the visitor would join voice under a name another visitor holds. Otherwise
+// every visitor may do everything in every room.
+func (s *Service) Authorize(ctx context.Context, visitor identity.Visitor, roomID string, action Action) error {
 	err := checkExists(ctx, s.db.Read(), roomID)
 	if err != nil && !errors.Is(err, ErrNotFound) {
 		return fmt.Errorf("authorize room access: %w", err)
+	}
+	if err == nil && action == JoinVoice && s.nameTaken(visitor) {
+		return identity.ErrNameTaken
 	}
 	return err
 }

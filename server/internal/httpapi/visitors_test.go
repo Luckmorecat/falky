@@ -30,6 +30,8 @@ type publicServer struct {
 	secret  string
 	rooms   *rooms.Service
 	livekit *voicetest.LiveKit
+	// clock is the time identity reads, which the test moves by hand.
+	clock *clock
 	// logs holds what the server logged.
 	logs *syncBuffer
 }
@@ -50,6 +52,24 @@ func (b *syncBuffer) String() string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.buf.String()
+}
+
+// clock is a time source the test moves by hand.
+type clock struct {
+	mu  sync.Mutex
+	now time.Time
+}
+
+func (c *clock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.now
+}
+
+func (c *clock) Advance(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.now = c.now.Add(d)
 }
 
 // Voice settings of the test server.
@@ -88,7 +108,8 @@ func startPublicLimited(t *testing.T, enterBurst, postBurst int) publicServer {
 	if _, err := db.Migrate(t.Context(), ms); err != nil {
 		t.Fatalf("Migrate: %v", err)
 	}
-	ident := identity.New(db, testOrigin)
+	clk := &clock{now: time.Now()}
+	ident := identity.New(db, testOrigin, identity.WithClock(clk.Now))
 	if _, err := ident.EnsureLink(t.Context()); err != nil {
 		t.Fatalf("EnsureLink: %v", err)
 	}
@@ -101,7 +122,7 @@ func startPublicLimited(t *testing.T, enterBurst, postBurst int) publicServer {
 	start := time.Now()
 	hub := realtime.New()
 	events := Events{Hub: hub, Logger: logger}
-	rs := rooms.New(db, rooms.WithPublisher(events.RoomChanged))
+	rs := rooms.New(db, rooms.WithPublisher(events.RoomChanged), rooms.WithNameCheck(ident.NameTaken))
 	lk := voicetest.New()
 	vs := voice.New(lk, voice.Config{
 		URL: testLiveKitURL, APIKey: testLiveKitKey, APISecret: testLiveKitSecret, RoomCap: testRoomCap,
@@ -130,7 +151,7 @@ func startPublicLimited(t *testing.T, enterBurst, postBurst int) publicServer {
 		}
 	})
 	return publicServer{
-		srv: srv, secret: strings.TrimPrefix(link, testOrigin+"/#k="), rooms: rs, livekit: lk, logs: logs,
+		srv: srv, secret: strings.TrimPrefix(link, testOrigin+"/#k="), rooms: rs, livekit: lk, clock: clk, logs: logs,
 	}
 }
 

@@ -144,8 +144,9 @@ func (h *Hub) Publish(e Event) {
 // Serve upgrades the request to a WebSocket for sub and sends it events until
 // the connection ends. The caller has checked the request's Origin and
 // resolved its visitor; Serve accepts any origin. The connection receives
-// every event published once its upgrade has begun.
-func (h *Hub) Serve(w http.ResponseWriter, r *http.Request, sub Subscriber) {
+// every event published once its upgrade has begun. Serve reports whether the
+// connection opened: false when the upgrade failed or the Hub was shut down.
+func (h *Hub) Serve(w http.ResponseWriter, r *http.Request, sub Subscriber) (opened bool) {
 	c := &conn{sub: sub, queue: make(chan Event, h.queueSize), ended: make(chan struct{})}
 	registered := h.add(c)
 	ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{InsecureSkipVerify: true})
@@ -155,15 +156,15 @@ func (h *Hub) Serve(w http.ResponseWriter, r *http.Request, sub Subscriber) {
 			h.remove(c)
 			h.serving.Done()
 		}
-		return
+		return false
 	}
 	if !registered {
 		_ = ws.Close(websocket.StatusGoingAway, "server shutting down")
-		return
+		return false
 	}
 	defer h.serving.Done()
 	defer h.remove(c)
-	h.opened(c)
+	opened = h.opened(c)
 
 	ctx, cancel := context.WithCancel(r.Context())
 	var wg sync.WaitGroup
@@ -180,6 +181,7 @@ func (h *Hub) Serve(w http.ResponseWriter, r *http.Request, sub Subscriber) {
 	cancel()
 	wg.Wait()
 	_ = ws.CloseNow()
+	return opened
 }
 
 // add registers c to receive events, unless the Hub is shut down. It does not
@@ -196,18 +198,20 @@ func (h *Hub) add(c *conn) bool {
 }
 
 // opened counts c, whose upgrade has succeeded, as one of its visitor's open
-// connections, unless the Hub has already let go of it.
-func (h *Hub) opened(c *conn) {
+// connections, unless the Hub has already let go of it. It reports whether it
+// did.
+func (h *Hub) opened(c *conn) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if _, ok := h.conns[c]; !ok {
-		return
+		return false
 	}
 	c.open = true
 	h.visitors[c.sub.VisitorID]++
 	if h.visitors[c.sub.VisitorID] == 1 {
 		h.connected(c.sub.VisitorID, true)
 	}
+	return true
 }
 
 // remove unregisters c, which has ended by itself.

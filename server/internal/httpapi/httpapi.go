@@ -77,7 +77,8 @@ func New(deps Deps) Handlers {
 
 	public := http.NewServeMux()
 	public.Handle("GET /api/live", live{
-		origin: deps.PublicOrigin, resolve: resolve, rooms: deps.Rooms, hub: deps.Live, logger: deps.Logger,
+		origin: deps.PublicOrigin, resolve: resolve, identity: deps.Identity, rooms: deps.Rooms, hub: deps.Live,
+		logger: deps.Logger,
 	})
 	public.Handle("/api/", operations)
 	public.HandleFunc("/", notFound)

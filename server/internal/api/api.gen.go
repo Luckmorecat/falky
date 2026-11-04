@@ -296,6 +296,11 @@ type Visitor struct {
 	//
 	// Example: Bob
 	Name string `json:"name"`
+
+	// NameTaken Whether another visitor holds this name: one took it while this visitor was not connected. Live updates and voice stay closed to this visitor until they rename; reading and posting messages stay open.
+	//
+	// Example: false
+	NameTaken bool `json:"nameTaken"`
 }
 
 // VoiceCredentials What a client connects to a room's voice with.
@@ -485,7 +490,7 @@ type ClientInterface interface {
 
 	// EnterWithBody Enter with the access link's secret and a name.
 	//
-	// Exchanges the secret from the access link (the `k` value in its URL fragment) and a name for a new visitor, and sets the visitor cookie. The name is reserved for 60 seconds so that no one else can enter under it meanwhile. Attempts are limited per client IP, whether they succeed or not.
+	// Exchanges the secret from the access link (the `k` value in its URL fragment) and a name for a new visitor, and sets the visitor cookie. The name is reserved for 60 seconds so that no one else can enter under it meanwhile; once the visitor opens a live-update connection (`GET /api/live`) they hold it for as long as they stay connected. Attempts are limited per client IP, whether they succeed or not.
 	//
 	// Takes any type of body and a specified content type.
 	//
@@ -494,7 +499,7 @@ type ClientInterface interface {
 
 	// Enter Enter with the access link's secret and a name.
 	//
-	// Exchanges the secret from the access link (the `k` value in its URL fragment) and a name for a new visitor, and sets the visitor cookie. The name is reserved for 60 seconds so that no one else can enter under it meanwhile. Attempts are limited per client IP, whether they succeed or not.
+	// Exchanges the secret from the access link (the `k` value in its URL fragment) and a name for a new visitor, and sets the visitor cookie. The name is reserved for 60 seconds so that no one else can enter under it meanwhile; once the visitor opens a live-update connection (`GET /api/live`) they hold it for as long as they stay connected. Attempts are limited per client IP, whether they succeed or not.
 	//
 	// Takes a body of the `application/json` content type.
 	//
@@ -503,14 +508,14 @@ type ClientInterface interface {
 
 	// GetMe Return the current visitor.
 	//
-	// Returns the visitor the cookie belongs to.
+	// Returns the visitor the cookie belongs to, and whether another visitor now holds their name (`nameTaken`). Such a visitor cannot open live updates or join voice until they rename.
 	//
 	// Corresponds with GET /api/me (the `GetMe` operationId).
 	GetMe(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// RenameMeWithBody Change the current visitor's name.
 	//
-	// Renames the visitor the cookie belongs to. The new name must be free; the visitor's own current name always is.
+	// Renames the visitor the cookie belongs to. The new name must be free; the visitor's own current name is, unless another visitor holds it. A connected visitor keeps holding their name under the new one.
 	//
 	// Takes any type of body and a specified content type.
 	//
@@ -519,7 +524,7 @@ type ClientInterface interface {
 
 	// RenameMe Change the current visitor's name.
 	//
-	// Renames the visitor the cookie belongs to. The new name must be free; the visitor's own current name always is.
+	// Renames the visitor the cookie belongs to. The new name must be free; the visitor's own current name is, unless another visitor holds it. A connected visitor keeps holding their name under the new one.
 	//
 	// Takes a body of the `application/json` content type.
 	//
@@ -586,7 +591,7 @@ type ClientInterface interface {
 
 // EnterWithBody Enter with the access link's secret and a name.
 //
-// Exchanges the secret from the access link (the `k` value in its URL fragment) and a name for a new visitor, and sets the visitor cookie. The name is reserved for 60 seconds so that no one else can enter under it meanwhile. Attempts are limited per client IP, whether they succeed or not.
+// Exchanges the secret from the access link (the `k` value in its URL fragment) and a name for a new visitor, and sets the visitor cookie. The name is reserved for 60 seconds so that no one else can enter under it meanwhile; once the visitor opens a live-update connection (`GET /api/live`) they hold it for as long as they stay connected. Attempts are limited per client IP, whether they succeed or not.
 //
 // Takes any type of body and a specified content type.
 //
@@ -605,7 +610,7 @@ func (c *Client) EnterWithBody(ctx context.Context, contentType string, body io.
 
 // Enter Enter with the access link's secret and a name.
 //
-// Exchanges the secret from the access link (the `k` value in its URL fragment) and a name for a new visitor, and sets the visitor cookie. The name is reserved for 60 seconds so that no one else can enter under it meanwhile. Attempts are limited per client IP, whether they succeed or not.
+// Exchanges the secret from the access link (the `k` value in its URL fragment) and a name for a new visitor, and sets the visitor cookie. The name is reserved for 60 seconds so that no one else can enter under it meanwhile; once the visitor opens a live-update connection (`GET /api/live`) they hold it for as long as they stay connected. Attempts are limited per client IP, whether they succeed or not.
 //
 // Takes a body of the `application/json` content type.
 //
@@ -624,7 +629,7 @@ func (c *Client) Enter(ctx context.Context, body EnterJSONRequestBody, reqEditor
 
 // GetMe Return the current visitor.
 //
-// Returns the visitor the cookie belongs to.
+// Returns the visitor the cookie belongs to, and whether another visitor now holds their name (`nameTaken`). Such a visitor cannot open live updates or join voice until they rename.
 //
 // Corresponds with GET /api/me (the `GetMe` operationId).
 func (c *Client) GetMe(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
@@ -641,7 +646,7 @@ func (c *Client) GetMe(ctx context.Context, reqEditors ...RequestEditorFn) (*htt
 
 // RenameMeWithBody Change the current visitor's name.
 //
-// Renames the visitor the cookie belongs to. The new name must be free; the visitor's own current name always is.
+// Renames the visitor the cookie belongs to. The new name must be free; the visitor's own current name is, unless another visitor holds it. A connected visitor keeps holding their name under the new one.
 //
 // Takes any type of body and a specified content type.
 //
@@ -660,7 +665,7 @@ func (c *Client) RenameMeWithBody(ctx context.Context, contentType string, body 
 
 // RenameMe Change the current visitor's name.
 //
-// Renames the visitor the cookie belongs to. The new name must be free; the visitor's own current name always is.
+// Renames the visitor the cookie belongs to. The new name must be free; the visitor's own current name is, unless another visitor holds it. A connected visitor keeps holding their name under the new one.
 //
 // Takes a body of the `application/json` content type.
 //
@@ -1196,7 +1201,7 @@ type ClientWithResponsesInterface interface {
 
 	// EnterWithBodyWithResponse Enter with the access link's secret and a name.
 	//
-	// Exchanges the secret from the access link (the `k` value in its URL fragment) and a name for a new visitor, and sets the visitor cookie. The name is reserved for 60 seconds so that no one else can enter under it meanwhile. Attempts are limited per client IP, whether they succeed or not.
+	// Exchanges the secret from the access link (the `k` value in its URL fragment) and a name for a new visitor, and sets the visitor cookie. The name is reserved for 60 seconds so that no one else can enter under it meanwhile; once the visitor opens a live-update connection (`GET /api/live`) they hold it for as long as they stay connected. Attempts are limited per client IP, whether they succeed or not.
 	//
 	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
 	//
@@ -1205,7 +1210,7 @@ type ClientWithResponsesInterface interface {
 
 	// EnterWithResponse Enter with the access link's secret and a name.
 	//
-	// Exchanges the secret from the access link (the `k` value in its URL fragment) and a name for a new visitor, and sets the visitor cookie. The name is reserved for 60 seconds so that no one else can enter under it meanwhile. Attempts are limited per client IP, whether they succeed or not.
+	// Exchanges the secret from the access link (the `k` value in its URL fragment) and a name for a new visitor, and sets the visitor cookie. The name is reserved for 60 seconds so that no one else can enter under it meanwhile; once the visitor opens a live-update connection (`GET /api/live`) they hold it for as long as they stay connected. Attempts are limited per client IP, whether they succeed or not.
 	//
 	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
 	//
@@ -1214,7 +1219,7 @@ type ClientWithResponsesInterface interface {
 
 	// GetMeWithResponse Return the current visitor.
 	//
-	// Returns the visitor the cookie belongs to.
+	// Returns the visitor the cookie belongs to, and whether another visitor now holds their name (`nameTaken`). Such a visitor cannot open live updates or join voice until they rename.
 	//
 	// Returns a wrapper object for the known response body format(s).
 	//
@@ -1223,7 +1228,7 @@ type ClientWithResponsesInterface interface {
 
 	// RenameMeWithBodyWithResponse Change the current visitor's name.
 	//
-	// Renames the visitor the cookie belongs to. The new name must be free; the visitor's own current name always is.
+	// Renames the visitor the cookie belongs to. The new name must be free; the visitor's own current name is, unless another visitor holds it. A connected visitor keeps holding their name under the new one.
 	//
 	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
 	//
@@ -1232,7 +1237,7 @@ type ClientWithResponsesInterface interface {
 
 	// RenameMeWithResponse Change the current visitor's name.
 	//
-	// Renames the visitor the cookie belongs to. The new name must be free; the visitor's own current name always is.
+	// Renames the visitor the cookie belongs to. The new name must be free; the visitor's own current name is, unless another visitor holds it. A connected visitor keeps holding their name under the new one.
 	//
 	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
 	//
@@ -1909,7 +1914,7 @@ func (r GetReadinessResponse) ContentType() string {
 
 // EnterWithBodyWithResponse Enter with the access link's secret and a name.
 //
-// Exchanges the secret from the access link (the `k` value in its URL fragment) and a name for a new visitor, and sets the visitor cookie. The name is reserved for 60 seconds so that no one else can enter under it meanwhile. Attempts are limited per client IP, whether they succeed or not.
+// Exchanges the secret from the access link (the `k` value in its URL fragment) and a name for a new visitor, and sets the visitor cookie. The name is reserved for 60 seconds so that no one else can enter under it meanwhile; once the visitor opens a live-update connection (`GET /api/live`) they hold it for as long as they stay connected. Attempts are limited per client IP, whether they succeed or not.
 //
 // Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
 //
@@ -1924,7 +1929,7 @@ func (c *ClientWithResponses) EnterWithBodyWithResponse(ctx context.Context, con
 
 // EnterWithResponse Enter with the access link's secret and a name.
 //
-// Exchanges the secret from the access link (the `k` value in its URL fragment) and a name for a new visitor, and sets the visitor cookie. The name is reserved for 60 seconds so that no one else can enter under it meanwhile. Attempts are limited per client IP, whether they succeed or not.
+// Exchanges the secret from the access link (the `k` value in its URL fragment) and a name for a new visitor, and sets the visitor cookie. The name is reserved for 60 seconds so that no one else can enter under it meanwhile; once the visitor opens a live-update connection (`GET /api/live`) they hold it for as long as they stay connected. Attempts are limited per client IP, whether they succeed or not.
 //
 // Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
 //
@@ -1939,7 +1944,7 @@ func (c *ClientWithResponses) EnterWithResponse(ctx context.Context, body EnterJ
 
 // GetMeWithResponse Return the current visitor.
 //
-// Returns the visitor the cookie belongs to.
+// Returns the visitor the cookie belongs to, and whether another visitor now holds their name (`nameTaken`). Such a visitor cannot open live updates or join voice until they rename.
 //
 // Returns a wrapper object for the known response body format(s).
 //
@@ -1954,7 +1959,7 @@ func (c *ClientWithResponses) GetMeWithResponse(ctx context.Context, reqEditors 
 
 // RenameMeWithBodyWithResponse Change the current visitor's name.
 //
-// Renames the visitor the cookie belongs to. The new name must be free; the visitor's own current name always is.
+// Renames the visitor the cookie belongs to. The new name must be free; the visitor's own current name is, unless another visitor holds it. A connected visitor keeps holding their name under the new one.
 //
 // Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
 //
@@ -1969,7 +1974,7 @@ func (c *ClientWithResponses) RenameMeWithBodyWithResponse(ctx context.Context, 
 
 // RenameMeWithResponse Change the current visitor's name.
 //
-// Renames the visitor the cookie belongs to. The new name must be free; the visitor's own current name always is.
+// Renames the visitor the cookie belongs to. The new name must be free; the visitor's own current name is, unless another visitor holds it. A connected visitor keeps holding their name under the new one.
 //
 // Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
 //

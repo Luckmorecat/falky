@@ -263,3 +263,162 @@ func TestRenamingAnUnknownVisitorFails(t *testing.T) {
 		t.Errorf("Rename(unknown) = %v, want ErrNoVisitor", err)
 	}
 }
+
+// connect counts a connection of v and fails the test unless Connect allows
+// it. The returned func ends the connection, saying whether it opened.
+func (f fixture) connect(t *testing.T, v identity.Visitor) func(opened bool) {
+	t.Helper()
+	disconnect, err := f.ident.Connect(t.Context(), v.ID)
+	if err != nil {
+		t.Fatalf("Connect(%s): %v", v.Name, err)
+	}
+	return disconnect
+}
+
+func TestAConnectedVisitorHoldsTheNameUntilTheLastConnectionEnds(t *testing.T) {
+	f := newFixture(t, filepath.Join(t.TempDir(), "falky.db"))
+	bob, _ := f.enter(t, "Bob")
+	tab1 := f.connect(t, bob)
+	tab2 := f.connect(t, bob)
+
+	// Connecting took over the reservation, so it does not lapse.
+	f.clock.Advance(time.Hour)
+	if _, _, err := f.ident.Enter(t.Context(), f.secret, " bob "); !errors.Is(err, identity.ErrNameTaken) {
+		t.Errorf("Enter(bob) while Bob is connected = %v, want ErrNameTaken", err)
+	}
+	ann, _ := f.enter(t, "Ann")
+	if _, err := f.ident.Rename(t.Context(), ann.ID, "BOB"); !errors.Is(err, identity.ErrNameTaken) {
+		t.Errorf("Rename to BOB while Bob is connected = %v, want ErrNameTaken", err)
+	}
+
+	tab1(true)
+	if _, _, err := f.ident.Enter(t.Context(), f.secret, "bob"); !errors.Is(err, identity.ErrNameTaken) {
+		t.Errorf("Enter(bob) while one of Bob's connections is left = %v, want ErrNameTaken", err)
+	}
+	tab2(true)
+	if _, _, err := f.ident.Enter(t.Context(), f.secret, "bob"); err != nil {
+		t.Errorf("Enter(bob) after Bob's last connection ended = %v, want it allowed", err)
+	}
+}
+
+func TestTheNameIsFreeOnceTheFirstConnectionEndsWithinTheReservation(t *testing.T) {
+	f := newFixture(t, filepath.Join(t.TempDir(), "falky.db"))
+	bob, _ := f.enter(t, "Bob")
+	f.connect(t, bob)(true)
+	if _, _, err := f.ident.Enter(t.Context(), f.secret, "bob"); err != nil {
+		t.Errorf("Enter(bob) after Bob connected and left = %v, want it allowed", err)
+	}
+}
+
+func TestAConnectionThatNeverOpenedLeavesTheReservation(t *testing.T) {
+	f := newFixture(t, filepath.Join(t.TempDir(), "falky.db"))
+	bob, _ := f.enter(t, "Bob")
+	f.connect(t, bob)(false)
+	if _, _, err := f.ident.Enter(t.Context(), f.secret, "bob"); !errors.Is(err, identity.ErrNameTaken) {
+		t.Errorf("Enter(bob) after Bob's upgrade failed = %v, want ErrNameTaken", err)
+	}
+	f.clock.Advance(time.Minute)
+	if _, _, err := f.ident.Enter(t.Context(), f.secret, "bob"); err != nil {
+		t.Errorf("Enter(bob) once the reservation lapsed = %v, want it allowed", err)
+	}
+}
+
+func TestAConnectedVisitorTakesTheirNameAlongWhenRenaming(t *testing.T) {
+	f := newFixture(t, filepath.Join(t.TempDir(), "falky.db"))
+	bob, _ := f.enter(t, "Bob")
+	disconnect := f.connect(t, bob)
+	f.clock.Advance(time.Hour)
+	if _, err := f.ident.Rename(t.Context(), bob.ID, "Rob"); err != nil {
+		t.Fatalf("Rename to Rob: %v", err)
+	}
+	if _, _, err := f.ident.Enter(t.Context(), f.secret, "bob"); err != nil {
+		t.Errorf("Enter(bob) after Bob renamed = %v, want it allowed", err)
+	}
+	if _, _, err := f.ident.Enter(t.Context(), f.secret, "rob"); !errors.Is(err, identity.ErrNameTaken) {
+		t.Errorf("Enter(rob) while Rob is connected = %v, want ErrNameTaken", err)
+	}
+	disconnect(true)
+	if _, _, err := f.ident.Enter(t.Context(), f.secret, "rob"); err != nil {
+		t.Errorf("Enter(rob) after Rob left = %v, want it allowed", err)
+	}
+}
+
+func TestAReturningVisitorWhoseNameIsTakenCannotConnectUntilTheyRename(t *testing.T) {
+	f := newFixture(t, filepath.Join(t.TempDir(), "falky.db"))
+	x, _ := f.enter(t, "Bob")
+	f.connect(t, x)(true)
+	y, _ := f.enter(t, "bob")
+	f.connect(t, y)
+
+	if !f.ident.NameTaken(x) {
+		t.Error("NameTaken(X) while Y is connected as bob = false, want true")
+	}
+	if f.ident.NameTaken(y) {
+		t.Error("NameTaken(Y) = true, want false: Y holds the name")
+	}
+	if _, err := f.ident.Connect(t.Context(), x.ID); !errors.Is(err, identity.ErrNameTaken) {
+		t.Errorf("Connect(X) = %v, want ErrNameTaken", err)
+	}
+	if _, err := f.ident.Rename(t.Context(), x.ID, "BOB"); !errors.Is(err, identity.ErrNameTaken) {
+		t.Errorf("X renaming to own name in other case = %v, want ErrNameTaken", err)
+	}
+
+	renamed, err := f.ident.Rename(t.Context(), x.ID, "Rob")
+	if err != nil {
+		t.Fatalf("Rename X to Rob: %v", err)
+	}
+	if f.ident.NameTaken(renamed) {
+		t.Error("NameTaken(X) after renaming = true, want false")
+	}
+	f.connect(t, renamed)
+}
+
+func TestAReservationFromEnteringKeepsAReturningVisitorOut(t *testing.T) {
+	f := newFixture(t, filepath.Join(t.TempDir(), "falky.db"))
+	x, _ := f.enter(t, "Bob")
+	f.clock.Advance(time.Minute)
+	f.enter(t, "bob")
+
+	if _, err := f.ident.Connect(t.Context(), x.ID); !errors.Is(err, identity.ErrNameTaken) {
+		t.Errorf("Connect(X) while bob is reserved = %v, want ErrNameTaken", err)
+	}
+	f.clock.Advance(time.Minute)
+	f.connect(t, x)
+}
+
+func TestOnlyOneOfTwoVisitorsWithTheSameNameConnects(t *testing.T) {
+	f := newFixture(t, filepath.Join(t.TempDir(), "falky.db"))
+	x, _ := f.enter(t, "Bob")
+	f.clock.Advance(time.Minute)
+	y, _ := f.enter(t, "bob")
+	f.clock.Advance(time.Minute)
+
+	errs := make(chan error, 2)
+	for _, v := range []identity.Visitor{x, y} {
+		go func() {
+			_, err := f.ident.Connect(t.Context(), v.ID)
+			errs <- err
+		}()
+	}
+	var allowed, refused int
+	for range 2 {
+		switch err := <-errs; {
+		case err == nil:
+			allowed++
+		case errors.Is(err, identity.ErrNameTaken):
+			refused++
+		default:
+			t.Fatalf("Connect: %v", err)
+		}
+	}
+	if allowed != 1 || refused != 1 {
+		t.Errorf("Connect allowed %d and refused %d of two visitors named Bob, want 1 and 1", allowed, refused)
+	}
+}
+
+func TestConnectingAnUnknownVisitorFails(t *testing.T) {
+	f := newFixture(t, filepath.Join(t.TempDir(), "falky.db"))
+	if _, err := f.ident.Connect(t.Context(), "01JBX6Z8Q3M5W2K7R9T4V1C0DE"); !errors.Is(err, identity.ErrNoVisitor) {
+		t.Errorf("Connect(unknown) = %v, want ErrNoVisitor", err)
+	}
+}

@@ -31,8 +31,9 @@ paths:
         Exchanges the secret from the access link (the `k` value in its URL
         fragment) and a name for a new visitor, and sets the visitor cookie.
         The name is reserved for 60 seconds so that no one else can enter
-        under it meanwhile. Attempts are limited per client IP, whether they
-        succeed or not.
+        under it meanwhile; once the visitor opens a live-update connection
+        (`GET /api/live`) they hold it for as long as they stay connected.
+        Attempts are limited per client IP, whether they succeed or not.
       requestBody:
         description: The secret and the name to enter under.
         required: true
@@ -79,7 +80,10 @@ paths:
       operationId: getMe
       tags: [visitors]
       summary: Return the current visitor.
-      description: Returns the visitor the cookie belongs to.
+      description: >-
+        Returns the visitor the cookie belongs to, and whether another visitor
+        now holds their name (`nameTaken`). Such a visitor cannot open live
+        updates or join voice until they rename.
       responses:
         "200":
           description: The current visitor.
@@ -97,7 +101,8 @@ paths:
       summary: Change the current visitor's name.
       description: >-
         Renames the visitor the cookie belongs to. The new name must be free;
-        the visitor's own current name always is.
+        the visitor's own current name is, unless another visitor holds it. A
+        connected visitor keeps holding their name under the new one.
       requestBody:
         description: The new name.
         required: true
@@ -312,7 +317,8 @@ paths:
         "409":
           description: >-
             The room's voice already has as many participants as it admits
-            (`room_full`). The visitor stays where they were.
+            (`room_full`), or another visitor holds this visitor's name
+            (`name_taken`; rename first). The visitor stays where they were.
           content:
             application/json:
               schema:
@@ -350,6 +356,11 @@ paths:
         reading each room's messages with `after` set to the last message ID
         it saw and the room list again. Events that arrive while it catches up
         may repeat what it reads; it keeps one message per message ID.
+
+
+        A visitor is connected while they have at least one of these
+        connections open, and a connected visitor holds their name: no one
+        else can enter under it or rename to it.
       parameters:
         - name: Origin
           in: header
@@ -367,6 +378,14 @@ paths:
           description: >-
             The `Origin` is missing or is not the server's public origin
             (`origin_forbidden`). No WebSocket is opened.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: >-
+            Another visitor holds this visitor's name (`name_taken`), as
+            `GET /api/me` reports; rename first. No WebSocket is opened.
           content:
             application/json:
               schema:
@@ -526,7 +545,7 @@ components:
     Visitor:
       type: object
       description: A person who entered through the access link.
-      required: [id, name]
+      required: [id, name, nameTaken]
       properties:
         id:
           type: string
@@ -536,6 +555,14 @@ components:
           type: string
           description: The visitor's name, trimmed.
           example: Bob
+        nameTaken:
+          type: boolean
+          description: >-
+            Whether another visitor holds this name: one took it while this
+            visitor was not connected. Live updates and voice stay closed to
+            this visitor until they rename; reading and posting messages stay
+            open.
+          example: false
     EnterRequest:
       type: object
       description: The access link's secret and the name to enter under.

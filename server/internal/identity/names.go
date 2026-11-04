@@ -63,7 +63,9 @@ func foldRune(r rune) rune {
 }
 
 // reservations tracks which visitor holds which name. Entering reserves the
-// name for reservationTime; nothing else holds names yet.
+// name for reservationTime; a connected visitor holds their name for as long
+// as they stay connected. A visitor holds at most one name, their current
+// one.
 type reservations struct {
 	mu sync.Mutex
 	// held maps a name key to the visitor holding it.
@@ -72,7 +74,17 @@ type reservations struct {
 
 type hold struct {
 	visitorID string
-	until     time.Time
+	// until is when the reservation from entering lapses; it is zero once a
+	// connection of the visitor's has opened.
+	until time.Time
+	// connections counts the visitor's live-update connections, including
+	// those whose upgrade is still under way.
+	connections int
+}
+
+// inForce reports whether h still holds its name at now.
+func (h hold) inForce(now time.Time) bool {
+	return h.connections > 0 || now.Before(h.until)
 }
 
 func newReservations() *reservations {
@@ -83,14 +95,14 @@ func newReservations() *reservations {
 // The caller holds n.mu.
 func (n *reservations) takenBy(key, visitorID string, now time.Time) bool {
 	h, ok := n.held[key]
-	return ok && h.visitorID != visitorID && now.Before(h.until)
+	return ok && h.visitorID != visitorID && h.inForce(now)
 }
 
 // reserve makes visitorID hold key until now plus reservationTime, and drops
 // lapsed holds. The caller holds n.mu.
 func (n *reservations) reserve(key, visitorID string, now time.Time) {
 	for k, h := range n.held {
-		if !now.Before(h.until) {
+		if !h.inForce(now) {
 			delete(n.held, k)
 		}
 	}
@@ -104,6 +116,39 @@ func (n *reservations) move(key, visitorID string) {
 		if h.visitorID == visitorID {
 			delete(n.held, k)
 			n.held[key] = h
+			return
+		}
+	}
+}
+
+// connect counts one more connection of visitorID, whose name has key: the
+// visitor holds key while it lasts. The caller holds n.mu and has checked
+// that no one else holds key.
+func (n *reservations) connect(key, visitorID string) {
+	h := n.held[key]
+	if h.visitorID != visitorID {
+		h = hold{visitorID: visitorID}
+	}
+	h.connections++
+	n.held[key] = h
+}
+
+// disconnect counts one connection of visitorID fewer. A connection that
+// opened ends the reservation from entering, so once the last connection is
+// gone the name is free; one whose upgrade failed leaves the reservation as
+// it was. The caller holds n.mu.
+func (n *reservations) disconnect(visitorID string, opened bool, now time.Time) {
+	for k, h := range n.held {
+		if h.visitorID == visitorID {
+			h.connections--
+			if opened {
+				h.until = time.Time{}
+			}
+			if h.inForce(now) {
+				n.held[k] = h
+			} else {
+				delete(n.held, k)
+			}
 			return
 		}
 	}

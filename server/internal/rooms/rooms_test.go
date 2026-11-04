@@ -167,6 +167,24 @@ func TestAuthorizeAllowsEverythingInAKnownRoomOnly(t *testing.T) {
 	}
 }
 
+func TestAuthorizeKeepsVoiceClosedToAVisitorWhoseNameIsTaken(t *testing.T) {
+	bob := identity.Visitor{ID: "01JBX6Z8Q3M5W2K7R9T4V1C0DE", Name: "Bob"}
+	s := rooms.New(openDB(t, filepath.Join(t.TempDir(), "falky.db")),
+		rooms.WithNameCheck(func(v identity.Visitor) bool { return v == bob }))
+	lounge := create(t, s, "Lounge")
+	if err := s.Authorize(t.Context(), bob, lounge.ID, rooms.JoinVoice); !errors.Is(err, identity.ErrNameTaken) {
+		t.Errorf("Authorize(JoinVoice) for Bob = %v, want ErrNameTaken", err)
+	}
+	for _, action := range []rooms.Action{rooms.ReadMessages, rooms.PostMessage} {
+		if err := s.Authorize(t.Context(), bob, lounge.ID, action); err != nil {
+			t.Errorf("Authorize(%v) for Bob = %v, want allowed", action, err)
+		}
+	}
+	if err := s.Authorize(t.Context(), bob, "01JBX6Z8Q3M5W2K7R9T4V1C0DF", rooms.JoinVoice); !errors.Is(err, rooms.ErrNotFound) {
+		t.Errorf("Authorize(JoinVoice) for Bob in an unknown room = %v, want ErrNotFound", err)
+	}
+}
+
 func TestCreatingAndRenamingPublishTheCommittedRoom(t *testing.T) {
 	var published, listedThen []rooms.Room
 	var s *rooms.Service

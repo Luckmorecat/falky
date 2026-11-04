@@ -116,8 +116,9 @@ func (s *Service) HasAccess(ctx context.Context, visitorID string) (bool, error)
 }
 
 // Rename changes the name of the visitor visitorID to name, and moves the
-// visitor's reservation, if any, to it. It fails with an ErrInvalidName,
-// ErrNameTaken, or ErrNoVisitor for an unknown visitor.
+// name the visitor holds, if any, to it. It fails with an ErrInvalidName,
+// ErrNameTaken, or ErrNoVisitor for an unknown visitor. The visitor's own
+// name is free to them unless another visitor holds it.
 func (s *Service) Rename(ctx context.Context, visitorID, name string) (Visitor, error) {
 	name, err := CleanName(name)
 	if err != nil {
@@ -149,6 +150,48 @@ func (s *Service) Rename(ctx context.Context, visitorID, name string) (Visitor, 
 	}
 	s.reservations.move(key, visitorID)
 	return Visitor{ID: visitorID, Name: name}, nil
+}
+
+// Connect counts a live-update connection of the visitor visitorID, who is
+// connected while they have one: a connected visitor holds their name, and a
+// connection that opens takes over the reservation from entering. The caller
+// calls disconnect once the connection has ended, saying whether it opened:
+// one whose upgrade failed leaves the reservation as it was.
+//
+// It fails with ErrNameTaken when another visitor holds the visitor's name,
+// or ErrNoVisitor for an unknown visitor. Checking the name and holding it
+// are one step, so two visitors with the same name cannot both connect.
+func (s *Service) Connect(ctx context.Context, visitorID string) (disconnect func(opened bool), err error) {
+	s.reservations.mu.Lock()
+	defer s.reservations.mu.Unlock()
+	// Rename writes names while holding the lock, so this one is current.
+	var name string
+	err = s.db.Read().QueryRowContext(ctx, "SELECT name FROM visitors WHERE id = ?", visitorID).Scan(&name)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNoVisitor
+	}
+	if err != nil {
+		return nil, fmt.Errorf("connect visitor: %w", err)
+	}
+	key := NameKey(name)
+	if s.reservations.takenBy(key, visitorID, s.now()) {
+		return nil, ErrNameTaken
+	}
+	s.reservations.connect(key, visitorID)
+	return func(opened bool) {
+		s.reservations.mu.Lock()
+		defer s.reservations.mu.Unlock()
+		s.reservations.disconnect(visitorID, opened, s.now())
+	}, nil
+}
+
+// NameTaken reports whether a visitor other than v holds v's name, as happens
+// to a visitor who returns after another took their name while they were
+// away. Connect refuses such a visitor until they rename.
+func (s *Service) NameTaken(v Visitor) bool {
+	s.reservations.mu.Lock()
+	defer s.reservations.mu.Unlock()
+	return s.reservations.takenBy(NameKey(v.Name), v.ID, s.now())
 }
 
 func hashToken(token string) []byte {

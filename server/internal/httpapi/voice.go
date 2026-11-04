@@ -5,6 +5,7 @@ import (
 	"errors"
 
 	"github.com/kisshot/falky/server/internal/api"
+	"github.com/kisshot/falky/server/internal/identity"
 	"github.com/kisshot/falky/server/internal/rooms"
 	"github.com/kisshot/falky/server/internal/voice"
 )
@@ -14,6 +15,9 @@ func (s *server) JoinVoice(ctx context.Context, req api.JoinVoiceRequestObject) 
 	err := s.rooms.Authorize(ctx, visitor, req.Id, rooms.JoinVoice)
 	if errors.Is(err, rooms.ErrNotFound) {
 		return api.JoinVoice404JSONResponse{RoomNotFoundJSONResponse: roomNotFound}, nil
+	}
+	if errors.Is(err, identity.ErrNameTaken) {
+		return api.JoinVoice409JSONResponse(yourNameTaken), nil
 	}
 	if err != nil {
 		return nil, err

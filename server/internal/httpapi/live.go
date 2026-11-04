@@ -13,19 +13,21 @@ import (
 
 	"github.com/kisshot/falky/server/internal/api"
 	"github.com/kisshot/falky/server/internal/chat"
+	"github.com/kisshot/falky/server/internal/identity"
 	"github.com/kisshot/falky/server/internal/realtime"
 	"github.com/kisshot/falky/server/internal/rooms"
 )
 
 // live serves GET /api/live, which the contract describes but the generated
-// server leaves out: it checks the Origin and the visitor cookie, then hands
-// the connection to the hub.
+// server leaves out: it checks the Origin, the visitor cookie and that the
+// visitor may connect, then hands the connection to the hub.
 type live struct {
-	origin  string
-	resolve visitorResolver
-	rooms   *rooms.Service
-	hub     *realtime.Hub
-	logger  *slog.Logger
+	origin   string
+	resolve  visitorResolver
+	identity *identity.Service
+	rooms    *rooms.Service
+	hub      *realtime.Hub
+	logger   *slog.Logger
 }
 
 func (l live) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -41,7 +43,18 @@ func (l live) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_request", "not a WebSocket upgrade")
 		return
 	}
-	l.hub.Serve(w, r, realtime.Subscriber{
+	disconnect, err := l.identity.Connect(r.Context(), visitor.ID)
+	if errors.Is(err, identity.ErrNameTaken) {
+		writeError(w, http.StatusConflict, yourNameTaken.Code, yourNameTaken.Message)
+		return
+	}
+	if err != nil {
+		errorWriter{logger: l.logger}.internal(w, r, err)
+		return
+	}
+	opened := false
+	defer func() { disconnect(opened) }()
+	opened = l.hub.Serve(w, r, realtime.Subscriber{
 		VisitorID: visitor.ID,
 		MayReceive: func(ctx context.Context, roomID string) bool {
 			err := l.rooms.Authorize(ctx, visitor, roomID, rooms.ReadMessages)
