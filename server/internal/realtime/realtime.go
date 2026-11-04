@@ -29,6 +29,9 @@ type Event struct {
 // Subscriber is the visitor a connection serves.
 type Subscriber struct {
 	VisitorID string
+	// Ticket is what Hub.Ticket returned before the visitor's access was
+	// checked.
+	Ticket Ticket
 	// MayReceive reports whether events about the room roomID may reach the
 	// visitor. It is asked again for each such event; nil allows every room.
 	MayReceive func(ctx context.Context, roomID string) bool
@@ -37,6 +40,16 @@ type Subscriber struct {
 // StatusBehind is the close code of a connection whose client fell behind:
 // its queue of events waiting to be sent filled up.
 const StatusBehind websocket.StatusCode = 4000
+
+// StatusRevoked is the close code of a connection whose visitor's access
+// was revoked: see Hub.Revoke.
+const StatusRevoked websocket.StatusCode = 4001
+
+// Ticket marks whether a connection's access was checked before or after
+// each Hub.Revoke.
+type Ticket struct {
+	revocations uint64
+}
 
 // Defaults of the options.
 const (
@@ -60,8 +73,10 @@ type Hub struct {
 	conns map[*conn]struct{}
 	// visitors counts the open connections of each connected visitor.
 	visitors map[string]int
-	closed   bool
-	serving  sync.WaitGroup
+	// revocations counts the calls of Revoke.
+	revocations uint64
+	closed      bool
+	serving     sync.WaitGroup
 }
 
 // Option changes how New sets up the Hub.
@@ -120,6 +135,8 @@ type conn struct {
 	ended  chan struct{}
 	status websocket.StatusCode
 	reason string
+	// notice, when set, is sent before closing.
+	notice []byte
 	// open is set once the upgrade has succeeded and the connection counts
 	// as one of its visitor's.
 	open bool
@@ -141,11 +158,35 @@ func (h *Hub) Publish(e Event) {
 	}
 }
 
+// Revoke ends every connection whose visitor's access was checked before it:
+// each one registered is sent notice and then closed with StatusRevoked, and
+// Serve refuses, with the same close code, one whose Ticket was taken before
+// Revoke. Connections checked afterwards are not affected.
+func (h *Hub) Revoke(notice []byte) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.revocations++
+	for c := range h.conns {
+		c.notice = notice
+		h.removeLocked(c, StatusRevoked, "access revoked")
+	}
+}
+
+// Ticket returns the ticket of a connection whose visitor's access is about
+// to be checked. Take it before the check, so that Serve can refuse the
+// connection if Revoke ran in between.
+func (h *Hub) Ticket() Ticket {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return Ticket{revocations: h.revocations}
+}
+
 // Serve upgrades the request to a WebSocket for sub and sends it events until
 // the connection ends. The caller has checked the request's Origin and
 // resolved its visitor; Serve accepts any origin. The connection receives
 // every event published once its upgrade has begun. Serve reports whether the
-// connection opened: false when the upgrade failed or the Hub was shut down.
+// connection opened: false when the upgrade failed, the Hub was shut down, or
+// the visitor's access was revoked since sub's ticket was taken.
 func (h *Hub) Serve(w http.ResponseWriter, r *http.Request, sub Subscriber) (opened bool) {
 	c := &conn{sub: sub, queue: make(chan Event, h.queueSize), ended: make(chan struct{})}
 	registered := h.add(c)
@@ -159,7 +200,7 @@ func (h *Hub) Serve(w http.ResponseWriter, r *http.Request, sub Subscriber) (ope
 		return false
 	}
 	if !registered {
-		_ = ws.Close(websocket.StatusGoingAway, "server shutting down")
+		_ = ws.Close(c.status, c.reason)
 		return false
 	}
 	defer h.serving.Done()
@@ -174,6 +215,11 @@ func (h *Hub) Serve(w http.ResponseWriter, r *http.Request, sub Subscriber) (ope
 		select {
 		case <-ctx.Done():
 		case <-c.ended:
+			if c.notice != nil {
+				wctx, cancel := context.WithTimeout(ctx, writeTimeout)
+				_ = ws.Write(wctx, websocket.MessageText, c.notice)
+				cancel()
+			}
 			_ = ws.Close(c.status, c.reason)
 		}
 	})
@@ -184,12 +230,18 @@ func (h *Hub) Serve(w http.ResponseWriter, r *http.Request, sub Subscriber) (ope
 	return opened
 }
 
-// add registers c to receive events, unless the Hub is shut down. It does not
+// add registers c to receive events, unless the Hub is shut down or c's
+// access was revoked; then it sets the status to close c with. It does not
 // count c as open yet: its upgrade may still fail.
 func (h *Hub) add(c *conn) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if h.closed {
+	switch {
+	case h.closed:
+		c.status, c.reason = websocket.StatusGoingAway, "server shutting down"
+		return false
+	case c.sub.Ticket.revocations != h.revocations:
+		c.status, c.reason = StatusRevoked, "access revoked"
 		return false
 	}
 	h.serving.Add(1)

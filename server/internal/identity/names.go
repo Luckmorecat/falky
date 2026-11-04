@@ -153,3 +153,9 @@ func (n *reservations) disconnect(visitorID string, opened bool, now time.Time) 
 		}
 	}
 }
+
+// dropAll drops every hold. A disconnect for a dropped hold then changes
+// nothing. The caller holds n.mu.
+func (n *reservations) dropAll() {
+	clear(n.held)
+}

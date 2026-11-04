@@ -30,8 +30,11 @@ type publicServer struct {
 	srv      *httptest.Server
 	internal *httptest.Server
 	secret   string
+	identity *identity.Service
 	rooms    *rooms.Service
+	voice    *voice.Service
 	livekit  *voicetest.LiveKit
+	events   Events
 	// clock is the time identity reads, which the test moves by hand.
 	clock *clock
 	// logs holds what the server logged.
@@ -155,8 +158,8 @@ func startPublicLimited(t *testing.T, enterBurst, postBurst int) publicServer {
 		}
 	})
 	return publicServer{
-		srv: srv, internal: internal, secret: strings.TrimPrefix(link, testOrigin+"/#k="), rooms: rs, livekit: lk,
-		clock: clk, logs: logs,
+		srv: srv, internal: internal, secret: strings.TrimPrefix(link, testOrigin+"/#k="),
+		identity: ident, rooms: rs, voice: vs, livekit: lk, events: events, clock: clk, logs: logs,
 	}
 }
 

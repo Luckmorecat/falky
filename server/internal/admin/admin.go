@@ -21,6 +21,7 @@ import (
 
 	"github.com/kisshot/falky/server/internal/identity"
 	"github.com/kisshot/falky/server/internal/rooms"
+	"github.com/kisshot/falky/server/internal/voice"
 )
 
 // Listen listens on the Unix socket at path, readable and writable by the
@@ -74,6 +75,11 @@ type Deps struct {
 	Logger   *slog.Logger
 	Identity *identity.Service
 	Rooms    *rooms.Service
+	// Voice is emptied once the access link is replaced.
+	Voice *voice.Service
+	// AccessRevoked tells every live-update connection that its visitor's
+	// access ended, and closes it, once the access link is replaced.
+	AccessRevoked func()
 }
 
 type linkBody struct {
@@ -105,6 +111,23 @@ func Handler(deps Deps) http.Handler {
 			writeJSON(w, http.StatusInternalServerError, errorBody{Error: "cannot read the access link"})
 			return
 		}
+		writeJSON(w, http.StatusOK, linkBody{Link: link})
+	})
+	mux.HandleFunc("POST /link/rotate", func(w http.ResponseWriter, r *http.Request) {
+		link, err := deps.Identity.Rotate(r.Context())
+		if err != nil {
+			deps.Logger.Error("admin: rotate access link", "error", err)
+			writeJSON(w, http.StatusInternalServerError, errorBody{Error: "cannot rotate the access link"})
+			return
+		}
+		// The new link is stored, so old cookies are already refused; what
+		// the visitors of the old link still have open ends now.
+		deps.AccessRevoked()
+		if err := deps.Voice.RemoveAll(r.Context()); err != nil {
+			deps.Logger.Error("admin: voice not emptied after rotating the access link; "+
+				"the next refresh removes its participants", "error", err)
+		}
+		deps.Logger.Info("access link rotated")
 		writeJSON(w, http.StatusOK, linkBody{Link: link})
 	})
 	mux.HandleFunc("POST /rooms", func(w http.ResponseWriter, r *http.Request) {
@@ -194,6 +217,17 @@ func NewClient(path string) *Client {
 func (c *Client) Link(ctx context.Context) (string, error) {
 	var body linkBody
 	if err := c.do(ctx, http.MethodGet, "/link", nil, &body); err != nil {
+		return "", err
+	}
+	return body.Link, nil
+}
+
+// RotateLink replaces the access link and returns the new one. Visitors
+// admitted by the old link lose their access, live-update connections and
+// voice.
+func (c *Client) RotateLink(ctx context.Context) (string, error) {
+	var body linkBody
+	if err := c.do(ctx, http.MethodPost, "/link/rotate", nil, &body); err != nil {
 		return "", err
 	}
 	return body.Link, nil

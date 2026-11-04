@@ -42,6 +42,26 @@ func (c *Client) Participants(ctx context.Context) ([]Participant, error) {
 	return participants, nil
 }
 
+// RemoveAll disconnects every participant by deleting every room LiveKit has
+// open; LiveKit opens a room again when someone joins it. A room already gone
+// counts as deleted.
+func (c *Client) RemoveAll(ctx context.Context) error {
+	rooms, err := c.rooms.ListRooms(ctx, &livekit.ListRoomsRequest{})
+	if err != nil {
+		return fmt.Errorf("list rooms: %w", err)
+	}
+	for _, room := range rooms.GetRooms() {
+		_, err := c.rooms.DeleteRoom(ctx, &livekit.DeleteRoomRequest{Room: room.GetName()})
+		if terr, ok := errors.AsType[twirp.Error](err); ok && terr.Code() == twirp.NotFound {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("delete room %s: %w", room.GetName(), err)
+		}
+	}
+	return nil
+}
+
 // RemoveParticipant disconnects the participant identity from room; LiveKit
 // answering that there is no such participant counts as success.
 func (c *Client) RemoveParticipant(ctx context.Context, room, identity string) error {

@@ -18,6 +18,8 @@ import (
 	"github.com/kisshot/falky/server/internal/identity"
 	"github.com/kisshot/falky/server/internal/platform"
 	"github.com/kisshot/falky/server/internal/rooms"
+	"github.com/kisshot/falky/server/internal/voice"
+	"github.com/kisshot/falky/server/internal/voice/voicetest"
 )
 
 // newDeps returns the services over a fresh migrated database that already
@@ -44,7 +46,16 @@ func newDeps(t *testing.T) admin.Deps {
 	if _, err := ident.EnsureLink(t.Context()); err != nil {
 		t.Fatalf("EnsureLink: %v", err)
 	}
-	return admin.Deps{Logger: platform.NewLogger(io.Discard, 0), Identity: ident, Rooms: rooms.New(db)}
+	rs := rooms.New(db)
+	return admin.Deps{
+		Logger: platform.NewLogger(io.Discard, 0), Identity: ident, Rooms: rs,
+		Voice: newVoice(voicetest.New(), ident, rs), AccessRevoked: func() {},
+	}
+}
+
+// newVoice returns the voice service over lk.
+func newVoice(lk voice.LiveKit, ident *identity.Service, rs *rooms.Service) *voice.Service {
+	return voice.New(lk, ident, rs, voice.Config{URL: "wss://falky.example", APIKey: "falky", APISecret: "a-secret", RoomCap: 8})
 }
 
 // serve serves the admin handler on ln until the returned stop is called.
@@ -274,5 +285,61 @@ func TestTheClientReportsWhyARoomChangeIsRefused(t *testing.T) {
 	}
 	if want := []rooms.Room{lounge, games}; !slices.Equal(got, want) {
 		t.Errorf("List after the refusals = %+v, want %+v", got, want)
+	}
+}
+
+func TestTheClientRotatesTheLinkAndEverythingOfTheOldOneEnds(t *testing.T) {
+	deps := newDeps(t)
+	lk := voicetest.New()
+	inVoice := lk.AddParticipant("01JBX7A2K9D4F6H8M0P3R5T7VW", "01JBX6Z8Q3M5W2K7R9T4V1C0DE")
+	deps.Voice = newVoice(lk, deps.Identity, deps.Rooms)
+	revoked := 0
+	deps.AccessRevoked = func() { revoked++ }
+	old, err := deps.Identity.Link(t.Context())
+	if err != nil {
+		t.Fatalf("Link: %v", err)
+	}
+	path := filepath.Join(t.TempDir(), "admin.sock")
+	serve(t, listen(t, path), deps)
+
+	rotated, err := admin.NewClient(path).RotateLink(t.Context())
+	if err != nil {
+		t.Fatalf("RotateLink: %v", err)
+	}
+	if rotated == old || !strings.HasPrefix(rotated, "https://falky.example/#k=") {
+		t.Errorf("RotateLink = %q, want a new link (was %q)", rotated, old)
+	}
+	if current, err := deps.Identity.Link(t.Context()); err != nil || current != rotated {
+		t.Errorf("Link after RotateLink = %q, %v, want %q", current, err, rotated)
+	}
+	if revoked != 1 {
+		t.Errorf("AccessRevoked called %d times, want once", revoked)
+	}
+	if got := lk.Removed(); !slices.Equal(got, []voice.Participant{inVoice}) {
+		t.Errorf("removed from voice %+v, want %+v", got, inVoice)
+	}
+}
+
+func TestRotatingTheLinkSucceedsWhenVoiceCannotBeEmptied(t *testing.T) {
+	deps := newDeps(t)
+	lk := voicetest.New()
+	lk.Fail(errors.New("connection refused"))
+	deps.Voice = newVoice(lk, deps.Identity, deps.Rooms)
+	var logs strings.Builder
+	deps.Logger = platform.NewLogger(&logs, 0)
+	old, err := deps.Identity.Link(t.Context())
+	if err != nil {
+		t.Fatalf("Link: %v", err)
+	}
+	path := filepath.Join(t.TempDir(), "admin.sock")
+	stop := serve(t, listen(t, path), deps)
+
+	rotated, err := admin.NewClient(path).RotateLink(t.Context())
+	if err != nil || rotated == old {
+		t.Errorf("RotateLink = %q, %v, want a new link (was %q)", rotated, err, old)
+	}
+	stop()
+	if !strings.Contains(logs.String(), "voice not emptied") {
+		t.Errorf("logs = %q, want the failure to empty voice", logs.String())
 	}
 }

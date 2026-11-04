@@ -22,6 +22,7 @@ import (
 	"github.com/kisshot/falky/server/internal/admin"
 	"github.com/kisshot/falky/server/internal/api"
 	"github.com/kisshot/falky/server/internal/platform"
+	"github.com/kisshot/falky/server/internal/realtime"
 )
 
 // syncBuffer is a bytes.Buffer safe for the server's goroutines to write to
@@ -289,7 +290,7 @@ func TestRunRefusesUnknownCommands(t *testing.T) {
 		{"frobnicate"},
 		{"serve", "extra"},
 		{"link"},
-		{"link", "rotate"},
+		{"link", "rotate", "extra"},
 		{"link", "show", "extra"},
 		{"room"},
 		{"room", "create"},
@@ -545,5 +546,93 @@ func TestServeClosesLiveConnectionsWhenItStops(t *testing.T) {
 	case <-stopped:
 	case <-time.After(5 * time.Second):
 		t.Fatal("server did not stop")
+	}
+}
+
+func TestLinkRotateReplacesTheLinkAndEndsTheOldOnesAccess(t *testing.T) {
+	dir := t.TempDir()
+	vars := map[string]string{
+		platform.EnvDBPath:      filepath.Join(dir, "falky.db"),
+		platform.EnvAdminSocket: filepath.Join(dir, "admin.sock"),
+	}
+	cfg, err := platform.LoadConfig(env(vars))
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	var logs syncBuffer
+	_, public := startServerOn(t, cfg, &logs)
+	_, link, _ := runLinkShow(t, env(vars))
+	secretOf := func(link string) string { return strings.TrimSpace(link[strings.Index(link, "#k=")+len("#k="):]) }
+	c, err := api.NewClientWithResponses(public)
+	if err != nil {
+		t.Fatalf("NewClientWithResponses: %v", err)
+	}
+	entered, err := c.EnterWithResponse(t.Context(), api.EnterRequest{Secret: secretOf(link), Name: "Bob"})
+	if err != nil || entered.StatusCode() != http.StatusCreated {
+		t.Fatalf("Enter = %v, %v, want 201", entered, err)
+	}
+	cookie := entered.HTTPResponse.Cookies()[0]
+	withCookie := func(_ context.Context, req *http.Request) error {
+		req.AddCookie(cookie)
+		return nil
+	}
+	ws, _, err := websocket.Dial(t.Context(), public+"/api/live", &websocket.DialOptions{ //nolint:bodyclose // Dial closes the body on success
+		HTTPHeader: http.Header{"Origin": {cfg.PublicOrigin}, "Cookie": {cookie.Name + "=" + cookie.Value}},
+	})
+	if err != nil {
+		t.Fatalf("Dial /api/live: %v", err)
+	}
+	defer func() { _ = ws.CloseNow() }()
+
+	// No LiveKit is configured, so voice cannot be emptied; the rotation
+	// still succeeds.
+	start := time.Now()
+	code, rotated, stderr := runCommand(t, env(vars), "link", "rotate")
+	if code != 0 || rotated == link || !strings.Contains(rotated, "/#k=") || !strings.HasSuffix(rotated, "\n") {
+		t.Fatalf("link rotate = exit %d, stdout %q, stderr %q; want 0 and a new link on one line (was %q)", code, rotated, stderr, link)
+	}
+	if _, shown, _ := runLinkShow(t, env(vars)); shown != rotated {
+		t.Errorf("link show after rotating = %q, want %q", shown, rotated)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+	_, data, err := ws.Read(ctx)
+	var e api.Event
+	if err != nil || json.Unmarshal(data, &e) != nil || e.Type != api.EventTypeAccessRevoked {
+		t.Errorf("live update after rotating = %s, %v; want access.revoked", data, err)
+	}
+	if _, _, err := ws.Read(ctx); websocket.CloseStatus(err) != realtime.StatusRevoked {
+		t.Errorf("read after access.revoked = %v, want close status %d", err, realtime.StatusRevoked)
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Errorf("rotation took %v to reach the live connection, want at most two seconds", elapsed)
+	}
+
+	if me, err := c.GetMeWithResponse(t.Context(), withCookie); err != nil || me.StatusCode() != http.StatusUnauthorized {
+		t.Errorf("GetMe with the old cookie = %v, %v, want 401", me, err)
+	}
+	if old, err := c.EnterWithResponse(t.Context(), api.EnterRequest{Secret: secretOf(link), Name: "Ann"}); err != nil ||
+		old.StatusCode() != http.StatusForbidden {
+		t.Errorf("Enter with the old secret = %v, %v, want 403", old, err)
+	}
+	again, err := c.EnterWithResponse(t.Context(), api.EnterRequest{Secret: secretOf(rotated), Name: "Bob"})
+	if err != nil || again.StatusCode() != http.StatusCreated || again.JSON201 == nil || again.JSON201.Id == entered.JSON201.Id {
+		t.Errorf("Enter with the new secret = %v, %v, want 201 and a new visitor", again, err)
+	}
+	if !strings.Contains(logs.String(), "voice not emptied") {
+		t.Errorf("logs = %q, want voice reported not emptied", logs.String())
+	}
+	for _, l := range []string{link, rotated} {
+		if strings.Contains(logs.String(), secretOf(l)) {
+			t.Errorf("server logs contain a link secret: %q", logs.String())
+		}
+	}
+}
+
+func TestLinkRotateFailsWhenNoServerIsRunning(t *testing.T) {
+	socket := filepath.Join(t.TempDir(), "admin.sock")
+	code, stdout, stderr := runCommand(t, env(map[string]string{platform.EnvAdminSocket: socket}), "link", "rotate")
+	if code == 0 || stdout != "" || !strings.Contains(stderr, "not running") {
+		t.Errorf("link rotate = exit %d, stdout %q, stderr %q; want non-zero saying the server is not running", code, stdout, stderr)
 	}
 }

@@ -133,6 +133,24 @@ func (s *Service) Refresh(ctx context.Context) error {
 	return nil
 }
 
+// RemoveAll removes every participant from every room's voice, empties the
+// view and publishes the occupancy of each room that had participants. It
+// fails with an ErrUnavailable, leaving the view as it was.
+func (s *Service) RemoveAll(ctx context.Context) error {
+	s.publishing.Lock()
+	defer s.publishing.Unlock()
+	if err := s.livekit.RemoveAll(ctx); err != nil {
+		return fmt.Errorf("%w: remove every participant: %w", ErrUnavailable, err)
+	}
+	s.logger.InfoContext(ctx, "every participant removed from voice")
+	// Only changes under s.publishing write the view, so it holds still.
+	s.mu.Lock()
+	roomIDs := slices.Sorted(maps.Keys(s.view))
+	s.mu.Unlock()
+	s.change(func() { clear(s.view) }, roomIDs...)
+	return nil
+}
+
 // Run refreshes the view at once, as the server starts, and then every
 // RefreshInterval until ctx is done. It logs a refresh that fails and leaves
 // it to the next.

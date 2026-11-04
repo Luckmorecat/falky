@@ -35,6 +35,9 @@ func (l live) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "origin_forbidden", "live updates are only for pages of this server's origin")
 		return
 	}
+	// Taken before the cookie is checked, so that the hub refuses the
+	// connection if the link is replaced in between.
+	ticket := l.hub.Ticket()
 	visitor, ok := l.resolve.visitor(w, r)
 	if !ok {
 		return
@@ -56,6 +59,7 @@ func (l live) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer func() { disconnect(opened) }()
 	opened = l.hub.Serve(w, r, realtime.Subscriber{
 		VisitorID: visitor.ID,
+		Ticket:    ticket,
 		MayReceive: func(ctx context.Context, roomID string) bool {
 			err := l.rooms.Authorize(ctx, visitor, roomID, rooms.ReadMessages)
 			if err != nil && !errors.Is(err, rooms.ErrNotFound) && ctx.Err() == nil {
@@ -96,10 +100,33 @@ func (e Events) OccupancyChanged(roomID string, occupancy []identity.Visitor) {
 	})
 }
 
+// AccessRevoked sends access.revoked to every live-update connection open so
+// far and closes it, once the access link has been replaced.
+func (e Events) AccessRevoked() {
+	data, err := encodeEvent(api.EventTypeAccessRevoked, "", func(p *api.Event_Payload) error {
+		return p.FromAccessRevoked(api.AccessRevoked{Reason: api.AccessRevokedReasonLinkReplaced})
+	})
+	if err != nil {
+		// Without the notice, the close code still tells clients.
+		e.Logger.Error("access.revoked not encoded", "error", err)
+	}
+	e.Hub.Revoke(data)
+}
+
 // publish publishes an event of type typ whose payload setPayload fills in;
 // roomID is the room the event is about, if it is about what happens inside
 // one.
 func (e Events) publish(typ api.EventType, roomID string, setPayload func(*api.Event_Payload) error) {
+	data, err := encodeEvent(typ, roomID, setPayload)
+	if err != nil {
+		e.Logger.Error("live update not published", "type", typ, "error", err)
+		return
+	}
+	e.Hub.Publish(realtime.Event{RoomID: roomID, Data: data})
+}
+
+// encodeEvent encodes an event of type typ as publish describes.
+func encodeEvent(typ api.EventType, roomID string, setPayload func(*api.Event_Payload) error) ([]byte, error) {
 	event := api.Event{
 		V:         api.EventVN1,
 		Type:      typ,
@@ -107,14 +134,8 @@ func (e Events) publish(typ api.EventType, roomID string, setPayload func(*api.E
 		RoomId:    roomID,
 		Timestamp: time.Now().UTC().Truncate(time.Millisecond),
 	}
-	err := setPayload(&event.Payload)
-	var data []byte
-	if err == nil {
-		data, err = json.Marshal(event)
+	if err := setPayload(&event.Payload); err != nil {
+		return nil, err
 	}
-	if err != nil {
-		e.Logger.Error("live update not published", "type", typ, "error", err)
-		return
-	}
-	e.Hub.Publish(realtime.Event{RoomID: roomID, Data: data})
+	return json.Marshal(event)
 }

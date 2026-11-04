@@ -34,6 +34,8 @@ type LiveKit interface {
 	// RemoveParticipant disconnects the participant identity from room. It
 	// succeeds when identity is not a participant there.
 	RemoveParticipant(ctx context.Context, room, identity string) error
+	// RemoveAll disconnects every participant of every room.
+	RemoveAll(ctx context.Context) error
 }
 
 // Participant is a visitor in a room's voice, as LiveKit lists them.

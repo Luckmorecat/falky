@@ -67,7 +67,8 @@ func (lk *LiveKit) Fail(err error) {
 	lk.err = err
 }
 
-// Removed returns the participants RemoveParticipant removed, in order.
+// Removed returns the participants RemoveParticipant and RemoveAll removed,
+// in order.
 func (lk *LiveKit) Removed() []voice.Participant {
 	lk.mu.Lock()
 	defer lk.mu.Unlock()
@@ -97,6 +98,19 @@ func (lk *LiveKit) RemoveParticipant(_ context.Context, room, identity string) e
 		lk.removed = append(lk.removed, lk.participants[i])
 		lk.participants = slices.Delete(lk.participants, i, i+1)
 	}
+	return nil
+}
+
+// RemoveAll removes every participant, recording each, in the order they
+// were added.
+func (lk *LiveKit) RemoveAll(context.Context) error {
+	lk.mu.Lock()
+	defer lk.mu.Unlock()
+	if lk.err != nil {
+		return lk.err
+	}
+	lk.removed = append(lk.removed, lk.participants...)
+	lk.participants = nil
 	return nil
 }
 

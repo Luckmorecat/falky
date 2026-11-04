@@ -2,7 +2,6 @@ package identity_test
 
 import (
 	"crypto/sha256"
-	"database/sql"
 	"errors"
 	"path/filepath"
 	"regexp"
@@ -131,34 +130,57 @@ func TestResolveRefusesUnknownTokens(t *testing.T) {
 	}
 }
 
-// replaceLink moves the access link to the next generation, as rotating it
-// does.
-func replaceLink(t *testing.T, db *platform.DB) {
-	t.Helper()
-	if err := db.Write(t.Context(), func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(t.Context(), "UPDATE access SET link_secret = 'replaced', generation = generation + 1")
-		return err
-	}); err != nil {
-		t.Fatalf("replace link: %v", err)
-	}
-}
-
 func TestAccessEndsWhenTheLinkIsReplaced(t *testing.T) {
 	f := newFixture(t, filepath.Join(t.TempDir(), "falky.db"))
 	v, token := f.enter(t, "Bob")
 	if got, err := f.ident.Visitor(t.Context(), v.ID); err != nil || got != v {
-		t.Fatalf("Visitor before replacing the link = %+v, %v, want %+v", got, err, v)
+		t.Fatalf("Visitor before rotating the link = %+v, %v, want %+v", got, err, v)
 	}
 
-	replaceLink(t, f.db)
+	link, err := f.ident.Rotate(t.Context())
+	if err != nil {
+		t.Fatalf("Rotate: %v", err)
+	}
 	if got, err := f.ident.Resolve(t.Context(), token); !errors.Is(err, identity.ErrNoVisitor) {
-		t.Errorf("Resolve after replacing the link = %+v, %v, want ErrNoVisitor", got, err)
+		t.Errorf("Resolve after rotating the link = %+v, %v, want ErrNoVisitor", got, err)
 	}
 	if got, err := f.ident.Visitor(t.Context(), v.ID); !errors.Is(err, identity.ErrNoVisitor) {
-		t.Errorf("Visitor after replacing the link = %+v, %v, want ErrNoVisitor", got, err)
+		t.Errorf("Visitor after rotating the link = %+v, %v, want ErrNoVisitor", got, err)
 	}
 	if _, _, err := f.ident.Enter(t.Context(), f.secret, "Ann"); !errors.Is(err, identity.ErrWrongSecret) {
-		t.Errorf("Enter with the replaced secret = %v, want ErrWrongSecret", err)
+		t.Errorf("Enter with the old secret = %v, want ErrWrongSecret", err)
+	}
+	ann, annToken, err := f.ident.Enter(t.Context(), strings.TrimPrefix(link, "https://falky.example/#k="), "Ann")
+	if err != nil || ann.ID == v.ID {
+		t.Fatalf("Enter with the new secret = %+v, %v, want a new visitor", ann, err)
+	}
+	if got, err := f.ident.Resolve(t.Context(), annToken); err != nil || got != ann {
+		t.Errorf("Resolve of the new visitor = %+v, %v, want %+v", got, err, ann)
+	}
+}
+
+func TestRotatingTheLinkFreesEveryName(t *testing.T) {
+	f := newFixture(t, filepath.Join(t.TempDir(), "falky.db"))
+	bob, _ := f.enter(t, "Bob")
+	disconnect := f.connect(t, bob)
+	f.enter(t, "Ann") // reserved for a minute
+
+	link, err := f.ident.Rotate(t.Context())
+	if err != nil {
+		t.Fatalf("Rotate: %v", err)
+	}
+	secret := strings.TrimPrefix(link, "https://falky.example/#k=")
+	if _, _, err := f.ident.Enter(t.Context(), secret, "bob"); err != nil {
+		t.Fatalf("Enter(bob) after rotating the link = %v, want it allowed", err)
+	}
+	if _, _, err := f.ident.Enter(t.Context(), secret, "ann"); err != nil {
+		t.Errorf("Enter(ann) after rotating the link = %v, want it allowed", err)
+	}
+	// The old Bob's connection ends after the rotation; the new Bob keeps
+	// the name.
+	disconnect(true)
+	if _, _, err := f.ident.Enter(t.Context(), secret, "BOB"); !errors.Is(err, identity.ErrNameTaken) {
+		t.Errorf("Enter(BOB) while the new Bob holds the name = %v, want ErrNameTaken", err)
 	}
 }
 

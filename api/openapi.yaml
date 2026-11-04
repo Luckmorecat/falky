@@ -352,8 +352,11 @@ paths:
         seconds and closes a connection that does not answer within 10
         seconds. Each connection has a bounded queue of events waiting to be
         sent; a client that lets it fill up is disconnected with close code
-        4000. When the server shuts down it closes connections with close code
-        1001. Events are not replayed: after any disconnection a client
+        4000. When the access link is replaced, every connection is sent
+        `access.revoked` and closed with close code 4001; reconnecting then
+        answers 401 until the visitor enters again through the new link. When
+        the server shuts down it closes connections with close code 1001.
+        Events are not replayed: after any disconnection a client
         reconnects first and then catches up through the other operations,
         reading each room's messages with `after` set to the last message ID
         it saw and the room list again. Events that arrive while it catches up
@@ -798,7 +801,8 @@ components:
         A live update, as sent over `GET /api/live`. `type` says what happened
         and which schema `payload` has: `message.created` carries a `Message`,
         `room.changed` a `RoomChange`, `occupancy.changed` an
-        `OccupancyChange`. Clients ignore event types they do not know.
+        `OccupancyChange`, `access.revoked` an `AccessRevoked`. Clients ignore
+        event types they do not know.
       required: [v, type, eventId, payload, timestamp]
       properties:
         v:
@@ -825,6 +829,7 @@ components:
             - $ref: "#/components/schemas/Message"
             - $ref: "#/components/schemas/RoomChange"
             - $ref: "#/components/schemas/OccupancyChange"
+            - $ref: "#/components/schemas/AccessRevoked"
         timestamp:
           type: string
           format: date-time
@@ -850,8 +855,10 @@ components:
         payload is the `Message`); `room.changed`, a room was created or
         renamed (its payload is the `RoomChange`); `occupancy.changed`,
         someone joined or left a room's voice, or a participant's new name
-        reached it (its payload is the `OccupancyChange`).
-      enum: [message.created, room.changed, occupancy.changed]
+        reached it (its payload is the `OccupancyChange`); `access.revoked`,
+        the visitor's access ended (its payload is the `AccessRevoked`), and
+        the server closes the connection next.
+      enum: [message.created, room.changed, occupancy.changed, access.revoked]
       example: message.created
     RoomChange:
       type: object
@@ -885,6 +892,20 @@ components:
           example:
             - visitorId: 01JBX6Z8Q3M5W2K7R9T4V1C0DE
               name: Bob
+    AccessRevoked:
+      type: object
+      description: >-
+        Why the visitor's access ended. Their cookie is refused from now on;
+        they enter again through the current access link, as a new visitor.
+      required: [reason]
+      properties:
+        reason:
+          type: string
+          description: >-
+            `link_replaced`: the access link was replaced, which ends every
+            visitor's access.
+          enum: [link_replaced]
+          example: link_replaced
     LiveKitEvent:
       type: object
       description: >-

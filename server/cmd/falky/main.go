@@ -7,6 +7,7 @@
 //	falky room create <name>        create a room in the running server and print its ID
 //	falky room rename <id> <name>   rename a room in the running server
 //	falky link show                 print the access link of the running server
+//	falky link rotate               replace the access link, ending everyone's access, and print it
 //
 // Configuration comes from FALKY_* environment variables; see
 // internal/platform.LoadConfig.
@@ -46,6 +47,7 @@ commands:
   room create <name>        create a room in the running server and print its ID
   room rename <id> <name>   rename a room in the running server
   link show                 print the access link of the running server
+  link rotate               replace the access link, ending everyone's access, and print it
 
 Quote a name that has spaces: falky room create "Living room"
 `
@@ -110,6 +112,8 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 		}
 	case slices.Equal(args, []string{"link", "show"}):
 		operator = linkShow
+	case slices.Equal(args, []string{"link", "rotate"}):
+		operator = linkRotate
 	case len(args) == 1 && slices.Contains([]string{"help", "-h", "--help"}, args[0]):
 		_, _ = fmt.Fprint(stdout, usage)
 		return 0
@@ -157,6 +161,17 @@ func roomRename(ctx context.Context, cfg platform.Config, id, name string) error
 // linkShow prints the access link the running server answers with.
 func linkShow(ctx context.Context, cfg platform.Config, stdout io.Writer) error {
 	link, err := admin.NewClient(cfg.AdminSocket).Link(ctx)
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprintln(stdout, link)
+	return err
+}
+
+// linkRotate replaces the access link of the running server and prints the
+// new one.
+func linkRotate(ctx context.Context, cfg platform.Config, stdout io.Writer) error {
+	link, err := admin.NewClient(cfg.AdminSocket).RotateLink(ctx)
 	if err != nil {
 		return err
 	}
@@ -258,7 +273,9 @@ func serveOn(ctx context.Context, logger *slog.Logger, cfg platform.Config, db *
 		Live:         hub,
 		PublicOrigin: cfg.PublicOrigin,
 	})
-	adminHandler := admin.Handler(admin.Deps{Logger: logger, Identity: ident, Rooms: rs})
+	adminHandler := admin.Handler(admin.Deps{
+		Logger: logger, Identity: ident, Rooms: rs, Voice: vs, AccessRevoked: events.AccessRevoked,
+	})
 
 	errorLog := slog.NewLogLogger(logger.Handler(), slog.LevelWarn)
 	servers := []struct {

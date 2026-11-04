@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/livekit/protocol/livekit"
 	lksdk "github.com/livekit/server-sdk-go/v2"
 	"github.com/oklog/ulid/v2"
 
@@ -401,4 +402,38 @@ func TestTheRefreshReadsLiveKitsListingAndRemovesWhoMayNotStay(t *testing.T) {
 		t.Errorf("occupancy = %+v, want Bob", got)
 	}
 	waitForParticipants(t, lk, room, bob.ID)
+}
+
+func TestRemoveAllEmptiesEveryRoomInLiveKit(t *testing.T) {
+	first, second := ulid.Make().String(), ulid.Make().String()
+	bob, alice := newVisitor("Bob"), newVisitor("Alice")
+	s, lk := liveKitService(8, newAccess(bob, alice).withRooms(first, second)), liveKitClient()
+	receiveWebhooks(t, s)
+
+	clients := []voiceClient{connect(t, joined(t, s, bob, first)), connect(t, joined(t, s, alice, second))}
+	waitForOccupancy(t, s, first, bob)
+	waitForOccupancy(t, s, second, alice)
+
+	start := time.Now()
+	if err := s.RemoveAll(t.Context()); err != nil {
+		t.Fatalf("RemoveAll: %v", err)
+	}
+	for _, c := range clients {
+		select {
+		case <-c.disconnected:
+			if reason := c.room.DisconnectReason(); reason != livekit.DisconnectReason_ROOM_DELETED {
+				t.Errorf("disconnected because %v, want the room deleted", reason)
+			}
+		case <-time.After(2*time.Second - time.Since(start)):
+			t.Error("a client was not disconnected within two seconds")
+		}
+	}
+	waitForParticipants(t, lk, first)
+	waitForParticipants(t, lk, second)
+	if got := s.Occupancy(first); len(got) != 0 {
+		t.Errorf("occupancy of the first room = %+v, want none", got)
+	}
+	if err := liveKitClient().RemoveAll(t.Context()); err != nil {
+		t.Errorf("RemoveAll with no room open = %v, want nil", err)
+	}
 }

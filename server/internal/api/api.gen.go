@@ -20,6 +20,21 @@ import (
 	"github.com/oapi-codegen/runtime"
 )
 
+// Defines values for AccessRevokedReason.
+const (
+	AccessRevokedReasonLinkReplaced AccessRevokedReason = "link_replaced"
+)
+
+// Valid indicates whether the value is a known member of the AccessRevokedReason enum.
+func (e AccessRevokedReason) Valid() bool {
+	switch e {
+	case AccessRevokedReasonLinkReplaced:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for EventV.
 const (
 	EventVN1 EventV = 1
@@ -37,6 +52,7 @@ func (e EventV) Valid() bool {
 
 // Defines values for EventType.
 const (
+	EventTypeAccessRevoked    EventType = "access.revoked"
 	EventTypeMessageCreated   EventType = "message.created"
 	EventTypeOccupancyChanged EventType = "occupancy.changed"
 	EventTypeRoomChanged      EventType = "room.changed"
@@ -45,6 +61,8 @@ const (
 // Valid indicates whether the value is a known member of the EventType enum.
 func (e EventType) Valid() bool {
 	switch e {
+	case EventTypeAccessRevoked:
+		return true
 	case EventTypeMessageCreated:
 		return true
 	case EventTypeOccupancyChanged:
@@ -77,6 +95,19 @@ func (e HealthStatus) Valid() bool {
 	}
 }
 
+// AccessRevoked Why the visitor's access ended. Their cookie is refused from now on; they enter again through the current access link, as a new visitor.
+type AccessRevoked struct {
+	// Reason `link_replaced`: the access link was replaced, which ends every visitor's access.
+	//
+	// Example: link_replaced
+	Reason AccessRevokedReason `json:"reason"`
+}
+
+// AccessRevokedReason `link_replaced`: the access link was replaced, which ends every visitor's access.
+//
+// Example: link_replaced
+type AccessRevokedReason string
+
 // EnterRequest The access link's secret and the name to enter under.
 type EnterRequest struct {
 	// Name A visitor's name: 1 to 32 characters once leading and trailing white space is trimmed, with no control characters (the bidirectional controls included). Names are compared trimmed and case-insensitively, so `" Bob "` and `bob` are the same name. The server checks these rules and answers `invalid_name`.
@@ -103,7 +134,7 @@ type Error struct {
 	Message string `json:"message"`
 }
 
-// Event A live update, as sent over `GET /api/live`. `type` says what happened and which schema `payload` has: `message.created` carries a `Message`, `room.changed` a `RoomChange`, `occupancy.changed` an `OccupancyChange`. Clients ignore event types they do not know.
+// Event A live update, as sent over `GET /api/live`. `type` says what happened and which schema `payload` has: `message.created` carries a `Message`, `room.changed` a `RoomChange`, `occupancy.changed` an `OccupancyChange`, `access.revoked` an `AccessRevoked`. Clients ignore event types they do not know.
 //
 // Example: {"eventId":"01JBX8C4P0G7J9M1Q4S6V8X0ZA","payload":{"authorId":"01JBX6Z8Q3M5W2K7R9T4V1C0DE","authorName":"Bob","body":"Anyone up for a game?","createdAt":"2026-11-04T18:30:05.123Z","id":"01JBX8C4N2F6H8K0P3R5T7W9YZ","roomId":"01JBX7A2K9D4F6H8M0P3R5T7VW"},"roomId":"01JBX7A2K9D4F6H8M0P3R5T7VW","timestamp":"2026-11-04T18:30:05.140Z","type":"message.created","v":1}
 type Event struct {
@@ -125,7 +156,7 @@ type Event struct {
 	// Example: 2026-11-04T18:30:05.140Z
 	Timestamp time.Time `json:"timestamp"`
 
-	// Type What an event reports: `message.created`, a message was posted (its payload is the `Message`); `room.changed`, a room was created or renamed (its payload is the `RoomChange`); `occupancy.changed`, someone joined or left a room's voice, or a participant's new name reached it (its payload is the `OccupancyChange`).
+	// Type What an event reports: `message.created`, a message was posted (its payload is the `Message`); `room.changed`, a room was created or renamed (its payload is the `RoomChange`); `occupancy.changed`, someone joined or left a room's voice, or a participant's new name reached it (its payload is the `OccupancyChange`); `access.revoked`, the visitor's access ended (its payload is the `AccessRevoked`), and the server closes the connection next.
 	//
 	// Example: message.created
 	Type EventType `json:"type"`
@@ -146,7 +177,7 @@ type Event_Payload struct {
 // Example: 1
 type EventV int
 
-// EventType What an event reports: `message.created`, a message was posted (its payload is the `Message`); `room.changed`, a room was created or renamed (its payload is the `RoomChange`); `occupancy.changed`, someone joined or left a room's voice, or a participant's new name reached it (its payload is the `OccupancyChange`).
+// EventType What an event reports: `message.created`, a message was posted (its payload is the `Message`); `room.changed`, a room was created or renamed (its payload is the `RoomChange`); `occupancy.changed`, someone joined or left a room's voice, or a participant's new name reached it (its payload is the `OccupancyChange`); `access.revoked`, the visitor's access ended (its payload is the `AccessRevoked`), and the server closes the connection next.
 //
 // Example: message.created
 type EventType string
@@ -465,6 +496,32 @@ func (t *Event_Payload) FromOccupancyChange(v OccupancyChange) error {
 
 // MergeOccupancyChange performs a merge with any union data inside the Event_Payload, using the provided OccupancyChange
 func (t *Event_Payload) MergeOccupancyChange(v OccupancyChange) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsAccessRevoked returns the union data inside the Event_Payload as a AccessRevoked
+func (t Event_Payload) AsAccessRevoked() (AccessRevoked, error) {
+	var body AccessRevoked
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromAccessRevoked overwrites any union data inside the Event_Payload as the provided AccessRevoked
+func (t *Event_Payload) FromAccessRevoked(v AccessRevoked) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeAccessRevoked performs a merge with any union data inside the Event_Payload, using the provided AccessRevoked
+func (t *Event_Payload) MergeAccessRevoked(v AccessRevoked) error {
 	b, err := json.Marshal(v)
 	if err != nil {
 		return err

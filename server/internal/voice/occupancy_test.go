@@ -376,3 +376,41 @@ func TestAFailedRefreshOrCheckLeavesTheView(t *testing.T) {
 		t.Errorf("removed %+v, want no one", got)
 	}
 }
+
+func TestRemoveAllEmptiesEveryRoomsVoice(t *testing.T) {
+	f := newFixture(bob, alice, carol)
+	inA, aliceInA := f.join(t, bob, roomA), f.join(t, alice, roomA)
+	inB := f.join(t, carol, roomB)
+	for _, p := range []voice.Participant{inA, aliceInA, inB} {
+		f.receive(t, voicetest.Joined(p))
+	}
+	before := len(f.changes.published())
+
+	if err := f.s.RemoveAll(t.Context()); err != nil {
+		t.Fatalf("RemoveAll: %v", err)
+	}
+	if got, want := f.livekit.Removed(), []voice.Participant{inA, aliceInA, inB}; !slices.Equal(got, want) {
+		t.Errorf("removed %+v, want %+v", got, want)
+	}
+	if left, err := f.livekit.Participants(t.Context()); err != nil || len(left) != 0 {
+		t.Errorf("participants after RemoveAll = %+v, %v, want none", left, err)
+	}
+	wantOccupancy(t, f.s, roomA)
+	wantOccupancy(t, f.s, roomB)
+	want := []change{{roomA, nil}, {roomB, nil}}
+	if got := f.changes.published()[before:]; !equalChanges(got, want) {
+		t.Errorf("published %+v, want %+v", got, want)
+	}
+}
+
+func TestRemoveAllFailsWhileLiveKitIsUnreachableAndLeavesTheView(t *testing.T) {
+	f := newFixture(bob)
+	p := f.join(t, bob, roomA)
+	f.receive(t, voicetest.Joined(p))
+
+	f.livekit.Fail(errors.New("connection refused"))
+	if err := f.s.RemoveAll(t.Context()); !errors.Is(err, voice.ErrUnavailable) {
+		t.Errorf("RemoveAll while LiveKit is down = %v, want ErrUnavailable", err)
+	}
+	wantOccupancy(t, f.s, roomA, bob)
+}

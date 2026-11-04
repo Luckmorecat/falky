@@ -5,7 +5,7 @@ A private, self-hosted place for a small circle of friends to chat, talk by voic
 ## People and access
 
 **Access link**:
-The one secret link that lets a person into this server. Replacing it ends everyone's access.
+The one secret link that lets a person into this server. Replacing it (the operator's `falky link rotate`) ends everyone's access.
 _Avoid_: Invite, guest link, join link, password
 
 **Visitor**:

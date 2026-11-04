@@ -45,6 +45,7 @@ func startHub(t *testing.T, opts ...realtime.Option) testHub {
 		deny := r.URL.Query()["deny"]
 		served <- hub.Serve(w, r, realtime.Subscriber{
 			VisitorID: r.URL.Query().Get("visitor"),
+			Ticket:    hub.Ticket(),
 			MayReceive: func(_ context.Context, roomID string) bool {
 				return !slices.Contains(deny, roomID)
 			},
@@ -353,4 +354,79 @@ func TestShutdownClosesConnectionsAndRefusesNewOnes(t *testing.T) {
 		t.Errorf("connection after Shutdown: read error %v, want close status going away", err)
 	}
 	h.wantNoChange(t, 50*time.Millisecond)
+}
+
+// wantClosed fails the test unless ws is closed with status within a second,
+// without another message first.
+func wantClosed(t *testing.T, ws *websocket.Conn, status websocket.StatusCode) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	_, data, err := ws.Read(ctx)
+	if got := websocket.CloseStatus(err); got != status {
+		t.Errorf("read = %q, %v (close status %d), want close status %d", data, err, got, status)
+	}
+}
+
+func TestRevokeSendsTheNoticeAndClosesEveryConnection(t *testing.T) {
+	h := startHub(t)
+	bob := h.dial(t, "bob")
+	h.wantChange(t, change{"bob", true}, time.Second)
+	ann := h.dial(t, "ann")
+	h.wantChange(t, change{"ann", true}, time.Second)
+
+	h.hub.Revoke([]byte("revoked"))
+	for _, ws := range []*websocket.Conn{bob, ann} {
+		if got := read(t, ws); got != "revoked" {
+			t.Errorf("message after Revoke = %q, want the notice", got)
+		}
+		wantClosed(t, ws, realtime.StatusRevoked)
+	}
+	gone := []change{<-h.changes, <-h.changes}
+	if !slices.Contains(gone, change{"bob", false}) || !slices.Contains(gone, change{"ann", false}) {
+		t.Errorf("connected func after Revoke got %+v, want bob and ann disconnected", gone)
+	}
+
+	// Connections checked after Revoke are not affected.
+	carol := h.dial(t, "carol")
+	h.wantChange(t, change{"carol", true}, time.Second)
+	h.hub.Publish(realtime.Event{Data: []byte("hello")})
+	if got := read(t, carol); got != "hello" {
+		t.Errorf("connection after Revoke got %q, want the event", got)
+	}
+}
+
+func TestAConnectionCheckedBeforeRevokeIsRefused(t *testing.T) {
+	hub := realtime.New()
+	checked, proceed := make(chan struct{}), make(chan struct{})
+	served := make(chan bool, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ticket := hub.Ticket()
+		close(checked) // the visitor's access was checked here
+		<-proceed
+		served <- hub.Serve(w, r, realtime.Subscriber{VisitorID: "bob", Ticket: ticket})
+	}))
+	t.Cleanup(srv.Close)
+
+	dialed := make(chan *websocket.Conn, 1)
+	go func() {
+		ws, _, err := websocket.Dial(context.Background(), srv.URL, nil) //nolint:bodyclose // Dial closes the body on success
+		if err != nil {
+			t.Errorf("Dial: %v", err)
+		}
+		dialed <- ws
+	}()
+	<-checked
+	hub.Revoke([]byte("revoked"))
+	close(proceed)
+
+	ws := <-dialed
+	if ws == nil {
+		return
+	}
+	defer func() { _ = ws.CloseNow() }()
+	wantClosed(t, ws, realtime.StatusRevoked)
+	if <-served {
+		t.Error("Serve reported the connection opened, want refused")
+	}
 }

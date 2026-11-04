@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/kisshot/falky/server/internal/identity"
 	"github.com/kisshot/falky/server/internal/platform"
@@ -117,5 +118,51 @@ func TestTheAccessRowStartsAtTheFirstGeneration(t *testing.T) {
 	}
 	if rows != 1 || generation != 1 || !strings.HasSuffix(rotatedAt, "Z") {
 		t.Errorf("access = %d rows, generation %d, rotated_at %q; want 1 row, generation 1, a UTC time", rows, generation, rotatedAt)
+	}
+}
+
+func TestRotatingTheLinkReplacesTheSecretAndStartsTheNextGeneration(t *testing.T) {
+	db := openDB(t, filepath.Join(t.TempDir(), "falky.db"))
+	ident := identity.New(db, "https://falky.example")
+	if _, err := ident.EnsureLink(t.Context()); err != nil {
+		t.Fatalf("EnsureLink: %v", err)
+	}
+	first, err := ident.Link(t.Context())
+	if err != nil {
+		t.Fatalf("Link: %v", err)
+	}
+	var rotatedBefore string
+	if err := db.Read().QueryRowContext(t.Context(), "SELECT rotated_at FROM access").Scan(&rotatedBefore); err != nil {
+		t.Fatalf("query access: %v", err)
+	}
+	time.Sleep(2 * time.Millisecond) // rotated_at has millisecond precision
+
+	rotated, err := ident.Rotate(t.Context())
+	if err != nil {
+		t.Fatalf("Rotate: %v", err)
+	}
+	if rotated == first || !strings.HasPrefix(rotated, "https://falky.example/#k=") {
+		t.Errorf("Rotate = %q, want a new link on the public origin (was %q)", rotated, first)
+	}
+	if current, err := ident.Link(t.Context()); err != nil || current != rotated {
+		t.Errorf("Link after Rotate = %q, %v, want %q", current, err, rotated)
+	}
+	var rows, generation int
+	var rotatedAt string
+	if err := db.Read().QueryRowContext(t.Context(),
+		"SELECT count(*), max(generation), max(rotated_at) FROM access",
+	).Scan(&rows, &generation, &rotatedAt); err != nil {
+		t.Fatalf("query access: %v", err)
+	}
+	if rows != 1 || generation != 2 || rotatedAt <= rotatedBefore || !strings.HasSuffix(rotatedAt, "Z") {
+		t.Errorf("access = %d rows, generation %d, rotated_at %q; want 1 row, generation 2, a UTC time after %q",
+			rows, generation, rotatedAt, rotatedBefore)
+	}
+}
+
+func TestRotateFailsBeforeTheLinkIsCreated(t *testing.T) {
+	db := openDB(t, filepath.Join(t.TempDir(), "falky.db"))
+	if link, err := identity.New(db, "https://falky.example").Rotate(t.Context()); !errors.Is(err, identity.ErrNoLink) {
+		t.Errorf("Rotate without a link = %q, %v, want ErrNoLink", link, err)
 	}
 }
