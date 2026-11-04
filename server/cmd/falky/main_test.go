@@ -6,12 +6,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -196,7 +198,7 @@ func TestMigrateCommandIsIdempotentAndCreatesTheLinkOnce(t *testing.T) {
 	getenv := env(map[string]string{platform.EnvDBPath: filepath.Join(t.TempDir(), "falky.db")})
 	for i, wantCreated := range []bool{true, false} {
 		var stdout, stderr bytes.Buffer
-		if code := run(t.Context(), []string{"migrate"}, getenv, &stdout, &stderr); code != 0 {
+		if code := run(t.Context(), []string{"migrate"}, getenv, nil, &stdout, &stderr); code != 0 {
 			t.Fatalf("migrate run %d: exit %d, stdout %q, stderr %q", i+1, code, stdout.String(), stderr.String())
 		}
 		if created := strings.Contains(stdout.String(), "access link created"); created != wantCreated {
@@ -318,9 +320,11 @@ func TestRunRefusesUnknownCommands(t *testing.T) {
 		{"health"},
 		{"health", "metrics"},
 		{"health", "ready", "extra"},
+		{"snapshot", "extra"},
+		{"restore", "falky.db"},
 	} {
 		var stdout, stderr bytes.Buffer
-		if code := run(t.Context(), args, func(string) string { return "" }, &stdout, &stderr); code != 2 {
+		if code := run(t.Context(), args, func(string) string { return "" }, nil, &stdout, &stderr); code != 2 {
 			t.Errorf("run %q = %d, want 2", args, code)
 		}
 		if !strings.Contains(stderr.String(), "usage:") {
@@ -401,7 +405,7 @@ func TestMessagesRoomsAndVisitorsSurviveARestart(t *testing.T) {
 func runCommand(t *testing.T, getenv func(string) string, args ...string) (code int, stdout, stderr string) {
 	t.Helper()
 	var out, errOut bytes.Buffer
-	code = run(t.Context(), args, getenv, &out, &errOut)
+	code = run(t.Context(), args, getenv, nil, &out, &errOut)
 	return code, out.String(), errOut.String()
 }
 
@@ -703,5 +707,142 @@ func TestHealthCommandFailsWhenNoServerIsRunning(t *testing.T) {
 	code, stdout, stderr := runCommand(t, env(map[string]string{platform.EnvInternalAddr: addr}), "health", "live")
 	if code != 1 || stdout != "" || !strings.Contains(stderr, addr) {
 		t.Errorf("health live = exit %d, stdout %q, stderr %q; want 1 and a message naming %s", code, stdout, stderr, addr)
+	}
+}
+
+func TestARestoredSnapshotHasWhatWasPostedBeforeItAndKeepsTheVisitors(t *testing.T) {
+	dir := t.TempDir()
+	vars := map[string]string{
+		platform.EnvDBPath:      filepath.Join(dir, "falky.db"),
+		platform.EnvAdminSocket: filepath.Join(dir, "admin.sock"),
+		platform.EnvSnapshotDir: filepath.Join(dir, "snapshots"),
+	}
+	cfg, err := platform.LoadConfig(env(vars))
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	stop, public := startServerOn(t, cfg, io.Discard)
+	_, link, _ := runLinkShow(t, env(vars))
+	secret := strings.TrimSpace(link[strings.Index(link, "#k=")+len("#k="):])
+	_, out, _ := runCommand(t, env(vars), "room", "create", "Lounge")
+	roomID := strings.TrimSpace(out)
+	c, err := api.NewClientWithResponses(public)
+	if err != nil {
+		t.Fatalf("NewClientWithResponses: %v", err)
+	}
+
+	// Visitors who keep posting, each as fast as the post limit lets them.
+	var cookies []*http.Cookie
+	for _, name := range []string{"Ann", "Bob", "Cy"} {
+		entered, err := c.EnterWithResponse(t.Context(), api.EnterRequest{Secret: secret, Name: name})
+		if err != nil || entered.StatusCode() != http.StatusCreated || len(entered.HTTPResponse.Cookies()) != 1 {
+			t.Fatalf("Enter %s = %v, %v, want 201 with a cookie", name, entered, err)
+		}
+		cookies = append(cookies, entered.HTTPResponse.Cookies()[0])
+	}
+	as := func(cookie *http.Cookie) api.RequestEditorFn {
+		return func(_ context.Context, req *http.Request) error {
+			req.AddCookie(cookie)
+			return nil
+		}
+	}
+	var posted sync.Map // body -> true, for every message posted
+	post := func(cookie *http.Cookie, body string) bool {
+		res, err := c.PostMessageWithResponse(t.Context(), roomID,
+			api.PostMessageRequest{RequestKey: strings.ReplaceAll(body, " ", "-"), Body: body}, as(cookie))
+		if err != nil {
+			t.Errorf("PostMessage: %v", err)
+			return false
+		}
+		if res.StatusCode() == http.StatusCreated {
+			posted.Store(body, true)
+		}
+		return res.StatusCode() == http.StatusCreated
+	}
+	if !post(cookies[0], "before the snapshot") {
+		t.Fatal("first message refused")
+	}
+	stopPosting := make(chan struct{})
+	var posters sync.WaitGroup
+	for i, cookie := range cookies {
+		posters.Go(func() {
+			for n := 0; ; n++ {
+				select {
+				case <-stopPosting:
+					return
+				default:
+				}
+				post(cookie, fmt.Sprintf("visitor %d message %d", i, n))
+			}
+		})
+	}
+	time.Sleep(50 * time.Millisecond)
+	code, out, errOut := runCommand(t, env(vars), "snapshot")
+	close(stopPosting)
+	posters.Wait()
+	if code != 0 {
+		t.Fatalf("snapshot = exit %d, stderr %q", code, errOut)
+	}
+	snapshot := strings.TrimSpace(out)
+	if filepath.Dir(snapshot) != vars[platform.EnvSnapshotDir] {
+		t.Errorf("snapshot went to %q, want it in %s", snapshot, vars[platform.EnvSnapshotDir])
+	}
+	time.Sleep(time.Second) // past the post limit
+	if !post(cookies[1], "after the snapshot") {
+		t.Fatal("message after the snapshot refused")
+	}
+	stop()
+
+	// Into an empty data directory, which the restore needs.
+	restoredDir := t.TempDir()
+	restoredVars := map[string]string{
+		platform.EnvDBPath:      filepath.Join(restoredDir, "falky.db"),
+		platform.EnvAdminSocket: filepath.Join(restoredDir, "admin.sock"),
+	}
+	restoreFrom := func(getenv func(string) string) (int, string) {
+		f, err := os.Open(snapshot)
+		if err != nil {
+			t.Fatalf("Open: %v", err)
+		}
+		defer func() { _ = f.Close() }()
+		var stdout, stderr bytes.Buffer
+		code := run(t.Context(), []string{"restore"}, getenv, f, &stdout, &stderr)
+		return code, stdout.String() + stderr.String()
+	}
+	if code, out := restoreFrom(env(vars)); code != 1 || !strings.Contains(out, "already exists") {
+		t.Errorf("restore over the old database = exit %d, %q; want a refusal", code, out)
+	}
+	if code, out := restoreFrom(env(restoredVars)); code != 0 {
+		t.Fatalf("restore = exit %d, %q", code, out)
+	}
+	restoredCfg, err := platform.LoadConfig(env(restoredVars))
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	_, public = startServerOn(t, restoredCfg, io.Discard)
+	if _, got, _ := runLinkShow(t, env(restoredVars)); got != link {
+		t.Errorf("link after restore = %q, want %q", got, link)
+	}
+	c, err = api.NewClientWithResponses(public)
+	if err != nil {
+		t.Fatalf("NewClientWithResponses: %v", err)
+	}
+	if me, err := c.GetMeWithResponse(t.Context(), as(cookies[2])); err != nil || me.StatusCode() != http.StatusOK {
+		t.Errorf("GetMe with a cookie from before the snapshot = %v, %v; want 200", me, err)
+	}
+	limit := 100
+	history, err := c.ListMessagesWithResponse(t.Context(), roomID, &api.ListMessagesParams{Limit: &limit}, as(cookies[0]))
+	if err != nil || history.JSON200 == nil {
+		t.Fatalf("ListMessages = %v, %v", history, err)
+	}
+	var bodies []string
+	for _, m := range history.JSON200.Messages {
+		if _, ok := posted.Load(m.Body); !ok {
+			t.Errorf("restored message %q was never posted", m.Body)
+		}
+		bodies = append(bodies, m.Body)
+	}
+	if !slices.Contains(bodies, "before the snapshot") || slices.Contains(bodies, "after the snapshot") {
+		t.Errorf("restored messages %q, want the one posted before the snapshot and not the one after", bodies)
 	}
 }

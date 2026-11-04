@@ -23,6 +23,8 @@ type Config struct {
 	InternalAddr string
 	// DBPath is the SQLite database file.
 	DBPath string
+	// SnapshotDir is the directory the snapshots of the database go to.
+	SnapshotDir string
 	// AdminSocket is the path of the Unix socket the operator commands use to
 	// reach the running server.
 	AdminSocket string
@@ -49,6 +51,7 @@ const (
 	EnvPublicAddr   = "FALKY_PUBLIC_ADDR"
 	EnvInternalAddr = "FALKY_INTERNAL_ADDR"
 	EnvDBPath       = "FALKY_DB_PATH"
+	EnvSnapshotDir  = "FALKY_SNAPSHOT_DIR"
 	EnvAdminSocket  = "FALKY_ADMIN_SOCKET"
 	EnvPublicOrigin = "FALKY_PUBLIC_ORIGIN"
 	EnvLogLevel     = "FALKY_LOG_LEVEL"
@@ -78,6 +81,7 @@ func LoadConfig(getenv func(string) string) (Config, error) {
 		PublicAddr:       valueOr(getenv(EnvPublicAddr), "127.0.0.1:8080"),
 		InternalAddr:     valueOr(getenv(EnvInternalAddr), "127.0.0.1:9090"),
 		DBPath:           valueOr(getenv(EnvDBPath), "falky.db"),
+		SnapshotDir:      valueOr(getenv(EnvSnapshotDir), "snapshots"),
 		AdminSocket:      valueOr(getenv(EnvAdminSocket), "falky-admin.sock"),
 		LiveKitAPIKey:    getenv(EnvLiveKitAPIKey),
 		LiveKitAPISecret: getenv(EnvLiveKitAPISecret),

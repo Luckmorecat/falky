@@ -3,6 +3,7 @@ package chat_test
 import (
 	"errors"
 	"fmt"
+	"io"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -32,7 +33,7 @@ func newFixture(t *testing.T, opts ...chat.Option) fixture {
 	if err != nil {
 		t.Fatalf("LoadMigrations: %v", err)
 	}
-	db, err := platform.OpenDB(t.Context(), filepath.Join(t.TempDir(), "falky.db"))
+	db, err := platform.OpenDB(t.Context(), filepath.Join(t.TempDir(), "falky.db"), platform.NewLogger(io.Discard, 0))
 	if err != nil {
 		t.Fatalf("OpenDB: %v", err)
 	}

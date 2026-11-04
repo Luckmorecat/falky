@@ -2,6 +2,7 @@ package rooms_test
 
 import (
 	"errors"
+	"io"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -21,7 +22,7 @@ func openDB(t *testing.T, path string) *platform.DB {
 	if err != nil {
 		t.Fatalf("LoadMigrations: %v", err)
 	}
-	db, err := platform.OpenDB(t.Context(), path)
+	db, err := platform.OpenDB(t.Context(), path, platform.NewLogger(io.Discard, 0))
 	if err != nil {
 		t.Fatalf("OpenDB: %v", err)
 	}

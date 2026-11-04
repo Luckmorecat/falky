@@ -9,6 +9,8 @@
 //	falky link show                 print the access link of the running server
 //	falky link rotate               replace the access link, ending everyone's access, and print it
 //	falky health live|ready         probe the running server's health and fail unless it is live or ready
+//	falky snapshot                  have the running server snapshot its database and print where it went
+//	falky restore                   make the snapshot on standard input the database; the server must be stopped
 //
 // Configuration comes from FALKY_* environment variables; see
 // internal/platform.LoadConfig.
@@ -50,6 +52,8 @@ commands:
   link show                 print the access link of the running server
   link rotate               replace the access link, ending everyone's access, and print it
   health live|ready         probe the running server's health and fail unless it is live or ready
+  snapshot                  have the running server snapshot its database and print where it went
+  restore                   make the snapshot on standard input the database; the server must be stopped
 
 Quote a name that has spaces: falky room create "Living room"
 `
@@ -77,7 +81,7 @@ const (
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	code := run(ctx, os.Args[1:], os.Getenv, os.Stdout, os.Stderr)
+	code := run(ctx, os.Args[1:], os.Getenv, os.Stdin, os.Stdout, os.Stderr)
 	stop()
 	os.Exit(code)
 }
@@ -85,7 +89,7 @@ func main() {
 // run executes the command in args and returns the process exit code.
 // Server commands log JSON lines to stdout; operator commands print their
 // result to stdout and their error to stderr.
-func run(ctx context.Context, args []string, getenv func(string) string, stdout, stderr io.Writer) int {
+func run(ctx context.Context, args []string, getenv func(string) string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		_, _ = fmt.Fprint(stderr, usage)
 		return 2
@@ -119,6 +123,12 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 	case len(args) == 2 && args[0] == "health" && slices.Contains([]string{"live", "ready"}, args[1]):
 		operator = func(ctx context.Context, cfg platform.Config, stdout io.Writer) error {
 			return health(ctx, cfg, stdout, args[1])
+		}
+	case slices.Equal(args, []string{"snapshot"}):
+		operator = snapshot
+	case slices.Equal(args, []string{"restore"}):
+		operator = func(ctx context.Context, cfg platform.Config, stdout io.Writer) error {
+			return restore(ctx, cfg, stdin, stdout)
 		}
 	case len(args) == 1 && slices.Contains([]string{"help", "-h", "--help"}, args[0]):
 		_, _ = fmt.Fprint(stdout, usage)
@@ -185,6 +195,31 @@ func linkRotate(ctx context.Context, cfg platform.Config, stdout io.Writer) erro
 	return err
 }
 
+// snapshot has the running server snapshot its database and prints where the
+// snapshot went.
+func snapshot(ctx context.Context, cfg platform.Config, stdout io.Writer) error {
+	path, err := admin.NewClient(cfg.AdminSocket).Snapshot(ctx)
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprintln(stdout, path)
+	return err
+}
+
+// restore makes the snapshot read from stdin the database, which must not
+// exist yet; the server starts on it next time.
+func restore(ctx context.Context, cfg platform.Config, stdin io.Reader, stdout io.Writer) error {
+	ms, err := platform.LoadMigrations(migrationSources...)
+	if err != nil {
+		return err
+	}
+	if err := platform.Restore(ctx, stdin, cfg.DBPath, ms); err != nil {
+		return err
+	}
+	_, err = fmt.Fprintf(stdout, "restored the snapshot as %s; start the server on it\n", cfg.DBPath)
+	return err
+}
+
 // healthTimeout bounds the health command's request.
 const healthTimeout = 5 * time.Second
 
@@ -232,7 +267,7 @@ func openMigrated(ctx context.Context, cfg platform.Config, logger *slog.Logger)
 	if err != nil {
 		return nil, platform.Migrations{}, err
 	}
-	db, err := platform.OpenDB(ctx, cfg.DBPath)
+	db, err := platform.OpenDB(ctx, cfg.DBPath, logger)
 	if err != nil {
 		return nil, platform.Migrations{}, err
 	}
@@ -321,6 +356,7 @@ func serveOn(ctx context.Context, logger *slog.Logger, cfg platform.Config, db *
 	})
 	adminHandler := admin.Handler(admin.Deps{
 		Logger: logger, Identity: ident, Rooms: rs, Voice: vs, AccessRevoked: events.AccessRevoked,
+		DB: db, SnapshotDir: cfg.SnapshotDir,
 	})
 
 	errorLog := slog.NewLogLogger(logger.Handler(), slog.LevelWarn)

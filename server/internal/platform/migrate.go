@@ -141,3 +141,8 @@ func (db *DB) CheckMigrated(ctx context.Context, ms Migrations) error {
 	}
 	return nil
 }
+
+// has reports whether ms has the migration with version.
+func (ms Migrations) has(version int) bool {
+	return slices.ContainsFunc(ms.list, func(m migration) bool { return m.version == version })
+}

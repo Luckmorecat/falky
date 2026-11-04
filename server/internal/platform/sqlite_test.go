@@ -3,6 +3,7 @@ package platform
 import (
 	"database/sql"
 	"errors"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -13,7 +14,7 @@ import (
 
 func openTestDB(t *testing.T) *DB {
 	t.Helper()
-	db, err := OpenDB(t.Context(), filepath.Join(t.TempDir(), "test.db"))
+	db, err := OpenDB(t.Context(), filepath.Join(t.TempDir(), "test.db"), NewLogger(io.Discard, 0))
 	if err != nil {
 		t.Fatalf("OpenDB: %v", err)
 	}
@@ -40,7 +41,7 @@ func TestOpenDBUsesWALOnBothPools(t *testing.T) {
 
 func TestANewDatabaseIsOwnerOnly(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "test.db")
-	db, err := OpenDB(t.Context(), path)
+	db, err := OpenDB(t.Context(), path, NewLogger(io.Discard, 0))
 	if err != nil {
 		t.Fatalf("OpenDB: %v", err)
 	}

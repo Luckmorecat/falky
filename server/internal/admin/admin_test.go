@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -30,7 +31,7 @@ func newDeps(t *testing.T) admin.Deps {
 	if err != nil {
 		t.Fatalf("LoadMigrations: %v", err)
 	}
-	db, err := platform.OpenDB(t.Context(), filepath.Join(t.TempDir(), "falky.db"))
+	db, err := platform.OpenDB(t.Context(), filepath.Join(t.TempDir(), "falky.db"), platform.NewLogger(io.Discard, 0))
 	if err != nil {
 		t.Fatalf("OpenDB: %v", err)
 	}
@@ -50,6 +51,7 @@ func newDeps(t *testing.T) admin.Deps {
 	return admin.Deps{
 		Logger: platform.NewLogger(io.Discard, 0), Identity: ident, Rooms: rs,
 		Voice: newVoice(voicetest.New(), ident, rs), AccessRevoked: func() {},
+		DB: db, SnapshotDir: filepath.Join(t.TempDir(), "snapshots"),
 	}
 }
 
@@ -341,5 +343,52 @@ func TestRotatingTheLinkSucceedsWhenVoiceCannotBeEmptied(t *testing.T) {
 	stop()
 	if !strings.Contains(logs.String(), "voice not emptied") {
 		t.Errorf("logs = %q, want the failure to empty voice", logs.String())
+	}
+}
+
+func TestTheClientTakesAnOwnerOnlySnapshotIntoTheSnapshotDirectory(t *testing.T) {
+	deps := newDeps(t)
+	lounge, err := deps.Rooms.Create(t.Context(), "Lounge")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	path := filepath.Join(t.TempDir(), "admin.sock")
+	serve(t, listen(t, path), deps)
+
+	snapshot, err := admin.NewClient(path).Snapshot(t.Context())
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if dir := filepath.Dir(snapshot); dir != deps.SnapshotDir {
+		t.Errorf("snapshot %s is in %s, want %s", snapshot, dir, deps.SnapshotDir)
+	}
+	if !regexp.MustCompile(`^falky-\d{8}T\d{6}Z\.db$`).MatchString(filepath.Base(snapshot)) {
+		t.Errorf("snapshot name %q, want falky-<UTC time>.db", filepath.Base(snapshot))
+	}
+	for p, want := range map[string]fs.FileMode{deps.SnapshotDir: 0o700, snapshot: 0o600} {
+		fi, err := os.Stat(p)
+		if err != nil {
+			t.Fatalf("Stat: %v", err)
+		}
+		if fi.Mode().Perm() != want {
+			t.Errorf("%s mode = %v, want %v", p, fi.Mode().Perm(), want)
+		}
+	}
+
+	db, err := platform.OpenDB(t.Context(), snapshot, platform.NewLogger(io.Discard, 0))
+	if err != nil {
+		t.Fatalf("open the snapshot: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Errorf("Close: %v", err)
+		}
+	})
+	got, err := rooms.New(db).List(t.Context())
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if want := []rooms.Room{lounge}; !slices.Equal(got, want) {
+		t.Errorf("rooms in the snapshot = %+v, want %+v", got, want)
 	}
 }

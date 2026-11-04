@@ -3,6 +3,7 @@ package httpapi
 import (
 	"bytes"
 	"context"
+	"io"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
@@ -101,7 +102,7 @@ func startPublicLimited(t *testing.T, enterBurst, postBurst int) publicServer {
 	if err != nil {
 		t.Fatalf("LoadMigrations: %v", err)
 	}
-	db, err := platform.OpenDB(t.Context(), filepath.Join(t.TempDir(), "falky.db"))
+	db, err := platform.OpenDB(t.Context(), filepath.Join(t.TempDir(), "falky.db"), platform.NewLogger(io.Discard, 0))
 	if err != nil {
 		t.Fatalf("OpenDB: %v", err)
 	}

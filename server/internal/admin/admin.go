@@ -16,10 +16,12 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"syscall"
 	"time"
 
 	"github.com/kisshot/falky/server/internal/identity"
+	"github.com/kisshot/falky/server/internal/platform"
 	"github.com/kisshot/falky/server/internal/rooms"
 	"github.com/kisshot/falky/server/internal/voice"
 )
@@ -80,6 +82,9 @@ type Deps struct {
 	// AccessRevoked tells every live-update connection that its visitor's
 	// access ended, and closes it, once the access link is replaced.
 	AccessRevoked func()
+	// DB is the database snapshots are taken of, into SnapshotDir.
+	DB          *platform.DB
+	SnapshotDir string
 }
 
 type linkBody struct {
@@ -95,6 +100,10 @@ type roomNameBody struct {
 type roomBody struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
+}
+
+type snapshotBody struct {
+	Path string `json:"path"`
 }
 
 type errorBody struct {
@@ -151,10 +160,37 @@ func Handler(deps Deps) http.Handler {
 		}
 		writeRoom(w, deps.Logger, "rename room", room, err)
 	})
+	mux.HandleFunc("POST /snapshots", func(w http.ResponseWriter, r *http.Request) {
+		path, err := snapshot(r.Context(), deps)
+		switch {
+		case errors.Is(err, fs.ErrExist):
+			writeJSON(w, http.StatusConflict, errorBody{Error: path + " already exists; try again in a second"})
+		case err != nil:
+			deps.Logger.Error("admin: snapshot", "error", err)
+			writeJSON(w, http.StatusInternalServerError, errorBody{Error: "cannot take a snapshot"})
+		default:
+			deps.Logger.Info("snapshot taken", "path", path)
+			writeJSON(w, http.StatusOK, snapshotBody{Path: path})
+		}
+	})
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, errorBody{Error: "unknown admin request " + r.Method + " " + r.URL.Path})
 	})
 	return mux
+}
+
+// snapshot takes a snapshot of the database into a new file in the snapshot
+// directory, named after the time, and returns the file's absolute path.
+func snapshot(ctx context.Context, deps Deps) (string, error) {
+	dir, err := filepath.Abs(deps.SnapshotDir)
+	if err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", err
+	}
+	path := filepath.Join(dir, "falky-"+time.Now().UTC().Format("20060102T150405Z")+".db")
+	return path, deps.DB.Snapshot(ctx, path)
 }
 
 // decode reads the JSON request body into v, or answers 400 and reports false.
@@ -190,6 +226,13 @@ func writeJSON(w http.ResponseWriter, status int, body any) {
 // ErrNotRunning reports that no server listens on the admin socket.
 var ErrNotRunning = errors.New("the server is not running")
 
+// Requests time out after requestTimeout, except snapshots, which may take
+// longer on a large database.
+const (
+	requestTimeout  = 10 * time.Second
+	snapshotTimeout = 10 * time.Minute
+)
+
 // Client sends operator commands to the server over its admin socket.
 type Client struct {
 	socket string
@@ -201,7 +244,6 @@ func NewClient(path string) *Client {
 	return &Client{
 		socket: path,
 		http: &http.Client{
-			Timeout: 10 * time.Second,
 			Transport: &http.Transport{
 				DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 					var d net.Dialer
@@ -248,9 +290,27 @@ func (c *Client) RenameRoom(ctx context.Context, id, name string) error {
 	return c.do(ctx, http.MethodPatch, "/rooms/"+url.PathEscape(id), roomNameBody{Name: name}, &body)
 }
 
+// Snapshot has the server take a snapshot of its database and returns where
+// the snapshot went, as a path inside the server's file system.
+func (c *Client) Snapshot(ctx context.Context) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, snapshotTimeout)
+	defer cancel()
+	var body snapshotBody
+	if err := c.do(ctx, http.MethodPost, "/snapshots", nil, &body); err != nil {
+		return "", err
+	}
+	return body.Path, nil
+}
+
 // do sends a request with in, if not nil, as its JSON body, and decodes the
-// answer into out.
+// answer into out. Unless ctx has a deadline, the request times out after
+// requestTimeout.
 func (c *Client) do(ctx context.Context, method, path string, in, out any) (err error) {
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, requestTimeout)
+		defer cancel()
+	}
 	var reqBody io.Reader
 	if in != nil {
 		b, err := json.Marshal(in)
