@@ -204,8 +204,13 @@ Configure two GitHub environments with **selected branches and tags**:
 
 | Environment | Allowed ref | Secret | Variables |
 | --- | --- | --- | --- |
-| `development` | Branch `master` only | `VPS_SSH_KEY` | `VPS_HOST`, `VPS_KNOWN_HOSTS` |
-| `production` | Tags `v*` only (remove branch `master`) | `VPS_SSH_KEY` | `VPS_HOST`, `VPS_KNOWN_HOSTS` |
+| `development` | Branch `master` only | `VPS_SSH_KEY` | `APP_URL`, `VPS_HOST`, `VPS_KNOWN_HOSTS` |
+| `production` | Tags `v*` only (remove branch `master`) | `VPS_SSH_KEY` | `APP_URL`, `VPS_HOST`, `VPS_KNOWN_HOSTS` |
+
+Set `APP_URL=https://dev.falky.lunari.win` in `development` and
+`APP_URL=https://falky.lunari.win` in `production`. The workflow uses this
+environment variable for GitHub's deployment link. It is separate from the SSH
+host and does not configure VPS routing, certificates or application origins.
 
 Use a different dedicated SSH key for each environment. Both use
 `VPS_HOST=falky.lunari.win` and the verified host key in `VPS_KNOWN_HOSTS`.
