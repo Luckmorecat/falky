@@ -50,6 +50,7 @@ export const prefs = {
       joinMuted: read('joinMuted') === 'on',
       shareResolution: oneOf('shareResolution', ['720', '1080', '1440'], '1080'),
       shareFps: oneOf('shareFps', ['15', '30', '60'], '30'),
+      shareBitrate: oneOf('shareBitrate', ['1', '2', '3'], '1'),
       shareFocus: oneOf('shareFocus', ['motion', 'detail'], 'motion'),
       shareAudio: read('shareAudio') !== 'off',
       theme: oneOf('theme', ['dark', 'light', 'system'], 'dark'),

@@ -2,11 +2,13 @@ import type { ScreenShareCaptureOptions, TrackPublishOptions } from 'livekit-cli
 
 export type ShareResolution = '720' | '1080' | '1440';
 export type ShareFps = '15' | '30' | '60';
+export type ShareBitrate = '1' | '2' | '3';
 export type ShareFocus = 'motion' | 'detail';
 
 export interface ShareSettings {
   shareResolution: ShareResolution;
   shareFps: ShareFps;
+  shareBitrate: ShareBitrate;
   shareFocus: ShareFocus;
   shareAudio: boolean;
 }
@@ -30,6 +32,6 @@ export function shareOptions(s: ShareSettings, safari = isSafari()): { capture: 
       contentHint: s.shareFocus,
       ...(safari ? {} : { resolution: { width: Math.round((height * 16) / 9), height, frameRate } }),
     },
-    publish: { screenShareEncoding: { maxBitrate: Math.round(BITRATE[s.shareResolution] * FPS_COST[s.shareFps]), maxFramerate: frameRate } },
+    publish: { screenShareEncoding: { maxBitrate: Math.round(BITRATE[s.shareResolution] * FPS_COST[s.shareFps] * Number(s.shareBitrate)), maxFramerate: frameRate } },
   };
 }
