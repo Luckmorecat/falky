@@ -116,6 +116,12 @@ blocks further CI releases until explicit recovery; never delete that marker to
 pretend an interrupted release succeeded. CI checks its baseline again under
 the VPS operation lock before changing anything. Running images, container IDs,
 Compose configuration and installed deployment files must match that baseline.
+The file fingerprint includes the instance files, the shared proxy's
+`/srv/falky-edge/{Caddyfile,compose.yaml}`, and all four backup service/timer
+units. CI reads the units' actual `FragmentPath` from systemd; missing units,
+unloaded file changes (`NeedDaemonReload=yes`) and untracked drop-ins block
+planning. New files under `deploy/edge/` or `deploy/systemd/` require an explicit
+installed-file verification mapping before CI can release them.
 Neither a new plan nor a deployment is allowed to reuse a drifted instance.
 
 Application-only updates replace only `caddy` (web) and/or `falky` (server), with
@@ -127,8 +133,9 @@ zero-downtime rollout.
 ### Enabling selective releases and changing VPS configuration
 
 This workflow does **not** install host files. Before enabling it, install the
-deployment files listed below, including `release.py`, in each instance. Keep
-them identical to the source revision being released. The new SSH wrapper
+deployment files listed below, including `release.py`, in each instance, and
+install the shared edge files and all four systemd units. Keep them identical
+to the source revision being released. The new SSH wrapper
 rejects the old CI `deploy <server> <web>` protocol, so coordinate installation
 with the workflow change when no deployment is active. Merging code alone does
 not perform this installation: CI fails safely if the protocol/files differ.
@@ -136,11 +143,18 @@ not perform this installation: CI fails safely if the protocol/files differ.
 For an existing healthy instance without a release record, the first CI release
 builds both images and establishes the record. A fresh or unhealthy installation
 must be started/recovered manually first; CI does not guess its state. When
-changing host configuration later, install the intended files and explicitly
-run the operator's full `./manage.sh deploy <server digest> <web digest>` with a
+changing host configuration later, install and apply the intended files first.
+For shared edge changes, validate its Caddy configuration and recreate the edge
+container using its Compose project; this can interrupt both domains. For unit
+changes, run `systemctl daemon-reload` and restart the affected timers as needed.
+CI verifies installed files; it does not load a new Caddy configuration for you.
+Then explicitly run the operator's full `./manage.sh deploy <server digest> <web digest>` with a
 known compatible pair. This reconciles the entire stack, verifies health, and
 clears the old release record only on success. The next CI release builds both.
 Keep deployment files in sync separately for production tags and development.
+The edge and backup units are shared host configuration: changing them requires
+coordinating both environments' baselines and release sources, rather than
+allowing an application deployment to silently ignore an unapplied host change.
 
 Do not bypass drift checks by editing release records. The records describe
 successful running state, not a desired configuration or a migration journal.

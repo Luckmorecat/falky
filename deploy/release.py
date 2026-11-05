@@ -20,6 +20,11 @@ INSTALLED = (
     "ci-deploy.sh", "release.py", "prune-backups.py", "Caddyfile",
     "WebCaddyfile", "web.caddy", "livekit.yaml",
 )
+HOST_CONFIG = (
+    "edge/Caddyfile", "edge/compose.yaml", "systemd/falky-backup.service",
+    "systemd/falky-backup.timer", "systemd/falky-dev-backup.service",
+    "systemd/falky-dev-backup.timer",
+)
 SERVICES = {"server": "falky", "web": "caddy"}
 REPOSITORIES = {"server": "ghcr.io/luckmorecat/falky", "web": "ghcr.io/luckmorecat/falky-web"}
 STATE = Path(".release.json")
@@ -53,8 +58,26 @@ def run(*args):
     return subprocess.check_output(args, text=True)
 
 
-def file_hashes(directory):
-    return digest({name: hashlib.sha256((directory / name).read_bytes()).hexdigest() for name in INSTALLED})
+def host_config_path(directory, name):
+    if name.startswith("edge/"):
+        return directory.resolve().parent / "falky-edge" / Path(name).name
+    unit = Path(name).name
+    properties = dict(line.split("=", 1) for line in run(
+        "systemctl", "show", "--property=FragmentPath", "--property=NeedDaemonReload",
+        "--property=DropInPaths", "--", unit).splitlines())
+    require(properties["NeedDaemonReload"] == "no", unit + " needs systemctl daemon-reload")
+    require(not properties["DropInPaths"], unit + " has untracked systemd overrides")
+    path = Path(properties["FragmentPath"])
+    require(path.is_absolute() and path.is_file(), unit + " is not installed")
+    return path
+
+
+def file_hashes(directory, *, installed=False):
+    hashes = {}
+    for name in INSTALLED + HOST_CONFIG:
+        path = host_config_path(directory, name) if installed and name in HOST_CONFIG else directory / name
+        hashes[name] = hashlib.sha256(path.read_bytes()).hexdigest()
+    return digest(hashes)
 
 
 def source_inputs():
@@ -68,6 +91,9 @@ def source_inputs():
         if not entry:
             continue
         _, name = entry.split("\t", 1)
+        if name.startswith(("deploy/edge/", "deploy/systemd/")):
+            require(name.removeprefix("deploy/") in HOST_CONFIG,
+                    "Unrecognized host configuration; add installed-file verification before releasing: " + name)
         if name.startswith(("docs/", ".agents/", ".claude/")) or name == "GLOSSARY.md":
             continue
         if name.startswith("server/") or name == ".github/workflows/publish-image.yml":
@@ -79,7 +105,7 @@ def source_inputs():
         for key in keys:
             entries[key].append(entry)
     installed = {}
-    for name in INSTALLED:
+    for name in INSTALLED + HOST_CONFIG:
         content = subprocess.check_output(["git", "show", "HEAD:deploy/" + name])
         installed[name] = hashlib.sha256(content).hexdigest()
     return {
@@ -154,7 +180,9 @@ def runtime():
                 service + " configuration drift; reconcile it before selective deployment")
         containers[service] = {"id": container["Id"], "image": container["Image"],
                                "started": container["State"]["StartedAt"]}
-    return {"fingerprint": digest({"config": config, "containers": containers, "installed": file_hashes(Path('.'))}),
+    installed = file_hashes(Path('.'), installed=True)
+    return {"fingerprint": digest({"config": config, "containers": containers, "installed": installed}),
+            "installed": installed,
             "images": {key: config["services"][service]["image"] for key, service in SERVICES.items()}}
 
 
@@ -169,7 +197,7 @@ def snapshot():
         require(current["images"] == {key: image["digest"] for key, image in state["release"]["images"].items()},
                 "Running images differ from the successful release")
     return {"token": digest({"state": state, "runtime": current}),
-            "installed": file_hashes(Path('.')), "release": state["release"] if state else None}
+            "installed": current["installed"], "release": state["release"] if state else None}
 
 
 def verify(request):
@@ -206,6 +234,8 @@ def atomic_write(path, value):
 def finish(request):
     require(json.loads(PENDING.read_text()) == request, "Deployment attempt changed")
     current = runtime()
+    require(current["installed"] == request["release"]["installed"],
+            "Host configuration changed during deployment; reconcile before recording success")
     require(current["images"] == {key: image["digest"] for key, image in request["release"]["images"].items()},
             "Started images do not match the requested release")
     atomic_write(STATE, {"release": request["release"], "runtime": current["fingerprint"]})

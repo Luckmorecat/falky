@@ -97,6 +97,9 @@ class InputTests(unittest.TestCase):
         self.git("config", "user.email", "release-test@example.invalid")
         for name in release.INSTALLED:
             self.write("deploy/" + name, "installed\n")
+        for folder in ("edge", "systemd"):
+            for path in (Path(__file__).parent / folder).iterdir():
+                self.write("deploy/" + folder + "/" + path.name, "installed\n")
         for name in ("server/app.go", "web/app.ts", "api/openapi.yaml", "docs/guide.md"):
             self.write(name, "original\n")
         self.commit()
@@ -144,6 +147,24 @@ class InputTests(unittest.TestCase):
         self.assertEqual(self.inputs()["installed"], release.file_hashes(self.root / "deploy"))
         self.write("deploy/web.caddy", "drift\n")
         self.assertNotEqual(self.inputs()["installed"], release.file_hashes(self.root / "deploy"))
+
+    def test_external_host_configuration_cannot_take_application_only_path(self):
+        for name in ("edge/Caddyfile", "edge/compose.yaml", "systemd/falky-backup.service",
+                     "systemd/falky-backup.timer", "systemd/falky-dev-backup.service",
+                     "systemd/falky-dev-backup.timer"):
+            with self.subTest(name=name):
+                before = self.inputs()
+                baseline = {"token": "0" * 64, "installed": before["installed"], "release": None}
+                self.write("deploy/" + name, "updated host configuration\n")
+                self.commit()
+                with self.assertRaisesRegex(ValueError, "install and reconcile"):
+                    release.plan(baseline, self.inputs())
+
+    def test_new_host_configuration_requires_an_explicit_verification_mapping(self):
+        self.write("deploy/systemd/new-backup.timer", "new unit\n")
+        self.commit()
+        with self.assertRaisesRegex(ValueError, "Unrecognized host configuration"):
+            self.inputs()
 
     def test_old_reruns_and_unavailable_history_cannot_roll_back_a_release(self):
         old = self.inputs()
@@ -316,6 +337,52 @@ class DeploymentTests(unittest.TestCase):
         result = self.command("release")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("image differs", result.stderr)
+
+    def test_external_host_file_drift_blocks_release_before_pull_or_backup(self):
+        baseline = self.bootstrap()
+        request = self.request(baseline, "web")
+        for relative in ("falky-edge/Caddyfile", "falky-edge/compose.yaml",
+                         "systemd/falky-backup.service", "systemd/falky-backup.timer",
+                         "systemd/falky-dev-backup.service", "systemd/falky-dev-backup.timer"):
+            with self.subTest(path=relative):
+                path = self.directory.parent / relative
+                original = path.read_bytes()
+                path.write_bytes(original + b"\n# local drift\n")
+                offset = len(self.calls())
+                result = self.apply(request)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("differs from its successful release", result.stderr)
+                self.assertFalse(any("up" in call or "snapshot" in call or "pull" in call
+                                     for call in self.calls()[offset:]))
+                path.write_bytes(original)
+        self.assertEqual(self.snapshot(), baseline)
+
+    def test_missing_host_files_unloaded_units_and_overrides_block_snapshot(self):
+        # This must fail even at bootstrap, when there is no successful record.
+        for relative in ("falky-edge/Caddyfile", "systemd/falky-backup.timer"):
+            with self.subTest(path=relative):
+                path = self.directory.parent / relative
+                original = path.read_bytes()
+                path.unlink()
+                result = self.command("release")
+                self.assertNotEqual(result.returncode, 0)
+                path.write_bytes(original)
+        for environment, message in (({"SYSTEMD_NEEDS_RELOAD": "yes"}, "daemon-reload"),
+                                     ({"SYSTEMD_OVERRIDES": "/untracked/override.conf"}, "untracked systemd overrides")):
+            with self.subTest(environment=environment):
+                result = self.command("release", **environment)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(message, result.stderr)
+        self.assertIsNone(self.snapshot()["release"])
+
+    def test_host_configuration_change_during_deployment_cannot_record_success(self):
+        baseline = self.bootstrap()
+        previous = self.state()
+        result = self.apply(self.request(baseline, "web"), DRIFT_HOST_CONFIG_ON_UP="1")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Host configuration changed during deployment", result.stderr)
+        self.assertEqual(self.state(), previous)
+        self.assertTrue((self.directory / ".release-pending.json").exists())
 
     def test_reused_digest_cannot_claim_different_build_inputs(self):
         baseline = self.bootstrap()

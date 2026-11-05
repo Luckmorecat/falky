@@ -126,6 +126,8 @@ if args[0] == "compose":
         for service in targets:
             state[service] = container(service, int(state[service]["State"]["StartedAt"]) + 1)
         Path("running.json").write_text(json.dumps(state))
+        if os.environ.get("DRIFT_HOST_CONFIG_ON_UP") == "1":
+            Path("../falky-edge/Caddyfile").write_text("changed during deployment\n")
     elif command[0] == "ps" and "--quiet" in command:
         if os.environ.get("FAIL_PS") == "1":
             sys.exit(1)
@@ -159,10 +161,13 @@ class DeploymentTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
-        self.directory = Path(self.temporary.name)
+        self.directory = Path(self.temporary.name) / "instance"
+        self.directory.mkdir()
         source = Path(__file__).parent
         for name in ("manage.sh", "compose.sh", "ci-deploy.sh", "release.py", "prune-backups.py", "compose.yaml", "compose.production.yaml", "Caddyfile", "WebCaddyfile", "web.caddy", "livekit.yaml"):
             shutil.copy2(source / name, self.directory / name)
+        shutil.copytree(source / "edge", self.directory.parent / "falky-edge")
+        shutil.copytree(source / "systemd", self.directory.parent / "systemd")
         self.initial = (
             f"FALKY_IMAGE={SERVER}@sha256:{'d' * 64}\n"
             f"FALKY_WEB_IMAGE={LOCAL_WEB}\n"
@@ -174,6 +179,15 @@ class DeploymentTests(unittest.TestCase):
         binary.mkdir()
         self.write_program(binary / "docker", FAKE_DOCKER)
         self.write_program(binary / "curl", 'print("401")\n')
+        self.write_program(binary / "systemctl", '''
+import os, sys
+from pathlib import Path
+unit = sys.argv[-1]
+path = Path.cwd().parent / "systemd" / unit
+print("FragmentPath=" + (str(path) if path.exists() else ""))
+print("NeedDaemonReload=" + os.environ.get("SYSTEMD_NEEDS_RELOAD", "no"))
+print("DropInPaths=" + os.environ.get("SYSTEMD_OVERRIDES", ""))
+''')
         # Test deployment selection separately from the network health probe.
         self.write_program(binary / "python3", f'''
 import os, sys
