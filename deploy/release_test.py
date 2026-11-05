@@ -204,6 +204,77 @@ class InputTests(unittest.TestCase):
         self.assertEqual(request["baseline"], snapshot["token"])
         release.valid_release(request["release"])
 
+    def ci_plan(self, snapshot, ref_type):
+        script = str(Path(release.__file__).with_name("ci-plan.py").resolve())
+        with tempfile.TemporaryDirectory() as directory:
+            baseline = Path(directory) / "baseline.json"
+            baseline.write_text(json.dumps(snapshot))
+            output = Path(directory) / "outputs"
+            result = subprocess.run([sys.executable, script, str(baseline)], cwd=self.root,
+                                    env=os.environ | {"GITHUB_OUTPUT": str(output), "GITHUB_REF_TYPE": ref_type},
+                                    capture_output=True, text=True)
+            values = dict(line.split("=", 1) for line in output.read_text().splitlines()) if output.exists() else {}
+        return result, values
+
+    def successful_baseline(self):
+        inputs = self.inputs()
+        snapshot = {"token": "0" * 64, "installed": inputs["installed"], "release": None}
+        return snapshot | {"release": built(release.plan(snapshot, inputs))["release"]}
+
+    def test_tags_always_publish_both_while_branches_remain_selective(self):
+        for paths, expected in (((), set()), (("docs/guide.md",), set()),
+                                (("web/app.ts",), {"web"}), (("server/app.go",), {"server"}),
+                                (("web/app.ts", "server/app.go"), {"server", "web"})):
+            with self.subTest(paths=paths):
+                baseline = self.successful_baseline()
+                for path in paths:
+                    self.write(path, self.git("rev-parse", "HEAD"))
+                if paths:
+                    self.commit()
+                for ref_type in ("branch", "tag"):
+                    with self.subTest(ref_type=ref_type):
+                        result, values = self.ci_plan(baseline, ref_type)
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                        builds = set(release.SERVICES) if ref_type == "tag" else expected
+                        self.assertEqual({key for key in release.SERVICES if values[key] == "true"}, builds)
+                        self.assertEqual(values["changed"], str(bool(builds)).lower())
+                        plan = release.decode(values["plan"])
+                        request = release.resolve(plan,
+                            {key: "success" if key in builds else "skipped" for key in release.SERVICES},
+                            {"server": "sha256:" + "c" * 64, "web": "sha256:" + "d" * 64})
+                        self.assertEqual(request["baseline"], baseline["token"])
+                        if ref_type == "tag":
+                            for key, image in request["release"]["images"].items():
+                                self.assertNotEqual(image["digest"], baseline["release"]["images"][key]["digest"])
+                                self.assertEqual(image["revision"], self.inputs()["revision"])
+                                for failure in ("failure", "cancelled", "skipped"):
+                                    results = dict.fromkeys(release.SERVICES, "success") | {key: failure}
+                                    with self.assertRaisesRegex(ValueError, "Requested builds must succeed"):
+                                        release.resolve(plan, results,
+                                            {"server": "sha256:" + "c" * 64, "web": "sha256:" + "d" * 64})
+
+    def test_tag_plan_without_baseline_publishes_both(self):
+        inputs = self.inputs()
+        result, values = self.ci_plan({"token": "0" * 64, "installed": inputs["installed"], "release": None}, "tag")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual([values[key] for key in ("server", "web", "changed")], ["true"] * 3)
+
+    def test_tag_planning_still_blocks_host_mismatch_and_rollback(self):
+        baseline = self.successful_baseline()
+        result, values = self.ci_plan(baseline | {"installed": "e" * 64}, "tag")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("install and reconcile", result.stderr)
+        self.assertEqual(values, {})
+        old = self.git("rev-parse", "HEAD").strip()
+        self.write("web/app.ts", "new version\n")
+        self.commit()
+        baseline = self.successful_baseline()
+        self.git("checkout", "--quiet", old)
+        result, values = self.ci_plan(baseline, "tag")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("does not descend", result.stderr)
+        self.assertEqual(values, {})
+
 
 class DeploymentTests(unittest.TestCase):
     setUp = manage_test.DeploymentTests.setUp

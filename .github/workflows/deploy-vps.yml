@@ -58,7 +58,7 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0
-      - name: Compare inputs with this environment's successful release
+      - name: Plan image publishing against the verified release
         id: plan
         env:
           VPS_HOST: ${{ vars.VPS_HOST }}
@@ -67,7 +67,7 @@ jobs:
         run: |
           set -euo pipefail
           bash deploy/ci-ssh.sh release > "$RUNNER_TEMP/release-baseline.json"
-          python3 deploy/release.py plan "$RUNNER_TEMP/release-baseline.json"
+          python3 deploy/ci-plan.py "$RUNNER_TEMP/release-baseline.json"
 
   server:
     if: needs.plan.outputs.server == 'true'

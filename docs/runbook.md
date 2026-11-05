@@ -80,25 +80,32 @@ no production deployment on master pushes and no manual workflow trigger.
 
 ```text
 master push → complete checks → plan against development → build changed images → development
-v* tag push → complete checks → plan against production  → build changed images → production
+v* tag push → complete checks → plan against production  → build both images    → production
 ```
 
 Planning reads the target instance's healthy, successful release through the
-restricted SSH command. It compares complete tracked build-input fingerprints,
-so failed or coalesced intermediate runs cannot hide an undeployed change.
+restricted SSH command. For development, it compares complete tracked build-input
+fingerprints, so failed or coalesced intermediate runs cannot hide an undeployed change.
 `web/` changes publish only the web image; `server/` changes publish only the
 server image. `api/`, shared tooling, deployment policy and unknown paths
 invalidate both. Each publisher's workflow invalidates its own image. Files
 under `docs/`, `.agents/`, `.claude/`, and `GLOSSARY.md` do not trigger publishing.
-Documentation-only pushes still run checks and verify the environment, but do
-not deploy. An old push/tag rerun cannot automatically roll back a newer release.
+Documentation-only master pushes still run checks and verify the environment,
+but do not deploy. Every `v*` tag schedules both publishers, even for frontend-only,
+backend-only, documentation-only or identical source. Input fingerprints are
+still recorded as provenance, but never skip publishing for a tag. Production
+retains health, installed-configuration, ancestry and stale-plan checks; an old
+push/tag rerun cannot automatically roll back a newer release.
 
 Requested publishers build the checked-out revision for `linux/amd64` and return
-immutable digests. Unchanged images retain their previous digest, input hash and
-original build revision. Every release still specifies both images. Images are
+immutable digests. In development, unchanged images retain their previous digest,
+input hash and original build revision. Every release still specifies both images. Images are
 labelled with their build commit and tagged `run-<run ID>-<attempt>`; CI never
-selects `edge` or `latest`. Production compares against its own release, not
-development's, and builds from the tag. It does not promote development data.
+selects `edge` or `latest`. Production validates against its own release, not
+development's, and builds both images from the tag. It does not promote
+development data.
+The tag publishing policy lives in the CI-only `deploy/ci-plan.py`; changing
+this policy does not require replacing the installed VPS scripts.
 Both GHCR packages (`falky` and `falky-web`) must be public for anonymous pulls.
 
 Each environment serializes its complete build/deploy sequence; active runs
