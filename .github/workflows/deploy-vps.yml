@@ -6,6 +6,13 @@ on:
     types: [completed]
     branches: [master]
   workflow_dispatch:
+    inputs:
+      component:
+        description: Component to update
+        type: choice
+        options: [all, backend, frontend]
+        default: all
+        required: true
 
 permissions: {}
 
@@ -21,12 +28,14 @@ jobs:
         github.event.workflow_run.head_branch == 'master' &&
         github.event.workflow_run.head_repository.full_name == github.repository))
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 35
     environment:
       name: production
       url: https://falky.lunari.win
     concurrency:
-      group: vps-production
+      # Keep one pending update for each component; a web event cannot replace
+      # a queued backend event. The VPS operations lock serializes execution.
+      group: vps-production-${{ github.event_name == 'workflow_dispatch' && inputs.component || (github.event.workflow_run.name == 'Publish server image' && 'backend' || 'frontend') }}
       cancel-in-progress: false
     steps:
       - name: Configure deployment SSH key and trusted host
@@ -41,18 +50,36 @@ jobs:
           mkdir -p "$RUNNER_TEMP/vps-ssh"
           printf '%s\n' "$VPS_SSH_KEY" > "$RUNNER_TEMP/vps-ssh/key"
           printf '%s\n' "$VPS_KNOWN_HOSTS" > "$RUNNER_TEMP/vps-ssh/known_hosts"
-      - name: Deploy latest published images
+      - name: Deploy published component
         env:
           VPS_HOST: ${{ vars.VPS_HOST }}
+          PUBLISHED_WORKFLOW: ${{ github.event.workflow_run.name }}
+          MANUAL_COMPONENT: ${{ inputs.component }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
           set -euo pipefail
           [[ $VPS_HOST =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]*$ ]] || { echo "Invalid production variable VPS_HOST" >&2; exit 1; }
+          if [[ $EVENT_NAME == workflow_dispatch ]]; then
+            component=$MANUAL_COMPONENT
+          else
+            case "$PUBLISHED_WORKFLOW" in
+              'Publish server image') component=backend ;;
+              'Publish web image') component=frontend ;;
+              *) echo "Unexpected publishing workflow" >&2; exit 1 ;;
+            esac
+          fi
+          case "$component" in
+            all) command=deploy ;;
+            backend) command='deploy backend' ;;
+            frontend) command='deploy frontend' ;;
+            *) echo "Invalid deployment component" >&2; exit 1 ;;
+          esac
           ssh -F /dev/null -T \
             -o BatchMode=yes -o IdentitiesOnly=yes -o IdentityAgent=none \
             -o StrictHostKeyChecking=yes -o UpdateHostKeys=no \
             -o UserKnownHostsFile="$RUNNER_TEMP/vps-ssh/known_hosts" \
             -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=3 \
-            -i "$RUNNER_TEMP/vps-ssh/key" -l deployer "$VPS_HOST" deploy
+            -i "$RUNNER_TEMP/vps-ssh/key" -l deployer "$VPS_HOST" "$command"
       - name: Remove temporary credentials
         if: always()
         run: rm -rf -- "$RUNNER_TEMP/vps-ssh"

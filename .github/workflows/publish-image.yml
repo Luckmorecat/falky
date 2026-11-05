@@ -6,8 +6,6 @@ on:
     paths:
       - server/**
       - api/**
-      - Makefile
-      - mise.toml
       - .github/workflows/publish-image.yml
 
 permissions:

@@ -5,7 +5,7 @@ cd -- "$(dirname -- "$0")"
 umask 077
 
 usage() {
-  echo "Usage: $0 deploy [ghcr.io/luckmorecat/falky@sha256:<digest> [web image digest or local image ID]] | backup | status" >&2
+  echo "Usage: $0 deploy [backend|frontend|ghcr.io/luckmorecat/falky@sha256:<digest> [web image digest or local image ID]] | backup | status" >&2
   exit 2
 }
 
@@ -38,7 +38,9 @@ operation=$1
 case "$operation" in
   deploy)
     [[ $# -le 3 ]] || usage
-    if [[ $# -ge 2 ]]; then
+    if [[ $# == 2 && ( $2 == backend || $2 == frontend ) ]]; then
+      :
+    elif [[ $# -ge 2 ]]; then
       [[ $2 =~ ^ghcr\.io/luckmorecat/falky@sha256:[a-f0-9]{64}$ ]] || usage
     fi
     if [[ $# == 3 ]]; then valid_web_image "$3" || usage; fi
@@ -148,23 +150,39 @@ case "$operation" in
     health
     ;;
   deploy)
+    services=()
+    pull_services=(falky livekit)
     if [[ $# == 1 ]]; then
       image=$(resolve_latest ghcr.io/luckmorecat/falky)
       web_image=$(resolve_latest ghcr.io/luckmorecat/falky-web)
       printf 'Selected server: %s\nSelected web: %s\n' "$image" "$web_image"
+    elif [[ $2 == backend ]]; then
+      image=$(resolve_latest ghcr.io/luckmorecat/falky)
+      web_image=$(./compose.sh config --format json | python3 -c 'import json,sys; print(json.load(sys.stdin)["services"]["caddy"]["image"])')
+      services=(falky)
+      pull_services=(falky)
+    elif [[ $2 == frontend ]]; then
+      image=$(./compose.sh config --format json | python3 -c 'import json,sys; print(json.load(sys.stdin)["services"]["falky"]["image"])')
+      web_image=$(resolve_latest ghcr.io/luckmorecat/falky-web)
+      services=(caddy)
+      pull_services=()
     else
       image=$2
       web_image=${3:-$(./compose.sh config --format json | python3 -c 'import json,sys; print(json.load(sys.stdin)["services"]["caddy"]["image"])')}
     fi
     valid_web_image "$web_image" || usage
-    if [[ $web_image == ghcr.io/* ]]; then
-      docker pull "$web_image"
-    else
-      docker image inspect "$web_image" >/dev/null
+    if [[ ${services[0]:-} != falky ]]; then
+      if [[ $web_image == ghcr.io/* ]]; then
+        docker pull "$web_image"
+      else
+        docker image inspect "$web_image" >/dev/null
+      fi
     fi
     # Pull before touching the existing application or its configuration.
     FALKY_IMAGE=$image FALKY_WEB_IMAGE=$web_image ./compose.sh config --quiet
-    FALKY_IMAGE=$image FALKY_WEB_IMAGE=$web_image ./compose.sh pull
+    if [[ ${#pull_services[@]} != 0 ]]; then
+      FALKY_IMAGE=$image FALKY_WEB_IMAGE=$web_image ./compose.sh pull "${pull_services[@]}"
+    fi
     if [[ -n $(./compose.sh ps --all --quiet falky) ]]; then
       backup
     fi
@@ -190,7 +208,11 @@ finally:
     if os.path.exists(temporary):
         os.unlink(temporary)
 PY
-    ./compose.sh up --detach --no-build --wait --wait-timeout 180
+    up_args=(--detach --no-build --wait --wait-timeout 180)
+    if [[ ${#services[@]} != 0 ]]; then
+      up_args+=(--no-deps "${services[@]}")
+    fi
+    ./compose.sh up "${up_args[@]}"
     # LiveKit readiness and ACME issuance may lag container startup.
     for attempt in {1..18}; do
       if health; then

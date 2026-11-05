@@ -62,9 +62,10 @@ snapshot taken after an upgrade that added migrations.
 ## Published server image
 
 The `Publish server image` GitHub Actions workflow runs on pushes to `master`
-that change `server/**`, `api/**`, `Makefile`, `mise.toml`, or the workflow
-itself (`.github/workflows/publish-image.yml`). Docs-only pushes, other
-branches, and tags do not publish images.
+that change `server/**`, `api/**`, or the workflow itself
+(`.github/workflows/publish-image.yml`). Frontend-only changes, changes only
+to shared tooling (`Makefile`, `mise.toml`), docs-only pushes, other branches,
+and tags do not publish server images.
 
 The Check job installs the tool versions pinned in `mise.toml` and runs the
 complete root `make check`. Only after it succeeds does Publish build
@@ -117,14 +118,21 @@ not rebuild or restart the backend.
 build of either `Publish server image` or `Publish web image` on this
 repository's `master`. Failed checks/publishes, other branches, and runs from
 other repositories cannot start a production job. It can also be started
-manually from **Actions → Deploy VPS → Run workflow**, selecting `master`.
+manually from **Actions → Deploy VPS → Run workflow**, selecting `master`
+and a component: `all`, `backend`, or `frontend`.
 The workflow becomes available after it is merged into the default branch.
 
 ```text
-push to master → check and publish changed image → Deploy VPS
-  SSH as deployer → restricted ci-deploy.sh → manage.sh deploy
-  resolve latest digests → backup → start containers → check API and frontend
+server/API change → publish server image → manage.sh deploy backend
+web change        → publish web image    → manage.sh deploy frontend
+  SSH as deployer → restricted ci-deploy.sh → lock and resolve selected digest
+  preserve other image → backup → update selected service → check API/frontend
 ```
+
+A server publish updates only `falky`. A web publish updates only Caddy and
+its bundled frontend. The unchanged component keeps its configured image;
+it is not pulled or recreated. If both components change, both publishers
+run and each schedules its own component update. Manual `all` updates both.
 
 The deploy job uses GitHub's `production` environment, restricted to the
 `master` branch. Configure these values there:
@@ -143,25 +151,31 @@ with a forced command and forwarding/PTY restrictions:
 restrict,command="/srv/falky/ci-deploy.sh" ssh-ed25519 <public-key> falky-github-actions-production
 ```
 
-The wrapper accepts exactly `deploy` or `status`; it rejects arbitrary shell
-commands and file transfers. Test the new key with `ssh ... status`. The job
+The wrapper accepts exactly `deploy`, `deploy backend`, `deploy frontend`,
+or `status`; it rejects arbitrary shell commands and file transfers. Test
+the new key with `ssh ... status`. The job
 pins the server's existing trusted host key, uses no repository checkout or
 build artifacts, and needs no `GITHUB_TOKEN` permissions. Only temporary SSH
 credentials are written on the runner and they are removed after the job.
 Application secrets remain in the VPS's private `.env`.
 
-Production deployments queue across both image workflows without cancelling
-an active deploy. Pending jobs may be coalesced; each selected job deploys the
-latest successfully published server and web images, not necessarily the
-commit which triggered it. This prevents an older queued event from rolling
-back a newer published image. The CI wrapper waits up to five minutes for a
-manual deploy or scheduled backup to release the VPS operations lock.
+Production deployments queue per component without cancelling an active
+deploy. Pending jobs for the same component may be coalesced; a frontend job
+cannot replace a queued backend job. The shared VPS lock serializes all
+component updates, manual operations, and scheduled backups. The CI wrapper
+waits up to fifteen minutes for this lock.
 
-Both image packages must be accessible to the VPS. The first web publish may
-create a private package: make it public, then manually run **Deploy VPS** if
-the initial automatic run failed. A missing image fails before changing the
-application. Backups and readiness/HTTPS/frontend checks are the same as a
-manual deployment; there is no automatic database rollback.
+Each job selects the latest successfully published image for its component,
+not necessarily the commit which triggered it. It reads the other image
+under the same lock, preserving any update completed by an earlier job.
+This prevents old queued events from rolling back either component.
+
+The selected image package must be accessible to the VPS. A backend-only
+update can keep the initial locally built frontend. The first web publish
+may create a private package: make it public, then manually run **Deploy VPS**
+with `frontend` if that initial automatic run failed. A missing image fails
+before changing the application. Backups and readiness/HTTPS/frontend checks
+are the same as a manual deployment; there is no automatic database rollback.
 
 The action updates container images only. Changes to the Compose files,
 Caddy/LiveKit configuration, management scripts or backup units still need
@@ -201,8 +215,19 @@ cd /srv/falky
 ./manage.sh deploy
 ```
 
-This pulls each package's `edge` tag independently, resolves it to that
-repository's immutable digest, and deploys those selected digests. The two
+To update only one component while preserving the other's deployed version:
+
+```sh
+./manage.sh deploy backend
+./manage.sh deploy frontend
+```
+
+These commands pull only the selected image and use `up --no-deps` with
+the selected service (`falky` or `caddy`). They leave the other component and
+LiveKit running with their current images.
+
+The no-argument command pulls each package's `edge` tag independently,
+resolves it to that repository's immutable digest, and deploys those selected digests. The two
 packages may have different source revisions because they publish separately.
 Both packages must already be published and accessible: a failed pull or a
 missing digest aborts before taking a snapshot or changing configuration or
@@ -235,7 +260,7 @@ retry period. A stopped existing server
 must be recovered before upgrading, so a failed backup cannot be skipped.
 Deployments and backups share a lock. Manual operations fail immediately if
 another operation is running; the CI wrapper sets
-`FALKY_LOCK_WAIT_SECONDS=300` to wait for that operation instead.
+`FALKY_LOCK_WAIT_SECONDS=900` to wait for that operation instead.
 
 Use the wrapper for operator commands and diagnostics:
 

@@ -53,10 +53,13 @@ if args[0] == "compose":
     command = args[7:]
     if command[0] == "config" and "--format" in command:
         env = dict(line.split("=", 1) for line in Path(".env").read_text().splitlines())
-        print(json.dumps({"services": {"caddy": {
-            "image": os.environ.get("FALKY_WEB_IMAGE", env["FALKY_WEB_IMAGE"]),
-            "environment": {"FALKY_DOMAIN": "test.invalid"},
-        }}}))
+        print(json.dumps({"services": {
+            "caddy": {
+                "image": os.environ.get("FALKY_WEB_IMAGE", env["FALKY_WEB_IMAGE"]),
+                "environment": {"FALKY_DOMAIN": "test.invalid"},
+            },
+            "falky": {"image": os.environ.get("FALKY_IMAGE", env["FALKY_IMAGE"])},
+        }}))
     elif command[0] == "ps" and "--quiet" in command:
         if os.environ.get("EXISTING") == "1":
             print(command[-1] + "-container")
@@ -171,6 +174,43 @@ else:
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("FALKY_WEB_IMAGE=" + WEB_DIGEST, (self.directory / ".env").read_text())
 
+    def test_frontend_deploy_preserves_backend_without_pulling_or_starting_it(self):
+        result = self.run_deploy("frontend", EXISTING="1")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        env = (self.directory / ".env").read_text()
+        self.assertIn(f"FALKY_IMAGE={SERVER}@sha256:{'d' * 64}", env)
+        self.assertIn("FALKY_WEB_IMAGE=" + WEB_DIGEST, env)
+        calls = self.calls()
+        self.assertFalse(any(call[0] == "pull" and (call[1] == SERVER + ":edge" or call[1].startswith(SERVER + "@")) for call in calls))
+        compose_pulls = [call for call in calls if call[0] == "compose" and call[7] == "pull"]
+        self.assertEqual(compose_pulls, [])
+        starts = [call[7:] for call in calls if call[0] == "compose" and call[7] == "up"]
+        self.assertEqual(len(starts), 1)
+        self.assertIn("--no-deps", starts[0])
+        self.assertEqual(starts[0][-1], "caddy")
+
+    def test_backend_deploy_preserves_frontend_without_pulling_or_starting_it(self):
+        self.initial = self.initial.replace(LOCAL_WEB, WEB_DIGEST)
+        (self.directory / ".env").write_text(self.initial)
+        result = self.run_deploy("backend")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        env = (self.directory / ".env").read_text()
+        self.assertIn("FALKY_IMAGE=" + SERVER_DIGEST, env)
+        self.assertIn("FALKY_WEB_IMAGE=" + WEB_DIGEST, env)
+        calls = self.calls()
+        self.assertFalse(any(call[0] == "pull" and call[1].startswith(WEB) for call in calls))
+        compose_pulls = [call[7:] for call in calls if call[0] == "compose" and call[7] == "pull"]
+        self.assertEqual(compose_pulls, [["pull", "falky"]])
+        starts = [call[7:] for call in calls if call[0] == "compose" and call[7] == "up"]
+        self.assertEqual(len(starts), 1)
+        self.assertIn("--no-deps", starts[0])
+        self.assertEqual(starts[0][-1], "falky")
+
+    def test_failed_frontend_update_keeps_both_deployed_versions(self):
+        result = self.run_deploy("frontend", FAIL_PULL=WEB + ":edge", EXISTING="1")
+        self.assertNotEqual(result.returncode, 0)
+        self.assert_untouched()
+
     def test_mutable_explicit_image_is_rejected(self):
         result = self.run_deploy(SERVER + ":edge")
         self.assertEqual(result.returncode, 2)
@@ -192,7 +232,7 @@ class CICommandTests(unittest.TestCase):
         shutil.copy2(Path(__file__).with_name("ci-deploy.sh"), self.directory / "ci-deploy.sh")
         management = self.directory / "manage.sh"
         management.write_text(
-            '#!/bin/sh\nprintf "%s %s\\n" "$1" "$FALKY_LOCK_WAIT_SECONDS"\n'
+            '#!/bin/sh\nprintf "%s %s\\n" "$*" "$FALKY_LOCK_WAIT_SECONDS"\n'
         )
         management.chmod(0o755)
 
@@ -206,15 +246,22 @@ class CICommandTests(unittest.TestCase):
     def test_deploy_uses_management_script_and_waits_for_lock(self):
         result = self.command("deploy")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout, "deploy 300\n")
+        self.assertEqual(result.stdout, "deploy 900\n")
+
+    def test_component_commands_are_forwarded_exactly(self):
+        for component in ("backend", "frontend"):
+            with self.subTest(component=component):
+                result = self.command("deploy " + component)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout, "deploy " + component + " 900\n")
 
     def test_status_is_available_for_connection_checks(self):
         result = self.command("status")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout, "status 300\n")
+        self.assertEqual(result.stdout, "status 900\n")
 
     def test_arbitrary_shell_commands_and_file_transfers_are_rejected(self):
-        for command in ("", "id", "deploy; id", "deploy\nid", "deploy extra", "scp -t /srv/falky", "internal-sftp"):
+        for command in ("", "id", "deploy; id", "deploy\nid", "deploy extra", "deploy frontend; id", "deploy backend extra", "scp -t /srv/falky", "internal-sftp"):
             with self.subTest(command=command):
                 result = self.command(command)
                 self.assertEqual(result.returncode, 2)
