@@ -164,7 +164,7 @@ messages(id, room_id, author_id, author_name, body, request_key, created_at,
 - **Toolchain:** `mise.toml` at the repo root pins Go (latest stable at setup time, also set in `go.mod`) and golangci-lint. Go-based tools (oapi-codegen, govulncheck, the OpenAPI linter if it is a Go binary) are pinned with `go.mod`'s `tool` directive and run with `go tool …`.
 - **Task runner:** a `Makefile` with the targets `check`, `fmt`, `lint`, `test`, `test-integration` and `generate`.
 - **The done condition:** `make check` runs formatting, build, vet, golangci-lint, `go test -race ./...` and govulncheck. From slice 01 it also regenerates code and fails on any diff, and lints `api/openapi.yaml`. Every slice ends with `make check` passing.
-- **No git hooks and no CI for now.** The local `make check` is the only gate.
+- **No git hooks.** `make check` is the local gate and also runs in GitHub Actions before publishing the server image on relevant pushes to `master` (see the runbook).
 - *Delegated:* golangci-lint v2 defaults plus gofumpt, errorlint, bodyclose and noctx, with no line-length rule. Tests use the standard `testing` package without an assertion library and with no coverage threshold.
 
 ## Testing decisions and verification

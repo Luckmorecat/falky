@@ -59,6 +59,38 @@ and run `docker compose up -d --build --wait` again. The server applies new
 database migrations when it starts. An older `falky` cannot restore a
 snapshot taken after an upgrade that added migrations.
 
+## Published server image
+
+The `Publish server image` GitHub Actions workflow runs on pushes to `master`
+that change `server/**`, `api/**`, `Makefile`, `mise.toml`, or the workflow
+itself (`.github/workflows/publish-image.yml`). Docs-only pushes, other
+branches, and tags do not publish images.
+
+The Check job installs the tool versions pinned in `mise.toml` and runs the
+complete root `make check`. Only after it succeeds does Publish build
+`server/Dockerfile` with `server/` as its context, for `linux/amd64`, and push
+to `ghcr.io/luckmorecat/falky`. Both tags identify that build:
+
+- `edge`, the most recently published revision.
+- `sha-<full commit SHA>`, for that exact revision.
+
+Publishing uses the repository's `GITHUB_TOKEN`, with package-write access
+only in Publish; no personal access token or push secret needs provisioning.
+The image's OCI source and revision labels identify the repository and commit.
+
+The package is intended to be public. GHCR creates new packages as private:
+after the first successful publish, a package administrator must open the
+`falky` package's **Package settings → Change visibility**, choose **Public**,
+and confirm. The workflow does not change this setting. Once public, hosts
+can pull anonymously, for example with Docker logged out of GHCR:
+
+```sh
+docker pull ghcr.io/luckmorecat/falky:edge
+```
+
+Publishing does not update the running server. The Compose stack still
+builds its local image; deploy and upgrade it manually as described above.
+
 ## Health
 
 `docker compose ps` shows `falky` as `healthy` while the server is ready.
