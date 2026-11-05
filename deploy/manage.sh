@@ -183,8 +183,30 @@ case "$operation" in
     if [[ ${#pull_services[@]} != 0 ]]; then
       FALKY_IMAGE=$image FALKY_WEB_IMAGE=$web_image ./compose.sh pull "${pull_services[@]}"
     fi
-    if [[ -n $(./compose.sh ps --all --quiet falky) ]]; then
+    # Assign separately so a failed container query cannot look like a fresh
+    # installation. `compose down` removes containers but retains the database.
+    container=$(./compose.sh ps --all --quiet falky)
+    if [[ -n "$container" ]]; then
       backup
+    else
+      data_volume=$(./compose.sh config --format json | python3 -c '
+import json, sys
+config = json.load(sys.stdin)
+mounts = [mount for mount in config["services"]["falky"]["volumes"] if mount["target"] == "/data"]
+if len(mounts) != 1 or mounts[0]["type"] != "volume":
+    raise SystemExit("Cannot identify the persistent database volume")
+name = config["volumes"][mounts[0]["source"]]["name"]
+if not name:
+    raise SystemExit("Database volume has no resolved name")
+print(name)
+')
+      existing_volumes=$(docker volume ls --format '{{.Name}}')
+      while IFS= read -r volume; do
+        if [[ $volume == "$data_volume" ]]; then
+          printf 'Refusing to deploy: retained database volume %s has no backend container. Recover the previous release and take a backup before upgrading.\n' "$data_volume" >&2
+          exit 1
+        fi
+      done <<< "$existing_volumes"
     fi
     # Commit the selected image atomically. On failure, keep the attempted image
     # configured for diagnosis; migrations make automatic rollback unsafe.

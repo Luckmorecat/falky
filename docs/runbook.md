@@ -256,8 +256,14 @@ checks that both the database and LiveKit report `ok` and that the public
 HTTPS `/api/me` endpoint returns 401 without a visitor cookie. It also checks
 the homepage contains the React root and that its JavaScript and CSS load with
 the correct content types. Certificate issuance is allowed an additional
-retry period. A stopped existing server
-must be recovered before upgrading, so a failed backup cannot be skipped.
+retry period. A stopped existing server must be recovered before upgrading,
+so a failed backup cannot be skipped. If the backend container is missing
+but its configured database volume remains (for example after
+`./compose.sh down`), deployment also stops before recording new images or
+starting containers. An absent container does not prove the database is new.
+Restore/start the previous known working release, then rerun deployment so
+it can take the pre-upgrade snapshot. An error querying containers or volumes
+also aborts; it cannot be mistaken for a fresh installation.
 Deployments and backups share a lock. Manual operations fail immediately if
 another operation is running; the CI wrapper sets
 `FALKY_LOCK_WAIT_SECONDS=900` to wait for that operation instead.
@@ -313,8 +319,10 @@ systemctl list-timers falky-backup.timer
 ```
 
 The timer runs daily at 03:00 UTC with up to 15 minutes of randomized delay.
-The job runs as `deployer`; failures appear in
-`journalctl -u falky-backup.service`. Backups and the original snapshots are
+The job runs as `deployer` and waits up to fifteen minutes for a deployment,
+status check, or another backup to release the operations lock. Its twenty-
+minute service timeout leaves five more minutes to write and copy the backup.
+Failures appear in `journalctl -u falky-backup.service`. Backups and the original snapshots are
 retained until explicitly removed. Monitor disk usage and copy complete
 backup directories off the VPS regularly: these local copies cannot protect
 against loss of the host. They contain the access link and LiveKit secret.

@@ -1,9 +1,12 @@
 """Exercise deployments with Docker and external HTTPS verification replaced."""
 
+import configparser
+import fcntl
 import json
 import os
 from pathlib import Path
 import shutil
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -38,6 +41,14 @@ if args[:2] == ["image", "inspect"]:
             references.append(repository + "@sha256:" + digest)
         print(json.dumps(references))
     sys.exit(0)
+if args[:2] == ["volume", "ls"]:
+    if os.environ.get("FAIL_VOLUME_LIST") == "1":
+        sys.exit(1)
+    if os.environ.get("RETAINED_VOLUME") == "1":
+        print(os.environ.get("DATA_VOLUME_NAME", "falky_falky_data"))
+    if os.environ.get("SIMILAR_VOLUME") == "1":
+        print("falky_falky_data_other")
+    sys.exit(0)
 if args[0] == "inspect":
     template = args[2]
     if "State.Running" in template:
@@ -58,9 +69,14 @@ if args[0] == "compose":
                 "image": os.environ.get("FALKY_WEB_IMAGE", env["FALKY_WEB_IMAGE"]),
                 "environment": {"FALKY_DOMAIN": "test.invalid"},
             },
-            "falky": {"image": os.environ.get("FALKY_IMAGE", env["FALKY_IMAGE"])},
-        }}))
+            "falky": {
+                "image": os.environ.get("FALKY_IMAGE", env["FALKY_IMAGE"]),
+                "volumes": [{"type": "volume", "source": "falky_data", "target": "/data"}],
+            },
+        }, "volumes": {"falky_data": {"name": os.environ.get("DATA_VOLUME_NAME", "falky_falky_data")}}}))
     elif command[0] == "ps" and "--quiet" in command:
+        if os.environ.get("FAIL_PS") == "1":
+            sys.exit(1)
         if os.environ.get("EXISTING") == "1":
             print(command[-1] + "-container")
     elif command[0] == "exec":
@@ -222,6 +238,65 @@ else:
         self.assertEqual((self.directory / ".env").read_text(), self.initial)
         self.assertFalse(any("up" in call for call in self.calls()))
         self.assertFalse(list((self.directory / "backups").glob("*/complete")))
+
+    def test_retained_volume_without_container_blocks_every_deploy_mode(self):
+        for images in ((), ("backend",), ("frontend",)):
+            with self.subTest(images=images):
+                result = self.run_deploy(*images, RETAINED_VOLUME="1")
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("retained database volume", result.stderr)
+                self.assert_untouched()
+
+    def test_retained_volume_uses_configured_name(self):
+        result = self.run_deploy("backend", RETAINED_VOLUME="1", DATA_VOLUME_NAME="production-chat-db")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("production-chat-db", result.stderr)
+        self.assert_untouched()
+
+    def test_unrelated_volume_does_not_block_fresh_installation(self):
+        result = self.run_deploy(SERVER_DIGEST, SIMILAR_VOLUME="1")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_volume_listing_failure_cannot_be_treated_as_fresh_installation(self):
+        result = self.run_deploy("backend", FAIL_VOLUME_LIST="1")
+        self.assertNotEqual(result.returncode, 0)
+        self.assert_untouched()
+
+    def test_container_query_failure_cannot_skip_backup(self):
+        result = self.run_deploy("backend", FAIL_PS="1")
+        self.assertNotEqual(result.returncode, 0)
+        self.assert_untouched()
+
+    def test_scheduled_backup_waits_for_busy_lock_then_takes_snapshot(self):
+        unit = configparser.ConfigParser(interpolation=None)
+        unit.read(Path(__file__).with_name("systemd") / "falky-backup.service")
+        environment = dict(value.split("=", 1) for value in shlex.split(unit["Service"].get("Environment", "")))
+        lock_wait = float(environment.get("FALKY_LOCK_WAIT_SECONDS", "0"))
+        self.assertGreater(float(unit["Service"]["TimeoutStartSec"]), lock_wait)
+        with (self.directory / ".operations.lock").open("w") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            process = subprocess.Popen(
+                ["bash", "manage.sh", "backup"], cwd=self.directory,
+                env=self.environment | environment | {"EXISTING": "1"},
+                text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            )
+
+            def stop_process():
+                if process.poll() is None:
+                    process.kill()
+                process.communicate()
+
+            self.addCleanup(stop_process)
+            try:
+                stdout, stderr = process.communicate(timeout=0.2)
+            except subprocess.TimeoutExpired:
+                self.assertEqual(self.calls(), [], "Backup touched Docker before acquiring the lock")
+            else:
+                self.fail(f"Scheduled backup exited before the lock was released: {stdout} {stderr}")
+            fcntl.flock(lock, fcntl.LOCK_UN)
+            stdout, stderr = process.communicate(timeout=5)
+            self.assertEqual(process.returncode, 0, stderr)
+        self.assertEqual(len(list((self.directory / "backups").glob("*/complete"))), 1)
 
 
 class CICommandTests(unittest.TestCase):

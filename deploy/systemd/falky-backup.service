@@ -9,6 +9,8 @@ User=deployer
 Group=deployer
 SupplementaryGroups=docker
 WorkingDirectory=/srv/falky
+Environment=FALKY_LOCK_WAIT_SECONDS=900
 ExecStart=/srv/falky/manage.sh backup
 UMask=0077
-TimeoutStartSec=300
+# Allow fifteen minutes for the lock, then five minutes to write/copy backup.
+TimeoutStartSec=1200
