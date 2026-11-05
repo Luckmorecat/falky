@@ -3,6 +3,8 @@ name: Deploy VPS
 on:
   pull_request:
     branches: [master]
+    # Body edits must revalidate the ban on release-note commit overrides.
+    types: [opened, synchronize, reopened, edited]
   push:
     branches: [master]
     tags: ['v*']
@@ -34,7 +36,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          fetch-depth: ${{ matrix.component == 'server' && '0' || '1' }}
+          fetch-depth: ${{ matrix.component != 'web' && '0' || '1' }}
       - name: Decide whether backend checks are required
         if: matrix.component == 'server'
         id: backend
@@ -44,9 +46,22 @@ jobs:
       - name: Install pinned tools
         if: matrix.component != 'web' && steps.backend.outputs.run != 'false'
         uses: jdx/mise-action@f5be966e4a917d54244728e6a5fdcd1d93a35e6c # v5.2.6
+      - name: Install release tooling runtime
+        if: matrix.component == 'deploy'
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24.21.0'
+          package-manager-cache: false
       - name: Run component checks
         if: steps.backend.outputs.run != 'false'
         run: make check-${{ matrix.component }}
+      - name: Validate incoming individual commits
+        if: matrix.component == 'deploy' && github.event_name == 'pull_request'
+        env:
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: node release/validate-commits.mjs "$PR_BASE" "$PR_HEAD"
 
   # Keep one stable required check and release gate. A failed, cancelled or
   # skipped component must never produce a successful aggregate check.

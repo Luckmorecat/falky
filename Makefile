@@ -29,6 +29,8 @@ check-server:
 
 # Deployment safety and workflow validation, independent of application checks.
 check-deploy:
+	npm --prefix release ci --ignore-scripts
+	npm --prefix release test
 	bash -n deploy/manage.sh deploy/compose.sh deploy/ci-deploy.sh deploy/ci-ssh.sh
 	python3 deploy/ci-check_test.py
 	python3 deploy/manage_test.py
