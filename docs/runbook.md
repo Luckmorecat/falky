@@ -59,252 +59,203 @@ and run `docker compose up -d --build --wait` again. The server applies new
 database migrations when it starts. An older `falky` cannot restore a
 snapshot taken after an upgrade that added migrations.
 
-## Published server image
+## Development and production releases
 
-The `Publish server image` GitHub Actions workflow runs on pushes to `master`
-that change `server/**`, `api/**`, or the workflow itself
-(`.github/workflows/publish-image.yml`). Frontend-only changes, changes only
-to shared tooling (`Makefile`, `mise.toml`), docs-only pushes, other branches,
-and tags do not publish server images.
+The VPS hosts two isolated instances behind one shared HTTPS proxy:
 
-The Check job installs the tool versions pinned in `mise.toml` and runs the
-complete root `make check`. Only after it succeeds does Publish build
-`server/Dockerfile` with `server/` as its context, for `linux/amd64`, and push
-to `ghcr.io/luckmorecat/falky`. Both tags identify that build:
+| Environment | Domain | Directory | Compose project | Media ports |
+| --- | --- | --- | --- | --- |
+| Production | `falky.lunari.win` | `/srv/falky` | `falky` | TCP 7881, UDP 7882 |
+| Development | `dev.falky.lunari.win` | `/srv/falky-dev` | `falky-dev` | TCP 7891, UDP 7892 |
 
-- `edge`, the most recently published revision.
-- `sha-<full commit SHA>`, for that exact revision.
+Each project has its own network, database, snapshots, rooms, visitors, access
+link and LiveKit credentials. Never change production's project name: its
+existing database is in `falky_falky_data`. Development starts with an empty
+`falky-dev_falky_data` volume; do not copy the production database or `.env`.
 
-Publishing uses the repository's `GITHUB_TOKEN`, with package-write access
-only in Publish; no personal access token or push secret needs provisioning.
-The image's OCI source and revision labels identify the repository and commit.
-
-The package is intended to be public. GHCR creates new packages as private:
-after the first successful publish, a package administrator must open the
-`falky` package's **Package settings → Change visibility**, choose **Public**,
-and confirm. The workflow does not change this setting. Once public, hosts
-can pull anonymously, for example with Docker logged out of GHCR:
-
-```sh
-docker pull ghcr.io/luckmorecat/falky:edge
-```
-
-The publish job builds the image; the separate `Deploy VPS` workflow updates
-the running server after publication succeeds. Local Compose builds its own
-images; the VPS uses the production override and published images as
-described below.
-
-## Published web image
-
-`Publish web image` (`.github/workflows/publish-web-image.yml`) is independent
-of the server workflow. It runs on pushes to `master` that change `web/**` or
-the web workflow itself. Backend-only and docs-only changes do not publish a
-web image. It checks generated contract types, runs the frontend tests, and
-type-checks and builds using the same pinned Node image as `web/Dockerfile`.
-Only after those checks pass does it build the Caddy image containing the
-frontend and publish `ghcr.io/luckmorecat/falky-web:edge` and
-`ghcr.io/luckmorecat/falky-web:sha-<full commit SHA>`, for `linux/amd64`.
-
-Publishing uses `GITHUB_TOKEN`; the new `falky-web` package must be made public
-after its first publish if the VPS is to pull without registry credentials.
-The workflow becomes active once merged into `master`. Successful publishes
-trigger the separate VPS deployment workflow described below. Server and web
-images can be selected independently by digest; a frontend-only release need
-not rebuild or restart the backend.
-
-## Automatic VPS deployment
-
-`Deploy VPS` (`.github/workflows/deploy-vps.yml`) runs after a successful push
-build of either `Publish server image` or `Publish web image` on this
-repository's `master`. Failed checks/publishes, other branches, and runs from
-other repositories cannot start a production job. It can also be started
-manually from **Actions → Deploy VPS → Run workflow**, selecting `master`
-and a component: `all`, `backend`, or `frontend`.
-The workflow becomes available after it is merged into the default branch.
+`Deploy VPS` (`.github/workflows/deploy-vps.yml`) runs on **every push to
+`master`**, including docs-only changes, and on **tags matching `v*`**.
+A master push deploys development; a version tag deploys production. There is
+no production deployment on master pushes and no manual workflow trigger.
 
 ```text
-server/API change → publish server image → manage.sh deploy backend
-web change        → publish web image    → manage.sh deploy frontend
-  SSH as deployer → restricted ci-deploy.sh → lock and resolve selected digest
-  preserve other image → backup → update selected service → check API/frontend
+master push → complete checks → build backend + frontend → development
+v* tag push → complete checks → build backend + frontend → production
 ```
 
-A server publish updates only `falky`. A web publish updates only Caddy and
-its bundled frontend. The unchanged component keeps its configured image;
-it is not pulled or recreated. If both components change, both publishers
-run and each schedules its own component update. Manual `all` updates both.
+Both reusable publisher workflows build the caller's checked-out revision,
+for `linux/amd64`, and return their immutable image digests. The deploy job
+passes those exact digests to the instance's restricted SSH command. Images
+are labelled with the source commit and tagged `run-<run ID>-<attempt>` for
+traceability. They do not update or deploy `edge`. A tag builds from the tagged
+commit, even if master has moved on. It does not promote development data.
+Both GHCR packages (`falky` and `falky-web`) must be public for anonymous pulls.
 
-The deploy job uses GitHub's `production` environment, restricted to the
-`master` branch. Configure these values there:
+Each environment serializes its complete build/deploy sequence; active runs
+are not cancelled. GitHub may coalesce pending runs during a burst of pushes.
+Development and production run independently and have separate host locks.
+Failed checks or either image build prevent deployment. Failed pulls happen
+before any configuration change. Existing instances are backed up before an
+upgrade; database migrations are applied on start. A failed health check
+leaves the attempted images configured, without an automatic database rollback.
 
-| Kind | Name | Value |
-| --- | --- | --- |
-| Secret | `VPS_SSH_KEY` | A dedicated deployment private key, never the personal Netcup key |
-| Variable | `VPS_HOST` | `falky.lunari.win` |
-| Variable | `VPS_KNOWN_HOSTS` | The verified SSH host public key in known_hosts format for that hostname |
+Release a tested commit with:
 
-Install `deploy/ci-deploy.sh` alongside `manage.sh` in `/srv/falky`, mode 0750.
-Authorize the dedicated public key in `/home/deployer/.ssh/authorized_keys`
-with a forced command and forwarding/PTY restrictions:
+```sh
+git tag v1.2.0 <tested-commit>
+git push origin v1.2.0
+```
+
+Do not move or reuse a release tag. The tagged commit must contain these
+workflows; a tag on an older commit uses that older commit's workflow files.
+
+### GitHub environments and SSH
+
+Configure two GitHub environments with **selected branches and tags**:
+
+| Environment | Allowed ref | Secret | Variables |
+| --- | --- | --- | --- |
+| `development` | Branch `master` only | `VPS_SSH_KEY` | `VPS_HOST`, `VPS_KNOWN_HOSTS` |
+| `production` | Tags `v*` only (remove branch `master`) | `VPS_SSH_KEY` | `VPS_HOST`, `VPS_KNOWN_HOSTS` |
+
+Use a different dedicated SSH key for each environment. Both use
+`VPS_HOST=falky.lunari.win` and the verified host key in `VPS_KNOWN_HOSTS`.
+Bind each public key in `/home/deployer/.ssh/authorized_keys` to its own path:
 
 ```text
-restrict,command="/srv/falky/ci-deploy.sh" ssh-ed25519 <public-key> falky-github-actions-production
+restrict,command="/srv/falky/ci-deploy.sh" ssh-ed25519 <production-public-key> falky-github-actions-production
+restrict,command="/srv/falky-dev/ci-deploy.sh" ssh-ed25519 <development-public-key> falky-github-actions-development
 ```
 
-The wrapper accepts exactly `deploy`, `deploy backend`, `deploy frontend`,
-or `status`; it rejects arbitrary shell commands and file transfers. Test
-the new key with `ssh ... status`. The job
-pins the server's existing trusted host key, uses no repository checkout or
-build artifacts, and needs no `GITHUB_TOKEN` permissions. Only temporary SSH
-credentials are written on the runner and they are removed after the job.
-Application secrets remain in the VPS's private `.env`.
+The wrapper accepts only `status` or `deploy <server digest> <web digest>`.
+It cannot select another instance, deploy a moving tag, or execute arbitrary
+shell commands. Old CI commands such as `deploy frontend` are rejected.
+Application secrets stay in each instance's private `.env`.
 
-Production deployments queue per component without cancelling an active
-deploy. Pending jobs for the same component may be coalesced; a frontend job
-cannot replace a queued backend job. The shared VPS lock serializes all
-component updates, manual operations, and scheduled backups. The CI wrapper
-waits up to fifteen minutes for this lock.
+### VPS configuration
 
-Each job selects the latest successfully published image for its component,
-not necessarily the commit which triggered it. It reads the other image
-under the same lock, preserving any update completed by an earlier job.
-This prevents old queued events from rolling back either component.
+Connect with `ssh -l deployer netcup`. Install these files from `deploy/` in
+**both** instance directories: `compose.yaml`, `compose.production.yaml`,
+`compose.sh`, `manage.sh`, `ci-deploy.sh`, `prune-backups.py`, `Caddyfile`,
+`WebCaddyfile`, and `livekit.yaml`. Keep the scripts executable and each `.env`
+mode 0600, owned by `deployer`. The repository need not be cloned on the VPS.
 
-The selected image package must be accessible to the VPS. A backend-only
-update can keep the initial locally built frontend. The first web publish
-may create a private package: make it public, then manually run **Deploy VPS**
-with `frontend` if that initial automatic run failed. A missing image fails
-before changing the application. Backups and readiness/HTTPS/frontend checks
-are the same as a manual deployment; there is no automatic database rollback.
-
-The action updates container images only. Changes to the Compose files,
-Caddy/LiveKit configuration, management scripts or backup units still need
-installing on the VPS as described below. To revoke CI access, remove the
-dedicated authorized-key entry and delete the `VPS_SSH_KEY` environment
-secret. To pause automatic deployment, disable **Deploy VPS** in Actions.
-
-## Production VPS
-
-The Netcup host is reached with `ssh -l deployer netcup`. Its deployment
-directory is `/srv/falky`, owned by `deployer`. Docker starts at boot, and all
-three containers have `restart: unless-stopped`. The repository need not be
-cloned onto the host.
-
-Install these files from `deploy/` into `/srv/falky`: `compose.yaml`,
-`compose.production.yaml`, `compose.sh`, `manage.sh`, `ci-deploy.sh`,
-`prune-backups.py`, `Caddyfile`, and
-`livekit.yaml`. Make the shell scripts executable. Keep the configuration files
-from the same repository revision together. `compose.production.yaml` clears
-local builds and selects `FALKY_IMAGE` and `FALKY_WEB_IMAGE` from `.env`.
-It mounts `Caddyfile`, which serves the web client and proxies the API and
-signalling. `compose.sh` always loads both files with the correct paths.
-
-Create `.env` on the host with mode 0600. Use the settings from `.env.example`,
-with `FALKY_DOMAIN=falky.lunari.win` and the host's public IP for
-`LIVEKIT_NODE_IP`. Generate the key pair on the host; do not commit it or
-print it in CI logs. Add `FALKY_IMAGE=ghcr.io/luckmorecat/falky@sha256:<digest>`
-for the selected published build. Also set
-`FALKY_WEB_IMAGE=ghcr.io/luckmorecat/falky-web@sha256:<digest>`. Public GHCR
-images need no registry login. Caddy uses `pull_policy: never`: `manage.sh`
-explicitly pulls a selected web registry image before starting Compose, and
-can also use an already-built local image by ID.
-
-For the latest published backend and frontend, run:
+Set the following in each instance's `.env`, alongside fresh instance-specific
+LiveKit credentials, the same VPS `LIVEKIT_NODE_IP`, and pinned `FALKY_IMAGE`
+and `FALKY_WEB_IMAGE` references:
 
 ```sh
-cd /srv/falky
-./manage.sh deploy
+# /srv/falky/.env — preserve all existing data and credentials
+FALKY_PROJECT_NAME=falky
+FALKY_DOMAIN=falky.lunari.win
+LIVEKIT_TCP_PORT=7881
+LIVEKIT_UDP_PORT=7882
+
+# /srv/falky-dev/.env — new credentials and empty volumes
+FALKY_PROJECT_NAME=falky-dev
+FALKY_DOMAIN=dev.falky.lunari.win
+LIVEKIT_TCP_PORT=7891
+LIVEKIT_UDP_PORT=7892
 ```
 
-To update only one component while preserving the other's deployed version:
+Install `deploy/edge/compose.yaml` and `deploy/edge/Caddyfile` in
+`/srv/falky-edge`. The edge joins the two existing project networks using
+unambiguous service aliases. It alone publishes ports 80/443, obtains both
+certificates, and routes APIs and LiveKit signalling directly to the correct
+instance. This preserves client-IP rate limiting without trusting forwarded
+headers from visitors. Internal Caddy containers only serve static assets.
+No backend health/metrics, LiveKit API, admin or webhook routes are exposed.
+Back up `/srv/falky-edge` separately: instance backup bundles do not include
+the shared edge configuration.
+
+Point Cloudflare A records for `falky` and `dev.falky` at this VPS, using DNS
+only for direct connections. Open TCP 80/443/7881/7891 and UDP 443/7882/7892
+in the host/provider firewalls. LiveKit must listen on and advertise the same
+media ports that Docker publishes. No extra DNS record is needed for media.
+
+### Migrating the existing single instance
+
+This is a one-time maintenance operation; recreating containers briefly
+interrupts requests and voice sessions. Perform it before enabling the new
+workflows. Preserve the current image digests throughout the migration.
+
+1. Restrict the GitHub `production` environment to `v*` tags, removing its
+   `master` branch policy, so the old push-triggered workflow cannot upgrade it.
+2. Run the **old** `/srv/falky/manage.sh backup`. Save a private copy of the
+   existing `.env`, scripts, Compose and Caddy configuration outside the
+   deployment directory. Serialize the migration with `.operations.lock` so
+   a scheduled backup or already-started deployment cannot overlap it.
+3. Install the new files and set production's explicit project name and
+   existing media ports. Keep its credentials, database and image references.
+4. Create `/srv/falky-dev` with fresh credentials, its own project name and
+   ports, and a known image pair. Run `./compose.sh up -d --wait` there to
+   create the development containers and network.
+5. Validate the edge Caddyfile and install the edge files. Recreate the
+   production stack using `./compose.sh up -d --wait`; its internal Caddy
+   releases host ports 80/443. Start the edge immediately with
+   `docker compose -f /srv/falky-edge/compose.yaml up -d --wait`.
+   The edge reuses the existing external `falky_caddy_data` certificate volume.
+6. Run `./manage.sh status` in both instance directories. Verify the two access
+   links are different and production's rooms remain. Test voice and screen
+   sharing in both domains from a browser. Never run `make smoke` on either
+   shared instance: it rotates the access link.
+7. Install both backup services/timers and the separate CI keys. Merge the
+   workflows into master to enable development deployment. Subsequent `v*`
+   tags deploy production.
+
+If the proxy migration fails, stop the edge, restore the saved production
+configuration, and run the old Compose wrapper to recreate the previous stack
+with its original image digests. Do not remove volumes or restore the database
+unless an actual application upgrade requires it; this infrastructure migration
+uses the same images. Leave development stopped if needed while recovering.
+
+### Operations
+
+Run commands from `/srv/falky` for production or `/srv/falky-dev` for development:
 
 ```sh
-./manage.sh deploy backend
-./manage.sh deploy frontend
-```
-
-These commands pull only the selected image and use `up --no-deps` with
-the selected service (`falky` or `caddy`). They leave the other component and
-LiveKit running with their current images.
-
-The no-argument command pulls each package's `edge` tag independently,
-resolves it to that repository's immutable digest, and deploys those selected digests. The two
-packages may have different source revisions because they publish separately.
-Both packages must already be published and accessible: a failed pull or a
-missing digest aborts before taking a snapshot or changing configuration or
-containers. There is no fallback to an older cached image. The first public
-`falky-web` publish is required before using this form.
-
-To choose versions explicitly, resolve the digest of the desired
-`sha-<full commit SHA>` image and check its
-`org.opencontainers.image.revision` label before deploying. Use the resulting
-`ghcr.io/luckmorecat/falky@sha256:…` reference, not a moving `edge` tag:
-
-```sh
-cd /srv/falky
-./manage.sh deploy ghcr.io/luckmorecat/falky@sha256:<digest>
-# To update the web client too (or only it, keeping the current server digest):
-./manage.sh deploy ghcr.io/luckmorecat/falky@sha256:<server-digest> ghcr.io/luckmorecat/falky-web@sha256:<web-digest>
 ./manage.sh status
-```
-
-With an explicit server digest and no web argument, the current web image is
-kept. With no image arguments, both latest published images are selected. The
-deploy command validates configuration, obtains the selected images, backs up
-the existing running server if there is one, records both image references
-atomically in `.env`, and starts Compose with a three-minute readiness deadline. It then
-checks that both the database and LiveKit report `ok` and that the public
-HTTPS `/api/me` endpoint returns 401 without a visitor cookie. It also checks
-the homepage contains the React root and that its JavaScript and CSS load with
-the correct content types. Certificate issuance is allowed an additional
-retry period. A stopped existing server must be recovered before upgrading,
-so a failed backup cannot be skipped. If the backend container is missing
-but its configured database volume remains (for example after
-`./compose.sh down`), deployment also stops before recording new images or
-starting containers. An absent container does not prove the database is new.
-Restore/start the previous known working release, then rerun deployment so
-it can take the pre-upgrade snapshot. An error querying containers or volumes
-also aborts; it cannot be mistaken for a fresh installation.
-Deployments and backups share a lock. Manual operations fail immediately if
-another operation is running; the CI wrapper sets
-`FALKY_LOCK_WAIT_SECONDS=900` to wait for that operation instead.
-
-Use the wrapper for operator commands and diagnostics:
-
-```sh
-./compose.sh exec falky /falky link show
-./compose.sh exec falky /falky room create "Living room"
 ./compose.sh logs --since 10m falky livekit caddy
+./compose.sh exec falky /falky link show
+./manage.sh backup
 ```
 
-The initial frontend rollout was built on the VPS from exact commit
-`53e3fa7c818910bcda7f03e6224813b10581856f` because the server publishing
-workflow does not include the web client. Its source is retained under
-`/srv/falky/releases/<commit>/web`. To rebuild that release before a registry
-image is available:
+For manual recovery, deploy an explicit pair of known immutable images:
 
 ```sh
-docker build --label org.opencontainers.image.revision=<commit> -t falky-caddy:sha-<commit> releases/<commit>/web
-docker image inspect falky-caddy:sha-<commit> --format '{{.Id}}'
+./manage.sh deploy ghcr.io/luckmorecat/falky@sha256:<server-digest> ghcr.io/luckmorecat/falky-web@sha256:<web-digest>
 ```
 
-Pass the resulting `sha256:<image ID>` as the second image argument to
-`manage.sh deploy`. Production pins that content ID, rather than its tag.
-Do not use `make smoke` against this public stack.
+No-argument, latest-image and component-only deployments are intentionally
+unavailable: each release identifies both images. A local web image ID is
+accepted only by the operator command for recovering older installations;
+CI accepts published digests only.
 
-For changes to the deployment scripts, run `python3 deploy/manage_test.py`
-from the repository root. These tests replace Docker and external HTTPS
-verification to exercise latest-image selection, explicit version selection,
-backup ordering, and failures without touching a running stack. Also run
-`bash -n deploy/manage.sh deploy/compose.sh deploy/ci-deploy.sh` and validate workflow changes
-with `actionlint`.
+The shared proxy's logs are separate:
 
-### Production backups and recovery
+```sh
+docker compose -f /srv/falky-edge/compose.yaml logs --since 10m
+```
+
+Validate deployment changes from the repository root:
+
+```sh
+python3 deploy/manage_test.py
+python3 deploy/config_test.py
+bash -n deploy/manage.sh deploy/compose.sh deploy/ci-deploy.sh
+actionlint
+```
+
+The management tests substitute Docker and public HTTPS probes; the configuration
+tests render real Compose files without contacting Docker. Validate both Caddyfiles
+with the pinned Caddy image before installing them.
+
+### Backups and recovery
 
 `./manage.sh backup` takes a consistent application snapshot and copies it
 to `backups/<UTC timestamp>-<suffix>/database.db` and checks the copy's SQLite
 integrity. Each directory also holds the private `.env`, deployment
-configuration, scripts, and running server image reference (`image.txt`),
+configuration (including `WebCaddyfile`), scripts, and running server image reference (`image.txt`),
 plus the web image ID and source revision (`web-image.txt`, `web-revision.txt`).
 A `complete` marker is written only after all copies
 succeed. Incomplete directories are not usable backups.
@@ -325,17 +276,19 @@ A snapshot, copy or integrity-check failure does not start pruning. If cleanup
 itself fails, the new complete backup remains and the command reports failure;
 old complete directories are not removed until Docker snapshot cleanup succeeds.
 
-Install `deploy/systemd/falky-backup.service` and `.timer` into
-`/etc/systemd/system/` as root, then run:
+Install `deploy/systemd/falky-backup.service` and `.timer`, plus
+`falky-dev-backup.service` and `.timer`, into `/etc/systemd/system/` as root,
+then run:
 
 ```sh
 systemctl daemon-reload
-systemctl enable --now falky-backup.timer
-systemctl start falky-backup.service
-systemctl list-timers falky-backup.timer
+systemctl enable --now falky-backup.timer falky-dev-backup.timer
+systemctl start falky-backup.service falky-dev-backup.service
+systemctl list-timers falky-backup.timer falky-dev-backup.timer
 ```
 
-The timer runs daily at 03:00 UTC with up to 15 minutes of randomized delay.
+Production runs daily at 03:00 UTC; development at 03:30 UTC, each with up to
+15 minutes of randomized delay. Retention is independent for each instance.
 The job runs as `deployer` and waits up to fifteen minutes for a deployment,
 status check, or another backup to release the operations lock. Its twenty-
 minute service timeout leaves five more minutes to write and copy the backup.
@@ -351,7 +304,12 @@ because a new binary may already have applied database migrations. To
 recover, preserve the current data if needed, select a complete pre-upgrade
 backup, restore its configuration and scripts, and follow the *Restore*
 procedure below using `./compose.sh` instead of `docker compose` and
-`database.db` as input. Use that backup's server and web image references. On a
+`database.db` as input. The shared edge is attached to each instance network:
+before a restore that uses `compose down`, run
+`docker compose -f /srv/falky-edge/compose.yaml down` (without `--volumes`).
+This temporarily interrupts both domains. Start the edge again after the
+instance network is recreated. Its external certificate volume is preserved.
+Use that backup's server and web image references. On a
 replacement host, pull the registry images first, or rebuild the web image
 from its recorded revision if the backup uses a local image ID. Image IDs
 are host-local and may change when rebuilding. This loses writes
@@ -562,6 +520,8 @@ docker compose logs -f --since 1h falky
 ```
 
 All three write JSON lines.
+On the VPS use `./compose.sh` instead of `docker compose` for instance logs.
+The shared edge has its own Compose file and logs, as shown above.
 Docker keeps each container's log with the `json-file` driver and rotates it
 at 10 MB, keeping three files per container. Each log is kept on the host
 under `/var/lib/docker/containers/`, and

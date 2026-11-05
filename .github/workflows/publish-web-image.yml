@@ -1,50 +1,23 @@
-name: Publish web image
+name: Build web image
 
+# Called only after the release workflow's complete check gate.
 on:
-  push:
-    branches: [master]
-    paths:
-      - web/**
-      - .github/workflows/publish-web-image.yml
+  workflow_call:
+    outputs:
+      digest:
+        description: Immutable image digest built from this workflow's source
+        value: ${{ jobs.publish.outputs.digest }}
 
 permissions:
   contents: read
 
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
 jobs:
-  check:
-    name: Check web client
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - name: Check out source
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Check contract types, test, and build
-        # Use the same pinned Node image as web/Dockerfile.
-        run: |
-          docker run --rm \
-            --user "$(id -u):$(id -g)" \
-            --env npm_config_cache=/tmp/npm-cache \
-            --volume "$GITHUB_WORKSPACE:/src" --workdir /src/web \
-            node:26.13.0-alpine@sha256:c6ad9e9c1d80f6eb607c26b4b0a132ff7a2344fad1c78ea3baa2a7d4c8de6d94 \
-            sh -eu -c '
-              npm ci --silent
-              npx --no-install openapi-typescript ../api/openapi.yaml -o node_modules/.cache/schema.gen.ts --silent
-              diff -u src/api/schema.gen.ts node_modules/.cache/schema.gen.ts
-              npm test --silent
-              npm run build --silent
-            '
-
   publish:
     name: Publish web image
-    needs: check
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
     permissions:
       contents: read
       packages: write
@@ -53,6 +26,9 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Record source revision
+        id: source
+        run: echo "revision=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
       - name: Set image name
         id: image
         env:
@@ -67,6 +43,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Build and publish web image
+        id: build
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         env:
           DOCKER_BUILD_RECORD_UPLOAD: "false"
@@ -76,8 +53,7 @@ jobs:
           platforms: linux/amd64
           push: true
           tags: |
-            ${{ steps.image.outputs.name }}:edge
-            ${{ steps.image.outputs.name }}:sha-${{ github.sha }}
+            ${{ steps.image.outputs.name }}:run-${{ github.run_id }}-${{ github.run_attempt }}
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
-            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.revision=${{ steps.source.outputs.revision }}

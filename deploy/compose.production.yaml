@@ -1,9 +1,23 @@
-# Use with compose.yaml through ./compose.sh on the VPS.
+# Published images behind the shared edge proxy; used by both VPS instances.
+# Keep production's project name `falky` to retain its existing volumes.
 services:
   caddy:
     build: !reset null
     image: ${FALKY_WEB_IMAGE:?set FALKY_WEB_IMAGE to a published digest or local image ID}
     pull_policy: never
+    ports: !reset []
+    volumes: !override
+      - ./WebCaddyfile:/etc/caddy/Caddyfile:ro
+    networks:
+      default:
+        aliases: ["${FALKY_PROJECT_NAME:-falky}-web"]
   falky:
     build: !reset null
     image: ${FALKY_IMAGE:?set FALKY_IMAGE to a published image digest}
+    networks:
+      default:
+        aliases: ["${FALKY_PROJECT_NAME:-falky}-api"]
+  livekit:
+    networks:
+      default:
+        aliases: ["${FALKY_PROJECT_NAME:-falky}-voice"]

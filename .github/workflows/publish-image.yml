@@ -1,41 +1,23 @@
-name: Publish server image
+name: Build server image
 
+# Called only after the release workflow's complete check gate.
 on:
-  push:
-    branches: [master]
-    paths:
-      - server/**
-      - api/**
-      - .github/workflows/publish-image.yml
+  workflow_call:
+    outputs:
+      digest:
+        description: Immutable image digest built from this workflow's source
+        value: ${{ jobs.publish.outputs.digest }}
 
 permissions:
   contents: read
 
-# Cancel obsolete checks/builds before they can replace the edge tag.
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
 jobs:
-  check:
-    name: Check
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - name: Check out source
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Install pinned tools
-        uses: jdx/mise-action@f5be966e4a917d54244728e6a5fdcd1d93a35e6c # v5.2.6
-      - name: Run complete check gate
-        run: make check
-
   publish:
     name: Publish
-    needs: check
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
     permissions:
       contents: read
       packages: write
@@ -44,6 +26,9 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Record source revision
+        id: source
+        run: echo "revision=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
       - name: Set image name
         id: image
         env:
@@ -58,6 +43,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Build and publish server image
+        id: build
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         env:
           DOCKER_BUILD_RECORD_UPLOAD: "false"
@@ -67,8 +53,7 @@ jobs:
           platforms: linux/amd64
           push: true
           tags: |
-            ${{ steps.image.outputs.name }}:edge
-            ${{ steps.image.outputs.name }}:sha-${{ github.sha }}
+            ${{ steps.image.outputs.name }}:run-${{ github.run_id }}-${{ github.run_attempt }}
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
-            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.revision=${{ steps.source.outputs.revision }}

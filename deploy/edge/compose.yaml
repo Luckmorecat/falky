@@ -1,0 +1,35 @@
+name: falky-edge
+
+services:
+  caddy:
+    image: caddy:2.11.7@sha256:36c24ad91a7ff7bc4c87fe22bfa8df3c4b18da0773d73fc12ee2c52b98c0bb7e
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - certificates:/data
+      - config:/config
+    networks: [production, development]
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+networks:
+  production:
+    external: true
+    name: falky_default
+  development:
+    external: true
+    name: falky-dev_default
+
+volumes:
+  # Reuse production's ACME account and certificates during migration.
+  certificates:
+    external: true
+    name: falky_caddy_data
+  config:
