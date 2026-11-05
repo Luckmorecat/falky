@@ -6,7 +6,9 @@ import { fitBlocks } from '../fx/layout';
 import { assignPalettes } from '../fx/palette';
 import { effectsReduced } from '../fx/ticker';
 import { t } from '../strings';
+import { shareStatsEnabled } from '../voice/shareStats';
 import { Icon } from './Icon';
+import { ShareStats } from './ShareStatsOverlay';
 import { Tile } from './Tile';
 import { useDrawerLayout } from './useDrawerLayout';
 
@@ -164,6 +166,9 @@ function ShareView({ width, person, others, onPick }: { width: number; person: P
   return (
     <div ref={frame} className="share" style={{ width }}>
       <video ref={video} autoPlay playsInline muted aria-label={person.isSelf ? t.yourScreen : t.screenOf(person.name)} />
+      {shareStatsEnabled(import.meta.env.DEV, location.hostname) && (
+        <ShareStats key={`${person.id}:${trackId}`} track={voice.shareTrack(person.id)} direction={person.isSelf ? 'send' : 'receive'} />
+      )}
       <div className="share-bar">
         <div className="share-tabs">
           {others.map((p) => (
