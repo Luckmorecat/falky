@@ -45,8 +45,9 @@ class IsolationTests(unittest.TestCase):
             self.assertFalse(services["caddy"].get("ports"))
             self.assertFalse(services["falky"].get("ports"))
             mounts = services["caddy"]["volumes"]
-            self.assertEqual(len(mounts), 1)
-            self.assertEqual(Path(mounts[0]["source"]).name, "WebCaddyfile")
+            self.assertEqual({(Path(m["source"]).name, m["target"], m["read_only"]) for m in mounts},
+                             {("WebCaddyfile", "/etc/caddy/Caddyfile", True),
+                              ("web.caddy", "/etc/caddy/web.caddy", True)})
             for service, alias in (("caddy", "web"), ("falky", "api"), ("livekit", "voice")):
                 self.assertEqual(services[service]["networks"]["default"]["aliases"],
                                  [config["name"] + "-" + alias])
@@ -66,6 +67,8 @@ class IsolationTests(unittest.TestCase):
     def test_local_stack_still_serves_https_directly(self):
         config = render("falky", "localhost", 7881, 7882, production=False)
         self.assertEqual({int(p["published"]) for p in config["services"]["caddy"]["ports"]}, {80, 443})
+        mounts = config["services"]["caddy"]["volumes"]
+        self.assertTrue(any(m["target"] == "/etc/caddy/web.caddy" and m["read_only"] for m in mounts))
 
     def test_edge_joins_only_the_two_instance_networks_and_reuses_certificates(self):
         result = subprocess.run(["docker", "compose", "-f", str(ROOT / "edge/compose.yaml"),

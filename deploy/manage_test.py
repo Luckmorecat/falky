@@ -128,7 +128,7 @@ class DeploymentTests(unittest.TestCase):
         self.addCleanup(self.temporary.cleanup)
         self.directory = Path(self.temporary.name)
         source = Path(__file__).parent
-        for name in ("manage.sh", "compose.sh", "ci-deploy.sh", "prune-backups.py", "compose.yaml", "compose.production.yaml", "Caddyfile", "WebCaddyfile", "livekit.yaml"):
+        for name in ("manage.sh", "compose.sh", "ci-deploy.sh", "prune-backups.py", "compose.yaml", "compose.production.yaml", "Caddyfile", "WebCaddyfile", "web.caddy", "livekit.yaml"):
             shutil.copy2(source / name, self.directory / name)
         self.initial = (
             f"FALKY_IMAGE={SERVER}@sha256:{'d' * 64}\n"

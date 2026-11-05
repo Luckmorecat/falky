@@ -6,17 +6,5 @@
 }
 
 :80 {
-	root * /srv/web
-	header {
-		Content-Security-Policy "default-src 'self'; connect-src 'self' wss://{$FALKY_DOMAIN}; img-src 'self' data:; style-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
-		Referrer-Policy no-referrer
-		X-Content-Type-Options nosniff
-		Permissions-Policy "microphone=(self), display-capture=(self), camera=()"
-	}
-	@assets path /assets/*
-	header @assets Cache-Control "public, max-age=31536000, immutable"
-	@page not path /assets/*
-	header @page Cache-Control no-cache
-	try_files {path} /index.html
-	file_server
+	import web.caddy
 }

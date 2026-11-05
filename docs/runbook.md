@@ -137,7 +137,7 @@ Application secrets stay in each instance's private `.env`.
 Connect with `ssh -l deployer netcup`. Install these files from `deploy/` in
 **both** instance directories: `compose.yaml`, `compose.production.yaml`,
 `compose.sh`, `manage.sh`, `ci-deploy.sh`, `prune-backups.py`, `Caddyfile`,
-`WebCaddyfile`, and `livekit.yaml`. Keep the scripts executable and each `.env`
+`WebCaddyfile`, `web.caddy`, and `livekit.yaml`. Keep the scripts executable and each `.env`
 mode 0600, owned by `deployer`. The repository need not be cloned on the VPS.
 
 Set the following in each instance's `.env`, alongside fresh instance-specific
@@ -164,6 +164,8 @@ unambiguous service aliases. It alone publishes ports 80/443, obtains both
 certificates, and routes APIs and LiveKit signalling directly to the correct
 instance. This preserves client-IP rate limiting without trusting forwarded
 headers from visitors. Internal Caddy containers only serve static assets.
+Local and VPS Caddyfiles import the same `web.caddy` static-serving policy;
+install and mount that file alongside either Caddyfile when updating them.
 No backend health/metrics, LiveKit API, admin or webhook routes are exposed.
 Back up `/srv/falky-edge` separately: instance backup bundles do not include
 the shared edge configuration.
@@ -255,7 +257,7 @@ with the pinned Caddy image before installing them.
 `./manage.sh backup` takes a consistent application snapshot and copies it
 to `backups/<UTC timestamp>-<suffix>/database.db` and checks the copy's SQLite
 integrity. Each directory also holds the private `.env`, deployment
-configuration (including `WebCaddyfile`), scripts, and running server image reference (`image.txt`),
+configuration (including `WebCaddyfile` and `web.caddy`), scripts, and running server image reference (`image.txt`),
 plus the web image ID and source revision (`web-image.txt`, `web-revision.txt`).
 A `complete` marker is written only after all copies
 succeed. Incomplete directories are not usable backups.

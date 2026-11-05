@@ -58,7 +58,7 @@ with closing(sqlite3.connect(Path(sys.argv[1]).resolve().as_uri() + '?mode=ro', 
     if db.execute('PRAGMA integrity_check').fetchall() != [('ok',)]:
         raise SystemExit('Copied database failed its integrity check')
 PY
-  cp .env compose.yaml compose.production.yaml compose.sh manage.sh ci-deploy.sh prune-backups.py Caddyfile WebCaddyfile livekit.yaml "$directory/"
+  cp .env compose.yaml compose.production.yaml compose.sh manage.sh ci-deploy.sh prune-backups.py Caddyfile WebCaddyfile web.caddy livekit.yaml "$directory/"
   docker inspect --format '{{.Config.Image}}' "$container" > "$directory/image.txt"
   caddy_container=$(./compose.sh ps --all --quiet caddy)
   docker inspect --format '{{.Image}}' "$caddy_container" > "$directory/web-image.txt"
