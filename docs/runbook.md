@@ -85,6 +85,21 @@ a skipped component blocks publishing and deployment. Locally, `make check`
 still runs both application check suites; use `make check-deploy` for deployment
 tests and workflow validation.
 
+On PRs and master pushes, the server job can reuse backend validation from a
+successful master workflow run when its commit is an ancestor of the checked-out
+revision and all backend/shared inputs still match. Only `web/`, documentation
+(`docs/`, `.agents/`, `.claude/`, `GLOSSARY.md`) changes allow reuse; API, server,
+tooling, workflow and unknown paths require the full backend suite. Comparing
+against a successful run also catches backend changes from an earlier failed or
+cancelled run. Tags always run backend checks. Missing history, API failures or
+no suitable baseline among the latest 30 successful master runs also run the
+full suite. The server job's log and summary explain its decision. Reuse skips
+the expensive tools/check steps; the job still reports success to the final gate.
+Frontend and deployment checks continue to run every time.
+Reusing backend validation also reuses its vulnerability-scan result; a tag or
+backend/shared-input change runs a fresh scan. Local `make check` always runs
+the complete backend suite.
+
 ```text
 master push → complete checks → plan against development → build changed images → development
 v* tag push → complete checks → plan against production  → build both images    → production
