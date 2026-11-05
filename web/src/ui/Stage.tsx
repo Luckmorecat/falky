@@ -166,7 +166,7 @@ function ShareView({ width, person, others, onPick }: { width: number; person: P
   return (
     <div ref={frame} className="share" style={{ width }}>
       <video ref={video} autoPlay playsInline muted aria-label={person.isSelf ? t.yourScreen : t.screenOf(person.name)} />
-      {shareStatsEnabled(import.meta.env.DEV, location.hostname) && (
+      {shareStatsEnabled(import.meta.env.VITE_DEV_STATS) && (
         <ShareStats key={`${person.id}:${trackId}`} track={voice.shareTrack(person.id)} direction={person.isSelf ? 'send' : 'receive'} />
       )}
       <div className="share-bar">

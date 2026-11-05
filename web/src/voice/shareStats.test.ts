@@ -138,13 +138,19 @@ it('continues measuring the fallback when dynacast marks the primary inactive', 
   stop();
 });
 
-it('enables diagnostics only for local development and the exact shared development host', async () => {
+it.each([
+  ['true', true],
+  [undefined, false],
+  ['', false],
+  ['false', false],
+  ['TRUE', false],
+  ['True', false],
+  ['1', false],
+  [' true', false],
+  ['true ', false],
+])('enables diagnostics only for the literal true flag (%s)', async (flag, enabled) => {
   const { shareStatsEnabled } = await import('./shareStats');
-  expect(shareStatsEnabled(true, 'localhost')).toBe(true);
-  expect(shareStatsEnabled(false, 'dev.falky.lunari.win')).toBe(true);
-  for (const hostname of ['falky.lunari.win', 'preview.falky.lunari.win', 'dev.falky.lunari.win.example.com', 'localhost']) {
-    expect(shareStatsEnabled(false, hostname)).toBe(false);
-  }
+  expect(shareStatsEnabled(flag)).toBe(enabled);
 });
 
 it('uses active encoding state when browsers omit active from a paused sender report', async () => {

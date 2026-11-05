@@ -1,5 +1,5 @@
-export function shareStatsEnabled(development: boolean, hostname: string): boolean {
-  return development || hostname === 'dev.falky.lunari.win';
+export function shareStatsEnabled(flag: string | undefined): boolean {
+  return flag === 'true';
 }
 
 export type ShareStatsDirection = 'send' | 'receive';

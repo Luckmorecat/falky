@@ -3,6 +3,11 @@ name: Build web image
 # Called only after the release workflow's complete check gate.
 on:
   workflow_call:
+    inputs:
+      dev_stats:
+        description: Enable development screen-share statistics in the built client
+        type: boolean
+        default: false
     outputs:
       digest:
         description: Immutable image digest built from this workflow's source
@@ -51,6 +56,8 @@ jobs:
           context: web/
           file: web/Dockerfile
           platforms: linux/amd64
+          build-args: |
+            VITE_DEV_STATS=${{ inputs.dev_stats }}
           push: true
           tags: |
             ${{ steps.image.outputs.name }}:run-${{ github.run_id }}-${{ github.run_attempt }}
