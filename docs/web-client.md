@@ -1,0 +1,91 @@
+# Web client
+
+`web/` is the browser client: one Vite app in React and TypeScript
+([ADR 0001](adr/0001-light-monorepo.md)). In production Caddy serves its build
+(`web/Dockerfile`), so the page, the API and LiveKit's signalling share one
+origin. `docs/design/prototype.html` is the design prototype it was built from.
+
+## What it does
+
+Everything the server offers, plus what a browser can add alone, without
+server changes: choosing devices, a volume for each participant, unread counts,
+event sounds and notifications. Attachments, push-to-talk and showing who is
+connected are left out: the first needs the server, the second cannot work
+while another window has the focus, and the third the
+[glossary](../GLOSSARY.md) rules out.
+
+## Where things live
+
+| Path | Holds |
+|---|---|
+| `src/api/` | The contract's generated types (`make generate-web`), requests, and the live-update connection with its reconnecting |
+| `src/chat/timeline.ts` | Chat rules with no UI: merging by ID, unread, the feed's layout, links |
+| `src/voice/session.ts` | One visitor's voice over LiveKit: joining and moving, mute, deafen, screen share, level meters |
+| `src/app/controller.ts` | Ties the above to the state in `store.ts`; every action the UI takes goes through here |
+| `src/fx/` | The blocks' colours, sizes and animation clock |
+| `src/ui/` | The screens |
+| `src/strings.ts` | Every word of the interface |
+
+A block's animation writes `transform` and `opacity` directly each frame and
+goes around React, so talking causes no renders, layout or repaints: Falky runs
+next to games. "Fewer effects" in the settings, or the system's reduced motion,
+leaves only the rim's brightness moving.
+
+## Running it locally
+
+Vite stands where Caddy stands, on `http://localhost:5173`. You need the server
+(`mise install` gives Go) and `livekit-server`, for example from
+`brew install livekit`.
+
+A LiveKit config in a file of your choice, say `livekit.yaml`. On a Mac, media
+only connects over loopback candidates:
+
+```yaml
+port: 7880
+keys:
+  devkey: devsecretdevsecretdevsecretdevsecret00
+rtc:
+  tcp_port: 7881
+  udp_port: 7882
+  use_external_ip: false
+  enable_loopback_candidate: true
+webhook:
+  api_key: devkey
+  urls:
+    - http://127.0.0.1:9090/livekit/webhook
+```
+
+Then, each in its own terminal:
+
+```sh
+livekit-server --config livekit.yaml --node-ip 127.0.0.1 --bind 127.0.0.1
+```
+
+```sh
+cd server
+FALKY_PUBLIC_ORIGIN=http://localhost:5173 \
+FALKY_LIVEKIT_API_KEY=devkey \
+FALKY_LIVEKIT_API_SECRET=devsecretdevsecretdevsecretdevsecret00 \
+go run ./cmd/falky serve
+```
+
+```sh
+cd web
+npm ci
+npm run dev
+```
+
+Create a room and print the access link from `server/`:
+
+```sh
+go run ./cmd/falky room create Lounge
+go run ./cmd/falky link show
+```
+
+A second person on the same machine needs another browser profile: the browser
+is what makes someone a visitor.
+
+## Checks
+
+`make check-web` (part of `make check`) compares the generated types with the
+contract, runs the unit tests and type-checks and builds the client.

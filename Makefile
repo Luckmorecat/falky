@@ -1,11 +1,15 @@
 IN_SERVER := cd server &&
+IN_WEB := cd web &&
 
 # The contract and the Go code generated from it (paths relative to server/).
 API_SPEC := ../api/openapi.yaml
 API_GEN := internal/api/api.gen.go
 OAPI_CODEGEN := go tool oapi-codegen -config internal/api/oapi-codegen.yaml
+# The client's types, generated from the same contract (relative to web/).
+WEB_API_GEN := src/api/schema.gen.ts
+WEB_API_FRESH := node_modules/.cache/schema.gen.ts
 
-.PHONY: check fmt lint lint-api check-generated test test-integration smoke generate
+.PHONY: check check-web fmt lint lint-api check-generated test test-integration smoke generate generate-web
 
 # The done condition: every step must pass, in this order.
 check:
@@ -17,6 +21,17 @@ check:
 	@$(MAKE) --no-print-directory lint
 	@$(MAKE) --no-print-directory test
 	$(IN_SERVER) go tool govulncheck ./...
+	@$(MAKE) --no-print-directory check-web
+
+# The web client: its types match the contract, it type-checks, its tests pass
+# and it builds.
+check-web:
+	$(IN_WEB) npm ci --silent
+	$(IN_WEB) npx openapi-typescript $(API_SPEC) -o $(WEB_API_FRESH) --silent && \
+		diff -u $(WEB_API_GEN) $(WEB_API_FRESH) || \
+		{ echo "web/$(WEB_API_GEN) is stale: run make generate-web" >&2; exit 1; }
+	$(IN_WEB) npm test --silent
+	$(IN_WEB) npm run build --silent
 
 fmt:
 	$(IN_SERVER) golangci-lint fmt
@@ -48,3 +63,6 @@ smoke:
 
 generate:
 	$(IN_SERVER) $(OAPI_CODEGEN) -o $(API_GEN) $(API_SPEC)
+
+generate-web:
+	$(IN_WEB) npm run generate

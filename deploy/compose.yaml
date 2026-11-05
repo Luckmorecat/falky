@@ -1,6 +1,6 @@
-# The Falky stack on one host: Caddy serves HTTPS and proxies the API and
-# LiveKit's signalling; LiveKit carries voice and screen share; the server keeps
-# the rooms, chat and visitors.
+# The Falky stack on one host: Caddy serves HTTPS and the web client, and proxies
+# the API and LiveKit's signalling; LiveKit carries voice and screen share; the
+# server keeps the rooms, chat and visitors.
 #
 #   cp deploy/.env.example deploy/.env   # then fill it in
 #   docker compose -f deploy/compose.yaml up -d --build
@@ -28,7 +28,9 @@ x-logging: &logging
 
 services:
   caddy:
-    image: caddy:2.11.7@sha256:36c24ad91a7ff7bc4c87fe22bfa8df3c4b18da0773d73fc12ee2c52b98c0bb7e
+    # Caddy with the built web client inside.
+    build: ../web
+    image: falky-caddy:local
     restart: unless-stopped
     ports:
       - "80:80"
