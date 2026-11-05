@@ -2,10 +2,9 @@ import { useEffect, useRef, useState } from 'react';
 import { enter, rename } from '../app/controller';
 import { useApp } from '../app/store';
 import { t } from '../strings';
-import { Dots } from './Dots';
-import { Tile } from './Tile';
+import { Orb } from './Orb';
 
-/** Typing wakes the entry block, as a voice would. */
+/** Typing wakes the entry orb, as a voice would. */
 export function Entry() {
   const [name, setName] = useState('');
   const [error, setError] = useState('');
@@ -31,30 +30,27 @@ export function Entry() {
 
   return (
     <div className="screen center">
-      <div className="enter">
-        <Tile id="entry" name={t.enterTitle} palette="magenta" level={level.current} mini />
-        <form className="enter-form" onSubmit={(e) => void submit(e)} noValidate>
-          <Dots text="F" className="enter-mark" />
-          <h1>{t.enterTitle}</h1>
-          <p>{t.enterHint}</p>
-          <input
-            autoFocus
-            maxLength={32}
-            autoComplete="off"
-            placeholder={t.name}
-            aria-label={t.name}
-            aria-describedby="enter-err"
-            value={name}
-            onChange={(e) => {
-              setName(e.target.value);
-              setError('');
-              pulse.current = Math.min(1, pulse.current + 0.7);
-            }}
-          />
-          <button className="go" disabled={!name.trim() || busy}>{t.enter}</button>
-          <p className="enter-err" id="enter-err" role="alert">{error}</p>
-        </form>
-      </div>
+      <form className="enter" onSubmit={(e) => void submit(e)} noValidate>
+        <Orb seed="entry" palette="sky" level={level.current} />
+        <h1>{t.enterTitle}</h1>
+        <p>{t.enterHint}</p>
+        <input
+          autoFocus
+          maxLength={32}
+          autoComplete="off"
+          placeholder={t.name}
+          aria-label={t.name}
+          aria-describedby="enter-err"
+          value={name}
+          onChange={(e) => {
+            setName(e.target.value);
+            setError('');
+            pulse.current = Math.min(1, pulse.current + 0.7);
+          }}
+        />
+        <button className="go" disabled={!name.trim() || busy}>{t.enter}</button>
+        <p className="enter-err" id="enter-err" role="alert">{error}</p>
+      </form>
     </div>
   );
 }
@@ -63,7 +59,7 @@ export function Message({ title, body }: { title: string; body: string }) {
   return (
     <div className="screen center">
       <div className="message-screen">
-        <Dots text="F" className="enter-mark" />
+        <Orb seed="message" palette="sky" />
         <h1>{title}</h1>
         <p>{body}</p>
       </div>

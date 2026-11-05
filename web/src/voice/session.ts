@@ -1,8 +1,10 @@
 import {
   ConnectionQuality,
   DisconnectReason,
+  type LocalAudioTrack,
   type LocalTrackPublication,
   type Participant as LkParticipant,
+  RemoteAudioTrack,
   type RemoteParticipant,
   Room,
   RoomEvent,
@@ -10,6 +12,9 @@ import {
   type VideoTrack,
 } from 'livekit-client';
 import { api, ApiError } from '../api/client';
+import { loudness } from './meter';
+import { type ShareSettings, shareOptions } from './share';
+import { softClipCurve } from './softclip';
 
 export interface VoicePerson {
   id: string;
@@ -57,6 +62,9 @@ export interface VoiceHost {
   onSound(sound: VoiceSound): void;
   micId(): string;
   speakerId(): string;
+  micProcessing(): { echoCancellation: boolean; noiseSuppression: boolean; autoGainControl: boolean };
+  joinMuted(): boolean;
+  shareSettings(): ShareSettings;
   volumeOf(visitorId: string): number;
 }
 
@@ -82,6 +90,8 @@ export class VoiceSession {
   private moving = false;
   private removedWhileMoving = false;
   private knownShares = new Set<string>();
+  /** What each remote track is raised by above 100%. */
+  private boosts = new WeakMap<RemoteAudioTrack, GainNode>();
 
   constructor(private readonly host: VoiceHost) {
     this.sinkHost = document.createElement('div');
@@ -100,7 +110,7 @@ export class VoiceSession {
     this.audio ??= new AudioContext({ latencyHint: 'interactive' });
     void this.audio.resume();
     const deafened = this.snap.deafened;
-    const startMuted = this.snap.status !== 'idle' && this.snap.muted && !this.snap.listenOnly;
+    const startMuted = this.snap.status === 'idle' ? this.host.joinMuted() : this.snap.muted && !this.snap.listenOnly;
     this.set({ status: 'joining', joiningRoomId: roomId });
     this.moving = true;
     this.removedWhileMoving = false;
@@ -125,12 +135,13 @@ export class VoiceSession {
     this.teardownRoom();
 
     const speakerId = this.host.speakerId();
-    const micId = this.host.micId();
     const room = new Room({
       adaptiveStream: true,
       dynacast: true,
-      audioCaptureDefaults: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, deviceId: micId || undefined },
+      audioCaptureDefaults: this.micOptions(),
       audioOutput: speakerId ? { deviceId: speakerId } : undefined,
+      // Through Web Audio, because an audio element cannot play above 100%.
+      webAudioMix: { audioContext: this.audio },
     });
     this.room = room;
     this.bind(room);
@@ -201,7 +212,8 @@ export class VoiceSession {
     if (!room) return;
     const on = !room.localParticipant.isScreenShareEnabled;
     try {
-      await room.localParticipant.setScreenShareEnabled(on, { audio: true });
+      const { capture, publish } = shareOptions(this.host.shareSettings());
+      await room.localParticipant.setScreenShareEnabled(on, capture, publish);
     } catch (err) {
       // Backing out of the browser's picker is not a failure.
       if ((err as Error).name !== 'NotAllowedError') this.host.onProblem('share_failed');
@@ -222,20 +234,13 @@ export class VoiceSession {
     const meter = this.meters.get(visitorId);
     if (!meter) return 0;
     meter.analyser.getFloatTimeDomainData(meter.buf);
-    let sum = 0;
-    for (const v of meter.buf) sum += v * v;
-    // Speech sits low on a linear scale; two roots spread it across the range.
-    return Math.max(0, Math.min(1, Math.sqrt(Math.sqrt(sum / meter.buf.length)) * 1.75 - 0.12));
+    return loudness(meter.buf);
   }
 
   applyVolumes(): void {
     const room = this.room;
     if (!room) return;
-    for (const p of room.remoteParticipants.values()) {
-      const v = this.snap.deafened ? 0 : this.host.volumeOf(p.identity);
-      p.setVolume(v, Track.Source.Microphone);
-      p.setVolume(v, Track.Source.ScreenShareAudio);
-    }
+    for (const p of room.remoteParticipants.values()) this.applyVolumesFor(p);
   }
 
   async setMic(deviceId: string): Promise<void> {
@@ -246,9 +251,20 @@ export class VoiceSession {
     await this.room?.switchActiveDevice('audiooutput', deviceId).catch(() => {});
   }
 
+  /** Applies changed noise, echo and gain settings to the microphone in use. */
+  async applyMicProcessing(): Promise<void> {
+    const track = this.room?.localParticipant.getTrackPublication(Track.Source.Microphone)?.track as LocalAudioTrack | undefined;
+    await track?.restartTrack(this.micOptions()).catch(() => {});
+    this.refresh();
+  }
+
+  private micOptions() {
+    return { ...this.host.micProcessing(), deviceId: this.host.micId() || undefined };
+  }
+
   private async enableMic(room: Room): Promise<void> {
     try {
-      await room.localParticipant.setMicrophoneEnabled(true);
+      await room.localParticipant.setMicrophoneEnabled(true, this.micOptions());
       this.set({ listenOnly: false });
     } catch (err) {
       this.set({ listenOnly: true });
@@ -261,6 +277,7 @@ export class VoiceSession {
     room
       .on(RoomEvent.TrackSubscribed, (track, _pub, participant) => {
         if (track.kind === Track.Kind.Audio) {
+          if (track instanceof RemoteAudioTrack) this.addBoost(track);
           const el = track.attach();
           this.sinkHost.append(el);
           this.applyVolumesFor(participant);
@@ -313,8 +330,28 @@ export class VoiceSession {
 
   private applyVolumesFor(p: RemoteParticipant): void {
     const v = this.snap.deafened ? 0 : this.host.volumeOf(p.identity);
-    p.setVolume(v, Track.Source.Microphone);
-    p.setVolume(v, Track.Source.ScreenShareAudio);
+    p.setVolume(Math.min(v, 1), Track.Source.Microphone);
+    p.setVolume(Math.min(v, 1), Track.Source.ScreenShareAudio);
+    for (const pub of p.audioTrackPublications.values()) {
+      const boost = pub.track && this.boosts.get(pub.track as RemoteAudioTrack);
+      if (boost) boost.gain.value = Math.max(v, 1);
+    }
+  }
+
+  /**
+   * Room above 100% for a track, with soft clipping after it so that raising a
+   * loud voice does not distort harshly. The SDK's own volume comes last and
+   * stays at 100% or below.
+   */
+  private addBoost(track: RemoteAudioTrack): void {
+    const ctx = this.audio;
+    if (!ctx || this.boosts.has(track)) return;
+    const boost = ctx.createGain();
+    const clip = ctx.createWaveShaper();
+    clip.curve = softClipCurve();
+    clip.oversample = '2x';
+    this.boosts.set(track, boost);
+    track.setWebAudioPlugins([boost, clip]);
   }
 
   private queueRefresh(): void {

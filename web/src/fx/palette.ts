@@ -1,15 +1,15 @@
 import type { CSSProperties } from 'react';
 
-/** Base (rim in silence), bright (rim in speech) and deep (the second glow). */
+/** An orb's body, the cloud poured over it, the darker patch beneath and the light at the cloud's heart. */
 export const PALETTES = {
-  magenta: ['#6c2e6c', '#e063b8', '#4d2085'],
-  ember: ['#6e3120', '#f2602f', '#8f1f18'],
-  indigo: ['#2c2f80', '#9286e6', '#1c2fa8'],
-  sand: ['#6a4a58', '#edc690', '#6b2fa3'],
-  navy: ['#14266e', '#3e6bee', '#0d1c70'],
-  rose: ['#6e2b40', '#f2728c', '#6b1f5c'],
-  lagoon: ['#12505b', '#42cbc3', '#0e4a7d'],
-  moss: ['#475720', '#c7da5c', '#2b5a31'],
+  sky: ['#4f98ee', '#a5d6f6', '#3a7fe6', '#f3fbf8'],
+  apricot: ['#a7a0c8', '#f6983c', '#8f86b8', '#e8e0f2'],
+  lagoon: ['#35d3ad', '#86ecd0', '#147a70', '#4fe36c'],
+  rose: ['#f08ca8', '#ffc9c4', '#c9477e', '#fff1e6'],
+  violet: ['#7b6cf0', '#b6a8ff', '#4a38c8', '#f0b8f0'],
+  amber: ['#f2b441', '#ffe08a', '#e4762a', '#fff7dc'],
+  moss: ['#9dc65a', '#dceca0', '#4f8a4a', '#f8ffd8'],
+  coral: ['#f0684c', '#ffab7d', '#b8305a', '#ffe3c4'],
 } as const;
 
 export type PaletteName = keyof typeof PALETTES;
@@ -51,6 +51,6 @@ export function assignPalettes(visitorIds: string[]): Map<string, PaletteName> {
 }
 
 export function paletteStyle(name: PaletteName): CSSProperties {
-  const [base, bright, deep] = PALETTES[name];
-  return { '--base': base, '--bright': bright, '--deep': deep } as CSSProperties;
+  const [base, bright, deep, core] = PALETTES[name];
+  return { '--base': base, '--bright': bright, '--deep': deep, '--core': core } as CSSProperties;
 }
