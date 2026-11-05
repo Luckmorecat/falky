@@ -9,10 +9,15 @@ OAPI_CODEGEN := go tool oapi-codegen -config internal/api/oapi-codegen.yaml
 WEB_API_GEN := src/api/schema.gen.ts
 WEB_API_FRESH := node_modules/.cache/schema.gen.ts
 
-.PHONY: check check-web fmt lint lint-api check-generated test test-integration smoke generate generate-web
+.PHONY: check check-server check-web check-deploy fmt lint lint-api check-generated test test-integration smoke generate generate-web
 
-# The done condition: every step must pass, in this order.
+# The complete application check gate. CI runs the two components in parallel.
 check:
+	@$(MAKE) --no-print-directory check-server
+	@$(MAKE) --no-print-directory check-web
+
+# The backend and shared API contract.
+check-server:
 	@$(MAKE) --no-print-directory lint-api
 	@$(MAKE) --no-print-directory check-generated
 	$(IN_SERVER) golangci-lint fmt --diff
@@ -21,7 +26,14 @@ check:
 	@$(MAKE) --no-print-directory lint
 	@$(MAKE) --no-print-directory test
 	$(IN_SERVER) go tool govulncheck ./...
-	@$(MAKE) --no-print-directory check-web
+
+# Deployment safety and workflow validation, independent of application checks.
+check-deploy:
+	bash -n deploy/manage.sh deploy/compose.sh deploy/ci-deploy.sh deploy/ci-ssh.sh
+	python3 deploy/manage_test.py
+	python3 deploy/release_test.py
+	python3 deploy/config_test.py
+	actionlint
 
 # The web client: its types match the contract, it type-checks, its tests pass
 # and it builds.
