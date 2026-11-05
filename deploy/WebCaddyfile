@@ -1,0 +1,10 @@
+# Internal static server. The shared edge proxies API and signalling directly
+# so the backend receives the real client IP from exactly one trusted proxy.
+{
+	admin off
+	auto_https off
+}
+
+:80 {
+	import web.caddy
+}

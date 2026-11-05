@@ -34,15 +34,6 @@ web = server + "-web"
 if args[0] == "pull":
     sys.exit(1 if args[1] == os.environ.get("FAIL_PULL") else 0)
 if args[:2] == ["image", "inspect"]:
-    image = args[2]
-    if image.endswith(":edge"):
-        repository = image.removesuffix(":edge")
-        digest = "b" * 64 if repository == web else "a" * 64
-        # The requested repository need not be the first RepoDigests entry.
-        references = ["ghcr.io/unrelated/image@sha256:" + "f" * 64]
-        if repository != os.environ.get("MISSING_DIGEST"):
-            references.append(repository + "@sha256:" + digest)
-        print(json.dumps(references))
     sys.exit(0)
 if args[:2] == ["volume", "ls"]:
     if os.environ.get("FAIL_VOLUME_LIST") == "1":
@@ -90,6 +81,8 @@ if args[0] == "run":
     sys.exit(0)
 if args[0] == "compose":
     command = args[7:]
+    if command[0] == "pull" and os.environ.get("FAIL_SERVER_PULL") == "1":
+        sys.exit(1)
     if command[0] == "config" and "--format" in command:
         env = dict(line.split("=", 1) for line in Path(".env").read_text().splitlines())
         print(json.dumps({"services": {
@@ -135,7 +128,7 @@ class DeploymentTests(unittest.TestCase):
         self.addCleanup(self.temporary.cleanup)
         self.directory = Path(self.temporary.name)
         source = Path(__file__).parent
-        for name in ("manage.sh", "compose.sh", "ci-deploy.sh", "prune-backups.py", "compose.yaml", "compose.production.yaml", "Caddyfile", "livekit.yaml"):
+        for name in ("manage.sh", "compose.sh", "ci-deploy.sh", "prune-backups.py", "compose.yaml", "compose.production.yaml", "Caddyfile", "WebCaddyfile", "web.caddy", "livekit.yaml"):
             shutil.copy2(source / name, self.directory / name)
         self.initial = (
             f"FALKY_IMAGE={SERVER}@sha256:{'d' * 64}\n"
@@ -166,7 +159,7 @@ else:
 
     def run_deploy(self, *images, **environment):
         return subprocess.run(
-            ["bash", "manage.sh", "deploy", *images],
+            ["bash", "manage.sh", "deploy", *(images or (SERVER_DIGEST, WEB_DIGEST))],
             cwd=self.directory,
             env=self.environment | environment,
             text=True,
@@ -182,7 +175,7 @@ else:
         self.assertEqual((self.directory / ".env").read_text(), self.initial)
         self.assertFalse(any("up" in call or "snapshot" in call for call in self.calls()))
 
-    def test_latest_pins_both_repositories_and_backs_up_before_start(self):
+    def test_release_pins_both_repositories_and_backs_up_before_start(self):
         result = self.run_deploy(EXISTING="1")
         self.assertEqual(result.returncode, 0, result.stderr)
         env = (self.directory / ".env").read_text()
@@ -285,73 +278,31 @@ else:
         self.assertTrue(any("20991104" not in path.parent.name for path in backups))
         self.assertTrue((self.directory / "snapshot-volume" / "falky-20261105T030000Z.db").is_file())
 
-    def test_failed_web_pull_keeps_running_deployment(self):
-        result = self.run_deploy(FAIL_PULL=WEB + ":edge", EXISTING="1")
+    def test_failed_pull_keeps_running_deployment(self):
+        result = self.run_deploy(FAIL_PULL=WEB_DIGEST, EXISTING="1")
         self.assertNotEqual(result.returncode, 0)
         self.assert_untouched()
 
-    def test_failed_server_pull_never_uses_cached_edge(self):
-        result = self.run_deploy(FAIL_PULL=SERVER + ":edge")
+    def test_failed_server_pull_keeps_running_deployment(self):
+        result = self.run_deploy(FAIL_SERVER_PULL="1", EXISTING="1")
         self.assertNotEqual(result.returncode, 0)
-        self.assertFalse(any(call[:2] == ["image", "inspect"] for call in self.calls()))
         self.assert_untouched()
 
-    def test_unrelated_digest_is_not_accepted(self):
-        result = self.run_deploy(MISSING_DIGEST=WEB)
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("no digest for " + WEB, result.stderr)
-        self.assert_untouched()
-
-    def test_explicit_server_keeps_existing_frontend(self):
-        result = self.run_deploy(SERVER_DIGEST)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("FALKY_WEB_IMAGE=" + LOCAL_WEB, (self.directory / ".env").read_text())
-        self.assertFalse(any(":edge" in argument for call in self.calls() for argument in call))
-
-    def test_explicit_frontend_digest_is_selected(self):
+    def test_release_never_resolves_mutable_tags(self):
         result = self.run_deploy(SERVER_DIGEST, WEB_DIGEST)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("FALKY_WEB_IMAGE=" + WEB_DIGEST, (self.directory / ".env").read_text())
+        self.assertFalse(any(":edge" in argument for call in self.calls() for argument in call))
 
-    def test_frontend_deploy_preserves_backend_without_pulling_or_starting_it(self):
-        result = self.run_deploy("frontend", EXISTING="1")
-        self.assertEqual(result.returncode, 0, result.stderr)
-        env = (self.directory / ".env").read_text()
-        self.assertIn(f"FALKY_IMAGE={SERVER}@sha256:{'d' * 64}", env)
-        self.assertIn("FALKY_WEB_IMAGE=" + WEB_DIGEST, env)
-        calls = self.calls()
-        self.assertFalse(any(call[0] == "pull" and (call[1] == SERVER + ":edge" or call[1].startswith(SERVER + "@")) for call in calls))
-        compose_pulls = [call for call in calls if call[0] == "compose" and call[7] == "pull"]
-        self.assertEqual(compose_pulls, [])
-        starts = [call[7:] for call in calls if call[0] == "compose" and call[7] == "up"]
-        self.assertEqual(len(starts), 1)
-        self.assertIn("--no-deps", starts[0])
-        self.assertEqual(starts[0][-1], "caddy")
+    def test_mutable_or_partial_release_is_rejected(self):
+        for images in ((SERVER + ":edge", WEB_DIGEST), (SERVER_DIGEST,), ("backend",), ("frontend",)):
+            with self.subTest(images=images):
+                result = self.run_deploy(*images)
+                self.assertEqual(result.returncode, 2)
+                self.assert_untouched()
 
-    def test_backend_deploy_preserves_frontend_without_pulling_or_starting_it(self):
-        self.initial = self.initial.replace(LOCAL_WEB, WEB_DIGEST)
-        (self.directory / ".env").write_text(self.initial)
-        result = self.run_deploy("backend")
-        self.assertEqual(result.returncode, 0, result.stderr)
-        env = (self.directory / ".env").read_text()
-        self.assertIn("FALKY_IMAGE=" + SERVER_DIGEST, env)
-        self.assertIn("FALKY_WEB_IMAGE=" + WEB_DIGEST, env)
-        calls = self.calls()
-        self.assertFalse(any(call[0] == "pull" and call[1].startswith(WEB) for call in calls))
-        compose_pulls = [call[7:] for call in calls if call[0] == "compose" and call[7] == "pull"]
-        self.assertEqual(compose_pulls, [["pull", "falky"]])
-        starts = [call[7:] for call in calls if call[0] == "compose" and call[7] == "up"]
-        self.assertEqual(len(starts), 1)
-        self.assertIn("--no-deps", starts[0])
-        self.assertEqual(starts[0][-1], "falky")
-
-    def test_failed_frontend_update_keeps_both_deployed_versions(self):
-        result = self.run_deploy("frontend", FAIL_PULL=WEB + ":edge", EXISTING="1")
-        self.assertNotEqual(result.returncode, 0)
-        self.assert_untouched()
-
-    def test_mutable_explicit_image_is_rejected(self):
-        result = self.run_deploy(SERVER + ":edge")
+    def test_no_argument_deploy_is_rejected(self):
+        result = subprocess.run(["bash", "manage.sh", "deploy"], cwd=self.directory,
+                                env=self.environment, capture_output=True, timeout=5)
         self.assertEqual(result.returncode, 2)
         self.assert_untouched()
 
@@ -362,31 +313,29 @@ else:
         self.assertFalse(any("up" in call for call in self.calls()))
         self.assertFalse(list((self.directory / "backups").glob("*/complete")))
 
-    def test_retained_volume_without_container_blocks_every_deploy_mode(self):
-        for images in ((), ("backend",), ("frontend",)):
-            with self.subTest(images=images):
-                result = self.run_deploy(*images, RETAINED_VOLUME="1")
-                self.assertNotEqual(result.returncode, 0)
-                self.assertIn("retained database volume", result.stderr)
-                self.assert_untouched()
+    def test_retained_volume_without_container_blocks_release(self):
+        result = self.run_deploy(RETAINED_VOLUME="1")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("retained database volume", result.stderr)
+        self.assert_untouched()
 
     def test_retained_volume_uses_configured_name(self):
-        result = self.run_deploy("backend", RETAINED_VOLUME="1", DATA_VOLUME_NAME="production-chat-db")
+        result = self.run_deploy(RETAINED_VOLUME="1", DATA_VOLUME_NAME="production-chat-db")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("production-chat-db", result.stderr)
         self.assert_untouched()
 
     def test_unrelated_volume_does_not_block_fresh_installation(self):
-        result = self.run_deploy(SERVER_DIGEST, SIMILAR_VOLUME="1")
+        result = self.run_deploy(SERVER_DIGEST, WEB_DIGEST, SIMILAR_VOLUME="1")
         self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_volume_listing_failure_cannot_be_treated_as_fresh_installation(self):
-        result = self.run_deploy("backend", FAIL_VOLUME_LIST="1")
+        result = self.run_deploy(FAIL_VOLUME_LIST="1")
         self.assertNotEqual(result.returncode, 0)
         self.assert_untouched()
 
     def test_container_query_failure_cannot_skip_backup(self):
-        result = self.run_deploy("backend", FAIL_PS="1")
+        result = self.run_deploy(FAIL_PS="1")
         self.assertNotEqual(result.returncode, 0)
         self.assert_untouched()
 
@@ -441,17 +390,21 @@ class CICommandTests(unittest.TestCase):
             text=True, capture_output=True, timeout=5,
         )
 
-    def test_deploy_uses_management_script_and_waits_for_lock(self):
-        result = self.command("deploy")
+    def test_deploy_forwards_exact_digests_and_waits_for_lock(self):
+        command = f"deploy {SERVER_DIGEST} {WEB_DIGEST}"
+        result = self.command(command)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout, "deploy 900\n")
+        self.assertEqual(result.stdout, command + " 900\n")
 
-    def test_component_commands_are_forwarded_exactly(self):
-        for component in ("backend", "frontend"):
-            with self.subTest(component=component):
-                result = self.command("deploy " + component)
-                self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertEqual(result.stdout, "deploy " + component + " 900\n")
+    def test_tags_partial_releases_and_injected_commands_are_rejected(self):
+        for command in ("deploy", "deploy backend", "deploy frontend",
+                        f"deploy {SERVER}:edge {WEB_DIGEST}",
+                        f"deploy {SERVER_DIGEST}",
+                        f"deploy {SERVER_DIGEST} {WEB_DIGEST}; id",
+                        f"deploy {SERVER_DIGEST} {WEB_DIGEST}\nstatus",
+                        f"deploy {WEB_DIGEST} {SERVER_DIGEST}"):
+            with self.subTest(command=command):
+                self.assertEqual(self.command(command).returncode, 2)
 
     def test_status_is_available_for_connection_checks(self):
         result = self.command("status")

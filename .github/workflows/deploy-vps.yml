@@ -1,42 +1,68 @@
 name: Deploy VPS
 
 on:
-  workflow_run:
-    workflows: [Publish server image, Publish web image]
-    types: [completed]
+  pull_request:
     branches: [master]
-  workflow_dispatch:
-    inputs:
-      component:
-        description: Component to update
-        type: choice
-        options: [all, backend, frontend]
-        default: all
-        required: true
+  push:
+    branches: [master]
+    tags: ['v*']
 
-permissions: {}
+permissions:
+  contents: read
+
+# Serialize the whole build/deploy sequence for each environment, so a slower
+# old build cannot overtake a newer deployment. Never cancel an active deploy.
+concurrency:
+  group: vps-${{ github.event_name }}-${{ github.event_name == 'pull_request' && github.ref || (github.ref_type == 'tag' && 'production' || 'development') }}
+  cancel-in-progress: false
 
 jobs:
+  check:
+    name: Check
+    if: github.repository == 'Luckmorecat/falky'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install pinned tools
+        uses: jdx/mise-action@f5be966e4a917d54244728e6a5fdcd1d93a35e6c # v5.2.6
+      - name: Run complete check gate
+        run: make check
+      - name: Check deployment scripts and workflows
+        run: |
+          bash -n deploy/manage.sh deploy/compose.sh deploy/ci-deploy.sh
+          python3 deploy/manage_test.py
+          python3 deploy/config_test.py
+          actionlint
+
+  server:
+    if: github.event_name == 'push'
+    needs: check
+    uses: ./.github/workflows/publish-image.yml
+    permissions:
+      contents: read
+      packages: write
+
+  web:
+    if: github.event_name == 'push'
+    needs: check
+    uses: ./.github/workflows/publish-web-image.yml
+    permissions:
+      contents: read
+      packages: write
+
   deploy:
-    name: Deploy production
-    if: >-
-      github.repository == 'Luckmorecat/falky' &&
-      github.ref == 'refs/heads/master' &&
-      (github.event_name == 'workflow_dispatch' ||
-       (github.event.workflow_run.conclusion == 'success' &&
-        github.event.workflow_run.event == 'push' &&
-        github.event.workflow_run.head_branch == 'master' &&
-        github.event.workflow_run.head_repository.full_name == github.repository))
+    name: Deploy ${{ github.ref_type == 'tag' && 'production' || 'development' }}
+    needs: [server, web]
     runs-on: ubuntu-latest
     timeout-minutes: 35
+    permissions: {}
     environment:
-      name: production
-      url: https://falky.lunari.win
-    concurrency:
-      # Keep one pending update for each component; a web event cannot replace
-      # a queued backend event. The VPS operations lock serializes execution.
-      group: vps-production-${{ github.event_name == 'workflow_dispatch' && inputs.component || (github.event.workflow_run.name == 'Publish server image' && 'backend' || 'frontend') }}
-      cancel-in-progress: false
+      name: ${{ github.ref_type == 'tag' && 'production' || 'development' }}
+      url: ${{ github.ref_type == 'tag' && 'https://falky.lunari.win' || 'https://dev.falky.lunari.win' }}
     steps:
       - name: Configure deployment SSH key and trusted host
         env:
@@ -44,36 +70,23 @@ jobs:
           VPS_KNOWN_HOSTS: ${{ vars.VPS_KNOWN_HOSTS }}
         run: |
           set -euo pipefail
-          test -n "$VPS_SSH_KEY" || { echo "Missing production secret VPS_SSH_KEY" >&2; exit 1; }
-          test -n "$VPS_KNOWN_HOSTS" || { echo "Missing production variable VPS_KNOWN_HOSTS" >&2; exit 1; }
+          test -n "$VPS_SSH_KEY" || { echo "Missing environment secret VPS_SSH_KEY" >&2; exit 1; }
+          test -n "$VPS_KNOWN_HOSTS" || { echo "Missing environment variable VPS_KNOWN_HOSTS" >&2; exit 1; }
           umask 077
           mkdir -p "$RUNNER_TEMP/vps-ssh"
           printf '%s\n' "$VPS_SSH_KEY" > "$RUNNER_TEMP/vps-ssh/key"
           printf '%s\n' "$VPS_KNOWN_HOSTS" > "$RUNNER_TEMP/vps-ssh/known_hosts"
-      - name: Deploy published component
+      - name: Deploy this build's immutable images
         env:
           VPS_HOST: ${{ vars.VPS_HOST }}
-          PUBLISHED_WORKFLOW: ${{ github.event.workflow_run.name }}
-          MANUAL_COMPONENT: ${{ inputs.component }}
-          EVENT_NAME: ${{ github.event_name }}
+          SERVER_DIGEST: ${{ needs.server.outputs.digest }}
+          WEB_DIGEST: ${{ needs.web.outputs.digest }}
         run: |
           set -euo pipefail
-          [[ $VPS_HOST =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]*$ ]] || { echo "Invalid production variable VPS_HOST" >&2; exit 1; }
-          if [[ $EVENT_NAME == workflow_dispatch ]]; then
-            component=$MANUAL_COMPONENT
-          else
-            case "$PUBLISHED_WORKFLOW" in
-              'Publish server image') component=backend ;;
-              'Publish web image') component=frontend ;;
-              *) echo "Unexpected publishing workflow" >&2; exit 1 ;;
-            esac
-          fi
-          case "$component" in
-            all) command=deploy ;;
-            backend) command='deploy backend' ;;
-            frontend) command='deploy frontend' ;;
-            *) echo "Invalid deployment component" >&2; exit 1 ;;
-          esac
+          [[ $VPS_HOST =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]*$ ]] || { echo "Invalid VPS_HOST" >&2; exit 1; }
+          [[ $SERVER_DIGEST =~ ^sha256:[a-f0-9]{64}$ ]] || { echo "Invalid server digest" >&2; exit 1; }
+          [[ $WEB_DIGEST =~ ^sha256:[a-f0-9]{64}$ ]] || { echo "Invalid web digest" >&2; exit 1; }
+          command="deploy ghcr.io/luckmorecat/falky@$SERVER_DIGEST ghcr.io/luckmorecat/falky-web@$WEB_DIGEST"
           ssh -F /dev/null -T \
             -o BatchMode=yes -o IdentitiesOnly=yes -o IdentityAgent=none \
             -o StrictHostKeyChecking=yes -o UpdateHostKeys=no \
