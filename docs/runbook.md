@@ -77,13 +77,21 @@ existing database is in `falky_falky_data`. Development starts with an empty
 `master`**, including docs-only changes, and on **tags matching `v*`**.
 A master push deploys development; a version tag deploys production. There is
 no production deployment on master pushes and no manual workflow trigger.
+`Release Please` runs separately on master pushes and maintains one rolling
+release PR. Merging that PR authorizes publication and production deployment;
+see [Release PRs and version policy](#release-prs-and-version-policy).
 
 Backend/API (`make check-server`), frontend (`make check-web`) and deployment
 safety (`make check-deploy`) checks run in parallel on separate runners. The
 final `Check` job succeeds only when all three pass; failure, cancellation or
 a skipped component blocks publishing and deployment. Locally, `make check`
 still runs both application check suites; use `make check-deploy` for deployment
-tests and workflow validation.
+tests, release-policy tests and workflow validation (Node 24 and npm are needed).
+On PRs, the deployment check also validates every incoming non-merge commit.
+This includes the release bot's commits. It excludes commits already on the PR's
+base branch, so historical nonconventional commits do not block new PRs.
+PR checks use `pull_request`, read-only permissions and no release App secrets;
+fork code never runs in a privileged `pull_request_target` workflow.
 
 On PRs and master pushes, the server job can reuse backend validation from a
 successful master workflow run when its commit is an ancestor of the checked-out
@@ -188,12 +196,141 @@ allowing an application deployment to silently ignore an unapplied host change.
 Do not bypass drift checks by editing release records. The records describe
 successful running state, not a desired configuration or a migration journal.
 
-Release a tested commit with:
+### Release PRs and version policy
 
-```sh
-git tag v1.2.0 <tested-commit>
-git push origin v1.2.0
-```
+Merge ordinary PRs into `master` with merge commits, preserving their individual
+semantic commits. Their normal development checks/build/deployment still run.
+Release Please accumulates the releasable commits into one PR, proposing the
+root `version.txt`, `.release-please-manifest.json` and `CHANGELOG.md`. Server
+and web share that application version; `web/package.json` is not an independent
+release version. Release PRs are refreshed from master even when a later push
+only changes documentation. All accumulated source ships with the release,
+including changes omitted from its notes. There is no frozen candidate branch.
+
+Review the version and notes, wait for the required `Check`, then merge the
+release PR. There is no auto-merge. Release Please publishes `vX.Y.Z` and a
+GitHub Release at the **merged release PR commit**, even if master has advanced.
+Publication does not wait for that push's development deployment. The App's tag
+push starts `Deploy VPS`, which runs all production checks and builds both images
+from the tagged commit before deploying. Publication and successful deployment
+are separate outcomes; a published GitHub Release is not proof the VPS is healthy.
+
+Use `type(scope): description` or `type: description` on individual commits.
+Types are lowercase; supported types are `feat`, `fix`, `perf`, `docs`, `ci`,
+`chore`, `build`, `refactor`, `style`, `test`, and `revert`. Optional scopes use
+letters, numbers, `.`, `_`, `/`, or `-`, starting with a letter or number (for
+example `server`, `web`, `deploy`, `deps`, `server/http`, or `UP-123`). The PR
+title alone does not determine the release. Actual merge commits are exempt
+from linting; ordinary commits whose subjects happen to say "Merge" are not.
+Only commits with zero or one Git parent contribute version changes and notes.
+The policy reads parents by exact SHA through GitHub, caching each candidate's
+lookup. This prevents semantic PR titles embedded in merge bodies from adding
+duplicate notes or inflating versions, even when master advances after checkout.
+Merge identities remain available for Release Please's release discovery. Failed
+or invalid parent lookups stop the proposal; retry after fixing the API failure.
+
+| Changes since the last release | Next version from 1.2.3 |
+| --- | --- |
+| `fix(server): ...`, `fix(deploy): ...`, `perf(web): ...` | 1.2.4 |
+| Runtime dependency update: `fix(deps): update LiveKit` | 1.2.4 |
+| `feat(voice): ...` | 1.3.0 |
+| `fix(api)!: ...` or a `BREAKING CHANGE: ...` body/footer | 2.0.0 |
+| `docs: ...`, `ci: ...`, any `ci`/`docs` scope (case-insensitive), including `perf(ci): ...` | No release |
+| Other maintenance such as `chore(deps): update test tooling`, without a breaking change | No release |
+
+The largest applicable bump wins. CI/docs maintenance is excluded before both
+version calculation and notes, including in mixed releases. Use `fix(deploy)`
+for operational corrections that should independently release. Runtime dependency
+fixes must use **`fix(deps)`**; `deps:` is not a supported type and
+`chore(deps)` intentionally does not release. `!` and `BREAKING CHANGE:` use
+the same upstream parser in validation and release generation. `Release-As:`
+commit directives and PR-body `BEGIN_COMMIT_OVERRIDE` sections are rejected:
+they bypass the automatic version policy or the validated individual commits.
+PR body edits rerun checks for this reason.
+Release generation also checks associated PR bodies before parsing unreleased
+commits, since bodies can be edited after merge. An override then stops the
+proposal with the PR number and commit SHA. Remove the override from that PR's
+body and rerun Release Please; the original Git messages determine the release.
+
+The first release is exactly **v1.0.0**. The initial empty manifest means no
+previous release; `version.txt` starts at `0.0.0` only as an unreleased placeholder.
+Do not seed a previous version, add a bootstrap SHA, or create a baseline tag.
+The initial notes collect releasable history from the beginning, including
+individual commits preserved by merge commits. The configured history search
+limit is raised far beyond Release Please's default 500 commits. Later releases
+start at the previous release commit and use the normal bump rules. `initial-version`
+is only a bootstrap default; it does not pin every release to 1.0.0.
+
+### Activating release automation
+
+These are required setup steps, **not a claim that the live repository is already
+configured**. This change does not create an App, install secrets, modify branch
+rules, publish a release, or change VPS files.
+
+1. Register a GitHub App and install it for **only `Luckmorecat/falky`**. Webhooks
+   are unnecessary. Grant repository **Contents: read/write**, **Pull requests:
+   read/write**, and **Workflows: read/write**; Metadata read is implicit. PR
+   permission covers the labels and comments used by Release Please, so separate
+   Issues write permission is unnecessary. Workflows write is needed when an
+   exact release commit has older workflow files than later master; GitHub's
+   [release API permission rules](https://docs.github.com/en/rest/releases/releases#create-a-release)
+   require it in that case. No organization, administration, Actions, or package
+   permission is needed by this App.
+2. Set repository variable `RELEASE_APP_CLIENT_ID` to the App's client ID and
+   repository secret `RELEASE_APP_PRIVATE_KEY` to its generated PEM private key.
+   Keep the key out of commits and logs. The workflow requests only this
+   repository and those three permissions; the token action revokes its
+   short-lived token after the job. There is no PAT or `GITHUB_TOKEN` fallback.
+   [App-authenticated events](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow)
+   let release PR checks run automatically and let the tag push trigger deployment.
+3. Protect `master`: require PRs, require the existing aggregate **`Check`**, and
+   require branches to be up to date before merge. Keep merge commits enabled;
+   don't require squash-only merges. The release bot must pass the same checks
+   and has no auto-merge or branch-protection bypass. Protect version tags against
+   movement/deletion while allowing this App to create them. Confirm repository
+   Actions policy allows the pinned actions in the workflows.
+4. Retain the development/production environment restrictions and secrets below.
+   Complete the existing [VPS baseline setup](#enabling-selective-releases-and-changing-vps-configuration)
+   for both instances; release automation does not install or reconcile host files.
+   Root release metadata can invalidate both development image fingerprints.
+5. Merge the automation change. Once the App is configured, a master push or
+   manual **Release Please → Run workflow → master** reconciles release state.
+   Verify the first PR proposes 1.0.0 with the historical notes, and that its
+   `Check` runs under the App. Merging that release PR is the production
+   authorization; do not merge it merely to test setup.
+
+Release Please's pinned npm library, parser and small CI/docs policy adapter live
+in `release/`; the lockfile is installed with `npm ci --ignore-scripts`. The
+official library owns PR/tag/label/retry state. `make check-deploy` tests its real
+manifest, version and changelog behavior against a substituted GitHub boundary,
+including full initial history, rolling updates and retry after publication
+failure. The historical regression test needs full Git history (CI fetches it).
+Hosted App permissions, bot-triggered checks and tag-triggered deployment
+must still be verified after activation; local tests cannot prove live settings.
+
+### Publication and deployment failures
+
+Release publication is serialized separately from development and production
+deployment. Runs are never cancelled while active; pending runs may coalesce.
+Release Please only responds to master pushes or a manual retry on master, so
+its PR-branch pushes and version tags cannot recursively start itself. The next
+run discovers current master and pending merged release PRs.
+
+If PR creation/publication fails, fix the reported cause and rerun **Release
+Please** (or dispatch it on master). Keep its `autorelease: pending` and
+`autorelease: tagged` labels intact. It discovers the merged PR and its exact
+commit again. A partial publication may reconcile labels on one retry and need
+another retry to resume proposals; never delete or move a published version.
+
+If production checks, image builds or deployment fail, the tag and GitHub Release
+remain published. Once the cause is resolved, rerun the **whole original tag's
+Deploy VPS workflow**, not just a failed deployment job with old outputs. Existing
+ancestry and baseline checks reject a stale retry after a newer deployment.
+A `.release-pending.json` marker or host drift requires the existing manual
+recovery below before a safe rerun. No automatic rollback is added. Development
+and production retain separate concurrency, and pending production runs may
+coalesce: publishing a version does not guarantee every intermediate version
+will reach the VPS.
 
 Do not move or reuse a release tag. The tagged commit must contain these
 workflows; a tag on an older commit uses that older commit's workflow files.
