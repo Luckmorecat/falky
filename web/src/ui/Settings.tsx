@@ -5,7 +5,7 @@ import { useApp } from '../app/store';
 import { onTick } from '../fx/ticker';
 import { t } from '../strings';
 import { type MicTest, startMicTest } from '../voice/meter';
-import { canShareScreen } from '../voice/share';
+import { canShareScreen, supportedShareCodecs, type ShareCodec } from '../voice/share';
 import { playSound } from '../voice/sounds';
 
 function useDevices(kind: MediaDeviceKind, active: boolean): MediaDeviceInfo[] {
@@ -21,6 +21,7 @@ function useDevices(kind: MediaDeviceKind, active: boolean): MediaDeviceInfo[] {
 }
 
 const canChooseSpeaker = typeof AudioContext !== 'undefined' && 'setSinkId' in AudioContext.prototype;
+const codecLabels: Record<ShareCodec, string> = { vp8: 'VP8', h264: 'H.264', h265: 'H.265' };
 
 function Segmented<V extends string>({ label, value, options, onChange }: { label: string; value: V; options: [V, string][]; onChange(v: V): void }) {
   return (
@@ -113,6 +114,8 @@ export function Settings({ open }: { open: boolean }) {
   const settings = useApp((s) => s.settings);
   const visitor = useApp((s) => s.visitor);
   const sharing = useApp((s) => s.voice.sharing);
+  const shareCodecs = supportedShareCodecs();
+  const shareCodec = shareCodecs.includes(settings.shareCodec) ? settings.shareCodec : 'vp8';
   const mics = useDevices('audioinput', open);
   const speakers = useDevices('audiooutput', open && canChooseSpeaker);
   const [name, setName] = useState(visitor?.name ?? '');
@@ -175,6 +178,8 @@ export function Settings({ open }: { open: boolean }) {
       {canShareScreen && (
         <section>
           <h3>{t.sectionShare}</h3>
+          <Segmented label={t.shareCodec} value={shareCodec} options={shareCodecs.map((codec) => [codec, codecLabels[codec]])} onChange={(shareCodec) => updateSettings({ shareCodec })} />
+          {shareCodec === 'h265' && <p className="set-note">{t.shareCodecFallback}</p>}
           <Segmented label={t.shareResolution} value={settings.shareResolution} options={[['720', '720p'], ['1080', '1080p'], ['1440', '1440p']]} onChange={(shareResolution) => updateSettings({ shareResolution })} />
           <Segmented label={t.shareFps} value={settings.shareFps} options={[['15', '15'], ['30', '30'], ['60', '60']]} onChange={(shareFps) => updateSettings({ shareFps })} />
           <Segmented label={t.shareBitrate} value={settings.shareBitrate} options={[['1', t.shareBitrateDefault], ['2', 'x2'], ['3', 'x3']]} onChange={(shareBitrate) => updateSettings({ shareBitrate })} />
