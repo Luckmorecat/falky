@@ -78,6 +78,13 @@ existing database is in `falky_falky_data`. Development starts with an empty
 A master push deploys development; a version tag deploys production. There is
 no production deployment on master pushes and no manual workflow trigger.
 
+Backend/API (`make check-server`), frontend (`make check-web`) and deployment
+safety (`make check-deploy`) checks run in parallel on separate runners. The
+final `Check` job succeeds only when all three pass; failure, cancellation or
+a skipped component blocks publishing and deployment. Locally, `make check`
+still runs both application check suites; use `make check-deploy` for deployment
+tests and workflow validation.
+
 ```text
 master push → complete checks → plan against development → build changed images → development
 v* tag push → complete checks → plan against production  → build both images    → production
