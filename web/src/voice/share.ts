@@ -1,3 +1,4 @@
+import { supportedShareCodecs } from '@falky/browser';
 import type { ScreenShareCaptureOptions, TrackPublishOptions } from 'livekit-client';
 
 export type ShareResolution = '720' | '1080' | '1440';
@@ -15,22 +16,7 @@ export interface ShareSettings {
   shareAudio: boolean;
 }
 
-export const canShareScreen = typeof navigator !== 'undefined' && !!navigator.mediaDevices?.getDisplayMedia;
-
-/** Probe sending support, not playback support. VP8 remains the WebRTC baseline. */
-export function supportedShareCodecs(): ShareCodec[] {
-  const supported: ShareCodec[] = ['vp8'];
-  try {
-    if (typeof RTCRtpSender === 'undefined') return supported;
-    const codecs = RTCRtpSender.getCapabilities?.('video')?.codecs ?? [];
-    for (const codec of ['h264', 'h265'] as const) {
-      if (codecs.some((c) => c.mimeType.toLowerCase() === `video/${codec}`)) supported.push(codec);
-    }
-  } catch {
-    // Capability discovery can be unavailable even when screen sharing works.
-  }
-  return supported;
-}
+export { canShareScreen, supportedShareCodecs } from '@falky/browser';
 
 /** Bits per second at 30 frames; enough for moving pictures without taking the whole uplink. */
 const BITRATE: Record<ShareResolution, number> = { 720: 1_700_000, 1080: 3_000_000, 1440: 5_000_000 };

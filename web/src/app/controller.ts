@@ -2,8 +2,9 @@ import { api, ApiError, type LiveEvent, type Message, type Room, type Visitor } 
 import { LiveConnection } from '../api/live';
 import { countUnread, emptyChat, mergeMessages, type PendingMessage, type RoomChat } from '../chat/timeline';
 import { setLanguage, t } from '../strings';
-import { VoiceSession } from '../voice/session';
-import { playSound } from '../voice/sounds';
+import { VoiceSession } from '@falky/voice';
+import type { VoiceClient } from '../voice/types';
+import { playSound, notificationPermission, requestNotificationPermission, notificationsAvailable, notify } from '@falky/browser';
 import { applyAppearance } from './appearance';
 import { prefs, type Settings } from './prefs';
 import { getState, setState } from './store';
@@ -15,7 +16,7 @@ let linkSecret: string | null = null;
 let noticeSeq = 0;
 let noticeTimer: ReturnType<typeof setTimeout> | null = null;
 
-export const voice = new VoiceSession({
+export const voice: VoiceClient = new VoiceSession({
   onChange: (snapshot) => setState({ voice: snapshot }),
   onProblem(problem) {
     if (problem === 'visitor_required') return endAccess();
@@ -310,15 +311,13 @@ async function send(p: PendingMessage): Promise<void> {
 function notifyOfMessage(m: Message): void {
   const s = getState();
   if (!s.settings.notifications || m.authorId === s.visitor?.id || document.visibilityState === 'visible') return;
-  if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
+  if (notificationPermission() !== 'granted') return;
   const room = s.rooms.find((r) => r.id === m.roomId)?.name ?? '';
-  const n = new Notification(`${m.authorName} · ${room}`, { body: m.body.slice(0, 160), tag: m.roomId });
-  n.onclick = () => {
+  notify(`${m.authorName} · ${room}`, { body: m.body.slice(0, 160), tag: m.roomId }, () => {
     window.focus();
     viewRoom(m.roomId);
     setChatOpen(true);
-    n.close();
-  };
+  });
 }
 
 /* ---------- Navigation ---------- */
@@ -375,8 +374,8 @@ export function updateSettings(patch: Partial<Settings>): void {
 
 /** Turns message notifications on, asking the browser first; answers whether they are on. */
 export async function enableNotifications(): Promise<boolean> {
-  if (typeof Notification === 'undefined') return false;
-  const permission = Notification.permission === 'default' ? await Notification.requestPermission() : Notification.permission;
+  if (!notificationsAvailable) return false;
+  const permission = notificationPermission() === 'default' ? await requestNotificationPermission() : notificationPermission();
   updateSettings({ notifications: permission === 'granted' });
   return permission === 'granted';
 }

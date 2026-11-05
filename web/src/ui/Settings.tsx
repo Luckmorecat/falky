@@ -4,23 +4,21 @@ import type { Settings as SettingsValues } from '../app/prefs';
 import { useApp } from '../app/store';
 import { onTick } from '../fx/ticker';
 import { t } from '../strings';
-import { type MicTest, startMicTest } from '../voice/meter';
+import type { MicTest } from '../voice/meter';
+import { canChooseSpeaker, enumerateDevices, watchDevices, refreshDevices, startMicTest, playSound, notificationsAvailable } from '@falky/browser';
 import { canShareScreen, supportedShareCodecs, type ShareCodec } from '../voice/share';
-import { playSound } from '../voice/sounds';
 
 function useDevices(kind: MediaDeviceKind, active: boolean): MediaDeviceInfo[] {
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
   useEffect(() => {
-    if (!active || !navigator.mediaDevices?.enumerateDevices) return;
-    const load = () => void navigator.mediaDevices.enumerateDevices().then((all) => setDevices(all.filter((d) => d.kind === kind && d.deviceId && d.deviceId !== 'default')));
+    if (!active) return;
+    const load = () => void enumerateDevices().then((all) => setDevices(all.filter((d) => d.kind === kind && d.deviceId && d.deviceId !== 'default')));
     load();
-    navigator.mediaDevices.addEventListener('devicechange', load);
-    return () => navigator.mediaDevices.removeEventListener('devicechange', load);
+    return watchDevices(load);
   }, [kind, active]);
   return devices;
 }
 
-const canChooseSpeaker = typeof AudioContext !== 'undefined' && 'setSinkId' in AudioContext.prototype;
 const codecLabels: Record<ShareCodec, string> = { vp8: 'VP8', h264: 'H.264', h265: 'H.265' };
 
 function Segmented<V extends string>({ label, value, options, onChange }: { label: string; value: V; options: [V, string][]; onChange(v: V): void }) {
@@ -72,7 +70,7 @@ function MicLevel({ open }: { open: boolean }) {
         else {
           test.current = started;
           // Device names appear once the browser has been allowed the microphone.
-          navigator.mediaDevices.dispatchEvent(new Event('devicechange'));
+          refreshDevices();
         }
       },
       (err: Error) => {
@@ -199,7 +197,7 @@ export function Settings({ open }: { open: boolean }) {
       <section>
         <h3>{t.sectionAlerts}</h3>
         <Toggle flag="sounds" label={t.eventSounds} />
-        {typeof Notification !== 'undefined' && (
+        {notificationsAvailable && (
           <label className="toggle">
             {t.notifications}
             <input

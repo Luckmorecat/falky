@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from 'react';
 import type { Room, Visitor } from '../api/client';
 import type { RoomChat } from '../chat/timeline';
-import { idleVoice, type VoiceSnapshot } from '../voice/session';
+import { idleVoice, type VoiceSnapshot } from '../voice/types';
 import { prefs, type Settings } from './prefs';
 
 export interface Notice {

@@ -13,60 +13,12 @@ import {
 } from 'livekit-client';
 import { api, ApiError } from '../api/client';
 import { loudness } from './meter';
-import { type ShareSettings, shareOptions } from './share';
+import { shareOptions } from './share';
 import { softClipCurve } from './softclip';
 
-export interface VoicePerson {
-  id: string;
-  name: string;
-  local: boolean;
-  muted: boolean;
-  deafened: boolean;
-  sharing: boolean;
-  /** The shared screen's track once it can be shown; it arrives after `sharing`. */
-  shareTrackId: string;
-}
-
-export interface VoiceSnapshot {
-  status: 'idle' | 'joining' | 'connected' | 'reconnecting';
-  /** The room whose voice this is. While moving, still the previous one. */
-  roomId: string | null;
-  joiningRoomId: string | null;
-  /** When this room's voice was joined, on the performance clock. */
-  joinedAt: number;
-  people: VoicePerson[];
-  /** Visitor IDs of who is talking now. */
-  speakers: string[];
-  muted: boolean;
-  deafened: boolean;
-  /** In voice without a microphone: refused, or none exists. */
-  listenOnly: boolean;
-  sharing: boolean;
-  quality: 'good' | 'poor' | 'lost' | 'unknown';
-}
-
-export const idleVoice: VoiceSnapshot = {
-  status: 'idle', roomId: null, joiningRoomId: null, joinedAt: 0, people: [], speakers: [],
-  muted: false, deafened: false, listenOnly: false, sharing: false, quality: 'unknown',
-};
-
-export type VoiceProblem =
-  | 'room_full' | 'voice_unavailable' | 'name_taken' | 'visitor_required' | 'join_failed' | 'media_failed'
-  | 'tab_taken' | 'removed' | 'lost' | 'mic_denied' | 'mic_missing' | 'share_failed';
-
-export type VoiceSound = 'join' | 'leave' | 'share';
-
-export interface VoiceHost {
-  onChange(snapshot: VoiceSnapshot): void;
-  onProblem(problem: VoiceProblem): void;
-  onSound(sound: VoiceSound): void;
-  micId(): string;
-  speakerId(): string;
-  micProcessing(): { echoCancellation: boolean; noiseSuppression: boolean; autoGainControl: boolean };
-  joinMuted(): boolean;
-  shareSettings(): ShareSettings;
-  volumeOf(visitorId: string): number;
-}
+import { idleVoice, type VoiceHost, type VoicePerson, type VoiceSnapshot, type VoiceClient } from './types';
+export { idleVoice } from './types';
+export type { VoiceHost, VoicePerson, VoiceSnapshot, VoiceProblem, VoiceSound } from './types';
 
 interface Meter {
   trackId: string;
@@ -78,7 +30,7 @@ interface Meter {
 const isDeafened = (p: LkParticipant) => p.attributes.deafened === 'true';
 
 /** One visitor's connection to one room's voice at a time, over LiveKit. */
-export class VoiceSession {
+export class VoiceSession implements VoiceClient {
   private room: Room | null = null;
   private snap: VoiceSnapshot = idleVoice;
   private audio: AudioContext | null = null;
