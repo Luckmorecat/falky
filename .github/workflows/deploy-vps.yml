@@ -125,7 +125,7 @@ jobs:
       contents: read
     environment:
       name: ${{ github.ref_type == 'tag' && 'production' || 'development' }}
-      url: ${{ github.ref_type == 'tag' && 'https://falky.lunari.win' || 'https://dev.falky.lunari.win' }}
+      url: ${{ vars.APP_URL }}
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
