@@ -116,7 +116,7 @@ func Handler(deps Deps) http.Handler {
 	mux.HandleFunc("GET /link", func(w http.ResponseWriter, r *http.Request) {
 		link, err := deps.Identity.Link(r.Context())
 		if err != nil {
-			deps.Logger.Error("admin: read access link", "error", err)
+			deps.Logger.ErrorContext(r.Context(), "admin: read access link", "error_kind", platform.ErrorKind(err))
 			writeJSON(w, http.StatusInternalServerError, errorBody{Error: "cannot read the access link"})
 			return
 		}
@@ -125,7 +125,7 @@ func Handler(deps Deps) http.Handler {
 	mux.HandleFunc("POST /link/rotate", func(w http.ResponseWriter, r *http.Request) {
 		link, err := deps.Identity.Rotate(r.Context())
 		if err != nil {
-			deps.Logger.Error("admin: rotate access link", "error", err)
+			deps.Logger.ErrorContext(r.Context(), "admin: rotate access link", "error_kind", platform.ErrorKind(err))
 			writeJSON(w, http.StatusInternalServerError, errorBody{Error: "cannot rotate the access link"})
 			return
 		}
@@ -133,10 +133,10 @@ func Handler(deps Deps) http.Handler {
 		// the visitors of the old link still have open ends now.
 		deps.AccessRevoked()
 		if err := deps.Voice.RemoveAll(r.Context()); err != nil {
-			deps.Logger.Error("admin: voice not emptied after rotating the access link; "+
-				"the next refresh removes its participants", "error", err)
+			deps.Logger.ErrorContext(r.Context(), "admin: voice not emptied after rotating the access link; "+
+				"the next refresh removes its participants", "error_kind", platform.ErrorKind(err))
 		}
-		deps.Logger.Info("access link rotated")
+		deps.Logger.InfoContext(r.Context(), "access link rotated")
 		writeJSON(w, http.StatusOK, linkBody{Link: link})
 	})
 	mux.HandleFunc("POST /rooms", func(w http.ResponseWriter, r *http.Request) {
@@ -145,7 +145,7 @@ func Handler(deps Deps) http.Handler {
 			return
 		}
 		room, err := deps.Rooms.Create(r.Context(), body.Name)
-		writeRoom(w, deps.Logger, "create room", room, err)
+		writeRoom(r.Context(), w, deps.Logger, "create room", room, err)
 	})
 	mux.HandleFunc("PATCH /rooms/{id}", func(w http.ResponseWriter, r *http.Request) {
 		var body roomNameBody
@@ -158,7 +158,7 @@ func Handler(deps Deps) http.Handler {
 			writeJSON(w, http.StatusNotFound, errorBody{Error: fmt.Sprintf("no room has the ID %q", id)})
 			return
 		}
-		writeRoom(w, deps.Logger, "rename room", room, err)
+		writeRoom(r.Context(), w, deps.Logger, "rename room", room, err)
 	})
 	mux.HandleFunc("POST /snapshots", func(w http.ResponseWriter, r *http.Request) {
 		path, err := snapshot(r.Context(), deps)
@@ -166,17 +166,17 @@ func Handler(deps Deps) http.Handler {
 		case errors.Is(err, fs.ErrExist):
 			writeJSON(w, http.StatusConflict, errorBody{Error: path + " already exists; try again in a second"})
 		case err != nil:
-			deps.Logger.Error("admin: snapshot", "error", err)
+			deps.Logger.ErrorContext(r.Context(), "admin: snapshot", "error_kind", platform.ErrorKind(err))
 			writeJSON(w, http.StatusInternalServerError, errorBody{Error: "cannot take a snapshot"})
 		default:
-			deps.Logger.Info("snapshot taken", "path", path)
+			deps.Logger.InfoContext(r.Context(), "snapshot taken", "path", path)
 			writeJSON(w, http.StatusOK, snapshotBody{Path: path})
 		}
 	})
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, errorBody{Error: "unknown admin request " + r.Method + " " + r.URL.Path})
 	})
-	return mux
+	return platform.ObserveHTTP(deps.Logger, mux, "admin")
 }
 
 // snapshot takes a snapshot of the database into a new file in the snapshot
@@ -203,14 +203,14 @@ func decode(w http.ResponseWriter, r *http.Request, v any) bool {
 }
 
 // writeRoom answers with room, or with what err says went wrong doing what.
-func writeRoom(w http.ResponseWriter, logger *slog.Logger, what string, room rooms.Room, err error) {
+func writeRoom(ctx context.Context, w http.ResponseWriter, logger *slog.Logger, what string, room rooms.Room, err error) {
 	switch {
 	case errors.Is(err, rooms.ErrInvalidName):
 		writeJSON(w, http.StatusBadRequest, errorBody{Error: err.Error()})
 	case errors.Is(err, rooms.ErrNameTaken):
 		writeJSON(w, http.StatusConflict, errorBody{Error: err.Error()})
 	case err != nil:
-		logger.Error("admin: "+what, "error", err)
+		logger.ErrorContext(ctx, "admin: "+what, "error_kind", platform.ErrorKind(err))
 		writeJSON(w, http.StatusInternalServerError, errorBody{Error: "cannot " + what})
 	default:
 		writeJSON(w, http.StatusOK, roomBody{ID: room.ID, Name: room.Name})

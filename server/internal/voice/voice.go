@@ -18,6 +18,7 @@ import (
 	"github.com/livekit/protocol/livekit"
 
 	"github.com/kisshot/falky/server/internal/identity"
+	"github.com/kisshot/falky/server/internal/platform"
 	"github.com/kisshot/falky/server/internal/rooms"
 )
 
@@ -95,13 +96,14 @@ type Config struct {
 // Service lets visitors join rooms' voice and keeps the view of who is in
 // each room's voice.
 type Service struct {
-	livekit  LiveKit
-	visitors Visitors
-	rooms    Rooms
-	cfg      Config
-	keys     auth.KeyProvider
-	publish  func(roomID string, occupancy []identity.Visitor)
-	logger   *slog.Logger
+	livekit    LiveKit
+	visitors   Visitors
+	rooms      Rooms
+	cfg        Config
+	keys       auth.KeyProvider
+	publish    func(roomID string, occupancy []identity.Visitor)
+	logger     *slog.Logger
+	refreshLog platform.FailureLog
 
 	// publishing holds each change to the view, from reading what changed
 	// until it has published, so changes apply and publish one at a time.

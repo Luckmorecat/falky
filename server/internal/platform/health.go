@@ -34,6 +34,7 @@ type healthCheck struct {
 	probe func(context.Context) error
 	// failed is the component's status while probe returns an error.
 	failed HealthStatus
+	logs   *FailureLog
 }
 
 // HealthReport is the result of checking every component.
@@ -59,14 +60,14 @@ func NewHealth(logger *slog.Logger) *Health {
 // Require adds a component the server cannot serve without: while probe
 // returns an error, the component is unavailable and the server is not ready.
 func (h *Health) Require(name string, probe func(context.Context) error) {
-	h.checks = append(h.checks, healthCheck{name: name, probe: probe, failed: HealthUnavailable})
+	h.checks = append(h.checks, healthCheck{name: name, probe: probe, failed: HealthUnavailable, logs: &FailureLog{}})
 }
 
 // Optional adds a component the server keeps serving without, with less
 // working: while probe returns an error, the component is degraded and the
 // server stays ready.
 func (h *Health) Optional(name string, probe func(context.Context) error) {
-	h.checks = append(h.checks, healthCheck{name: name, probe: probe, failed: HealthDegraded})
+	h.checks = append(h.checks, healthCheck{name: name, probe: probe, failed: HealthDegraded, logs: &FailureLog{}})
 }
 
 // Check probes every component.
@@ -76,8 +77,8 @@ func (h *Health) Check(ctx context.Context) HealthReport {
 		pctx, cancel := context.WithTimeout(ctx, probeTimeout)
 		err := c.probe(pctx)
 		cancel()
+		c.logs.Report(ctx, h.logger, "health probe", err, "component", c.name)
 		if err != nil {
-			h.logger.WarnContext(ctx, "health probe failed", "component", c.name, "error", err)
 			report.Components[c.name] = c.failed
 			if report.Status != HealthUnavailable {
 				report.Status = c.failed

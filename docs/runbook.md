@@ -263,12 +263,59 @@ docker compose logs falky          # or caddy, livekit
 docker compose logs -f --since 1h falky
 ```
 
-All three write JSON lines.
+All three write JSON lines. The backend uses structured `slog` JSON on stdout.
+`FALKY_LOG_LEVEL` in `deploy/.env` sets its minimum level (default `info`);
+apply a change with `docker compose up -d falky`. Use `debug` for upgrade
+refusals, `info` for request completions, connection lifecycle and recovery,
+`warn` for voice outages, failed health probes and refused webhooks, and
+`error` for unexpected request/admin failures. Raising the minimum level
+also hides lower-level request records; responses still carry request IDs.
+
+Every HTTP response, including a WebSocket upgrade, has a server-generated
+`X-Request-ID`; client-supplied IDs are ignored. Copy this header from the
+browser's Network panel to find the request and its related errors:
+
+```sh
+request_id='COPY_X_REQUEST_ID_HERE'
+docker compose logs --no-log-prefix falky | jq -c --arg id "$request_id" 'select(.request_id == $id)'
+```
+
+A public `http request completed` record contains `request_id`, `listener`,
+`method`, `route`, `status`, and `duration_ms`. Routes are fixed templates
+such as `/api/rooms/{id}/messages`; unknown routes and redirects use
+`unmatched`. Unknown HTTP methods use `OTHER`. Request summaries contain no
+path parameters or query strings. Names, message bodies, cookies, tokens,
+and access links are excluded from logs.
+`client_ip` appears only on public 401, 403 and 429 completions, from the
+validated last `X-Forwarded-For` address supplied by Caddy. Malformed values
+are omitted. IPv6 logs use the actual address; the existing rate limiter
+still groups IPv6 clients by /64. Internal probes and WebSocket lifecycle
+records have no client IP.
+
+WebSocket upgrade completions use status 101 and measure the handshake.
+`live connection opened` and `live connection closed` share `request_id`
+and `connection_id` with that response. Close records have `lifetime_ms`,
+`close_code`, and a fixed `reason`, such as `peer_closed`, `write_failed`,
+`heartbeat_timeout`, `slow_consumer`, `access_revoked`, or `shutdown`.
+Peer-supplied close text is omitted; there are no per-message records.
+
+Errors use safe `error_kind` categories instead of raw error messages:
+for example `connection_refused`, `timeout`, `permission_denied`,
+`sqlite_<numeric code>`, or `livekit_<Twirp code>`. The event, component,
+room/visitor IDs when available, and request ID provide context. Health
+probes and occupancy refreshes log the first failure, a changed category,
+and a reminder at most once a minute for an unchanged category. A later
+success logs one recovery, with `suppressed` counting omitted repeats.
+Healthy probes and metrics requests stay quiet. Each failed voice join has
+one correlated warning in addition to its HTTP completion.
+
 Docker keeps each container's log with the `json-file` driver and rotates it
 at 10 MB, keeping three files per container. Each log is kept on the host
 under `/var/lib/docker/containers/`, and
 `docker inspect --format '{{.LogPath}}' falky-falky-1` names the file. A
 log is deleted with its container, for example by `docker compose down`.
+Retention is bounded by log volume, not by time: busy periods replace old
+records sooner. There is no guaranteed number of days of history.
 
 ## What else to keep
 

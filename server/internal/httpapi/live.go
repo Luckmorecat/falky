@@ -14,6 +14,7 @@ import (
 	"github.com/kisshot/falky/server/internal/api"
 	"github.com/kisshot/falky/server/internal/chat"
 	"github.com/kisshot/falky/server/internal/identity"
+	"github.com/kisshot/falky/server/internal/platform"
 	"github.com/kisshot/falky/server/internal/realtime"
 	"github.com/kisshot/falky/server/internal/rooms"
 )
@@ -63,7 +64,7 @@ func (l live) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		MayReceive: func(ctx context.Context, roomID string) bool {
 			err := l.rooms.Authorize(ctx, visitor, roomID, rooms.ReadMessages)
 			if err != nil && !errors.Is(err, rooms.ErrNotFound) && ctx.Err() == nil {
-				l.logger.ErrorContext(ctx, "live update not sent", "visitor", visitor.ID, "room", roomID, "error", err)
+				l.logger.ErrorContext(ctx, "live update not sent", "visitor", visitor.ID, "room", roomID, "error_kind", platform.ErrorKind(err))
 			}
 			return err == nil
 		},
@@ -108,7 +109,7 @@ func (e Events) AccessRevoked() {
 	})
 	if err != nil {
 		// Without the notice, the close code still tells clients.
-		e.Logger.Error("access.revoked not encoded", "error", err)
+		e.Logger.Error("access.revoked not encoded", "error_kind", platform.ErrorKind(err))
 	}
 	e.Hub.Revoke(data)
 }
@@ -119,7 +120,7 @@ func (e Events) AccessRevoked() {
 func (e Events) publish(typ api.EventType, roomID string, setPayload func(*api.Event_Payload) error) {
 	data, err := encodeEvent(typ, roomID, setPayload)
 	if err != nil {
-		e.Logger.Error("live update not published", "type", typ, "error", err)
+		e.Logger.Error("live update not published", "type", typ, "error_kind", platform.ErrorKind(err))
 		return
 	}
 	e.Hub.Publish(realtime.Event{RoomID: roomID, Data: data})

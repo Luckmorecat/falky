@@ -91,7 +91,13 @@ func New(deps Deps) Handlers {
 		http.MaxBytesHandler(liveKitWebhook{voice: deps.Voice, logger: deps.Logger}, maxWebhookBody))
 	internal.HandleFunc("/", notFound)
 
-	return Handlers{Public: http.MaxBytesHandler(public, maxRequestBody), Internal: internal}
+	// MaxBytesHandler copies the request, so observe inside it to see the
+	// final mux pattern without retaining an arbitrary URL.
+	return Handlers{
+		Public: http.MaxBytesHandler(platform.ObserveHTTP(deps.Logger, public, "public",
+			"/api/enter", "/api/me", "/api/rooms", "/api/rooms/{id}/messages", "/api/rooms/{id}/voice", "/api/live"), maxRequestBody),
+		Internal: platform.ObserveHTTP(deps.Logger, internal, "internal"),
+	}
 }
 
 type server struct {
@@ -134,7 +140,7 @@ func (e errorWriter) badRequest(w http.ResponseWriter, _ *http.Request, err erro
 }
 
 func (e errorWriter) internal(w http.ResponseWriter, r *http.Request, err error) {
-	e.logger.ErrorContext(r.Context(), "request failed", "method", r.Method, "path", r.URL.Path, "error", err)
+	e.logger.ErrorContext(r.Context(), "request failed", "error_kind", platform.ErrorKind(err))
 	writeError(w, http.StatusInternalServerError, "internal", "internal error")
 }
 

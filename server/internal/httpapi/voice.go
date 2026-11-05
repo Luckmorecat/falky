@@ -6,6 +6,7 @@ import (
 
 	"github.com/kisshot/falky/server/internal/api"
 	"github.com/kisshot/falky/server/internal/identity"
+	"github.com/kisshot/falky/server/internal/platform"
 	"github.com/kisshot/falky/server/internal/rooms"
 	"github.com/kisshot/falky/server/internal/voice"
 )
@@ -27,7 +28,7 @@ func (s *server) JoinVoice(ctx context.Context, req api.JoinVoiceRequestObject) 
 	case errors.Is(err, voice.ErrRoomFull):
 		return api.JoinVoice409JSONResponse{Code: "room_full", Message: err.Error()}, nil
 	case errors.Is(err, voice.ErrUnavailable):
-		s.logger.WarnContext(ctx, "voice join failed", "room", req.Id, "error", err)
+		s.logger.WarnContext(ctx, "voice join failed", "room", req.Id, "error_kind", platform.ErrorKind(err))
 		return api.JoinVoice503JSONResponse{Code: "voice_unavailable", Message: "voice is unavailable; try again later"}, nil
 	case err != nil:
 		return nil, err

@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/kisshot/falky/server/internal/platform"
+	"github.com/oklog/ulid/v2"
 )
 
 // Event is one live update, as published.
@@ -128,8 +130,12 @@ func New(opts ...Option) *Hub {
 
 // conn is one open connection.
 type conn struct {
-	sub   Subscriber
-	queue chan Event
+	ctx       context.Context
+	id        string
+	logReason string
+	logCode   websocket.StatusCode
+	sub       Subscriber
+	queue     chan Event
 	// ended is closed when the hub lets go of the connection; status is then
 	// the close code to end it with, if it is still open.
 	ended  chan struct{}
@@ -152,7 +158,6 @@ func (h *Hub) Publish(e Event) {
 		select {
 		case c.queue <- e:
 		default:
-			h.logger.Info("live connection fell behind; closing it", "visitor", c.sub.VisitorID)
 			h.removeLocked(c, StatusBehind, "fell behind; catch up and reconnect")
 		}
 	}
@@ -188,18 +193,31 @@ func (h *Hub) Ticket() Ticket {
 // connection opened: false when the upgrade failed, the Hub was shut down, or
 // the visitor's access was revoked since sub's ticket was taken.
 func (h *Hub) Serve(w http.ResponseWriter, r *http.Request, sub Subscriber) (opened bool) {
-	c := &conn{sub: sub, queue: make(chan Event, h.queueSize), ended: make(chan struct{})}
+	id := platform.RequestID(r.Context())
+	if id == "" {
+		id = ulid.Make().String()
+	}
+	c := &conn{ctx: r.Context(), id: id, sub: sub, queue: make(chan Event, h.queueSize), ended: make(chan struct{})}
 	registered := h.add(c)
 	ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{InsecureSkipVerify: true})
 	if err != nil {
-		h.logger.Debug("live connection refused", "error", err) // Accept answered the request
+		h.logger.DebugContext(r.Context(), "live connection refused", "error_kind", platform.ErrorKind(err)) // Accept answered the request
 		if registered {
 			h.remove(c)
 			h.serving.Done()
 		}
 		return false
 	}
+	started := time.Now()
+	h.logger.InfoContext(c.ctx, "live connection opened", "connection_id", c.id, "visitor", c.sub.VisitorID)
+	defer func() {
+		h.mu.Lock()
+		reason, code := c.logReason, c.logCode
+		h.mu.Unlock()
+		h.logger.InfoContext(c.ctx, "live connection closed", "connection_id", c.id, "visitor", c.sub.VisitorID, "lifetime_ms", float64(time.Since(started))/float64(time.Millisecond), "reason", reason, "close_code", int(code))
+	}()
 	if !registered {
+		h.endReason(c, c.status, closeReason(c.status))
 		_ = ws.Close(c.status, c.reason)
 		return false
 	}
@@ -223,7 +241,12 @@ func (h *Hub) Serve(w http.ResponseWriter, r *http.Request, sub Subscriber) (ope
 			_ = ws.Close(c.status, c.reason)
 		}
 	})
-	discardIncoming(ctx, ws)
+	readErr := discardIncoming(ctx, ws)
+	code := websocket.CloseStatus(readErr)
+	if code < 1000 || code > 4999 {
+		code = websocket.StatusAbnormalClosure
+	}
+	h.endReason(c, code, "peer_closed")
 	cancel()
 	wg.Wait()
 	_ = ws.CloseNow()
@@ -280,6 +303,9 @@ func (h *Hub) removeLocked(c *conn, status websocket.StatusCode, reason string) 
 		return
 	}
 	delete(h.conns, c)
+	if c.logReason == "" && reason != "" {
+		c.logReason, c.logCode = closeReason(status), status
+	}
 	c.status, c.reason = status, reason
 	close(c.ended)
 	if !c.open {
@@ -311,7 +337,7 @@ func (h *Hub) send(ctx context.Context, c *conn, ws *websocket.Conn) {
 		err := ws.Write(wctx, websocket.MessageText, e.Data)
 		cancel()
 		if err != nil {
-			h.logger.Debug("live connection write failed", "visitor", c.sub.VisitorID, "error", err)
+			h.endReason(c, websocket.StatusAbnormalClosure, "write_failed")
 			_ = ws.CloseNow()
 			return
 		}
@@ -334,7 +360,7 @@ func (h *Hub) heartbeat(ctx context.Context, c *conn, ws *websocket.Conn) {
 		cancel()
 		if err != nil {
 			if ctx.Err() == nil {
-				h.logger.Debug("live connection missed a heartbeat; closing it", "visitor", c.sub.VisitorID, "error", err)
+				h.endReason(c, websocket.StatusAbnormalClosure, "heartbeat_timeout")
 			}
 			_ = ws.CloseNow()
 			return
@@ -344,14 +370,14 @@ func (h *Hub) heartbeat(ctx context.Context, c *conn, ws *websocket.Conn) {
 
 // discardIncoming reads ws until it closes, which keeps control frames
 // (pongs, the peer's close) flowing, and throws away every data message.
-func discardIncoming(ctx context.Context, ws *websocket.Conn) {
+func discardIncoming(ctx context.Context, ws *websocket.Conn) error {
 	for {
 		_, r, err := ws.Reader(ctx)
 		if err == nil {
 			_, err = io.Copy(io.Discard, r)
 		}
 		if err != nil {
-			return
+			return err
 		}
 	}
 }
@@ -376,5 +402,28 @@ func (h *Hub) Shutdown(ctx context.Context) error {
 		return nil
 	case <-ctx.Done():
 		return fmt.Errorf("live connections still open: %w", ctx.Err())
+	}
+}
+
+// endReason keeps the first cause; peer close text and transport errors are
+// untrusted and must never become lifecycle fields.
+func (h *Hub) endReason(c *conn, code websocket.StatusCode, reason string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if c.logReason == "" {
+		c.logReason, c.logCode = reason, code
+	}
+}
+
+func closeReason(code websocket.StatusCode) string {
+	switch code {
+	case StatusBehind:
+		return "slow_consumer"
+	case StatusRevoked:
+		return "access_revoked"
+	case websocket.StatusGoingAway:
+		return "shutdown"
+	default:
+		return "peer_closed"
 	}
 }

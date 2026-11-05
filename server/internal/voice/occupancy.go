@@ -107,7 +107,12 @@ func (s *Service) apply(ctx context.Context, event *livekit.WebhookEvent) error 
 // voice, and publishes the occupancy of each room it changed. It fails with
 // an ErrUnavailable or an error from checking a participant, leaving the
 // view as it was.
-func (s *Service) Refresh(ctx context.Context) error {
+func (s *Service) Refresh(ctx context.Context) (err error) {
+	defer func() {
+		if !errors.Is(ctx.Err(), context.Canceled) {
+			s.refreshLog.Report(ctx, s.logger, "voice occupancy refresh", err)
+		}
+	}()
 	s.publishing.Lock()
 	defer s.publishing.Unlock()
 	listed, err := s.livekit.Participants(ctx)
@@ -159,11 +164,8 @@ func (s *Service) Run(ctx context.Context) {
 	defer ticker.Stop()
 	for {
 		refreshCtx, cancel := context.WithTimeout(ctx, RefreshInterval)
-		err := s.Refresh(refreshCtx)
+		_ = s.Refresh(refreshCtx)
 		cancel()
-		if err != nil && ctx.Err() == nil {
-			s.logger.WarnContext(ctx, "voice occupancy refresh failed", "error", err)
-		}
 		select {
 		case <-ctx.Done():
 			return

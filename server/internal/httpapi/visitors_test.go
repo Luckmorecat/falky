@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
@@ -124,9 +125,9 @@ func startPublicLimited(t *testing.T, enterBurst, postBurst int) publicServer {
 		t.Fatalf("Link: %v", err)
 	}
 	logs := &syncBuffer{}
-	logger := platform.NewLogger(logs, 0)
+	logger := platform.NewLogger(logs, slog.LevelDebug)
 	start := time.Now()
-	hub := realtime.New()
+	hub := realtime.New(realtime.WithLogger(logger))
 	events := Events{Hub: hub, Logger: logger}
 	rs := rooms.New(db, rooms.WithPublisher(events.RoomChanged), rooms.WithNameCheck(ident.NameTaken))
 	lk := voicetest.New()

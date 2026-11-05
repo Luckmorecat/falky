@@ -1,9 +1,13 @@
 package platform
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
+	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -58,5 +62,35 @@ func TestHealthIsUnavailableWhenARequiredAndAnOptionalComponentFail(t *testing.T
 	report := h.Check(t.Context())
 	if report.Ready() || report.Status != HealthUnavailable {
 		t.Errorf("report = %+v, want not ready and unavailable", report)
+	}
+}
+
+func TestHealthLogsFailuresAndRecoveryWithoutProbeFlooding(t *testing.T) {
+	var logs bytes.Buffer
+	h := NewHealth(NewLogger(&logs, 0))
+	failure := error(nil)
+	h.Optional("livekit", func(context.Context) error { return failure })
+	h.Check(t.Context())
+	if logs.Len() != 0 {
+		t.Fatal("healthy probes should stay quiet")
+	}
+	failure = fmt.Errorf("private-token private-name: %w", syscall.ECONNREFUSED)
+	for range 5 {
+		h.Check(t.Context())
+	}
+	if strings.Count(logs.String(), `"msg":"health probe failed"`) != 1 {
+		t.Fatalf("repeated failure logs: %s", logs.String())
+	}
+	failure = nil
+	h.Check(t.Context())
+	h.Check(t.Context())
+	if strings.Count(logs.String(), `"msg":"health probe recovered"`) != 1 {
+		t.Fatalf("missing/duplicate recovery: %s", logs.String())
+	}
+	if !strings.Contains(logs.String(), `"error_kind":"connection_refused"`) || !strings.Contains(logs.String(), `"suppressed":4`) {
+		t.Errorf("missing diagnostics: %s", logs.String())
+	}
+	if strings.Contains(logs.String(), "private-") {
+		t.Fatalf("private error leaked: %s", logs.String())
 	}
 }

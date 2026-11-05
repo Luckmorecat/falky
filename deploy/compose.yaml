@@ -53,6 +53,7 @@ services:
     restart: unless-stopped
     environment:
       FALKY_PUBLIC_ORIGIN: https://${FALKY_DOMAIN:?set FALKY_DOMAIN in deploy/.env}
+      FALKY_LOG_LEVEL: ${FALKY_LOG_LEVEL:-info}
       FALKY_LIVEKIT_API_URL: http://livekit:7880
       FALKY_LIVEKIT_API_KEY: ${FALKY_LIVEKIT_API_KEY:?set FALKY_LIVEKIT_API_KEY in deploy/.env}
       FALKY_LIVEKIT_API_SECRET: ${FALKY_LIVEKIT_API_SECRET:?set FALKY_LIVEKIT_API_SECRET in deploy/.env}

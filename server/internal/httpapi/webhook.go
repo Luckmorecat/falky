@@ -5,6 +5,8 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/kisshot/falky/server/internal/platform"
+
 	"github.com/kisshot/falky/server/internal/voice"
 )
 
@@ -22,10 +24,10 @@ type liveKitWebhook struct {
 
 func (h liveKitWebhook) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	err := h.voice.ReceiveWebhook(r)
-	errs := errorWriter{logger: h.logger}
+	errs := errorWriter{logger: h.logger.With("operation", "livekit_webhook")}
 	switch {
 	case errors.Is(err, voice.ErrUnverifiedWebhook):
-		h.logger.WarnContext(r.Context(), "LiveKit webhook refused", "error", err)
+		h.logger.WarnContext(r.Context(), "LiveKit webhook refused", "error_kind", platform.ErrorKind(err))
 		writeError(w, http.StatusUnauthorized, "webhook_unverified", "the request is not signed with the LiveKit API key")
 	case errors.Is(err, voice.ErrInvalidWebhook):
 		errs.badRequest(w, r, err)
