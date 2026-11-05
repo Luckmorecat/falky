@@ -12,3 +12,7 @@
 
 # Deployment settings with secrets (deploy/.env.example is the template)
 /deploy/.env
+/deploy/.env.*
+!/deploy/.env.example
+/deploy/.operations.lock
+/deploy/backups/
