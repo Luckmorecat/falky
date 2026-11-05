@@ -41,9 +41,20 @@ server, for working on how they look. It is not part of the production build.
 
 ## Screen share diagnostics
 
-Local Vite development and `dev.falky.lunari.win` show video statistics inside the
-selected screen share, including fullscreen. Other deployed hosts do not render
-the overlay or start its polling. No build or deployment flag is needed.
+`VITE_DEV_STATS` is the build-time switch for the overlay and its polling. Only
+`VITE_DEV_STATS=true` enables diagnostics, regardless of hostname; missing, false,
+or malformed values disable them. The static frontend must be rebuilt to change
+this setting; changing the running Caddy container's environment has no effect.
+
+Local Vite development defaults on through `web/.env.development`. Run
+`VITE_DEV_STATS=false npm run dev` from `web/` to turn it off locally. Production
+builds default off; `VITE_DEV_STATS=true npm run build` explicitly enables them.
+Docker builds default off through `ARG VITE_DEV_STATS=false`; opt in with
+`docker build --build-arg VITE_DEV_STATS=true -t falky-caddy web`.
+
+The reusable web image workflow's boolean `dev_stats` input defaults false and
+passes the Docker build argument. The deployment workflow sets it true only for
+`master` development builds; tagged production builds pass false.
 
 The current rate uses video RTP byte deltas and their report timestamps, in Mbps.
 Your own share totals primary and compatibility senders; a remote share measures
