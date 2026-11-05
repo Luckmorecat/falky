@@ -1,6 +1,7 @@
 import {
   ConnectionQuality,
   DisconnectReason,
+  type LocalAudioTrack,
   type LocalTrackPublication,
   type Participant as LkParticipant,
   RemoteAudioTrack,
@@ -11,6 +12,8 @@ import {
   type VideoTrack,
 } from 'livekit-client';
 import { api, ApiError } from '../api/client';
+import { loudness } from './meter';
+import { type ShareSettings, shareOptions } from './share';
 import { softClipCurve } from './softclip';
 
 export interface VoicePerson {
@@ -59,6 +62,9 @@ export interface VoiceHost {
   onSound(sound: VoiceSound): void;
   micId(): string;
   speakerId(): string;
+  micProcessing(): { echoCancellation: boolean; noiseSuppression: boolean; autoGainControl: boolean };
+  joinMuted(): boolean;
+  shareSettings(): ShareSettings;
   volumeOf(visitorId: string): number;
 }
 
@@ -104,7 +110,7 @@ export class VoiceSession {
     this.audio ??= new AudioContext({ latencyHint: 'interactive' });
     void this.audio.resume();
     const deafened = this.snap.deafened;
-    const startMuted = this.snap.status !== 'idle' && this.snap.muted && !this.snap.listenOnly;
+    const startMuted = this.snap.status === 'idle' ? this.host.joinMuted() : this.snap.muted && !this.snap.listenOnly;
     this.set({ status: 'joining', joiningRoomId: roomId });
     this.moving = true;
     this.removedWhileMoving = false;
@@ -129,11 +135,10 @@ export class VoiceSession {
     this.teardownRoom();
 
     const speakerId = this.host.speakerId();
-    const micId = this.host.micId();
     const room = new Room({
       adaptiveStream: true,
       dynacast: true,
-      audioCaptureDefaults: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, deviceId: micId || undefined },
+      audioCaptureDefaults: this.micOptions(),
       audioOutput: speakerId ? { deviceId: speakerId } : undefined,
       // Through Web Audio, because an audio element cannot play above 100%.
       webAudioMix: { audioContext: this.audio },
@@ -207,7 +212,8 @@ export class VoiceSession {
     if (!room) return;
     const on = !room.localParticipant.isScreenShareEnabled;
     try {
-      await room.localParticipant.setScreenShareEnabled(on, { audio: true });
+      const { capture, publish } = shareOptions(this.host.shareSettings());
+      await room.localParticipant.setScreenShareEnabled(on, capture, publish);
     } catch (err) {
       // Backing out of the browser's picker is not a failure.
       if ((err as Error).name !== 'NotAllowedError') this.host.onProblem('share_failed');
@@ -228,10 +234,7 @@ export class VoiceSession {
     const meter = this.meters.get(visitorId);
     if (!meter) return 0;
     meter.analyser.getFloatTimeDomainData(meter.buf);
-    let sum = 0;
-    for (const v of meter.buf) sum += v * v;
-    // Speech sits low on a linear scale; two roots spread it across the range.
-    return Math.max(0, Math.min(1, Math.sqrt(Math.sqrt(sum / meter.buf.length)) * 1.75 - 0.12));
+    return loudness(meter.buf);
   }
 
   applyVolumes(): void {
@@ -248,9 +251,20 @@ export class VoiceSession {
     await this.room?.switchActiveDevice('audiooutput', deviceId).catch(() => {});
   }
 
+  /** Applies changed noise, echo and gain settings to the microphone in use. */
+  async applyMicProcessing(): Promise<void> {
+    const track = this.room?.localParticipant.getTrackPublication(Track.Source.Microphone)?.track as LocalAudioTrack | undefined;
+    await track?.restartTrack(this.micOptions()).catch(() => {});
+    this.refresh();
+  }
+
+  private micOptions() {
+    return { ...this.host.micProcessing(), deviceId: this.host.micId() || undefined };
+  }
+
   private async enableMic(room: Room): Promise<void> {
     try {
-      await room.localParticipant.setMicrophoneEnabled(true);
+      await room.localParticipant.setMicrophoneEnabled(true, this.micOptions());
       this.set({ listenOnly: false });
     } catch (err) {
       this.set({ listenOnly: true });

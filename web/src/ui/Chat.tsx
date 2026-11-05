@@ -1,13 +1,14 @@
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { Message, Room } from '../api/client';
-import { discardMessage, loadOlder, postMessage, retryMessage } from '../app/controller';
-import { useApp } from '../app/store';
+import { discardMessage, loadOlder, postMessage, retryMessage, setChatOpen } from '../app/controller';
+import { getState, useApp } from '../app/store';
 import { buildFeed, canPost, MESSAGE_MAX, messageLength, type PendingMessage, splitLinks } from '../chat/timeline';
 import { paletteOf, paletteStyle } from '../fx/palette';
 import { t } from '../strings';
 import { Icon } from './Icon';
+import { useDrawerLayout } from './useDrawerLayout';
 
-const timeOf = (iso: string) => new Date(iso).toLocaleTimeString('uk-UA', { hour: '2-digit', minute: '2-digit' });
+const timeOf = (iso: string) => new Date(iso).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false });
 
 function Body({ text }: { text: string }) {
   return (
@@ -49,8 +50,23 @@ function PendingRow({ pending, continued, name, selfId }: { pending: PendingMess
   );
 }
 
-export function Chat({ room, peopleInVoice }: { room: Room | null; peopleInVoice: number }) {
+/**
+ * Always on the page, mostly past its right edge, with the start of its lines
+ * showing and blurring away. A mouse over that part or focus in it brings it in
+ * and moves the interface aside; only then does it count as read. On a phone
+ * there is no hover, so it opens over the page by a button.
+ */
+export function Chat({ room }: { room: Room | null }) {
   const open = useApp((s) => s.chatOpen);
+  const lang = useApp((s) => s.settings.lang);
+  const unread = useApp((s) => (s.viewedRoomId ? (s.chats[s.viewedRoomId]?.unread ?? 0) : 0));
+  const drawer = useDrawerLayout();
+  const aside = useRef<HTMLElement>(null);
+  const hovering = useRef(false);
+  const settling = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** Someone wrote while the chat is back: it shows itself for a moment. */
+  const [nudged, setNudged] = useState(false);
+  const lastSeen = useRef<{ roomId?: string; messageId?: string }>({});
   const chat = useApp((s) => (room ? s.chats[room.id] : undefined));
   const newAfterId = useApp((s) => s.newAfterId);
   const visitor = useApp((s) => s.visitor);
@@ -63,7 +79,7 @@ export function Chat({ room, peopleInVoice }: { room: Room | null; peopleInVoice
   const input = useRef<HTMLTextAreaElement>(null);
 
   const draft = room ? (drafts[room.id] ?? '') : '';
-  const items = useMemo(() => (chat ? buildFeed(chat, visitor?.id, newAfterId) : []), [chat, visitor?.id, newAfterId]);
+  const items = useMemo(() => (chat ? buildFeed(chat, visitor?.id, newAfterId) : []), [chat, visitor?.id, newAfterId, lang]);
   const count = messageLength(draft);
 
   useLayoutEffect(() => {
@@ -86,8 +102,41 @@ export function Chat({ room, peopleInVoice }: { room: Room | null; peopleInVoice
   }, [room?.id, open]);
 
   useEffect(() => {
-    if (open && matchMedia('(pointer: fine)').matches) input.current?.focus({ preventScroll: true });
-  }, [open, room?.id]);
+    if (open && drawer && matchMedia('(pointer: fine)').matches) input.current?.focus({ preventScroll: true });
+  }, [open, room?.id, drawer]);
+
+  const newest = chat?.messages.at(-1);
+  useEffect(() => {
+    const before = lastSeen.current;
+    lastSeen.current = { roomId: room?.id, messageId: newest?.id };
+    if (open || before.roomId !== room?.id) {
+      setNudged(false);
+      return;
+    }
+    // The first page of history is not news.
+    if (!newest || !before.messageId || before.messageId === newest.id || newest.authorId === visitor?.id) return;
+    setNudged(true);
+    const id = setTimeout(() => setNudged(false), 4000);
+    return () => clearTimeout(id);
+  }, [room?.id, newest?.id, newest?.authorId, open, visitor?.id]);
+
+  useEffect(() => () => {
+    if (settling.current) clearTimeout(settling.current);
+  }, []);
+
+  /** Forward at once when wanted; back only after a moment, so a passing mouse does no harm. */
+  const settle = () => {
+    if (drawer) return;
+    if (settling.current) clearTimeout(settling.current);
+    const wanted = () => hovering.current || !!aside.current?.contains(document.activeElement);
+    if (wanted()) {
+      if (!getState().chatOpen) setChatOpen(true);
+      return;
+    }
+    settling.current = setTimeout(() => {
+      if (!wanted() && getState().chatOpen) setChatOpen(false);
+    }, 280);
+  };
 
   const onScroll = () => {
     const el = feed.current;
@@ -113,11 +162,24 @@ export function Chat({ room, peopleInVoice }: { room: Room | null; peopleInVoice
   };
 
   return (
-    <aside className="chat" aria-label={t.chat} {...(open ? {} : { inert: true })}>
-      <div className="chat-head">
-        <h2>{room?.name ?? t.chat}</h2>
-        <p>{peopleInVoice ? t.inVoiceCount(peopleInVoice) : t.nobodyInVoice}</p>
-      </div>
+    <aside
+      ref={aside}
+      className={`chat${nudged ? ' nudge' : ''}`}
+      aria-label={t.chat}
+      {...(drawer && !open ? { inert: true } : {})}
+      onPointerEnter={(e) => {
+        if (e.pointerType !== 'mouse') return;
+        hovering.current = true;
+        settle();
+      }}
+      onPointerLeave={(e) => {
+        if (e.pointerType !== 'mouse') return;
+        hovering.current = false;
+        settle();
+      }}
+      onFocus={settle}
+      onBlur={settle}
+    >
       <div className="feed" ref={feed} onScroll={onScroll} aria-live="polite">
         {chat?.loadingOlder && <div className="day">{t.loadingOlder}</div>}
         {chat?.loaded && !items.length && (
@@ -153,6 +215,10 @@ export function Chat({ room, peopleInVoice }: { room: Room | null; peopleInVoice
             disabled={!room}
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={(e) => {
+              if (e.key === 'Escape') {
+                e.currentTarget.blur();
+                if (drawer) setChatOpen(false);
+              }
               if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
                 e.preventDefault();
                 send();
@@ -162,6 +228,9 @@ export function Chat({ room, peopleInVoice }: { room: Room | null; peopleInVoice
           <button className="ib sm send" aria-label={t.send} disabled={!canPost(draft)} onClick={send}><Icon name="send" /></button>
         </div>
       </div>
+      <div className="chat-veil" aria-hidden="true"><i /><i /><i /><i /><b /></div>
+      {unread > 0 && <div className="chat-hint" aria-hidden="true"><span className="badge">{unread > 99 ? '99+' : unread}</span></div>}
+      <div className="chat-zone" aria-hidden="true" />
     </aside>
   );
 }

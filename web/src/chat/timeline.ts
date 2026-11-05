@@ -1,4 +1,5 @@
 import type { Message } from '../api/client';
+import { t } from '../strings';
 
 /** A message on its way to the server, shown until the server has it. */
 export interface PendingMessage {
@@ -50,9 +51,9 @@ export function dayLabel(iso: string, now: Date = new Date()): string {
   const d = new Date(iso);
   const startOf = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
   const days = Math.round((startOf(now) - startOf(d)) / 86_400_000);
-  if (days === 0) return 'Сьогодні';
-  if (days === 1) return 'Вчора';
-  return d.toLocaleDateString('uk-UA', { day: 'numeric', month: 'long', year: d.getFullYear() === now.getFullYear() ? undefined : 'numeric' });
+  if (days === 0) return t.today;
+  if (days === 1) return t.yesterday;
+  return d.toLocaleDateString(t.locale, { day: 'numeric', month: 'long', year: d.getFullYear() === now.getFullYear() ? undefined : 'numeric' });
 }
 
 /**

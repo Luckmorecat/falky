@@ -4,10 +4,9 @@ import { viewRoom, voice } from '../app/controller';
 import { useApp } from '../app/store';
 import { onTick } from '../fx/ticker';
 import { t } from '../strings';
+import { canShareScreen } from '../voice/share';
 import { Icon } from './Icon';
 import { Settings } from './Settings';
-
-const canShare = typeof navigator !== 'undefined' && !!navigator.mediaDevices?.getDisplayMedia;
 
 /** The control center: voice for this visitor, wherever they are looking. */
 export function Dock({ room }: { room: Room | null }) {
@@ -84,7 +83,7 @@ export function Dock({ room }: { room: Room | null }) {
           <Icon name={v.muted ? 'micOff' : 'mic'} />
         </button>
       </div>
-      {canShare && (
+      {canShareScreen && (
         <button className={`ib hide-phone${v.sharing ? ' sharing' : ''}`} aria-pressed={v.sharing} aria-label={shareLabel} data-tip={shareLabel} onClick={() => void voice.toggleShare()}>
           <Icon name="screen" />
         </button>

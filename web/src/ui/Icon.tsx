@@ -12,7 +12,7 @@ const PATHS = {
   send: <path d="M12 19V6M6.500 11 12 5.500l5.500 5.500" />,
   down: <path d="M12 5v13M6.500 13 12 18.500l5.500-5.500" />,
   vol: <><path d="M4.500 9.500v5h3.200l4.300 3.500V6L7.700 9.500H4.500Z" /><path d="M15.500 9a4 4 0 0 1 0 6M18 6.500a7.500 7.500 0 0 1 0 11" /></>,
-  rooms: <path d="M5 7h14M5 12h14M5 17h14" />,
+  chevron: <path d="M6.500 9.500 12 15l5.500-5.500" />,
   expand: <path d="M4.500 9V4.500H9M15 4.500h4.500V9M19.500 15v4.500H15M9 19.500H4.500V15" />,
 } satisfies Record<string, ReactNode>;
 

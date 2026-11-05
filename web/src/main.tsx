@@ -2,6 +2,7 @@ import '@fontsource-variable/onest/index.css';
 import './styles.css';
 import { useEffect } from 'react';
 import { createRoot } from 'react-dom/client';
+import { applyAppearance } from './app/appearance';
 import { boot } from './app/controller';
 import { useApp } from './app/store';
 import { t } from './strings';
@@ -10,6 +11,8 @@ import { Entry, Message } from './ui/Screens';
 
 function App() {
   const phase = useApp((s) => s.phase);
+  // Words are read when rendering, so a new language needs only this render.
+  useApp((s) => s.settings.lang);
   const fewerEffects = useApp((s) => s.settings.fewerEffects);
   const unread = useApp((s) => Object.values(s.chats).reduce((sum, c) => sum + c.unread, 0));
 
@@ -40,5 +43,6 @@ addEventListener('hashchange', () => {
   if (location.hash.includes('k=')) void boot();
 });
 
+applyAppearance();
 createRoot(document.getElementById('root')!).render(<App />);
 void boot();

@@ -1,9 +1,10 @@
 import { api, ApiError, type LiveEvent, type Message, type Room, type Visitor } from '../api/client';
 import { LiveConnection } from '../api/live';
 import { countUnread, emptyChat, mergeMessages, type PendingMessage, type RoomChat } from '../chat/timeline';
-import { t } from '../strings';
+import { setLanguage, t } from '../strings';
 import { VoiceSession } from '../voice/session';
 import { playSound } from '../voice/sounds';
+import { applyAppearance } from './appearance';
 import { prefs, type Settings } from './prefs';
 import { getState, setState } from './store';
 
@@ -27,6 +28,12 @@ export const voice = new VoiceSession({
   },
   micId: () => getState().settings.micId,
   speakerId: () => getState().settings.speakerId,
+  micProcessing() {
+    const s = getState().settings;
+    return { echoCancellation: s.echoCancellation, noiseSuppression: s.noiseSuppression, autoGainControl: s.autoGain };
+  },
+  joinMuted: () => getState().settings.joinMuted,
+  shareSettings: () => getState().settings,
   volumeOf: (id) => prefs.volume(id),
 });
 
@@ -358,7 +365,10 @@ document.addEventListener('visibilitychange', () => {
 export function updateSettings(patch: Partial<Settings>): void {
   const settings = { ...getState().settings, ...patch };
   prefs.saveSettings(settings);
+  setLanguage(settings.lang);
   setState({ settings });
+  if (patch.lang !== undefined || patch.theme !== undefined) applyAppearance();
+  if (patch.noiseSuppression !== undefined || patch.echoCancellation !== undefined || patch.autoGain !== undefined) void voice.applyMicProcessing();
   if (patch.micId !== undefined) void voice.setMic(patch.micId);
   if (patch.speakerId !== undefined) void voice.setSpeaker(patch.speakerId);
 }

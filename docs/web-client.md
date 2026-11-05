@@ -22,14 +22,22 @@ while another window has the focus, and the third the
 | `src/chat/timeline.ts` | Chat rules with no UI: merging by ID, unread, the feed's layout, links |
 | `src/voice/session.ts` | One visitor's voice over LiveKit: joining and moving, mute, deafen, screen share, level meters |
 | `src/app/controller.ts` | Ties the above to the state in `store.ts`; every action the UI takes goes through here |
-| `src/fx/` | The blocks' colours, sizes and animation clock |
+| `src/fx/` | The orbs' shader and colours, the blocks' sizes, the animation clock |
 | `src/ui/` | The screens |
-| `src/strings.ts` | Every word of the interface |
+| `src/strings.ts` | Every word of the interface, in each language |
 
-A block's animation writes `transform` and `opacity` directly each frame and
-goes around React, so talking causes no renders, layout or repaints: Falky runs
-next to games. "Fewer effects" in the settings, or the system's reduced motion,
-leaves only the rim's brightness moving.
+One shader on one WebGL context draws every orb (`src/fx/orbRenderer.ts`) and
+goes around React, so talking causes no renders. Falky runs next to games, so a
+silent orb is redrawn 15 times a second at most, at 512 pixels at most, and only
+a voice gets every frame. "Fewer effects" in the settings, or the system's
+reduced motion, stops the colours moving and redraws only for a change in voice.
+Without WebGL an orb is a plain gradient.
+
+Interface words live in `src/strings.ts` in Ukrainian and English. They are read
+when rendering, so never keep one in a constant outside a render or a call.
+
+`/design.html` on the dev server shows the real screens with made-up data and no
+server, for working on how they look. It is not part of the production build.
 
 ## Running it locally
 
