@@ -39,6 +39,25 @@ when rendering, so never keep one in a constant outside a render or a call.
 `/design.html` on the dev server shows the real screens with made-up data and no
 server, for working on how they look. It is not part of the production build.
 
+## Screen share diagnostics
+
+Local Vite development and `dev.falky.lunari.win` show video statistics inside the
+selected screen share, including fullscreen. Other deployed hosts do not render
+the overlay or start its polling. No build or deployment flag is needed.
+
+The current rate uses video RTP byte deltas and their report timestamps, in Mbps.
+Your own share totals primary and compatibility senders; a remote share measures
+the receiver. Codec labels come from media RTP reports with traffic in the measured
+interval, not the saved codec preference. Audio, repair streams, and transport
+headers are excluded. A dash means measuring or unavailable; a valid zero is shown
+as zero. The graph keeps only the last 60 seconds in memory, leaving gaps where
+measurements are unavailable. Changing or stopping the share clears diagnostics.
+
+`src/voice/shareStats.ts` isolates the use of LiveKit's internal
+`LocalVideoTrack.simulcastCodecs` map to discover backup senders. Recheck that
+adapter when upgrading LiveKit; the public primary-track stats method alone does
+not include compatibility upload.
+
 ## Running it locally
 
 Vite stands where Caddy stands, on `http://localhost:5173`. You need the server
