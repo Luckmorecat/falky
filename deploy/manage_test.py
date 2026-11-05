@@ -1,12 +1,14 @@
 """Exercise deployments with Docker and external HTTPS verification replaced."""
 
 import configparser
+from contextlib import closing
 import fcntl
 import json
 import os
 from pathlib import Path
 import shutil
 import shlex
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -20,6 +22,7 @@ WEB_DIGEST = WEB + "@sha256:" + "b" * 64
 LOCAL_WEB = "sha256:" + "c" * 64
 
 FAKE_DOCKER = r'''
+from contextlib import closing
 import json, os, sqlite3, sys
 from pathlib import Path
 
@@ -49,9 +52,15 @@ if args[:2] == ["volume", "ls"]:
     if os.environ.get("SIMILAR_VOLUME") == "1":
         print("falky_falky_data_other")
     sys.exit(0)
+if args[:2] == ["volume", "inspect"]:
+    sys.exit(1 if os.environ.get("MISSING_SNAPSHOT_VOLUME") == "1" else 0)
 if args[0] == "inspect":
     template = args[2]
-    if "State.Running" in template:
+    if ".Mounts" in template:
+        print(json.dumps([{"Destination": "/snapshots", "Type": "volume", "Name": "falky_falky_snapshots"}]))
+    elif "json .Image" in template:
+        print(json.dumps("sha256:" + "c" * 64))
+    elif "State.Running" in template:
         print("true")
     elif "Config.Image" in template:
         print(server + "@sha256:" + "d" * 64)
@@ -59,6 +68,25 @@ if args[0] == "inspect":
         print("e" * 40)
     else:
         print("sha256:" + "c" * 64)
+    sys.exit(0)
+if args[0] == "run":
+    index = args.index("--entrypoint")
+    entrypoint = args[index + 1]
+    operands = args[index + 3:]
+    root = Path("snapshot-volume")
+    if entrypoint == "find":
+        for path in sorted(root.iterdir()):
+            if path.is_file() and not path.is_symlink():
+                sys.stdout.write("/snapshots/" + path.name + "\0")
+    elif entrypoint == "rm":
+        if os.environ.get("FAIL_PRUNE") == "1":
+            sys.exit(1)
+        assert operands[0] == "--"
+        for path in operands[1:]:
+            assert Path(path).parent == Path("/snapshots")
+            (root / Path(path).name).unlink()
+    else:
+        raise SystemExit("Unexpected retention helper: " + entrypoint)
     sys.exit(0)
 if args[0] == "compose":
     command = args[7:]
@@ -83,12 +111,19 @@ if args[0] == "compose":
         if command[-1] == "snapshot":
             if os.environ.get("FAIL_SNAPSHOT") == "1":
                 sys.exit(1)
+            root = Path("snapshot-volume")
+            root.mkdir(exist_ok=True)
+            (root / "falky-20261105T030000Z.db").write_bytes(b"snapshot")
             print("/snapshots/falky-20261105T030000Z.db")
         else:
             print(json.dumps({"status": "ok", "components": {"database": "ok", "livekit": "ok"}}))
     elif command[0] == "cp":
-        with sqlite3.connect(command[-1]) as db:
-            db.execute("CREATE TABLE sample (value TEXT)")
+        if os.environ.get("CORRUPT_COPY") == "1":
+            Path(command[-1]).write_bytes(b"not a SQLite snapshot")
+        else:
+            with closing(sqlite3.connect(command[-1])) as db:
+                db.execute("CREATE TABLE sample (value TEXT)")
+                db.commit()
     sys.exit(0)
 raise SystemExit("Unexpected Docker call: " + repr(args))
 '''
@@ -100,7 +135,7 @@ class DeploymentTests(unittest.TestCase):
         self.addCleanup(self.temporary.cleanup)
         self.directory = Path(self.temporary.name)
         source = Path(__file__).parent
-        for name in ("manage.sh", "compose.sh", "ci-deploy.sh", "compose.yaml", "compose.production.yaml", "Caddyfile", "livekit.yaml"):
+        for name in ("manage.sh", "compose.sh", "ci-deploy.sh", "prune-backups.py", "compose.yaml", "compose.production.yaml", "Caddyfile", "livekit.yaml"):
             shutil.copy2(source / name, self.directory / name)
         self.initial = (
             f"FALKY_IMAGE={SERVER}@sha256:{'d' * 64}\n"
@@ -161,6 +196,94 @@ else:
         start = next(i for i, call in enumerate(calls) if "up" in call)
         self.assertLess(snapshot, start)
         self.assertEqual(len(list((self.directory / "backups").glob("*/complete"))), 1)
+
+    def seed_backups(self, count, day="20261104"):
+        root = self.directory / "backups"
+        snapshots = self.directory / "snapshot-volume"
+        root.mkdir(exist_ok=True)
+        snapshots.mkdir(exist_ok=True)
+        directories = []
+        for index in range(count):
+            timestamp = f"{day}T{index:06d}Z"
+            path = root / f"{timestamp}-{index:06d}"
+            path.mkdir()
+            with closing(sqlite3.connect(path / "database.db")) as db:
+                db.execute("CREATE TABLE sample (value TEXT)")
+                db.commit()
+            name = f"falky-{timestamp}.db"
+            (path / "snapshot.txt").write_text("/snapshots/" + name + "\n")
+            (path / "complete").touch()
+            (snapshots / name).write_bytes((path / "database.db").read_bytes())
+            directories.append(path)
+        return directories
+
+    def test_successful_backup_keeps_ten_newest_bundles_and_original_snapshots(self):
+        older = self.seed_backups(15)
+        result = self.run_deploy(EXISTING="1")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(all(not path.exists() for path in older[:6]))
+        self.assertTrue(all(path.is_dir() for path in older[6:]))
+        self.assertEqual(len(list((self.directory / "backups").glob("*/complete"))), 10)
+        self.assertEqual(len(list((self.directory / "snapshot-volume").glob("*.db"))), 10)
+        snapshots = {path.name for path in (self.directory / "snapshot-volume").iterdir()}
+        self.assertIn("falky-20261105T030000Z.db", snapshots)
+        self.assertNotIn("falky-20261104T000000Z.db", snapshots)
+
+    def test_retention_preserves_incomplete_backups_unrelated_files_and_symlinks(self):
+        older = self.seed_backups(10)
+        root = self.directory / "backups"
+        incomplete = root / "20261101T000000Z-abcdef"
+        incomplete.mkdir()
+        (incomplete / "database.db").write_bytes(b"incomplete")
+        outside = self.directory / "outside"
+        outside.mkdir()
+        (outside / "database.db").write_bytes(b"keep")
+        link = root / "20261101T000001Z-abcdef"
+        link.symlink_to(outside, target_is_directory=True)
+        unrelated = self.directory / "snapshot-volume" / "keep.txt"
+        unrelated.write_text("keep")
+        result = self.run_deploy(EXISTING="1")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(older[0].exists())
+        self.assertTrue(incomplete.is_dir())
+        self.assertTrue(link.is_symlink())
+        self.assertEqual((outside / "database.db").read_bytes(), b"keep")
+        self.assertEqual(unrelated.read_text(), "keep")
+
+    def test_failed_snapshot_or_integrity_check_never_prunes_older_backups(self):
+        older = self.seed_backups(15)
+        for failure in ("FAIL_SNAPSHOT", "CORRUPT_COPY"):
+            with self.subTest(failure=failure):
+                result = self.run_deploy(EXISTING="1", **{failure: "1"})
+                self.assertNotEqual(result.returncode, 0)
+                self.assertTrue(all(path.is_dir() for path in older))
+                self.assertEqual(len(list((self.directory / "backups").glob("*/complete"))), 15)
+                self.assertFalse(any("rm" in call for call in self.calls()))
+
+    def test_snapshot_cleanup_failure_keeps_all_backup_bundles_and_blocks_deploy(self):
+        older = self.seed_backups(15)
+        result = self.run_deploy(EXISTING="1", FAIL_PRUNE="1")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertTrue(all(path.is_dir() for path in older))
+        self.assertEqual(len(list((self.directory / "backups").glob("*/complete"))), 16)
+        self.assertEqual((self.directory / ".env").read_text(), self.initial)
+        self.assertFalse(any("up" in call for call in self.calls()))
+
+    def test_missing_snapshot_volume_does_not_create_replacement_or_remove_bundles(self):
+        older = self.seed_backups(15)
+        result = self.run_deploy(EXISTING="1", MISSING_SNAPSHOT_VOLUME="1")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertTrue(all(path.is_dir() for path in older))
+        self.assertFalse(any(call[0] == "run" for call in self.calls()))
+
+    def test_retention_always_preserves_new_backup_even_after_clock_moves_back(self):
+        self.seed_backups(15, day="20991104")
+        result = self.run_deploy(EXISTING="1")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        backups = list((self.directory / "backups").glob("*/complete"))
+        self.assertEqual(len(backups), 10)
+        self.assertTrue(any("20991104" not in path.parent.name for path in backups))
+        self.assertTrue((self.directory / "snapshot-volume" / "falky-20261105T030000Z.db").is_file())
 
     def test_failed_web_pull_keeps_running_deployment(self):
         result = self.run_deploy(FAIL_PULL=WEB + ":edge", EXISTING="1")

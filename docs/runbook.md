@@ -191,7 +191,8 @@ three containers have `restart: unless-stopped`. The repository need not be
 cloned onto the host.
 
 Install these files from `deploy/` into `/srv/falky`: `compose.yaml`,
-`compose.production.yaml`, `compose.sh`, `manage.sh`, `ci-deploy.sh`, `Caddyfile`, and
+`compose.production.yaml`, `compose.sh`, `manage.sh`, `ci-deploy.sh`,
+`prune-backups.py`, `Caddyfile`, and
 `livekit.yaml`. Make the shell scripts executable. Keep the configuration files
 from the same repository revision together. `compose.production.yaml` clears
 local builds and selects `FALKY_IMAGE` and `FALKY_WEB_IMAGE` from `.env`.
@@ -308,6 +309,22 @@ plus the web image ID and source revision (`web-image.txt`, `web-revision.txt`).
 A `complete` marker is written only after all copies
 succeed. Incomplete directories are not usable backups.
 
+After a new backup passes its integrity check and is complete, retention keeps
+the ten newest completed backup directories and ten newest timestamped database
+snapshots in the Docker volume. The just-created backup and snapshot are always
+kept. Older complete directories are removed with their saved configuration;
+incomplete directories, unrelated files and symlinks are left alone. Raw volume
+snapshots made manually are included in the snapshot limit at the next successful
+managed backup. Each retained backup directory has its own database copy, so it
+does not depend on the original volume snapshot remaining.
+
+Cleanup shares the deployment/backup lock. It uses the running backend's actual
+snapshot volume and the existing Caddy image as an unprivileged helper with no
+network and no application-data mount. It never creates a missing snapshot volume.
+A snapshot, copy or integrity-check failure does not start pruning. If cleanup
+itself fails, the new complete backup remains and the command reports failure;
+old complete directories are not removed until Docker snapshot cleanup succeeds.
+
 Install `deploy/systemd/falky-backup.service` and `.timer` into
 `/etc/systemd/system/` as root, then run:
 
@@ -322,8 +339,9 @@ The timer runs daily at 03:00 UTC with up to 15 minutes of randomized delay.
 The job runs as `deployer` and waits up to fifteen minutes for a deployment,
 status check, or another backup to release the operations lock. Its twenty-
 minute service timeout leaves five more minutes to write and copy the backup.
-Failures appear in `journalctl -u falky-backup.service`. Backups and the original snapshots are
-retained until explicitly removed. Monitor disk usage and copy complete
+Failures appear in `journalctl -u falky-backup.service`. The ten-copy limit applies
+after each successful managed backup; incomplete directories need manual cleanup.
+Monitor disk usage and copy complete
 backup directories off the VPS regularly: these local copies cannot protect
 against loss of the host. They contain the access link and LiveKit secret.
 

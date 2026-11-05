@@ -57,7 +57,7 @@ unset FALKY_IMAGE FALKY_WEB_IMAGE
 ./compose.sh config --quiet
 
 backup() {
-  local container directory snapshot
+  local container caddy_container directory snapshot
   container=$(./compose.sh ps --all --quiet falky)
   if [[ -z "$container" ]] || [[ $(docker inspect --format '{{.State.Running}}' "$container") != true ]]; then
     echo "Backup requires the existing Falky container to be running" >&2
@@ -73,22 +73,24 @@ backup() {
   ./compose.sh cp "falky:$snapshot" "$directory/database.db"
   chmod 600 "$directory/database.db"
   python3 - "$directory/database.db" <<'PY'
+from contextlib import closing
 import sqlite3
 import sys
 from pathlib import Path
 
-with sqlite3.connect(Path(sys.argv[1]).resolve().as_uri() + '?mode=ro', uri=True) as db:
+with closing(sqlite3.connect(Path(sys.argv[1]).resolve().as_uri() + '?mode=ro', uri=True)) as db:
     if db.execute('PRAGMA integrity_check').fetchall() != [('ok',)]:
         raise SystemExit('Copied database failed its integrity check')
 PY
-  cp .env compose.yaml compose.production.yaml compose.sh manage.sh ci-deploy.sh Caddyfile livekit.yaml "$directory/"
+  cp .env compose.yaml compose.production.yaml compose.sh manage.sh ci-deploy.sh prune-backups.py Caddyfile livekit.yaml "$directory/"
   docker inspect --format '{{.Config.Image}}' "$container" > "$directory/image.txt"
-  container=$(./compose.sh ps --all --quiet caddy)
-  docker inspect --format '{{.Image}}' "$container" > "$directory/web-image.txt"
-  docker inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$container" > "$directory/web-revision.txt"
+  caddy_container=$(./compose.sh ps --all --quiet caddy)
+  docker inspect --format '{{.Image}}' "$caddy_container" > "$directory/web-image.txt"
+  docker inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$caddy_container" > "$directory/web-revision.txt"
   printf '%s\n' "$snapshot" > "$directory/snapshot.txt"
   # Only complete backups get this marker. Failed copies remain for diagnosis.
   touch "$directory/complete"
+  python3 ./prune-backups.py "$directory" "$container" "$caddy_container"
   echo "Backup saved to $PWD/$directory"
 }
 
