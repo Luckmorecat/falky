@@ -133,13 +133,14 @@ export function Tile({ id, name, palette, isSelf, level, muted, deafened, adjust
         <label className="t-vol">
           <Icon name="vol" />
           <input
-            type="range" min="0" max="1" step="0.01" value={volume} aria-label={`${t.volume}: ${name}`} tabIndex={volumeOpen ? 0 : -1}
+            type="range" min="0" max="2" step="0.05" value={volume} aria-label={`${t.volume}: ${name}`} tabIndex={volumeOpen ? 0 : -1}
             onChange={(e) => {
               const v = Number(e.target.value);
               setVolume(v);
               setParticipantVolume(id, v);
             }}
           />
+          <output>{Math.round(volume * 100)}%</output>
         </label>
       )}
     </article>

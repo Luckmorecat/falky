@@ -3,6 +3,7 @@ import {
   DisconnectReason,
   type LocalTrackPublication,
   type Participant as LkParticipant,
+  RemoteAudioTrack,
   type RemoteParticipant,
   Room,
   RoomEvent,
@@ -10,6 +11,7 @@ import {
   type VideoTrack,
 } from 'livekit-client';
 import { api, ApiError } from '../api/client';
+import { softClipCurve } from './softclip';
 
 export interface VoicePerson {
   id: string;
@@ -82,6 +84,8 @@ export class VoiceSession {
   private moving = false;
   private removedWhileMoving = false;
   private knownShares = new Set<string>();
+  /** What each remote track is raised by above 100%. */
+  private boosts = new WeakMap<RemoteAudioTrack, GainNode>();
 
   constructor(private readonly host: VoiceHost) {
     this.sinkHost = document.createElement('div');
@@ -131,6 +135,8 @@ export class VoiceSession {
       dynacast: true,
       audioCaptureDefaults: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, deviceId: micId || undefined },
       audioOutput: speakerId ? { deviceId: speakerId } : undefined,
+      // Through Web Audio, because an audio element cannot play above 100%.
+      webAudioMix: { audioContext: this.audio },
     });
     this.room = room;
     this.bind(room);
@@ -231,11 +237,7 @@ export class VoiceSession {
   applyVolumes(): void {
     const room = this.room;
     if (!room) return;
-    for (const p of room.remoteParticipants.values()) {
-      const v = this.snap.deafened ? 0 : this.host.volumeOf(p.identity);
-      p.setVolume(v, Track.Source.Microphone);
-      p.setVolume(v, Track.Source.ScreenShareAudio);
-    }
+    for (const p of room.remoteParticipants.values()) this.applyVolumesFor(p);
   }
 
   async setMic(deviceId: string): Promise<void> {
@@ -261,6 +263,7 @@ export class VoiceSession {
     room
       .on(RoomEvent.TrackSubscribed, (track, _pub, participant) => {
         if (track.kind === Track.Kind.Audio) {
+          if (track instanceof RemoteAudioTrack) this.addBoost(track);
           const el = track.attach();
           this.sinkHost.append(el);
           this.applyVolumesFor(participant);
@@ -313,8 +316,28 @@ export class VoiceSession {
 
   private applyVolumesFor(p: RemoteParticipant): void {
     const v = this.snap.deafened ? 0 : this.host.volumeOf(p.identity);
-    p.setVolume(v, Track.Source.Microphone);
-    p.setVolume(v, Track.Source.ScreenShareAudio);
+    p.setVolume(Math.min(v, 1), Track.Source.Microphone);
+    p.setVolume(Math.min(v, 1), Track.Source.ScreenShareAudio);
+    for (const pub of p.audioTrackPublications.values()) {
+      const boost = pub.track && this.boosts.get(pub.track as RemoteAudioTrack);
+      if (boost) boost.gain.value = Math.max(v, 1);
+    }
+  }
+
+  /**
+   * Room above 100% for a track, with soft clipping after it so that raising a
+   * loud voice does not distort harshly. The SDK's own volume comes last and
+   * stays at 100% or below.
+   */
+  private addBoost(track: RemoteAudioTrack): void {
+    const ctx = this.audio;
+    if (!ctx || this.boosts.has(track)) return;
+    const boost = ctx.createGain();
+    const clip = ctx.createWaveShaper();
+    clip.curve = softClipCurve();
+    clip.oversample = '2x';
+    this.boosts.set(track, boost);
+    track.setWebAudioPlugins([boost, clip]);
   }
 
   private queueRefresh(): void {

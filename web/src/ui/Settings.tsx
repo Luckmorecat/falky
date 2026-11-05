@@ -17,7 +17,7 @@ function useDevices(kind: MediaDeviceKind, active: boolean): MediaDeviceInfo[] {
   return devices;
 }
 
-const canChooseSpeaker = typeof HTMLMediaElement !== 'undefined' && 'setSinkId' in HTMLMediaElement.prototype;
+const canChooseSpeaker = typeof AudioContext !== 'undefined' && 'setSinkId' in AudioContext.prototype;
 
 export function Settings({ open }: { open: boolean }) {
   const settings = useApp((s) => s.settings);
