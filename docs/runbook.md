@@ -420,12 +420,16 @@ while the server keeps running and visitors keep posting:
 docker compose exec falky /falky snapshot
 ```
 
+On the VPS, run from the selected instance directory and use `./compose.sh`
+instead of `docker compose` for all snapshot commands below.
+
 It prints where the snapshot went, for example
 `/snapshots/falky-20261104T014919Z.db`, named after the UTC time. Never copy
 `falky.db`, `falky.db-wal` or `falky.db-shm` out of the data volume instead:
 while the server runs, those files are not a consistent database.
 
-Snapshots go to the volume `falky_falky_snapshots`, mounted at `/snapshots`,
+Snapshots go to the selected project's snapshot volume (`falky_falky_snapshots`
+for production, `falky-dev_falky_snapshots` for development), mounted at `/snapshots`,
 which is kept apart from the live database. Each file can be read and written
 by the server's user only (mode 0600). A snapshot never replaces an existing
 file: two in the same second fail the second time, so try again.
@@ -441,9 +445,11 @@ a throwaway container, for example with the Caddy image the stack already
 uses:
 
 ```sh
-caddy=$(docker compose config --images | grep '^caddy:')
-docker run --rm -v falky_falky_snapshots:/snapshots --entrypoint ls "$caddy" -l /snapshots
-docker run --rm -v falky_falky_snapshots:/snapshots --entrypoint rm "$caddy" /snapshots/falky-20261104T014919Z.db
+snapshot_volume=$(docker compose config --format json | python3 -c 'import json, sys; print(json.load(sys.stdin)["volumes"]["falky_snapshots"]["name"])')
+caddy=$(docker compose config --format json | python3 -c 'import json, sys; print(json.load(sys.stdin)["services"]["caddy"]["image"])')
+docker volume inspect "${snapshot_volume:?}" >/dev/null
+docker run --rm -v "${snapshot_volume:?}:/snapshots" --entrypoint ls "${caddy:?}" -l /snapshots
+docker run --rm -v "${snapshot_volume:?}:/snapshots" --entrypoint rm "${caddy:?}" /snapshots/falky-20261104T014919Z.db
 ```
 
 Do this only while the volume exists, that is, after the stack has been up
@@ -462,20 +468,34 @@ Keep snapshots as private as `deploy/.env`.
 A restore makes a snapshot the database in a fresh data volume, with the
 server stopped. Everything posted after the snapshot was taken is lost.
 
+Run from the selected instance's directory. On the VPS, use `./compose.sh`
+in place of every `docker compose` command below so the saved instance
+configuration and published images are selected. Use a backup from that same
+instance, and stop the shared edge as described in *Backups and recovery*.
+
 1. Have the snapshot on the host, copied out as above. If the current
    database might still be needed, take a snapshot of it and copy that out
    too.
-2. Stop the stack. The volumes stay. Container logs are deleted with the
+2. Resolve the database volume from the selected Compose configuration and
+   check the printed name: production is `falky_falky_data`, development is
+   `falky-dev_falky_data`. Stop if it names the wrong instance.
+
+   ```sh
+   database_volume=$(docker compose config --format json | python3 -c 'import json, sys; print(json.load(sys.stdin)["volumes"]["falky_data"]["name"])')
+   printf 'Selected database volume: %s\n' "${database_volume:?}"
+   ```
+
+3. Stop the stack. The volumes stay. Container logs are deleted with the
    containers, so save any you need first (see *Logs*).
 
    ```sh
    docker compose down
    ```
 
-3. Delete the current database:
+4. Delete only the database volume resolved above:
 
    ```sh
-   docker volume rm falky_falky_data
+   docker volume rm -- "${database_volume:?}"
    ```
 
    Do not mount the new, empty volume into any other container before the
@@ -483,7 +503,7 @@ server stopped. Everything posted after the snapshot was taken is lost.
    takes its owner, after which the server cannot write there. If it
    happened, delete the volume again.
 
-4. Restore the snapshot, passing it on standard input:
+5. Restore the snapshot, passing it on standard input:
 
    ```sh
    docker compose run --rm --no-deps -T falky restore < falky-20261104T014919Z.db
@@ -499,13 +519,14 @@ server stopped. Everything posted after the snapshot was taken is lost.
    prints `restored the snapshot as /data/falky.db; start the server on it`. A snapshot from an older
    `falky` is fine: the server migrates it when it starts.
 
-5. Start the stack:
+6. Start the stack:
 
    ```sh
    docker compose up -d --wait
    ```
 
-6. Check `falky health ready`, the rooms and the latest messages. The access
+7. On the VPS, start the shared edge again after the instance network exists.
+   Check `falky health ready`, the rooms and the latest messages. The access
    link and the visitors' cookies are the ones the snapshot held, so visitors
    who entered before the snapshot are let in again.
 
