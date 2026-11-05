@@ -1,13 +1,12 @@
 import { useEffect, useState } from 'react';
-import { dismissNotice, setChatOpen, stepRoom, viewRoom, voice } from '../app/controller';
+import { dismissNotice, setChatOpen, stepRoom, voice } from '../app/controller';
 import { getState, setState, useApp } from '../app/store';
-import { roomPalette, paletteStyle } from '../fx/palette';
 import { t } from '../strings';
 import { Chat } from './Chat';
 import { Dock } from './Dock';
-import { Dots } from './Dots';
 import { Icon } from './Icon';
 import { NameConflict } from './Screens';
+import { Rooms } from './Rooms';
 import { Stage } from './Stage';
 
 function Clock({ joinedAt }: { joinedAt: number }) {
@@ -21,48 +20,7 @@ function Clock({ joinedAt }: { joinedAt: number }) {
   const mm = String(Math.floor((total % 3600) / 60)).padStart(2, '0');
   const ss = String(total % 60).padStart(2, '0');
   const text = hours ? `${hours}:${mm}:${ss}` : `${mm}:${ss}`;
-  return <Dots text={text} label={text} />;
-}
-
-function Rail() {
-  const rooms = useApp((s) => s.rooms);
-  const viewed = useApp((s) => s.viewedRoomId);
-  const chats = useApp((s) => s.chats);
-  const voiceRoomId = useApp((s) => (s.voice.status === 'idle' ? null : s.voice.roomId));
-  const speakers = useApp((s) => s.voice.speakers);
-  const selfId = useApp((s) => s.visitor?.id);
-
-  return (
-    <aside className="rail" aria-label={t.rooms}>
-      <h2>{t.rooms}</h2>
-      {rooms.map((room, i) => {
-        const on = room.id === viewed;
-        const n = room.occupancy.length;
-        return (
-          <button key={room.id} className={`room${on ? ' on' : ''}`} aria-current={on ? 'true' : undefined} onClick={() => viewRoom(room.id)}>
-            <span className="room-row">
-              <span className={`chip${n ? '' : ' empty'}`} style={paletteStyle(roomPalette(i))} />
-              <span className="room-name">{room.name}</span>
-              {room.id === voiceRoomId && <span className="room-here" title={t.mic}><Icon name="mic" /></span>}
-              {!!chats[room.id]?.unread && <span className="room-new" title={t.newMessages} />}
-              {n > 0 && <span className="room-count"><Dots text={String(n)} label={t.inVoiceCount(n)} /></span>}
-            </span>
-            {n > 0 && (
-              <ul className="people">
-                {room.occupancy.map((p) => (
-                  <li key={p.visitorId} className={room.id === voiceRoomId && speakers.includes(p.visitorId) ? 'talk' : ''}>
-                    <i className="pdot" />
-                    <span>{p.name}{p.visitorId === selfId ? ` (${t.you})` : ''}</span>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </button>
-        );
-      })}
-      {!rooms.length && <p className="rail-empty"><strong>{t.noRoomsTitle}</strong>{t.noRoomsBody}</p>}
-    </aside>
-  );
+  return <span>{t.inVoiceFor(text)}</span>;
 }
 
 export function Main() {
@@ -90,6 +48,13 @@ export function Main() {
       const target = e.target as Element | null;
       if (target?.closest('input, textarea, select') || e.metaKey || e.ctrlKey || e.altKey) return;
       // By physical key, so a Ukrainian layout works the same.
+      // Straight to writing, as in most chats; a focused button keeps its own Enter.
+      if (e.code === 'Slash' || e.key === '/' || (e.code === 'Enter' && !target?.closest('button, a'))) {
+        e.preventDefault();
+        setChatOpen(true);
+        document.querySelector<HTMLTextAreaElement>('.composer textarea')?.focus();
+        return;
+      }
       if (e.code === 'KeyM' && getState().voice.status === 'connected') void voice.toggleMute();
       else if (e.code === 'KeyD' && getState().voice.status === 'connected') void voice.toggleDeafen();
       else if (e.key === 'ArrowLeft') stepRoom(-1);
@@ -106,38 +71,30 @@ export function Main() {
   return (
     <div className="screen room-screen">
       <div className="topbar"><span className="mark">falky</span></div>
-      <button className="ib rooms-btn" aria-label={t.rooms} aria-expanded={roomsOpen} onClick={() => setState({ roomsOpen: !roomsOpen })}>
-        <Icon name="rooms" />
-      </button>
 
       <div className="main">
-        <header className="room-title">
-          <h1>{room?.name ?? t.noRoomsTitle}</h1>
-          <div className="clock">
-            {!room ? <span>{t.noRoomsBody}</span>
-              : inThisRoom && voiceState.joinedAt ? <Clock joinedAt={voiceState.joinedAt} />
-                : inVoiceElsewhere ? <span>{t.inOtherRoom(voiceRoomName)}</span>
-                  : <span>{room.occupancy.length ? t.notInVoice : t.nobodyInVoice}</span>}
-          </div>
-        </header>
+        <Rooms
+          room={room}
+          status={!room ? <span>{t.noRoomsBody}</span>
+            : inThisRoom && voiceState.joinedAt ? <Clock joinedAt={voiceState.joinedAt} />
+              : inVoiceElsewhere ? <span>{t.inOtherRoom(voiceRoomName)}</span>
+                : <span>{room.occupancy.length ? t.notInVoice : t.nobodyInVoice}</span>}
+        />
         {room ? <Stage room={room} /> : <div className="stage" />}
         <div className="dock-space" />
         <Dock room={room} />
       </div>
 
-      <Rail />
-
       <button
         className="ib chat-btn"
         aria-label={chatOpen ? t.closeChat : unread ? `${t.chat}: ${unread}` : t.chat}
         aria-expanded={chatOpen}
-        data-tip={undefined}
         onClick={() => setChatOpen(!chatOpen)}
       >
         <span className="swap"><Icon name="chat" className="a" /><Icon name="x" className="b" /></span>
         {unread > 0 && <span className="badge">{unread > 99 ? '99+' : unread}</span>}
       </button>
-      <Chat room={room} peopleInVoice={room?.occupancy.length ?? 0} />
+      <Chat room={room} />
 
       <div className="float-top" aria-live="polite">
         {banner && <div className="banner"><span className="pulse" />{banner}</div>}

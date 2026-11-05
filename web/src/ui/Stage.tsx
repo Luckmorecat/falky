@@ -8,6 +8,7 @@ import { effectsReduced } from '../fx/ticker';
 import { t } from '../strings';
 import { Icon } from './Icon';
 import { Tile } from './Tile';
+import { useDrawerLayout } from './useDrawerLayout';
 
 interface Person {
   id: string;
@@ -44,18 +45,16 @@ function useWindowSize(): { w: number; h: number } {
   return size;
 }
 
-const NARROW = 1000;
-
 export function Stage({ room }: { room: Room }) {
   const people = usePeople(room);
   const { w, h } = useWindowSize();
-  const narrow = w <= NARROW;
+  const narrow = useDrawerLayout();
   const shares = people.filter((p) => p.live && p.sharing);
   const [picked, setPicked] = useState<string | null>(null);
   const shown = shares.find((p) => p.id === picked) ?? shares[0] ?? null;
 
-  // The chat's width stays reserved, so blocks keep their size as it slides.
-  const width = (narrow ? w : w - 440) - (narrow ? 24 : 72);
+  // The chat's width (--chat) stays reserved, so blocks keep their size as it comes in.
+  const width = (narrow ? w : w - 340) - (narrow ? 24 : 72);
   const height = h - (narrow ? 96 : 112) - (narrow ? 104 : 128) - 16;
   const gap = people.length > 4 ? 12 : 16;
   const miniSize = narrow ? 76 : 104;

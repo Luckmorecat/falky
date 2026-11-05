@@ -1,8 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import { enableNotifications, rename, updateSettings, voice } from '../app/controller';
+import type { Settings as SettingsValues } from '../app/prefs';
 import { useApp } from '../app/store';
 import { onTick } from '../fx/ticker';
 import { t } from '../strings';
+import { type MicTest, startMicTest } from '../voice/meter';
+import { canShareScreen } from '../voice/share';
 import { playSound } from '../voice/sounds';
 
 function useDevices(kind: MediaDeviceKind, active: boolean): MediaDeviceInfo[] {
@@ -19,28 +22,104 @@ function useDevices(kind: MediaDeviceKind, active: boolean): MediaDeviceInfo[] {
 
 const canChooseSpeaker = typeof AudioContext !== 'undefined' && 'setSinkId' in AudioContext.prototype;
 
+function Segmented<V extends string>({ label, value, options, onChange }: { label: string; value: V; options: [V, string][]; onChange(v: V): void }) {
+  return (
+    <div className="setrow">
+      <span>{label}</span>
+      <div className="seg" role="group" aria-label={label}>
+        {options.map(([v, text]) => <button key={v} type="button" aria-pressed={v === value} onClick={() => onChange(v)}>{text}</button>)}
+      </div>
+    </div>
+  );
+}
+
+type Flag = { [K in keyof SettingsValues]: SettingsValues[K] extends boolean ? K : never }[keyof SettingsValues];
+
+function Toggle({ flag, label }: { flag: Flag; label: string }) {
+  const on = useApp((s) => s.settings[flag]);
+  return (
+    <label className="toggle">
+      {label}
+      <input type="checkbox" checked={on} onChange={(e) => updateSettings({ [flag]: e.target.checked })} />
+    </label>
+  );
+}
+
+/** How loud the microphone is: in voice, what goes out; otherwise a test on request. */
+function MicLevel({ open }: { open: boolean }) {
+  const settings = useApp((s) => s.settings);
+  const selfId = useApp((s) => s.visitor?.id);
+  const inVoice = useApp((s) => s.voice.status === 'connected');
+  const muted = useApp((s) => s.voice.muted);
+  const [testing, setTesting] = useState(false);
+  const [error, setError] = useState('');
+  const test = useRef<MicTest | null>(null);
+  const fill = useRef<HTMLDivElement>(null);
+  const { micId, echoCancellation, noiseSuppression, autoGain } = settings;
+
+  useEffect(() => {
+    if (!open || inVoice) setTesting(false);
+  }, [open, inVoice]);
+
+  useEffect(() => {
+    if (!testing) return;
+    let cancelled = false;
+    setError('');
+    startMicTest({ deviceId: micId || undefined, echoCancellation, noiseSuppression, autoGainControl: autoGain }).then(
+      (started) => {
+        if (cancelled) started.stop();
+        else {
+          test.current = started;
+          // Device names appear once the browser has been allowed the microphone.
+          navigator.mediaDevices.dispatchEvent(new Event('devicechange'));
+        }
+      },
+      (err: Error) => {
+        if (cancelled) return;
+        setTesting(false);
+        setError(err.name === 'NotFoundError' ? t.voiceProblems.mic_missing.title : t.voiceProblems.mic_denied.title);
+      },
+    );
+    return () => {
+      cancelled = true;
+      test.current?.stop();
+      test.current = null;
+    };
+  }, [testing, micId, echoCancellation, noiseSuppression, autoGain]);
+
+  useEffect(() => {
+    if (!open) return;
+    let shown = 0;
+    return onTick((_time, dt) => {
+      const target = inVoice ? (selfId && !muted ? voice.level(selfId) : 0) : (test.current?.level() ?? 0);
+      shown += (target - shown) * (1 - Math.exp(-dt * (target > shown ? 30 : 7)));
+      if (fill.current) fill.current.style.transform = `scaleX(${shown.toFixed(3)})`;
+    });
+  }, [open, inVoice, muted, selfId]);
+
+  return (
+    <div className="setrow">
+      <span>{t.micLevel}</span>
+      <div className="meter" aria-hidden="true"><div ref={fill} /></div>
+      {inVoice ? muted && <span className="set-note">{t.micMutedHint}</span> : (
+        <button type="button" className="btn2" onClick={() => setTesting(!testing)}>{testing ? t.micTestStop : t.micTest}</button>
+      )}
+      {error && <span className="field-err" role="alert">{error}</span>}
+    </div>
+  );
+}
+
 export function Settings({ open }: { open: boolean }) {
   const settings = useApp((s) => s.settings);
   const visitor = useApp((s) => s.visitor);
-  const inVoice = useApp((s) => s.voice.status === 'connected');
+  const sharing = useApp((s) => s.voice.sharing);
   const mics = useDevices('audioinput', open);
   const speakers = useDevices('audiooutput', open && canChooseSpeaker);
   const [name, setName] = useState(visitor?.name ?? '');
   const [nameError, setNameError] = useState('');
   const [notifError, setNotifError] = useState(false);
-  const line = useRef<HTMLDivElement>(null);
-  const moon = useRef<HTMLDivElement>(null);
 
   useEffect(() => setName(visitor?.name ?? ''), [visitor?.name]);
-
-  useEffect(() => {
-    if (!open || !inVoice || !visitor) return;
-    return onTick(() => {
-      const l = voice.level(visitor.id);
-      if (line.current) line.current.style.transform = `scaleX(${l.toFixed(3)})`;
-      if (moon.current && line.current) moon.current.style.transform = `translateX(${(l * line.current.clientWidth).toFixed(1)}px)`;
-    });
-  }, [open, inVoice, visitor]);
 
   const saveName = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -52,66 +131,84 @@ export function Settings({ open }: { open: boolean }) {
   return (
     <div className={`sheet${open ? ' open' : ''}`} {...(open ? {} : { inert: true })} role="dialog" aria-label={t.settings}>
       <h2>{t.settings}</h2>
-      <form className="setrow" onSubmit={(e) => void saveName(e)}>
-        <label htmlFor="set-name">{t.name}</label>
-        <span className="namerow">
-          <input id="set-name" type="text" maxLength={32} value={name} onChange={(e) => { setName(e.target.value); setNameError(''); }} />
-          <button className="btn2" disabled={!name.trim() || name.trim() === visitor?.name}>{t.save}</button>
-        </span>
-        {nameError && <span className="field-err" role="alert">{nameError}</span>}
-      </form>
-      <label className="setrow">
-        {t.mic}
-        <select value={settings.micId} onChange={(e) => updateSettings({ micId: e.target.value })}>
-          <option value="">{t.systemDefault}</option>
-          {mics.map((d, i) => <option key={d.deviceId} value={d.deviceId}>{d.label || `${t.mic} ${i + 1}`}</option>)}
-        </select>
-      </label>
-      {inVoice && (
-        <div className="setrow">
-          <span>{t.micLevel}</span>
-          <div className="meter" aria-hidden="true">
-            <div className="dots" />
-            <div className="line" ref={line} />
-            <div className="moon" ref={moon} />
-          </div>
-        </div>
-      )}
-      {canChooseSpeaker && (
+
+      <section>
+        <h3>{t.sectionProfile}</h3>
+        <form className="setrow" onSubmit={(e) => void saveName(e)}>
+          <label htmlFor="set-name">{t.name}</label>
+          <span className="namerow">
+            <input id="set-name" type="text" maxLength={32} value={name} onChange={(e) => { setName(e.target.value); setNameError(''); }} />
+            <button className="btn2" disabled={!name.trim() || name.trim() === visitor?.name}>{t.save}</button>
+          </span>
+          {nameError && <span className="field-err" role="alert">{nameError}</span>}
+        </form>
+      </section>
+
+      <section>
+        <h3>{t.sectionAudio}</h3>
         <label className="setrow">
-          {t.speakers}
-          <select value={settings.speakerId} onChange={(e) => updateSettings({ speakerId: e.target.value })}>
+          {t.mic}
+          <select value={settings.micId} onChange={(e) => updateSettings({ micId: e.target.value })}>
             <option value="">{t.systemDefault}</option>
-            {speakers.map((d, i) => <option key={d.deviceId} value={d.deviceId}>{d.label || `${t.speakers} ${i + 1}`}</option>)}
+            {mics.map((d, i) => <option key={d.deviceId} value={d.deviceId}>{d.label || `${t.mic} ${i + 1}`}</option>)}
           </select>
         </label>
+        <MicLevel open={open} />
+        {canChooseSpeaker && (
+          <label className="setrow">
+            {t.speakers}
+            <select value={settings.speakerId} onChange={(e) => updateSettings({ speakerId: e.target.value })}>
+              <option value="">{t.systemDefault}</option>
+              {speakers.map((d, i) => <option key={d.deviceId} value={d.deviceId}>{d.label || `${t.speakers} ${i + 1}`}</option>)}
+            </select>
+          </label>
+        )}
+        <div className="setrow">
+          <button type="button" className="btn2" onClick={() => playSound('test', settings.speakerId)}>{t.testSound}</button>
+        </div>
+        <Toggle flag="noiseSuppression" label={t.noiseSuppression} />
+        <Toggle flag="echoCancellation" label={t.echoCancellation} />
+        <Toggle flag="autoGain" label={t.autoGain} />
+        <Toggle flag="joinMuted" label={t.joinMuted} />
+      </section>
+
+      {canShareScreen && (
+        <section>
+          <h3>{t.sectionShare}</h3>
+          <Segmented label={t.shareResolution} value={settings.shareResolution} options={[['720', '720p'], ['1080', '1080p'], ['1440', '1440p']]} onChange={(shareResolution) => updateSettings({ shareResolution })} />
+          <Segmented label={t.shareFps} value={settings.shareFps} options={[['15', '15'], ['30', '30'], ['60', '60']]} onChange={(shareFps) => updateSettings({ shareFps })} />
+          <Segmented label={t.shareFocus} value={settings.shareFocus} options={[['motion', t.shareFocusMotion], ['detail', t.shareFocusDetail]]} onChange={(shareFocus) => updateSettings({ shareFocus })} />
+          <Toggle flag="shareAudio" label={t.shareAudio} />
+          {sharing && <p className="set-note">{t.shareNextTime}</p>}
+        </section>
       )}
-      <div className="setrow">
-        <button className="btn2" onClick={() => playSound('test', settings.speakerId)}>{t.testSound}</button>
-      </div>
-      <label className="toggle">
-        {t.eventSounds}
-        <input type="checkbox" checked={settings.sounds} onChange={(e) => updateSettings({ sounds: e.target.checked })} />
-      </label>
-      {typeof Notification !== 'undefined' && (
-        <label className="toggle">
-          {t.notifications}
-          <input
-            type="checkbox"
-            checked={settings.notifications}
-            onChange={(e) => {
-              setNotifError(false);
-              if (!e.target.checked) updateSettings({ notifications: false });
-              else void enableNotifications().then((on) => setNotifError(!on));
-            }}
-          />
-        </label>
-      )}
-      {notifError && <p className="field-err" role="alert">{t.notificationsBlocked}</p>}
-      <label className="toggle">
-        {t.fewerEffects}
-        <input type="checkbox" checked={settings.fewerEffects} onChange={(e) => updateSettings({ fewerEffects: e.target.checked })} />
-      </label>
+
+      <section>
+        <h3>{t.sectionLook}</h3>
+        <Segmented label={t.theme} value={settings.theme} options={[['dark', t.themeDark], ['light', t.themeLight], ['system', t.themeSystem]]} onChange={(theme) => updateSettings({ theme })} />
+        <Segmented label={t.language} value={settings.lang} options={[['uk', 'Українська'], ['en', 'English']]} onChange={(lang) => updateSettings({ lang })} />
+        <Toggle flag="fewerEffects" label={t.fewerEffects} />
+      </section>
+
+      <section>
+        <h3>{t.sectionAlerts}</h3>
+        <Toggle flag="sounds" label={t.eventSounds} />
+        {typeof Notification !== 'undefined' && (
+          <label className="toggle">
+            {t.notifications}
+            <input
+              type="checkbox"
+              checked={settings.notifications}
+              onChange={(e) => {
+                setNotifError(false);
+                if (!e.target.checked) updateSettings({ notifications: false });
+                else void enableNotifications().then((on) => setNotifError(!on));
+              }}
+            />
+          </label>
+        )}
+        {notifError && <p className="field-err" role="alert">{t.notificationsBlocked}</p>}
+      </section>
     </div>
   );
 }
