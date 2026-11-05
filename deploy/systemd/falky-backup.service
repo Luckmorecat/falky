@@ -1,0 +1,14 @@
+[Unit]
+Description=Falky database snapshot and deployment configuration backup
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+User=deployer
+Group=deployer
+SupplementaryGroups=docker
+WorkingDirectory=/srv/falky
+ExecStart=/srv/falky/manage.sh backup
+UMask=0077
+TimeoutStartSec=300

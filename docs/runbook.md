@@ -88,8 +88,161 @@ can pull anonymously, for example with Docker logged out of GHCR:
 docker pull ghcr.io/luckmorecat/falky:edge
 ```
 
-Publishing does not update the running server. The Compose stack still
-builds its local image; deploy and upgrade it manually as described above.
+Publishing does not update the running server. Local Compose builds its own
+image; the VPS uses the production override and pulls a published image as
+described below.
+
+## Published web image
+
+`Publish web image` (`.github/workflows/publish-web-image.yml`) is independent
+of the server workflow. It runs on pushes to `master` that change `web/**` or
+the web workflow itself. Backend-only and docs-only changes do not publish a
+web image. It checks generated contract types, runs the frontend tests, and
+type-checks and builds using the same pinned Node image as `web/Dockerfile`.
+Only after those checks pass does it build the Caddy image containing the
+frontend and publish `ghcr.io/luckmorecat/falky-web:edge` and
+`ghcr.io/luckmorecat/falky-web:sha-<full commit SHA>`, for `linux/amd64`.
+
+Publishing uses `GITHUB_TOKEN`; the new `falky-web` package must be made public
+after its first publish if the VPS is to pull without registry credentials.
+The workflow becomes active once merged into `master`. Publishing either
+image does not deploy it. Server and web images can be selected independently
+by digest; a frontend-only release need not rebuild or restart the backend.
+
+## Production VPS
+
+The Netcup host is reached with `ssh -l deployer netcup`. Its deployment
+directory is `/srv/falky`, owned by `deployer`. Docker starts at boot, and all
+three containers have `restart: unless-stopped`. The repository need not be
+cloned onto the host.
+
+Install these files from `deploy/` into `/srv/falky`: `compose.yaml`,
+`compose.production.yaml`, `compose.sh`, `manage.sh`, `Caddyfile`, and
+`livekit.yaml`. Make the two scripts executable. Keep the configuration files
+from the same repository revision together. `compose.production.yaml` clears
+local builds and selects `FALKY_IMAGE` and `FALKY_WEB_IMAGE` from `.env`.
+It mounts `Caddyfile`, which serves the web client and proxies the API and
+signalling. `compose.sh` always loads both files with the correct paths.
+
+Create `.env` on the host with mode 0600. Use the settings from `.env.example`,
+with `FALKY_DOMAIN=falky.lunari.win` and the host's public IP for
+`LIVEKIT_NODE_IP`. Generate the key pair on the host; do not commit it or
+print it in CI logs. Add `FALKY_IMAGE=ghcr.io/luckmorecat/falky@sha256:<digest>`
+for the selected published build. Also set
+`FALKY_WEB_IMAGE=ghcr.io/luckmorecat/falky-web@sha256:<digest>`. Public GHCR
+images need no registry login. Caddy uses `pull_policy: never`: `manage.sh`
+explicitly pulls a selected web registry image before starting Compose, and
+can also use an already-built local image by ID.
+
+For the latest published backend and frontend, run:
+
+```sh
+cd /srv/falky
+./manage.sh deploy
+```
+
+This pulls each package's `edge` tag independently, resolves it to that
+repository's immutable digest, and deploys those selected digests. The two
+packages may have different source revisions because they publish separately.
+Both packages must already be published and accessible: a failed pull or a
+missing digest aborts before taking a snapshot or changing configuration or
+containers. There is no fallback to an older cached image. The first public
+`falky-web` publish is required before using this form.
+
+To choose versions explicitly, resolve the digest of the desired
+`sha-<full commit SHA>` image and check its
+`org.opencontainers.image.revision` label before deploying. Use the resulting
+`ghcr.io/luckmorecat/falky@sha256:…` reference, not a moving `edge` tag:
+
+```sh
+cd /srv/falky
+./manage.sh deploy ghcr.io/luckmorecat/falky@sha256:<digest>
+# To update the web client too (or only it, keeping the current server digest):
+./manage.sh deploy ghcr.io/luckmorecat/falky@sha256:<server-digest> ghcr.io/luckmorecat/falky-web@sha256:<web-digest>
+./manage.sh status
+```
+
+With an explicit server digest and no web argument, the current web image is
+kept. With no image arguments, both latest published images are selected. The
+deploy command validates configuration, obtains the selected images, backs up
+the existing running server if there is one, records both image references
+atomically in `.env`, and starts Compose with a three-minute readiness deadline. It then
+checks that both the database and LiveKit report `ok` and that the public
+HTTPS `/api/me` endpoint returns 401 without a visitor cookie. It also checks
+the homepage contains the React root and that its JavaScript and CSS load with
+the correct content types. Certificate issuance is allowed an additional
+retry period. A stopped existing server
+must be recovered before upgrading, so a failed backup cannot be skipped.
+Deployments and backups share a lock; concurrent operations fail immediately.
+
+Use the wrapper for operator commands and diagnostics:
+
+```sh
+./compose.sh exec falky /falky link show
+./compose.sh exec falky /falky room create "Living room"
+./compose.sh logs --since 10m falky livekit caddy
+```
+
+The initial frontend rollout was built on the VPS from exact commit
+`53e3fa7c818910bcda7f03e6224813b10581856f` because the server publishing
+workflow does not include the web client. Its source is retained under
+`/srv/falky/releases/<commit>/web`. To rebuild that release before a registry
+image is available:
+
+```sh
+docker build --label org.opencontainers.image.revision=<commit> -t falky-caddy:sha-<commit> releases/<commit>/web
+docker image inspect falky-caddy:sha-<commit> --format '{{.Id}}'
+```
+
+Pass the resulting `sha256:<image ID>` as the second image argument to
+`manage.sh deploy`. Production pins that content ID, rather than its tag.
+Do not use `make smoke` against this public stack.
+
+For changes to the deployment scripts, run `python3 deploy/manage_test.py`
+from the repository root. These tests replace Docker and external HTTPS
+verification to exercise latest-image selection, explicit version selection,
+backup ordering, and failures without touching a running stack. Also run
+`bash -n deploy/manage.sh deploy/compose.sh` and validate workflow changes
+with `actionlint`.
+
+### Production backups and recovery
+
+`./manage.sh backup` takes a consistent application snapshot and copies it
+to `backups/<UTC timestamp>-<suffix>/database.db` and checks the copy's SQLite
+integrity. Each directory also holds the private `.env`, deployment
+configuration, scripts, and running server image reference (`image.txt`),
+plus the web image ID and source revision (`web-image.txt`, `web-revision.txt`).
+A `complete` marker is written only after all copies
+succeed. Incomplete directories are not usable backups.
+
+Install `deploy/systemd/falky-backup.service` and `.timer` into
+`/etc/systemd/system/` as root, then run:
+
+```sh
+systemctl daemon-reload
+systemctl enable --now falky-backup.timer
+systemctl start falky-backup.service
+systemctl list-timers falky-backup.timer
+```
+
+The timer runs daily at 03:00 UTC with up to 15 minutes of randomized delay.
+The job runs as `deployer`; failures appear in
+`journalctl -u falky-backup.service`. Backups and the original snapshots are
+retained until explicitly removed. Monitor disk usage and copy complete
+backup directories off the VPS regularly: these local copies cannot protect
+against loss of the host. They contain the access link and LiveKit secret.
+
+If deployment verification fails, inspect containers and logs; the script
+leaves the attempted image configured. It does not automatically roll back,
+because a new binary may already have applied database migrations. To
+recover, preserve the current data if needed, select a complete pre-upgrade
+backup, restore its configuration and scripts, and follow the *Restore*
+procedure below using `./compose.sh` instead of `docker compose` and
+`database.db` as input. Use that backup's server and web image references. On a
+replacement host, pull the registry images first, or rebuild the web image
+from its recorded revision if the backup uses a local image ID. Image IDs
+are host-local and may change when rebuilding. This loses writes
+after the snapshot. Never run `down --volumes` during routine deployment.
 
 ## Health
 

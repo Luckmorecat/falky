@@ -1,0 +1,9 @@
+# Use with compose.yaml through ./compose.sh on the VPS.
+services:
+  caddy:
+    build: !reset null
+    image: ${FALKY_WEB_IMAGE:?set FALKY_WEB_IMAGE to a published digest or local image ID}
+    pull_policy: never
+  falky:
+    build: !reset null
+    image: ${FALKY_IMAGE:?set FALKY_IMAGE to a published image digest}
