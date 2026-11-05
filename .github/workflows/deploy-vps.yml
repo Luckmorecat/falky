@@ -33,22 +33,53 @@ jobs:
         run: make check
       - name: Check deployment scripts and workflows
         run: |
-          bash -n deploy/manage.sh deploy/compose.sh deploy/ci-deploy.sh
+          bash -n deploy/manage.sh deploy/compose.sh deploy/ci-deploy.sh deploy/ci-ssh.sh
           python3 deploy/manage_test.py
+          python3 deploy/release_test.py
           python3 deploy/config_test.py
           actionlint
 
-  server:
+  plan:
+    name: Plan release
     if: github.event_name == 'push'
     needs: check
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment:
+      name: ${{ github.ref_type == 'tag' && 'production' || 'development' }}
+    outputs:
+      server: ${{ steps.plan.outputs.server }}
+      web: ${{ steps.plan.outputs.web }}
+      changed: ${{ steps.plan.outputs.changed }}
+      plan: ${{ steps.plan.outputs.plan }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Compare inputs with this environment's successful release
+        id: plan
+        env:
+          VPS_HOST: ${{ vars.VPS_HOST }}
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_KNOWN_HOSTS: ${{ vars.VPS_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          bash deploy/ci-ssh.sh release > "$RUNNER_TEMP/release-baseline.json"
+          python3 deploy/release.py plan "$RUNNER_TEMP/release-baseline.json"
+
+  server:
+    if: needs.plan.outputs.server == 'true'
+    needs: plan
     uses: ./.github/workflows/publish-image.yml
     permissions:
       contents: read
       packages: write
 
   web:
-    if: github.event_name == 'push'
-    needs: check
+    if: needs.plan.outputs.web == 'true'
+    needs: plan
     uses: ./.github/workflows/publish-web-image.yml
     permissions:
       contents: read
@@ -56,43 +87,36 @@ jobs:
 
   deploy:
     name: Deploy ${{ github.ref_type == 'tag' && 'production' || 'development' }}
-    needs: [server, web]
+    # Planned skips are valid. Failures/cancellation must never become reuse.
+    if: >-
+      !cancelled() && needs.check.result == 'success' &&
+      needs.plan.result == 'success' && needs.plan.outputs.changed == 'true' &&
+      (needs.server.result == 'success' || needs.server.result == 'skipped') &&
+      (needs.web.result == 'success' || needs.web.result == 'skipped')
+    needs: [check, plan, server, web]
     runs-on: ubuntu-latest
     timeout-minutes: 35
-    permissions: {}
+    permissions:
+      contents: read
     environment:
       name: ${{ github.ref_type == 'tag' && 'production' || 'development' }}
       url: ${{ github.ref_type == 'tag' && 'https://falky.lunari.win' || 'https://dev.falky.lunari.win' }}
     steps:
-      - name: Configure deployment SSH key and trusted host
-        env:
-          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
-          VPS_KNOWN_HOSTS: ${{ vars.VPS_KNOWN_HOSTS }}
-        run: |
-          set -euo pipefail
-          test -n "$VPS_SSH_KEY" || { echo "Missing environment secret VPS_SSH_KEY" >&2; exit 1; }
-          test -n "$VPS_KNOWN_HOSTS" || { echo "Missing environment variable VPS_KNOWN_HOSTS" >&2; exit 1; }
-          umask 077
-          mkdir -p "$RUNNER_TEMP/vps-ssh"
-          printf '%s\n' "$VPS_SSH_KEY" > "$RUNNER_TEMP/vps-ssh/key"
-          printf '%s\n' "$VPS_KNOWN_HOSTS" > "$RUNNER_TEMP/vps-ssh/known_hosts"
-      - name: Deploy this build's immutable images
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Resolve immutable images and deploy against the verified baseline
         env:
           VPS_HOST: ${{ vars.VPS_HOST }}
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_KNOWN_HOSTS: ${{ vars.VPS_KNOWN_HOSTS }}
+          RELEASE_PLAN: ${{ needs.plan.outputs.plan }}
+          SERVER_RESULT: ${{ needs.server.result }}
+          WEB_RESULT: ${{ needs.web.result }}
           SERVER_DIGEST: ${{ needs.server.outputs.digest }}
           WEB_DIGEST: ${{ needs.web.outputs.digest }}
         run: |
           set -euo pipefail
-          [[ $VPS_HOST =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]*$ ]] || { echo "Invalid VPS_HOST" >&2; exit 1; }
-          [[ $SERVER_DIGEST =~ ^sha256:[a-f0-9]{64}$ ]] || { echo "Invalid server digest" >&2; exit 1; }
-          [[ $WEB_DIGEST =~ ^sha256:[a-f0-9]{64}$ ]] || { echo "Invalid web digest" >&2; exit 1; }
-          command="deploy ghcr.io/luckmorecat/falky@$SERVER_DIGEST ghcr.io/luckmorecat/falky-web@$WEB_DIGEST"
-          ssh -F /dev/null -T \
-            -o BatchMode=yes -o IdentitiesOnly=yes -o IdentityAgent=none \
-            -o StrictHostKeyChecking=yes -o UpdateHostKeys=no \
-            -o UserKnownHostsFile="$RUNNER_TEMP/vps-ssh/known_hosts" \
-            -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=3 \
-            -i "$RUNNER_TEMP/vps-ssh/key" -l deployer "$VPS_HOST" "$command"
-      - name: Remove temporary credentials
-        if: always()
-        run: rm -rf -- "$RUNNER_TEMP/vps-ssh"
+          command=$(python3 deploy/release.py resolve)
+          bash deploy/ci-ssh.sh "$command"

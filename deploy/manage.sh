@@ -5,7 +5,7 @@ cd -- "$(dirname -- "$0")"
 umask 077
 
 usage() {
-  echo "Usage: $0 deploy <server digest> <web digest or local image ID> | backup | status" >&2
+  echo "Usage: $0 deploy <server digest> <web digest or local image ID> | deploy-release <request> | release | backup | status" >&2
   exit 2
 }
 
@@ -21,7 +21,8 @@ case "$operation" in
     [[ $2 =~ ^ghcr\.io/luckmorecat/falky@sha256:[a-f0-9]{64}$ ]] || usage
     valid_web_image "$3" || usage
     ;;
-  backup|status) [[ $# == 1 ]] || usage ;;
+  deploy-release) [[ $# == 2 ]] || usage ;;
+  release|backup|status) [[ $# == 1 ]] || usage ;;
   *) usage ;;
 esac
 
@@ -58,7 +59,8 @@ with closing(sqlite3.connect(Path(sys.argv[1]).resolve().as_uri() + '?mode=ro', 
     if db.execute('PRAGMA integrity_check').fetchall() != [('ok',)]:
         raise SystemExit('Copied database failed its integrity check')
 PY
-  cp .env compose.yaml compose.production.yaml compose.sh manage.sh ci-deploy.sh prune-backups.py Caddyfile WebCaddyfile web.caddy livekit.yaml "$directory/"
+  cp .env compose.yaml compose.production.yaml compose.sh manage.sh ci-deploy.sh release.py prune-backups.py Caddyfile WebCaddyfile web.caddy livekit.yaml "$directory/"
+  if [[ -f .release.json ]]; then cp .release.json "$directory/"; fi
   docker inspect --format '{{.Config.Image}}' "$container" > "$directory/image.txt"
   caddy_container=$(./compose.sh ps --all --quiet caddy)
   docker inspect --format '{{.Image}}' "$caddy_container" > "$directory/web-image.txt"
@@ -127,18 +129,41 @@ case "$operation" in
     ./compose.sh ps
     health
     ;;
-  deploy)
-    image=$2
-    web_image=$3
+  release)
+    health >&2
+    python3 release.py snapshot
+    ;;
+  deploy|deploy-release)
+    services=()
+    if [[ $operation == deploy-release ]]; then
+      request=$2
+      # The shell holds the same lock from baseline verification through health.
+      health >&2
+      selection=$(python3 release.py verify "$request")
+      mapfile -t selected <<< "$selection"
+      image=${selected[0]}
+      web_image=${selected[1]}
+      read -r -a services <<< "${selected[2]:-}"
+      [[ ${#services[@]} -gt 0 ]] || { echo "Release has no changed images" >&2; exit 1; }
+    else
+      image=$2
+      web_image=$3
+    fi
     # Resolve both images before changing configuration or taking a backup.
     # CI passes the build outputs directly; no moving tags are resolved here.
-    if [[ $web_image == ghcr.io/* ]]; then
-      docker pull "$web_image"
-    else
-      docker image inspect "$web_image" >/dev/null
+    if [[ $operation == deploy || " ${services[*]} " == *" caddy "* ]]; then
+      if [[ $web_image == ghcr.io/* ]]; then
+        docker pull "$web_image"
+      else
+        docker image inspect "$web_image" >/dev/null
+      fi
     fi
     FALKY_IMAGE=$image FALKY_WEB_IMAGE=$web_image ./compose.sh config --quiet
-    FALKY_IMAGE=$image FALKY_WEB_IMAGE=$web_image ./compose.sh pull falky livekit
+    if [[ $operation == deploy ]]; then
+      FALKY_IMAGE=$image FALKY_WEB_IMAGE=$web_image ./compose.sh pull falky livekit
+    elif [[ " ${services[*]} " == *" falky "* ]]; then
+      FALKY_IMAGE=$image FALKY_WEB_IMAGE=$web_image ./compose.sh pull falky
+    fi
     # Assign separately so a failed container query cannot look like a fresh
     # installation. `compose down` removes containers but retains the database.
     container=$(./compose.sh ps --all --quiet falky)
@@ -164,6 +189,13 @@ print(name)
         fi
       done <<< "$existing_volumes"
     fi
+    # Failures after this marker require explicit recovery, even if CI was lost.
+    # Pull/backup failures above leave the previous successful baseline usable.
+    if [[ $operation == deploy-release ]]; then
+      python3 release.py begin "$request"
+    else
+      python3 release.py manual-begin
+    fi
     # Commit the selected image atomically. On failure, keep the attempted image
     # configured for diagnosis; migrations make automatic rollback unsafe.
     python3 - "$image" "$web_image" <<'PY'
@@ -186,10 +218,19 @@ finally:
     if os.path.exists(temporary):
         os.unlink(temporary)
 PY
-    ./compose.sh up --detach --no-build --wait --wait-timeout 180
+    if [[ $operation == deploy-release ]]; then
+      ./compose.sh up --detach --no-build --no-deps --wait --wait-timeout 180 "${services[@]}"
+    else
+      ./compose.sh up --detach --no-build --wait --wait-timeout 180
+    fi
     # LiveKit readiness and ACME issuance may lag container startup.
     for attempt in {1..18}; do
       if health; then
+        if [[ $operation == deploy-release ]]; then
+          python3 release.py finish "$request"
+        else
+          python3 release.py manual-finish
+        fi
         printf 'Deployed %s\n' "$image"
         exit 0
       fi

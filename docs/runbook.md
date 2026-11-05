@@ -79,25 +79,71 @@ A master push deploys development; a version tag deploys production. There is
 no production deployment on master pushes and no manual workflow trigger.
 
 ```text
-master push → complete checks → build backend + frontend → development
-v* tag push → complete checks → build backend + frontend → production
+master push → complete checks → plan against development → build changed images → development
+v* tag push → complete checks → plan against production  → build changed images → production
 ```
 
-Both reusable publisher workflows build the caller's checked-out revision,
-for `linux/amd64`, and return their immutable image digests. The deploy job
-passes those exact digests to the instance's restricted SSH command. Images
-are labelled with the source commit and tagged `run-<run ID>-<attempt>` for
-traceability. They do not update or deploy `edge`. A tag builds from the tagged
-commit, even if master has moved on. It does not promote development data.
+Planning reads the target instance's healthy, successful release through the
+restricted SSH command. It compares complete tracked build-input fingerprints,
+so failed or coalesced intermediate runs cannot hide an undeployed change.
+`web/` changes publish only the web image; `server/` changes publish only the
+server image. `api/`, shared tooling, deployment policy and unknown paths
+invalidate both. Each publisher's workflow invalidates its own image. Files
+under `docs/`, `.agents/`, `.claude/`, and `GLOSSARY.md` do not trigger publishing.
+Documentation-only pushes still run checks and verify the environment, but do
+not deploy. An old push/tag rerun cannot automatically roll back a newer release.
+
+Requested publishers build the checked-out revision for `linux/amd64` and return
+immutable digests. Unchanged images retain their previous digest, input hash and
+original build revision. Every release still specifies both images. Images are
+labelled with their build commit and tagged `run-<run ID>-<attempt>`; CI never
+selects `edge` or `latest`. Production compares against its own release, not
+development's, and builds from the tag. It does not promote development data.
 Both GHCR packages (`falky` and `falky-web`) must be public for anonymous pulls.
 
 Each environment serializes its complete build/deploy sequence; active runs
 are not cancelled. GitHub may coalesce pending runs during a burst of pushes.
 Development and production run independently and have separate host locks.
-Failed checks or either image build prevent deployment. Failed pulls happen
+Failed checks or any requested image build prevent deployment. Only planned
+skips may reuse images. Failed pulls happen
 before any configuration change. Existing instances are backed up before an
 upgrade; database migrations are applied on start. A failed health check
 leaves the attempted images configured, without an automatic database rollback.
+
+Each instance stores `.release.json` after successful health verification and
+`.release-pending.json` before changing its configured images. A pending attempt
+blocks further CI releases until explicit recovery; never delete that marker to
+pretend an interrupted release succeeded. CI checks its baseline again under
+the VPS operation lock before changing anything. Running images, container IDs,
+Compose configuration and installed deployment files must match that baseline.
+Neither a new plan nor a deployment is allowed to reuse a drifted instance.
+
+Application-only updates replace only `caddy` (web) and/or `falky` (server), with
+`--no-deps`; LiveKit and unchanged containers stay running. Backups and the full
+API, frontend-assets and LiveKit health checks still run for either update.
+Replacing a container can briefly interrupt its requests; this is not a
+zero-downtime rollout.
+
+### Enabling selective releases and changing VPS configuration
+
+This workflow does **not** install host files. Before enabling it, install the
+deployment files listed below, including `release.py`, in each instance. Keep
+them identical to the source revision being released. The new SSH wrapper
+rejects the old CI `deploy <server> <web>` protocol, so coordinate installation
+with the workflow change when no deployment is active. Merging code alone does
+not perform this installation: CI fails safely if the protocol/files differ.
+
+For an existing healthy instance without a release record, the first CI release
+builds both images and establishes the record. A fresh or unhealthy installation
+must be started/recovered manually first; CI does not guess its state. When
+changing host configuration later, install the intended files and explicitly
+run the operator's full `./manage.sh deploy <server digest> <web digest>` with a
+known compatible pair. This reconciles the entire stack, verifies health, and
+clears the old release record only on success. The next CI release builds both.
+Keep deployment files in sync separately for production tags and development.
+
+Do not bypass drift checks by editing release records. The records describe
+successful running state, not a desired configuration or a migration journal.
 
 Release a tested commit with:
 
@@ -127,16 +173,18 @@ restrict,command="/srv/falky/ci-deploy.sh" ssh-ed25519 <production-public-key> f
 restrict,command="/srv/falky-dev/ci-deploy.sh" ssh-ed25519 <development-public-key> falky-github-actions-development
 ```
 
-The wrapper accepts only `status` or `deploy <server digest> <web digest>`.
+The wrapper accepts only `status`, `release` (a non-secret baseline snapshot),
+or `deploy-release <encoded request>` (strictly validated by `release.py`).
 It cannot select another instance, deploy a moving tag, or execute arbitrary
-shell commands. Old CI commands such as `deploy frontend` are rejected.
+shell commands. Old CI commands such as `deploy frontend` and unguarded digest
+pairs are rejected. The snapshot requires a healthy, reconciled instance.
 Application secrets stay in each instance's private `.env`.
 
 ### VPS configuration
 
 Connect with `ssh -l deployer netcup`. Install these files from `deploy/` in
 **both** instance directories: `compose.yaml`, `compose.production.yaml`,
-`compose.sh`, `manage.sh`, `ci-deploy.sh`, `prune-backups.py`, `Caddyfile`,
+`compose.sh`, `manage.sh`, `ci-deploy.sh`, `release.py`, `prune-backups.py`, `Caddyfile`,
 `WebCaddyfile`, `web.caddy`, and `livekit.yaml`. Keep the scripts executable and each `.env`
 mode 0600, owned by `deployer`. The repository need not be cloned on the VPS.
 
@@ -231,7 +279,10 @@ For manual recovery, deploy an explicit pair of known immutable images:
 No-argument, latest-image and component-only deployments are intentionally
 unavailable: each release identifies both images. A local web image ID is
 accepted only by the operator command for recovering older installations;
-CI accepts published digests only.
+CI accepts published digests only. A successful manual deployment clears the
+successful/pending release records; the next CI release rebuilds both images.
+If a failed backend release ran migrations, choose a compatible recovery image
+or follow database restoration below; do not automatically downgrade the binary.
 
 The shared proxy's logs are separate:
 
@@ -243,12 +294,14 @@ Validate deployment changes from the repository root:
 
 ```sh
 python3 deploy/manage_test.py
+python3 deploy/release_test.py
 python3 deploy/config_test.py
-bash -n deploy/manage.sh deploy/compose.sh deploy/ci-deploy.sh
+bash -n deploy/manage.sh deploy/compose.sh deploy/ci-deploy.sh deploy/ci-ssh.sh
 actionlint
 ```
 
-The management tests substitute Docker and public HTTPS probes; the configuration
+The management/release tests substitute Docker and public HTTPS probes and use
+temporary Git repositories for input and ancestry checks; the configuration
 tests render real Compose files without contacting Docker. Validate both Caddyfiles
 with the pinned Caddy image before installing them.
 
