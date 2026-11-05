@@ -1,0 +1,58 @@
+name: Deploy VPS
+
+on:
+  workflow_run:
+    workflows: [Publish server image, Publish web image]
+    types: [completed]
+    branches: [master]
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  deploy:
+    name: Deploy production
+    if: >-
+      github.repository == 'Luckmorecat/falky' &&
+      github.ref == 'refs/heads/master' &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.event == 'push' &&
+        github.event.workflow_run.head_branch == 'master' &&
+        github.event.workflow_run.head_repository.full_name == github.repository))
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment:
+      name: production
+      url: https://falky.lunari.win
+    concurrency:
+      group: vps-production
+      cancel-in-progress: false
+    steps:
+      - name: Configure deployment SSH key and trusted host
+        env:
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_KNOWN_HOSTS: ${{ vars.VPS_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          test -n "$VPS_SSH_KEY" || { echo "Missing production secret VPS_SSH_KEY" >&2; exit 1; }
+          test -n "$VPS_KNOWN_HOSTS" || { echo "Missing production variable VPS_KNOWN_HOSTS" >&2; exit 1; }
+          umask 077
+          mkdir -p "$RUNNER_TEMP/vps-ssh"
+          printf '%s\n' "$VPS_SSH_KEY" > "$RUNNER_TEMP/vps-ssh/key"
+          printf '%s\n' "$VPS_KNOWN_HOSTS" > "$RUNNER_TEMP/vps-ssh/known_hosts"
+      - name: Deploy latest published images
+        env:
+          VPS_HOST: ${{ vars.VPS_HOST }}
+        run: |
+          set -euo pipefail
+          [[ $VPS_HOST =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]*$ ]] || { echo "Invalid production variable VPS_HOST" >&2; exit 1; }
+          ssh -F /dev/null -T \
+            -o BatchMode=yes -o IdentitiesOnly=yes -o IdentityAgent=none \
+            -o StrictHostKeyChecking=yes -o UpdateHostKeys=no \
+            -o UserKnownHostsFile="$RUNNER_TEMP/vps-ssh/known_hosts" \
+            -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=3 \
+            -i "$RUNNER_TEMP/vps-ssh/key" -l deployer "$VPS_HOST" deploy
+      - name: Remove temporary credentials
+        if: always()
+        run: rm -rf -- "$RUNNER_TEMP/vps-ssh"

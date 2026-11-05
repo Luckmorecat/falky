@@ -88,8 +88,9 @@ can pull anonymously, for example with Docker logged out of GHCR:
 docker pull ghcr.io/luckmorecat/falky:edge
 ```
 
-Publishing does not update the running server. Local Compose builds its own
-image; the VPS uses the production override and pulls a published image as
+The publish job builds the image; the separate `Deploy VPS` workflow updates
+the running server after publication succeeds. Local Compose builds its own
+images; the VPS uses the production override and published images as
 described below.
 
 ## Published web image
@@ -105,9 +106,68 @@ frontend and publish `ghcr.io/luckmorecat/falky-web:edge` and
 
 Publishing uses `GITHUB_TOKEN`; the new `falky-web` package must be made public
 after its first publish if the VPS is to pull without registry credentials.
-The workflow becomes active once merged into `master`. Publishing either
-image does not deploy it. Server and web images can be selected independently
-by digest; a frontend-only release need not rebuild or restart the backend.
+The workflow becomes active once merged into `master`. Successful publishes
+trigger the separate VPS deployment workflow described below. Server and web
+images can be selected independently by digest; a frontend-only release need
+not rebuild or restart the backend.
+
+## Automatic VPS deployment
+
+`Deploy VPS` (`.github/workflows/deploy-vps.yml`) runs after a successful push
+build of either `Publish server image` or `Publish web image` on this
+repository's `master`. Failed checks/publishes, other branches, and runs from
+other repositories cannot start a production job. It can also be started
+manually from **Actions → Deploy VPS → Run workflow**, selecting `master`.
+The workflow becomes available after it is merged into the default branch.
+
+```text
+push to master → check and publish changed image → Deploy VPS
+  SSH as deployer → restricted ci-deploy.sh → manage.sh deploy
+  resolve latest digests → backup → start containers → check API and frontend
+```
+
+The deploy job uses GitHub's `production` environment, restricted to the
+`master` branch. Configure these values there:
+
+| Kind | Name | Value |
+| --- | --- | --- |
+| Secret | `VPS_SSH_KEY` | A dedicated deployment private key, never the personal Netcup key |
+| Variable | `VPS_HOST` | `falky.lunari.win` |
+| Variable | `VPS_KNOWN_HOSTS` | The verified SSH host public key in known_hosts format for that hostname |
+
+Install `deploy/ci-deploy.sh` alongside `manage.sh` in `/srv/falky`, mode 0750.
+Authorize the dedicated public key in `/home/deployer/.ssh/authorized_keys`
+with a forced command and forwarding/PTY restrictions:
+
+```text
+restrict,command="/srv/falky/ci-deploy.sh" ssh-ed25519 <public-key> falky-github-actions-production
+```
+
+The wrapper accepts exactly `deploy` or `status`; it rejects arbitrary shell
+commands and file transfers. Test the new key with `ssh ... status`. The job
+pins the server's existing trusted host key, uses no repository checkout or
+build artifacts, and needs no `GITHUB_TOKEN` permissions. Only temporary SSH
+credentials are written on the runner and they are removed after the job.
+Application secrets remain in the VPS's private `.env`.
+
+Production deployments queue across both image workflows without cancelling
+an active deploy. Pending jobs may be coalesced; each selected job deploys the
+latest successfully published server and web images, not necessarily the
+commit which triggered it. This prevents an older queued event from rolling
+back a newer published image. The CI wrapper waits up to five minutes for a
+manual deploy or scheduled backup to release the VPS operations lock.
+
+Both image packages must be accessible to the VPS. The first web publish may
+create a private package: make it public, then manually run **Deploy VPS** if
+the initial automatic run failed. A missing image fails before changing the
+application. Backups and readiness/HTTPS/frontend checks are the same as a
+manual deployment; there is no automatic database rollback.
+
+The action updates container images only. Changes to the Compose files,
+Caddy/LiveKit configuration, management scripts or backup units still need
+installing on the VPS as described below. To revoke CI access, remove the
+dedicated authorized-key entry and delete the `VPS_SSH_KEY` environment
+secret. To pause automatic deployment, disable **Deploy VPS** in Actions.
 
 ## Production VPS
 
@@ -117,8 +177,8 @@ three containers have `restart: unless-stopped`. The repository need not be
 cloned onto the host.
 
 Install these files from `deploy/` into `/srv/falky`: `compose.yaml`,
-`compose.production.yaml`, `compose.sh`, `manage.sh`, `Caddyfile`, and
-`livekit.yaml`. Make the two scripts executable. Keep the configuration files
+`compose.production.yaml`, `compose.sh`, `manage.sh`, `ci-deploy.sh`, `Caddyfile`, and
+`livekit.yaml`. Make the shell scripts executable. Keep the configuration files
 from the same repository revision together. `compose.production.yaml` clears
 local builds and selects `FALKY_IMAGE` and `FALKY_WEB_IMAGE` from `.env`.
 It mounts `Caddyfile`, which serves the web client and proxies the API and
@@ -173,7 +233,9 @@ the homepage contains the React root and that its JavaScript and CSS load with
 the correct content types. Certificate issuance is allowed an additional
 retry period. A stopped existing server
 must be recovered before upgrading, so a failed backup cannot be skipped.
-Deployments and backups share a lock; concurrent operations fail immediately.
+Deployments and backups share a lock. Manual operations fail immediately if
+another operation is running; the CI wrapper sets
+`FALKY_LOCK_WAIT_SECONDS=300` to wait for that operation instead.
 
 Use the wrapper for operator commands and diagnostics:
 
@@ -202,7 +264,7 @@ For changes to the deployment scripts, run `python3 deploy/manage_test.py`
 from the repository root. These tests replace Docker and external HTTPS
 verification to exercise latest-image selection, explicit version selection,
 backup ordering, and failures without touching a running stack. Also run
-`bash -n deploy/manage.sh deploy/compose.sh` and validate workflow changes
+`bash -n deploy/manage.sh deploy/compose.sh deploy/ci-deploy.sh` and validate workflow changes
 with `actionlint`.
 
 ### Production backups and recovery

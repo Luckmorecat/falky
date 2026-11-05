@@ -81,7 +81,7 @@ class DeploymentTests(unittest.TestCase):
         self.addCleanup(self.temporary.cleanup)
         self.directory = Path(self.temporary.name)
         source = Path(__file__).parent
-        for name in ("manage.sh", "compose.sh", "compose.yaml", "compose.production.yaml", "Caddyfile", "livekit.yaml"):
+        for name in ("manage.sh", "compose.sh", "ci-deploy.sh", "compose.yaml", "compose.production.yaml", "Caddyfile", "livekit.yaml"):
             shutil.copy2(source / name, self.directory / name)
         self.initial = (
             f"FALKY_IMAGE={SERVER}@sha256:{'d' * 64}\n"
@@ -182,6 +182,43 @@ else:
         self.assertEqual((self.directory / ".env").read_text(), self.initial)
         self.assertFalse(any("up" in call for call in self.calls()))
         self.assertFalse(list((self.directory / "backups").glob("*/complete")))
+
+
+class CICommandTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.directory = Path(self.temporary.name)
+        shutil.copy2(Path(__file__).with_name("ci-deploy.sh"), self.directory / "ci-deploy.sh")
+        management = self.directory / "manage.sh"
+        management.write_text(
+            '#!/bin/sh\nprintf "%s %s\\n" "$1" "$FALKY_LOCK_WAIT_SECONDS"\n'
+        )
+        management.chmod(0o755)
+
+    def command(self, command):
+        return subprocess.run(
+            ["bash", "ci-deploy.sh"], cwd=self.directory,
+            env=os.environ | {"SSH_ORIGINAL_COMMAND": command},
+            text=True, capture_output=True, timeout=5,
+        )
+
+    def test_deploy_uses_management_script_and_waits_for_lock(self):
+        result = self.command("deploy")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "deploy 300\n")
+
+    def test_status_is_available_for_connection_checks(self):
+        result = self.command("status")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "status 300\n")
+
+    def test_arbitrary_shell_commands_and_file_transfers_are_rejected(self):
+        for command in ("", "id", "deploy; id", "deploy\nid", "deploy extra", "scp -t /srv/falky", "internal-sftp"):
+            with self.subTest(command=command):
+                result = self.command(command)
+                self.assertEqual(result.returncode, 2)
+                self.assertEqual(result.stdout, "")
 
 
 if __name__ == "__main__":

@@ -49,7 +49,7 @@ esac
 
 # Serializes scheduled backups and deploys, including the health checks.
 exec 9>.operations.lock
-flock --nonblock 9 || { echo "Another deployment or backup is running" >&2; exit 1; }
+flock --timeout "${FALKY_LOCK_WAIT_SECONDS:-0}" 9 || { echo "Another deployment or backup is running" >&2; exit 1; }
 # The persisted deployment, rather than an inherited shell variable, is current.
 unset FALKY_IMAGE FALKY_WEB_IMAGE
 ./compose.sh config --quiet
@@ -79,7 +79,7 @@ with sqlite3.connect(Path(sys.argv[1]).resolve().as_uri() + '?mode=ro', uri=True
     if db.execute('PRAGMA integrity_check').fetchall() != [('ok',)]:
         raise SystemExit('Copied database failed its integrity check')
 PY
-  cp .env compose.yaml compose.production.yaml compose.sh manage.sh Caddyfile livekit.yaml "$directory/"
+  cp .env compose.yaml compose.production.yaml compose.sh manage.sh ci-deploy.sh Caddyfile livekit.yaml "$directory/"
   docker inspect --format '{{.Config.Image}}' "$container" > "$directory/image.txt"
   container=$(./compose.sh ps --all --quiet caddy)
   docker inspect --format '{{.Image}}' "$container" > "$directory/web-image.txt"
