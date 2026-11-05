@@ -177,6 +177,7 @@ export function Settings({ open }: { open: boolean }) {
           <h3>{t.sectionShare}</h3>
           <Segmented label={t.shareResolution} value={settings.shareResolution} options={[['720', '720p'], ['1080', '1080p'], ['1440', '1440p']]} onChange={(shareResolution) => updateSettings({ shareResolution })} />
           <Segmented label={t.shareFps} value={settings.shareFps} options={[['15', '15'], ['30', '30'], ['60', '60']]} onChange={(shareFps) => updateSettings({ shareFps })} />
+          <Segmented label={t.shareBitrate} value={settings.shareBitrate} options={[['1', t.shareBitrateDefault], ['2', 'x2'], ['3', 'x3']]} onChange={(shareBitrate) => updateSettings({ shareBitrate })} />
           <Segmented label={t.shareFocus} value={settings.shareFocus} options={[['motion', t.shareFocusMotion], ['detail', t.shareFocusDetail]]} onChange={(shareFocus) => updateSettings({ shareFocus })} />
           <Toggle flag="shareAudio" label={t.shareAudio} />
           {sharing && <p className="set-note">{t.shareNextTime}</p>}
