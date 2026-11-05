@@ -15,4 +15,6 @@
 /deploy/.env.*
 !/deploy/.env.example
 /deploy/.operations.lock
+/deploy/.release*.json*
+/deploy/__pycache__/
 /deploy/backups/

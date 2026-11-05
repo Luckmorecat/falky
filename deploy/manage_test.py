@@ -23,7 +23,7 @@ LOCAL_WEB = "sha256:" + "c" * 64
 
 FAKE_DOCKER = r'''
 from contextlib import closing
-import json, os, sqlite3, sys
+import hashlib, json, os, sqlite3, sys
 from pathlib import Path
 
 args = sys.argv[1:]
@@ -31,6 +31,33 @@ with open("calls.jsonl", "a") as log:
     log.write(json.dumps(args) + "\n")
 server = "ghcr.io/luckmorecat/falky"
 web = server + "-web"
+
+def config():
+    env = dict(line.split("=", 1) for line in Path(".env").read_text().splitlines())
+    return {"services": {
+        "caddy": {"image": os.environ.get("FALKY_WEB_IMAGE", env["FALKY_WEB_IMAGE"]),
+                  "environment": {"FALKY_DOMAIN": "test.invalid"}},
+        "falky": {"image": os.environ.get("FALKY_IMAGE", env["FALKY_IMAGE"]),
+                  "environment": {"SECRET": env["FALKY_LIVEKIT_API_SECRET"]},
+                  "volumes": [{"type": "volume", "source": "falky_data", "target": "/data"}]},
+        "livekit": {"image": "livekit/livekit-server@sha256:" + "f" * 64},
+    }, "volumes": {"falky_data": {"name": os.environ.get("DATA_VOLUME_NAME", "falky_falky_data")}}}
+
+def config_hash(service):
+    return hashlib.sha256(json.dumps(config()["services"][service], sort_keys=True).encode()).hexdigest()
+
+def container(service, generation=0):
+    return {"Id": service + "-" + str(generation), "Image": "sha256:" + config_hash(service),
+            "State": {"Running": True, "StartedAt": str(generation)},
+            "Config": {"Image": config()["services"][service]["image"],
+                       "Labels": {"com.docker.compose.config-hash": config_hash(service)}}}
+
+def running():
+    path = Path("running.json")
+    if not path.exists():
+        path.write_text(json.dumps({key: container(key) for key in config()["services"]}))
+    return json.loads(path.read_text())
+
 if args[0] == "pull":
     sys.exit(1 if args[1] == os.environ.get("FAIL_PULL") else 0)
 if args[:2] == ["image", "inspect"]:
@@ -46,6 +73,9 @@ if args[:2] == ["volume", "ls"]:
 if args[:2] == ["volume", "inspect"]:
     sys.exit(1 if os.environ.get("MISSING_SNAPSHOT_VOLUME") == "1" else 0)
 if args[0] == "inspect":
+    if len(args) == 2:
+        print(json.dumps([running()[args[1].removesuffix("-container")]]))
+        sys.exit(0)
     template = args[2]
     if ".Mounts" in template:
         print(json.dumps([{"Destination": "/snapshots", "Type": "volume", "Name": "falky_falky_snapshots"}]))
@@ -84,17 +114,20 @@ if args[0] == "compose":
     if command[0] == "pull" and os.environ.get("FAIL_SERVER_PULL") == "1":
         sys.exit(1)
     if command[0] == "config" and "--format" in command:
-        env = dict(line.split("=", 1) for line in Path(".env").read_text().splitlines())
-        print(json.dumps({"services": {
-            "caddy": {
-                "image": os.environ.get("FALKY_WEB_IMAGE", env["FALKY_WEB_IMAGE"]),
-                "environment": {"FALKY_DOMAIN": "test.invalid"},
-            },
-            "falky": {
-                "image": os.environ.get("FALKY_IMAGE", env["FALKY_IMAGE"]),
-                "volumes": [{"type": "volume", "source": "falky_data", "target": "/data"}],
-            },
-        }, "volumes": {"falky_data": {"name": os.environ.get("DATA_VOLUME_NAME", "falky_falky_data")}}}))
+        print(json.dumps(config()))
+    elif command[0] == "config" and "--hash" in command:
+        for service in config()["services"]:
+            print(service, config_hash(service))
+    elif command[0] == "up":
+        if os.environ.get("FAIL_UP") == "1":
+            sys.exit(1)
+        state = running()
+        targets = [value for value in command if value in state] or list(state)
+        for service in targets:
+            state[service] = container(service, int(state[service]["State"]["StartedAt"]) + 1)
+        Path("running.json").write_text(json.dumps(state))
+        if os.environ.get("DRIFT_HOST_CONFIG_ON_UP") == "1":
+            Path("../falky-edge/Caddyfile").write_text("changed during deployment\n")
     elif command[0] == "ps" and "--quiet" in command:
         if os.environ.get("FAIL_PS") == "1":
             sys.exit(1)
@@ -109,6 +142,8 @@ if args[0] == "compose":
             (root / "falky-20261105T030000Z.db").write_bytes(b"snapshot")
             print("/snapshots/falky-20261105T030000Z.db")
         else:
+            if os.environ.get("FAIL_HEALTH_AFTER_UP") == "1" and Path(".release-pending.json").exists():
+                sys.exit(1)
             print(json.dumps({"status": "ok", "components": {"database": "ok", "livekit": "ok"}}))
     elif command[0] == "cp":
         if os.environ.get("CORRUPT_COPY") == "1":
@@ -126,10 +161,13 @@ class DeploymentTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
-        self.directory = Path(self.temporary.name)
+        self.directory = Path(self.temporary.name) / "instance"
+        self.directory.mkdir()
         source = Path(__file__).parent
-        for name in ("manage.sh", "compose.sh", "ci-deploy.sh", "prune-backups.py", "compose.yaml", "compose.production.yaml", "Caddyfile", "WebCaddyfile", "web.caddy", "livekit.yaml"):
+        for name in ("manage.sh", "compose.sh", "ci-deploy.sh", "release.py", "prune-backups.py", "compose.yaml", "compose.production.yaml", "Caddyfile", "WebCaddyfile", "web.caddy", "livekit.yaml"):
             shutil.copy2(source / name, self.directory / name)
+        shutil.copytree(source / "edge", self.directory.parent / "falky-edge")
+        shutil.copytree(source / "systemd", self.directory.parent / "systemd")
         self.initial = (
             f"FALKY_IMAGE={SERVER}@sha256:{'d' * 64}\n"
             f"FALKY_WEB_IMAGE={LOCAL_WEB}\n"
@@ -141,6 +179,15 @@ class DeploymentTests(unittest.TestCase):
         binary.mkdir()
         self.write_program(binary / "docker", FAKE_DOCKER)
         self.write_program(binary / "curl", 'print("401")\n')
+        self.write_program(binary / "systemctl", '''
+import os, sys
+from pathlib import Path
+unit = sys.argv[-1]
+path = Path.cwd().parent / "systemd" / unit
+print("FragmentPath=" + (str(path) if path.exists() else ""))
+print("NeedDaemonReload=" + os.environ.get("SYSTEMD_NEEDS_RELOAD", "no"))
+print("DropInPaths=" + os.environ.get("SYSTEMD_OVERRIDES", ""))
+''')
         # Test deployment selection separately from the network health probe.
         self.write_program(binary / "python3", f'''
 import os, sys
@@ -390,14 +437,17 @@ class CICommandTests(unittest.TestCase):
             text=True, capture_output=True, timeout=5,
         )
 
-    def test_deploy_forwards_exact_digests_and_waits_for_lock(self):
-        command = f"deploy {SERVER_DIGEST} {WEB_DIGEST}"
+    def test_deploy_forwards_encoded_request_and_waits_for_lock(self):
+        command = "deploy-release eyJ2ZXJzaW9uIjoxfQ=="
         result = self.command(command)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, command + " 900\n")
 
     def test_tags_partial_releases_and_injected_commands_are_rejected(self):
         for command in ("deploy", "deploy backend", "deploy frontend",
+                        f"deploy {SERVER_DIGEST} {WEB_DIGEST}",
+                        "deploy-release abc;id", "deploy-release abc\nstatus",
+                        "deploy-release " + "a" * 16001,
                         f"deploy {SERVER}:edge {WEB_DIGEST}",
                         f"deploy {SERVER_DIGEST}",
                         f"deploy {SERVER_DIGEST} {WEB_DIGEST}; id",
@@ -410,6 +460,11 @@ class CICommandTests(unittest.TestCase):
         result = self.command("status")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, "status 900\n")
+
+    def test_release_snapshot_is_available(self):
+        result = self.command("release")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "release 900\n")
 
     def test_arbitrary_shell_commands_and_file_transfers_are_rejected(self):
         for command in ("", "id", "deploy; id", "deploy\nid", "deploy extra", "deploy frontend; id", "deploy backend extra", "scp -t /srv/falky", "internal-sftp"):
