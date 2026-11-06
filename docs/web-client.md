@@ -3,7 +3,7 @@
 `web/` is the browser client: one Vite app in React and TypeScript
 ([ADR 0001](adr/0001-light-monorepo.md)). In production Caddy serves its build
 (`web/Dockerfile`), so the page, the API and LiveKit's signalling share one
-origin. `docs/design/prototype.html` is the design prototype it was built from.
+origin.
 
 ## What it does
 
