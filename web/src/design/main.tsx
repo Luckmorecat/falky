@@ -13,7 +13,7 @@ import { getState, setState, useApp } from '../app/store';
 import { emptyChat } from '../chat/timeline';
 import { hashString, PALETTE_NAMES } from '../fx/palette';
 import { t } from '../strings';
-import { idleVoice, type VoicePerson, type VoiceSnapshot } from '../voice/session';
+import { idleVoice, type VoicePerson, type VoiceSnapshot } from '../voice/types';
 import { Main } from '../ui/Main';
 import { Orb } from '../ui/Orb';
 import { Entry, Message } from '../ui/Screens';

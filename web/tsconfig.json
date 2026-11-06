@@ -13,7 +13,12 @@
     "isolatedModules": true,
     "skipLibCheck": true,
     "noEmit": true,
-    "types": ["vite/client"]
+    "types": ["vite/client"],
+    "paths": {
+      "@falky/browser": ["./src/runtime/browser.ts"],
+      "@falky/voice": ["./src/voice/session.ts"],
+      "@falky/bootstrap": ["./src/runtime/bootstrap.ts"]
+    }
   },
   "include": ["src", "vite.config.ts"]
 }

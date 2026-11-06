@@ -1,4 +1,4 @@
-import type { VoiceSound } from './session';
+import type { VoiceSound } from './types';
 
 let ctx: AudioContext | null = null;
 

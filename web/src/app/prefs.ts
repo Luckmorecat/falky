@@ -1,10 +1,11 @@
+import { preferencePrefix } from '../runtime/preferences';
 import type { Language } from '../strings';
 import type { ShareSettings } from '../voice/share';
 
 /** What this browser remembers for the person. Reads and writes may fail in a private window. */
 function read(key: string): string | null {
   try {
-    return localStorage.getItem(`falky.${key}`);
+    return localStorage.getItem(`${preferencePrefix}${key}`);
   } catch {
     return null;
   }
@@ -12,7 +13,7 @@ function read(key: string): string | null {
 
 function write(key: string, value: string): void {
   try {
-    localStorage.setItem(`falky.${key}`, value);
+    localStorage.setItem(`${preferencePrefix}${key}`, value);
   } catch {
     // Forgotten on reload; nothing else depends on it.
   }

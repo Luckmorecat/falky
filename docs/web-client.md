@@ -24,6 +24,9 @@ while another window has the focus, and the third the
 | `src/app/controller.ts` | Ties the above to the state in `store.ts`; every action the UI takes goes through here |
 | `src/fx/` | The orbs' shader and colours, the blocks' sizes, the animation clock |
 | `src/ui/` | The screens |
+| `src/runtime/` | Real browser capabilities, bootstrap and preference namespace; real voice stays in `src/voice/session.ts` |
+| `src/mock/`, `mock/` | Development-only browser/media adapters and Node HTTP/WebSocket/control service |
+| `smoke/`, `scripts/check-runtime.ts` | Local Chromium acceptance and production adapter/bundle boundary checks |
 | `src/strings.ts` | Every word of the interface, in each language |
 
 One shader on one WebGL context draws every orb (`src/fx/orbRenderer.ts`) and
@@ -70,6 +73,11 @@ adapter when upgrading LiveKit; the public primary-track stats method alone does
 not include compatibility upload.
 
 ## Running it locally
+
+For frontend mock scenarios, browser checks, and screenshots, use the
+[frontend-sandbox skill](../.agents/skills/frontend-sandbox/SKILL.md).
+
+### Full Go + LiveKit stack
 
 Vite stands where Caddy stands, on `http://localhost:5173`. You need the server
 (`mise install` gives Go) and `livekit-server`, for example from

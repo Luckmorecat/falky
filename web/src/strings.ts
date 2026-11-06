@@ -1,9 +1,10 @@
-import type { VoiceProblem } from './voice/session';
+import type { VoiceProblem } from './voice/types';
 
 export type Language = 'uk' | 'en';
 
 const uk = {
   locale: 'uk-UA',
+  startupFailure: 'Не вдалося відкрити Falky. Перезавантаж сторінку, щоб спробувати ще раз.',
   enterTitle: 'Як тебе звати?',
   enterHint: "Друзі бачитимуть це ім'я в кімнатах і чаті.",
   name: "Ім'я",
@@ -139,6 +140,7 @@ export type Strings = typeof uk;
 
 const en: Strings = {
   locale: 'en-GB',
+  startupFailure: "Couldn't open Falky. Reload the page to try again.",
   enterTitle: "What's your name?",
   enterHint: 'Friends will see it in rooms and chat.',
   name: 'Name',
