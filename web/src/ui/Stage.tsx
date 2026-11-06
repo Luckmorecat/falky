@@ -1,10 +1,11 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { type RefObject, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { Room } from '../api/client';
 import { voice } from '../app/controller';
 import { getState, useApp } from '../app/store';
 import { fitBlocks } from '../fx/layout';
 import { assignPalettes } from '../fx/palette';
-import { effectsReduced } from '../fx/ticker';
+import { effectsReduced, onTick } from '../fx/ticker';
+import { createVoiceBackground, type VoiceSource } from '../fx/voiceBackgroundRenderer';
 import { t } from '../strings';
 import { shareStatsEnabled } from '../voice/shareStats';
 import { IconButton } from './IconButton';
@@ -52,7 +53,7 @@ function useWindowSize(): { w: number; h: number } {
 /** The width of --chat in styles.css. */
 const CHAT_WIDTH = 340;
 
-export function Stage({ room }: { room: Room }) {
+export function Stage({ room, background }: { room: Room; background?: RefObject<HTMLCanvasElement | null> }) {
   const people = usePeople(room);
   const { w, h } = useWindowSize();
   const narrow = useDrawerLayout();
@@ -76,6 +77,39 @@ export function Stage({ room }: { room: Room }) {
 
   const grid = useRef<HTMLDivElement>(null);
   const rects = useRef(new Map<string, DOMRect>());
+  const backgroundEnabled = useApp((s) => s.settings.voiceBackground && !s.settings.fewerEffects);
+  const roomsOpen = useApp((s) => s.roomsOpen);
+  const layoutUntil = useRef(0);
+  const sourcesKey = people.filter((p) => p.live).map((p) => `${p.id}:${palettes.get(p.id)}`).join();
+
+  useLayoutEffect(() => {
+    layoutUntil.current = performance.now() + 500;
+  }, [sourcesKey, size, room.id, roomsOpen, shown?.id]);
+
+  useEffect(() => {
+    const canvas = background?.current;
+    if (!canvas || !backgroundEnabled || !sourcesKey || !grid.current) return;
+    const tiles = new Map([...grid.current.querySelectorAll<HTMLElement>('[data-tile]')].map((el) => [el.dataset.tile, el]));
+    const sources: VoiceSource[] = people.filter((p) => p.live).flatMap((p) => {
+      const element = tiles.get(p.id)?.querySelector<HTMLElement>('.orb');
+      return element ? [{ element, palette: palettes.get(p.id)!, level: () => {
+        const person = getState().voice.people.find((person) => person.id === p.id);
+        return person && !person.muted && !person.deafened ? levelOf(p.id)() : 0;
+      } }] : [];
+    });
+    const painter = createVoiceBackground(canvas, sources);
+    if (!painter) return;
+    let time = 0;
+    const stop = onTick((_now, dt) => {
+      if (document.hidden) return;
+      time += dt;
+      // Follow FLIP and room-picker transforms only while the layout settles.
+      if (performance.now() < layoutUntil.current) painter.invalidateLayout();
+      painter.draw(time, 1.5, 480, effectsReduced());
+    });
+    return () => { stop(); painter.dispose(); };
+    // Voice snapshots change with loudness; only membership/palettes rebuild the field.
+  }, [background, backgroundEnabled, sourcesKey, room.id]);
 
   // Blocks glide from where they were when someone joins or leaves.
   useLayoutEffect(() => {
