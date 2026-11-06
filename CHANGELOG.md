@@ -5,6 +5,7 @@
 
 ### Features
 
+* **web:** add isolated local mock development mode ([412f703](https://github.com/Luckmorecat/falky/commit/412f703f9fb909532c8abe524db7c35df0106bb5))
 * **web:** add mock screenshot presets and GPU option ([8fbc327](https://github.com/Luckmorecat/falky/commit/8fbc327a95837327febd6518857eda78217ad18e))
 
 
