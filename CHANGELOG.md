@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.1.0](https://github.com/Luckmorecat/falky/compare/v1.0.0...v1.1.0) (2026-11-06)
+
+
+### Features
+
+* **web:** add mock screenshot presets and GPU option ([8fbc327](https://github.com/Luckmorecat/falky/commit/8fbc327a95837327febd6518857eda78217ad18e))
+
+
+### Bug Fixes
+
+* **deploy:** separate application releases from VPS infrastructure ([6fe2454](https://github.com/Luckmorecat/falky/commit/6fe245425b366bcb30f6bd23c5a85c238b5b0e35))
+
 ## 1.0.0 (2026-11-05)
 
 
