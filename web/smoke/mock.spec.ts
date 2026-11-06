@@ -116,6 +116,14 @@ test('settings, simulated voice errors and animated local/remote sharing avoid h
   await page.getByRole('button', { name: 'Turn sound on', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Mute microphone', exact: true })).toHaveAttribute('aria-pressed', 'false');
   await movingVideo(page, "Sam's screen");
+  const shareVideo = page.getByLabel("Sam's screen", { exact: true });
+  await page.getByRole('button', { name: 'Full screen', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Exit full screen', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await expect.poll(() => page.evaluate(() => document.fullscreenElement?.className ?? '')).toContain('share');
+  await page.getByRole('button', { name: 'Exit full screen', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => document.fullscreenElement)).toBeNull();
+  await expect(page.getByRole('button', { name: 'Full screen', exact: true })).toHaveAttribute('aria-pressed', 'false');
+  await expect.poll(() => shareVideo.evaluate((el: HTMLVideoElement) => el.videoWidth)).toBe(960);
   await expect(page.getByLabel('Screen share statistics', { exact: true })).toContainText('— Mbps');
   await page.getByRole('button', { name: 'Share screen', exact: true }).click();
   await movingVideo(page, 'Your screen');

@@ -157,10 +157,19 @@ function levelOf(id: string): () => number {
   return fn;
 }
 
-function ShareView({ width, person, others, onPick }: { width: number; person: Person; others: Person[]; onPick(id: string): void }) {
+export function ShareView({ width, person, others, onPick }: { width: number; person: Person; others: Person[]; onPick(id: string): void }) {
   const frame = useRef<HTMLDivElement>(null);
   const video = useRef<HTMLVideoElement>(null);
   const trackId = useApp((s) => s.voice.people.find((p) => p.id === person.id)?.shareTrackId ?? '');
+  // Esc and other browser exits never pass through the button, so the label follows the element.
+  const [fullscreen, setFullscreen] = useState(false);
+
+  useEffect(() => {
+    const sync = () => setFullscreen(document.fullscreenElement === frame.current);
+    sync();
+    document.addEventListener('fullscreenchange', sync);
+    return () => document.removeEventListener('fullscreenchange', sync);
+  }, []);
 
   useEffect(() => {
     const el = video.current;
@@ -171,6 +180,13 @@ function ShareView({ width, person, others, onPick }: { width: number; person: P
       track.detach(el);
     };
   }, [person.id, trackId]);
+
+  const toggleFullscreen = () => {
+    const el = frame.current;
+    if (!el) return;
+    if (document.fullscreenElement === el) void document.exitFullscreen();
+    else void el.requestFullscreen();
+  };
 
   return (
     <div ref={frame} className="share" style={{ width }}>
@@ -186,8 +202,8 @@ function ShareView({ width, person, others, onPick }: { width: number; person: P
             </button>
           ))}
         </div>
-        <IconButton size="small" className="ghost" aria-label={t.fullscreen} onClick={() => void frame.current?.requestFullscreen?.()}>
-          <Icon name="expand" />
+        <IconButton size="small" className="ghost" aria-label={fullscreen ? t.exitFullscreen : t.fullscreen} aria-pressed={fullscreen} onClick={toggleFullscreen}>
+          <Icon name={fullscreen ? 'collapse' : 'expand'} />
         </IconButton>
       </div>
     </div>
