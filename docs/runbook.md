@@ -96,8 +96,10 @@ fork code never runs in a privileged `pull_request_target` workflow.
 On PRs and master pushes, the server job can reuse backend validation from a
 successful master workflow run when its commit is an ancestor of the checked-out
 revision and all backend/shared inputs still match. Only `web/`, documentation
-(`docs/`, `.agents/`, `.claude/`, `GLOSSARY.md`) changes allow reuse; API, server,
-tooling, workflow and unknown paths require the full backend suite. Comparing
+(`docs/`, `.agents/`, `.claude/`, `GLOSSARY.md`), and the root release metadata
+files `CHANGELOG.md`, `version.txt`, and `.release-please-manifest.json` allow
+reuse. API, server, tooling, release configuration/scripts, workflow and unknown
+paths require the full backend suite. Comparing
 against a successful run also catches backend changes from an earlier failed or
 cancelled run. Tags always run backend checks. Missing history, API failures or
 no suitable baseline among the latest 30 successful master runs also run the

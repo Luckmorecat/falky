@@ -58,9 +58,20 @@ class BackendCheckTests(unittest.TestCase):
         self.assertFalse(required)
         self.assertIn(self.baseline[:12], reason)
 
+    def test_release_metadata_only_changes_reuse_success(self):
+        for content in ("first release\n", "next release\n"):
+            with self.subTest(content=content):
+                baseline = self.run_record(self.git("rev-parse", "HEAD"))
+                for name in ("CHANGELOG.md", "version.txt", ".release-please-manifest.json"):
+                    self.write(name, content)
+                self.commit()
+                self.assertFalse(check.decide([baseline])[0])
+
     def test_backend_shared_and_unknown_inputs_require_checks(self):
         for name in ("server/app.go", "server/go.sum", "api/openapi.yaml", "Makefile", "mise.toml",
-                     ".github/workflows/deploy-vps.yml", "deploy/ci-check.py", "unknown-input"):
+                     ".github/workflows/deploy-vps.yml", "deploy/ci-check.py", "unknown-input",
+                     "release-please-config.json", "release/policy.mjs", "release/package-lock.json",
+                     "server/CHANGELOG.md", "release/version.txt", "version.txt.backup"):
             with self.subTest(name=name):
                 baseline = self.run_record(self.git("rev-parse", "HEAD"))
                 self.write(name, "changed\n")
@@ -89,6 +100,15 @@ class BackendCheckTests(unittest.TestCase):
             with self.subTest(conclusion=conclusion):
                 history = [self.run_record(failed, conclusion=conclusion), self.run_record()]
                 self.assertTrue(check.decide(history)[0])
+
+    def test_release_metadata_cannot_hide_an_earlier_failed_backend_change(self):
+        self.write("server/app.go", "broken\n")
+        failed = self.commit()
+        for name in ("CHANGELOG.md", "version.txt", ".release-please-manifest.json"):
+            self.write(name, "release\n")
+        self.commit()
+        history = [self.run_record(failed, conclusion="failure"), self.run_record()]
+        self.assertTrue(check.decide(history)[0])
 
     def test_only_successful_completed_master_pushes_can_be_baselines(self):
         for fields in ({"event": "pull_request"}, {"head_branch": "feature"},
@@ -131,6 +151,8 @@ class BackendCheckTests(unittest.TestCase):
 
     def test_cli_emits_explicit_decision_and_explanation_for_pr_and_push(self):
         self.write("web/app.ts", "changed\n")
+        for name in ("CHANGELOG.md", "version.txt", ".release-please-manifest.json"):
+            self.write(name, "release\n")
         self.commit()
         binary = self.root / "bin/gh"
         self.write("bin/gh", "#!" + sys.executable + "\nprint(" + repr(json.dumps(
