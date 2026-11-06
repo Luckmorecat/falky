@@ -28,7 +28,9 @@ class PipelineTests(unittest.TestCase):
         self.git('config', 'user.name', 'Test')
         self.git('add', 'deploy')
         self.change('server/main.go', 'initial')
-        self.environment = dict(os.environ, GITHUB_EVENT_NAME='push',
+        # The outer Actions run describes the real checkout, not this fixture.
+        self.environment = dict({key: value for key, value in os.environ.items() if not key.startswith('GITHUB_')},
+                                GITHUB_EVENT_NAME='push',
                                 GITHUB_REF='refs/heads/master', GITHUB_REF_TYPE='branch',
                                 GITHUB_OUTPUT=str(self.root / 'output'))
         self.snapshot = {'version': 1, 'token': 'a' * 64, 'release': None,
@@ -45,8 +47,12 @@ class PipelineTests(unittest.TestCase):
         self.git('commit', '-qm', 'fixture change')
 
     def command(self, *args, succeeds=True, environment=None):
+        # Fixtures commit and check out revisions during tests. Explicit test
+        # overrides still win so a genuine workflow/source mismatch is tested.
+        environment = {'GITHUB_SHA': self.git('rev-parse', 'HEAD'),
+                       **(environment if environment is not None else self.environment)}
         result = subprocess.run([sys.executable, str(self.root / 'deploy/ci-plan.py'), *args],
-                                cwd=self.root, env=environment or self.environment,
+                                cwd=self.root, env=environment,
                                 capture_output=True, text=True)
         if succeeds:
             self.assertEqual(result.returncode, 0, result.stderr)
@@ -208,13 +214,19 @@ class PipelineTests(unittest.TestCase):
                 output, _ = self.plan()
                 self.assertEqual((output['server'], output['web']), ('true', 'true'))
 
-    def test_legacy_protocol_and_checkout_mismatch_fail_closed(self):
+    def test_legacy_protocol_fails_closed(self):
         self.snapshot['legacy'] = True
         self.assertIn('migration', self.plan(succeeds=False).stderr)
         self.snapshot = {'token': 'a' * 64, 'release': None, 'installed': 'b' * 64}
         self.assertIn('migrate', self.plan(succeeds=False).stderr)
-        self.environment['GITHUB_SHA'] = '0' * 40
-        self.assertIn('Checkout', self.plan(succeeds=False).stderr)
+
+    def test_explicit_workflow_revision_mismatch_fails_closed(self):
+        self.environment['GITHUB_SHA'] = self.git('rev-parse', 'HEAD')
+        self.plan()
+        self.change('docs/runbook.md', 'new checkout after workflow source was selected')
+        self.assertIn('Checkout differs from workflow source', self.plan(succeeds=False).stderr)
+        self.environment['GITHUB_SHA'] = self.git('rev-parse', 'HEAD')
+        self.plan()
 
 
 class TransportTests(unittest.TestCase):
