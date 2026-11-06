@@ -16,8 +16,7 @@ Run the commands below from the repository’s `web/` directory. Install depende
   mock server and headless browser, captures the preset, and shuts both down.
   Use this command directly instead of assembling another capture harness.
 - For real API integration, microphone audio, codecs, screen capture, or LiveKit
-  behavior, follow [the full-stack setup](../../../docs/web-client.md#full-go--livekit-stack)
-  and use `npm run dev`.
+  behavior, use `npm run dev` with the Go + LiveKit stack running.
 
 Mock mode runs the shared `/` app, controller, and HTTP/WebSocket clients. Keep
 frontend changes on that shared path so they also work with Go. `/design.html`
@@ -76,6 +75,3 @@ flows, and `test:screenshot` for capture tooling. When changing adapter selectio
 Vite configuration, or production boundaries, run `test:runtime` to verify that
 normal development selects real adapters and production builds exclude mocks.
 For browser prerequisites and suite coverage, read [the check reference](references/sandbox.md#checks).
-
-For architecture or screen-share diagnostics, read the corresponding section of
-[the web client guide](../../../docs/web-client.md).
