@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { dismissNotice, setChatOpen, stepRoom, voice } from '../app/controller';
 import { getState, setState, useApp } from '../app/store';
 import { t } from '../strings';
+import { IconButton } from './IconButton';
 import { Chat } from './Chat';
 import { Dock } from './Dock';
 import { Icon } from './Icon';
@@ -85,15 +86,15 @@ export function Main() {
         <Dock room={room} />
       </div>
 
-      <button
-        className="ib chat-btn"
+      <IconButton
+        className="chat-btn"
         aria-label={chatOpen ? t.closeChat : unread ? `${t.chat}: ${unread}` : t.chat}
         aria-expanded={chatOpen}
         onClick={() => setChatOpen(!chatOpen)}
       >
         <span className="swap"><Icon name="chat" className="a" /><Icon name="x" className="b" /></span>
         {unread > 0 && <span className="badge">{unread > 99 ? '99+' : unread}</span>}
-      </button>
+      </IconButton>
       <Chat room={room} />
 
       <div className="float-top" aria-live="polite">
@@ -104,7 +105,7 @@ export function Main() {
               <strong>{notice.title}</strong>
               {notice.body && <p>{notice.body}</p>}
             </div>
-            <button className="ib sm" aria-label={t.close} onClick={dismissNotice}><Icon name="x" /></button>
+            <IconButton size="small" aria-label={t.close} onClick={dismissNotice}><Icon name="x" /></IconButton>
           </div>
         )}
         {nameTaken && <NameConflict />}

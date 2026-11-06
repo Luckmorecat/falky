@@ -5,6 +5,8 @@ import { useApp } from '../app/store';
 import { onTick } from '../fx/ticker';
 import { t } from '../strings';
 import { canShareScreen } from '../voice/share';
+import { Button } from './Button';
+import { IconButton } from './IconButton';
 import { Icon } from './Icon';
 import { Settings } from './Settings';
 
@@ -50,10 +52,10 @@ export function Dock({ room }: { room: Room | null }) {
       <div className="dock">
         <div className="dock-bg" />
         {room && (
-          <button className="join" disabled={joining} onClick={() => void voice.join(room.id)}>
+          <Button variant="join" disabled={joining} onClick={() => void voice.join(room.id)}>
             <Icon name="mic" />
             {joining ? t.joining : t.join}
-          </button>
+          </Button>
         )}
         <SettingsButton open={sheetOpen} onToggle={() => setSheetOpen(!sheetOpen)} />
       </div>
@@ -74,19 +76,19 @@ export function Dock({ room }: { room: Room | null }) {
           <span className="dock-sep" />
         </>
       )}
-      <button className={`ib${v.deafened ? ' off' : ''}`} aria-pressed={v.deafened} aria-label={deafLabel} data-tip={deafLabel} onClick={() => void voice.toggleDeafen()}>
+      <IconButton className={v.deafened ? 'off' : ''} aria-pressed={v.deafened} aria-label={deafLabel} data-tip={deafLabel} onClick={() => void voice.toggleDeafen()}>
         <Icon name={v.deafened ? 'headOff' : 'head'} />
-      </button>
+      </IconButton>
       <div className="mic-wrap">
         <span ref={ring} className="mic-ring" />
-        <button className={`ib${v.muted ? ' off' : ''}`} aria-pressed={v.muted} aria-label={muteLabel} data-tip={muteLabel} onClick={() => void voice.toggleMute()}>
+        <IconButton className={v.muted ? 'off' : ''} aria-pressed={v.muted} aria-label={muteLabel} data-tip={muteLabel} onClick={() => void voice.toggleMute()}>
           <Icon name={v.muted ? 'micOff' : 'mic'} />
-        </button>
+        </IconButton>
       </div>
       {canShareScreen && (
-        <button className={`ib hide-phone${v.sharing ? ' sharing' : ''}`} aria-pressed={v.sharing} aria-label={shareLabel} data-tip={shareLabel} onClick={() => void voice.toggleShare()}>
+        <IconButton className={`hide-phone${v.sharing ? ' sharing' : ''}`} aria-pressed={v.sharing} aria-label={shareLabel} data-tip={shareLabel} onClick={() => void voice.toggleShare()}>
           <Icon name="screen" />
-        </button>
+        </IconButton>
       )}
       <span className="dock-sep" />
       <SettingsButton open={sheetOpen} onToggle={() => setSheetOpen(!sheetOpen)} />
@@ -101,9 +103,9 @@ export function Dock({ room }: { room: Room | null }) {
 function SettingsButton({ open, onToggle }: { open: boolean; onToggle(): void }) {
   return (
     <div className="sheet-anchor">
-      <button className="ib" data-settings aria-label={t.settings} aria-expanded={open} data-tip={open ? undefined : t.settings} onClick={onToggle}>
+      <IconButton data-settings aria-label={t.settings} aria-expanded={open} data-tip={open ? undefined : t.settings} onClick={onToggle}>
         <Icon name="sliders" />
-      </button>
+      </IconButton>
       <Settings open={open} />
     </div>
   );

@@ -1,0 +1,10 @@
+/* Canvas sizing only; the components use the production stylesheet unchanged. */
+body { overflow: auto; }
+.sb-canvas { width: 100%; color: var(--text); background: var(--bg); }
+.sb-canvas .screen { position: relative; min-height: min(680px, 100dvh); }
+.sb-stack { display: grid; gap: 20px; width: min(100%, 440px); }
+.sb-row { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; }
+.sb-gallery { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 28px; width: 100%; }
+.sb-sample { display: grid; justify-items: center; gap: 12px; text-align: center; }
+.sb-sample > .orb { width: 150px; }
+.sb-note { color: var(--text-2); font-size: 13px; }

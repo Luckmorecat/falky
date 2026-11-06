@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { enter, rename } from '../app/controller';
 import { useApp } from '../app/store';
 import { t } from '../strings';
+import { Button } from './Button';
 import { Orb } from './Orb';
 
 /** Typing wakes the entry orb, as a voice would. */
@@ -48,21 +49,9 @@ export function Entry() {
             pulse.current = Math.min(1, pulse.current + 0.7);
           }}
         />
-        <button className="go" disabled={!name.trim() || busy}>{t.enter}</button>
+        <Button variant="primary" type="submit" disabled={!name.trim() || busy}>{t.enter}</Button>
         <p className="enter-err" id="enter-err" role="alert">{error}</p>
       </form>
-    </div>
-  );
-}
-
-export function Message({ title, body }: { title: string; body: string }) {
-  return (
-    <div className="screen center">
-      <div className="message-screen">
-        <Orb seed="message" palette="sky" />
-        <h1>{title}</h1>
-        <p>{body}</p>
-      </div>
     </div>
   );
 }
@@ -88,7 +77,7 @@ export function NameConflict() {
       <p>{t.nameConflictBody}</p>
       <div className="namerow">
         <input ref={input} type="text" maxLength={32} placeholder={t.name} aria-label={t.name} value={name} onChange={(e) => { setName(e.target.value); setError(''); }} />
-        <button className="btn2" disabled={!name.trim()}>{t.changeName}</button>
+        <Button type="submit" disabled={!name.trim()}>{t.changeName}</Button>
       </div>
       {error && <p className="field-err" role="alert">{error}</p>}
     </form>

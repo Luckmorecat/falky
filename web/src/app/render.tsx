@@ -7,7 +7,8 @@ import { boot } from './controller';
 import { useApp } from './store';
 import { t } from '../strings';
 import { Main } from '../ui/Main';
-import { Entry, Message } from '../ui/Screens';
+import { Entry } from '../ui/Screens';
+import { Message } from '../ui/Message';
 
 function App() {
   const phase = useApp((s) => s.phase);

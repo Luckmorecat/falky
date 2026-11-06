@@ -7,6 +7,9 @@ import { t } from '../strings';
 import type { MicTest } from '../voice/meter';
 import { canChooseSpeaker, enumerateDevices, watchDevices, refreshDevices, startMicTest, playSound, notificationsAvailable } from '@falky/browser';
 import { canShareScreen, supportedShareCodecs, type ShareCodec } from '../voice/share';
+import { Button } from './Button';
+import { Segmented } from './Segmented';
+import { Toggle } from './Toggle';
 
 function useDevices(kind: MediaDeviceKind, active: boolean): MediaDeviceInfo[] {
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
@@ -21,27 +24,11 @@ function useDevices(kind: MediaDeviceKind, active: boolean): MediaDeviceInfo[] {
 
 const codecLabels: Record<ShareCodec, string> = { vp8: 'VP8', h264: 'H.264', h265: 'H.265' };
 
-function Segmented<V extends string>({ label, value, options, onChange }: { label: string; value: V; options: [V, string][]; onChange(v: V): void }) {
-  return (
-    <div className="setrow">
-      <span>{label}</span>
-      <div className="seg" role="group" aria-label={label}>
-        {options.map(([v, text]) => <button key={v} type="button" aria-pressed={v === value} onClick={() => onChange(v)}>{text}</button>)}
-      </div>
-    </div>
-  );
-}
-
 type Flag = { [K in keyof SettingsValues]: SettingsValues[K] extends boolean ? K : never }[keyof SettingsValues];
 
-function Toggle({ flag, label }: { flag: Flag; label: string }) {
+function SettingToggle({ flag, label }: { flag: Flag; label: string }) {
   const on = useApp((s) => s.settings[flag]);
-  return (
-    <label className="toggle">
-      {label}
-      <input type="checkbox" checked={on} onChange={(e) => updateSettings({ [flag]: e.target.checked })} />
-    </label>
-  );
+  return <Toggle label={label} checked={on} onChange={(checked) => updateSettings({ [flag]: checked })} />;
 }
 
 /** How loud the microphone is: in voice, what goes out; otherwise a test on request. */
@@ -101,7 +88,7 @@ function MicLevel({ open }: { open: boolean }) {
       <span>{t.micLevel}</span>
       <div className="meter" aria-hidden="true"><div ref={fill} /></div>
       {inVoice ? muted && <span className="set-note">{t.micMutedHint}</span> : (
-        <button type="button" className="btn2" onClick={() => setTesting(!testing)}>{testing ? t.micTestStop : t.micTest}</button>
+        <Button onClick={() => setTesting(!testing)}>{testing ? t.micTestStop : t.micTest}</Button>
       )}
       {error && <span className="field-err" role="alert">{error}</span>}
     </div>
@@ -139,7 +126,7 @@ export function Settings({ open }: { open: boolean }) {
           <label htmlFor="set-name">{t.name}</label>
           <span className="namerow">
             <input id="set-name" type="text" maxLength={32} value={name} onChange={(e) => { setName(e.target.value); setNameError(''); }} />
-            <button className="btn2" disabled={!name.trim() || name.trim() === visitor?.name}>{t.save}</button>
+            <Button type="submit" disabled={!name.trim() || name.trim() === visitor?.name}>{t.save}</Button>
           </span>
           {nameError && <span className="field-err" role="alert">{nameError}</span>}
         </form>
@@ -165,12 +152,12 @@ export function Settings({ open }: { open: boolean }) {
           </label>
         )}
         <div className="setrow">
-          <button type="button" className="btn2" onClick={() => playSound('test', settings.speakerId)}>{t.testSound}</button>
+          <Button onClick={() => playSound('test', settings.speakerId)}>{t.testSound}</Button>
         </div>
-        <Toggle flag="noiseSuppression" label={t.noiseSuppression} />
-        <Toggle flag="echoCancellation" label={t.echoCancellation} />
-        <Toggle flag="autoGain" label={t.autoGain} />
-        <Toggle flag="joinMuted" label={t.joinMuted} />
+        <SettingToggle flag="noiseSuppression" label={t.noiseSuppression} />
+        <SettingToggle flag="echoCancellation" label={t.echoCancellation} />
+        <SettingToggle flag="autoGain" label={t.autoGain} />
+        <SettingToggle flag="joinMuted" label={t.joinMuted} />
       </section>
 
       {canShareScreen && (
@@ -182,7 +169,7 @@ export function Settings({ open }: { open: boolean }) {
           <Segmented label={t.shareFps} value={settings.shareFps} options={[['15', '15'], ['30', '30'], ['60', '60']]} onChange={(shareFps) => updateSettings({ shareFps })} />
           <Segmented label={t.shareBitrate} value={settings.shareBitrate} options={[['1', t.shareBitrateDefault], ['2', 'x2'], ['3', 'x3']]} onChange={(shareBitrate) => updateSettings({ shareBitrate })} />
           <Segmented label={t.shareFocus} value={settings.shareFocus} options={[['motion', t.shareFocusMotion], ['detail', t.shareFocusDetail]]} onChange={(shareFocus) => updateSettings({ shareFocus })} />
-          <Toggle flag="shareAudio" label={t.shareAudio} />
+          <SettingToggle flag="shareAudio" label={t.shareAudio} />
           {sharing && <p className="set-note">{t.shareNextTime}</p>}
         </section>
       )}
@@ -191,25 +178,22 @@ export function Settings({ open }: { open: boolean }) {
         <h3>{t.sectionLook}</h3>
         <Segmented label={t.theme} value={settings.theme} options={[['dark', t.themeDark], ['light', t.themeLight], ['system', t.themeSystem]]} onChange={(theme) => updateSettings({ theme })} />
         <Segmented label={t.language} value={settings.lang} options={[['uk', 'Українська'], ['en', 'English']]} onChange={(lang) => updateSettings({ lang })} />
-        <Toggle flag="fewerEffects" label={t.fewerEffects} />
+        <SettingToggle flag="fewerEffects" label={t.fewerEffects} />
       </section>
 
       <section>
         <h3>{t.sectionAlerts}</h3>
-        <Toggle flag="sounds" label={t.eventSounds} />
+        <SettingToggle flag="sounds" label={t.eventSounds} />
         {notificationsAvailable && (
-          <label className="toggle">
-            {t.notifications}
-            <input
-              type="checkbox"
-              checked={settings.notifications}
-              onChange={(e) => {
-                setNotifError(false);
-                if (!e.target.checked) updateSettings({ notifications: false });
-                else void enableNotifications().then((on) => setNotifError(!on));
-              }}
-            />
-          </label>
+          <Toggle
+            label={t.notifications}
+            checked={settings.notifications}
+            onChange={(checked) => {
+              setNotifError(false);
+              if (!checked) updateSettings({ notifications: false });
+              else void enableNotifications().then((on) => setNotifError(!on));
+            }}
+          />
         )}
         {notifError && <p className="field-err" role="alert">{t.notificationsBlocked}</p>}
       </section>

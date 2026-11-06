@@ -5,6 +5,7 @@ import { getState, useApp } from '../app/store';
 import { buildFeed, canPost, MESSAGE_MAX, messageLength, type PendingMessage, splitLinks } from '../chat/timeline';
 import { paletteOf, paletteStyle } from '../fx/palette';
 import { t } from '../strings';
+import { IconButton } from './IconButton';
 import { Icon } from './Icon';
 import { useDrawerLayout } from './useDrawerLayout';
 
@@ -225,7 +226,7 @@ export function Chat({ room }: { room: Room | null }) {
               }
             }}
           />
-          <button className="ib sm send" aria-label={t.send} disabled={!canPost(draft)} onClick={send}><Icon name="send" /></button>
+          <IconButton size="small" className="send" aria-label={t.send} disabled={!canPost(draft)} onClick={send}><Icon name="send" /></IconButton>
         </div>
       </div>
       <div className="chat-veil" aria-hidden="true"><i /><i /><i /><i /><b /></div>
