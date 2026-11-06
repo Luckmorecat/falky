@@ -57,6 +57,14 @@ float shape(vec2 p) {
   return pow(pow(a.x, N) + pow(a.y, N), 1. / N);
 }
 
+// Mix the coordinates before multiplying so grain cannot collapse along a row or column.
+// Keep the cloud hash separate: changing it would change the flowing colour pattern.
+float grainHash(vec3 p) {
+  p = fract(p * .1031);
+  p += dot(p, p.zyx + 31.32);
+  return fract((p.x + p.y) * p.z);
+}
+
 // Where on the turning colours a point of the surface lies.
 vec3 place(vec3 n) {
   float c = cos(uAngle), s = sin(uAngle);
@@ -106,7 +114,7 @@ void main() {
   float edge = pow(1. - n.z, 3.2);
   col = mix(col, mix(uBright, vec3(1.), .35), edge * (.5 + uLevel * .5));
 
-  col += (hash(vec3(gl_FragCoord.xy, uSeed)) - .5) * .045;
+  col += (grainHash(vec3(gl_FragCoord.xy, uSeed)) - .5) * .045;
   gl_FragColor = vec4(col * alpha, alpha);
 }`;
 
@@ -160,7 +168,7 @@ void main() {
   float rim = pow(1. - surface.z, 3.);
   col = mix(col, mix(uBright, vec3(1.), .4), rim * (.36 + uLevel * .5));
 
-  col += (hash(vec3(gl_FragCoord.xy, uSeed)) - .5) * .03;
+  col += (grainHash(vec3(gl_FragCoord.xy, uSeed)) - .5) * .03;
   gl_FragColor = vec4(col * alpha, alpha) + behind * (1. - alpha);
 }`;
 
