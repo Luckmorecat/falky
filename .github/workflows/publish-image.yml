@@ -53,7 +53,7 @@ jobs:
           platforms: linux/amd64
           push: true
           tags: |
-            ${{ steps.image.outputs.name }}:run-${{ github.run_id }}-${{ github.run_attempt }}
+            ${{ steps.image.outputs.name }}:${{ github.ref_type == 'tag' && github.ref_name || steps.source.outputs.revision }}
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ steps.source.outputs.revision }}

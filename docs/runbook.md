@@ -97,8 +97,11 @@ revisions compare the complete tracked release inputs against the last successfu
 release, so failed or coalesced runs cannot hide a change. Known documentation
 and root release metadata alone do not rebuild development. Every new version
 tag builds both images. Frontend statistics are enabled only for development.
-Immutable images are built for `linux/amd64`; CI selects their actual digests,
-never `latest` or `edge`. Both GHCR packages must support anonymous pulls.
+Both the server (`ghcr.io/luckmorecat/falky`) and web
+(`ghcr.io/luckmorecat/falky-web`) images use the full source commit SHA as the
+development image tag and the Git version tag (for example, `v1.2.3`) as the
+production image tag. Images are built for `linux/amd64`; CI pins deployments
+to their actual digests. Both GHCR packages must support anonymous pulls.
 
 Backend validation may be reused on PR/master runs only from an ancestor's
 successful master check with unchanged backend/shared inputs. Changes confined to
