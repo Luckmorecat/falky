@@ -7,6 +7,7 @@ import { assignPalettes } from '../fx/palette';
 import { effectsReduced } from '../fx/ticker';
 import { t } from '../strings';
 import { shareStatsEnabled } from '../voice/shareStats';
+import { IconButton } from './IconButton';
 import { Icon } from './Icon';
 import { ShareStats } from './ShareStatsOverlay';
 import { Tile } from './Tile';
@@ -177,9 +178,9 @@ function ShareView({ width, person, others, onPick }: { width: number; person: P
             </button>
           ))}
         </div>
-        <button className="ib sm ghost" aria-label={t.fullscreen} onClick={() => void frame.current?.requestFullscreen?.()}>
+        <IconButton size="small" className="ghost" aria-label={t.fullscreen} onClick={() => void frame.current?.requestFullscreen?.()}>
           <Icon name="expand" />
-        </button>
+        </IconButton>
       </div>
     </div>
   );

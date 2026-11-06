@@ -16,7 +16,8 @@ import { t } from '../strings';
 import { idleVoice, type VoicePerson, type VoiceSnapshot } from '../voice/types';
 import { Main } from '../ui/Main';
 import { Orb } from '../ui/Orb';
-import { Entry, Message } from '../ui/Screens';
+import { Entry } from '../ui/Screens';
+import { Message } from '../ui/Message';
 
 const NAMES = ['Олена', 'Марк', 'Софія', 'Тарас', 'Ірина', 'Богдан', 'Катя', 'Дмитро'];
 const person = (i: number): VoicePerson => ({
