@@ -8,6 +8,14 @@ on:
   push:
     branches: [master]
     tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Prepare artifacts only; use master for development or a v* tag for production
+        required: true
+        type: choice
+        default: development
+        options: [development, production]
 
 permissions:
   contents: read
@@ -79,7 +87,7 @@ jobs:
 
   plan:
     name: Plan release
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     needs: check
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -89,6 +97,7 @@ jobs:
       server: ${{ steps.plan.outputs.server }}
       web: ${{ steps.plan.outputs.web }}
       changed: ${{ steps.plan.outputs.changed }}
+      mode: ${{ steps.plan.outputs.mode }}
       plan: ${{ steps.plan.outputs.plan }}
     steps:
       - name: Check out source
@@ -96,8 +105,8 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0
-      - name: Plan image publishing against the verified release
-        id: plan
+      - name: Read the durable host release baseline
+        if: github.event_name == 'push'
         env:
           VPS_HOST: ${{ vars.VPS_HOST }}
           VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
@@ -105,7 +114,17 @@ jobs:
         run: |
           set -euo pipefail
           bash deploy/ci-ssh.sh release > "$RUNNER_TEMP/release-baseline.json"
-          python3 deploy/ci-plan.py "$RUNNER_TEMP/release-baseline.json"
+      - name: Plan complete publishing or an exact pending retry
+        id: plan
+        env:
+          PREPARE_ENVIRONMENT: ${{ inputs.environment }}
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]]; then
+            python3 deploy/ci-plan.py prepare
+          else
+            python3 deploy/ci-plan.py plan "$RUNNER_TEMP/release-baseline.json"
+          fi
 
   server:
     if: needs.plan.outputs.server == 'true'
@@ -126,13 +145,13 @@ jobs:
       packages: write
 
   deploy:
-    name: Deploy ${{ github.ref_type == 'tag' && 'production' || 'development' }}
-    # Planned skips are valid. Failures/cancellation must never become reuse.
+    name: ${{ github.event_name == 'workflow_dispatch' && 'Prepare' || 'Deploy' }} ${{ github.ref_type == 'tag' && 'production' || 'development' }}
+    # Only exact pending retries skip both builds. New releases require both.
     if: >-
       !cancelled() && needs.check.result == 'success' &&
       needs.plan.result == 'success' && needs.plan.outputs.changed == 'true' &&
-      (needs.server.result == 'success' || needs.server.result == 'skipped') &&
-      (needs.web.result == 'success' || needs.web.result == 'skipped')
+      ((needs.plan.outputs.mode == 'retry' && needs.server.result == 'skipped' && needs.web.result == 'skipped') ||
+      (needs.plan.outputs.mode != 'retry' && needs.server.result == 'success' && needs.web.result == 'success'))
     needs: [check, plan, server, web]
     runs-on: ubuntu-latest
     timeout-minutes: 35
@@ -146,11 +165,9 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Resolve immutable images and deploy against the verified baseline
+      - name: Resolve immutable images and package the exact runtime
+        id: artifact
         env:
-          VPS_HOST: ${{ vars.VPS_HOST }}
-          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
-          VPS_KNOWN_HOSTS: ${{ vars.VPS_KNOWN_HOSTS }}
           RELEASE_PLAN: ${{ needs.plan.outputs.plan }}
           SERVER_RESULT: ${{ needs.server.result }}
           WEB_RESULT: ${{ needs.web.result }}
@@ -158,5 +175,28 @@ jobs:
           WEB_DIGEST: ${{ needs.web.outputs.digest }}
         run: |
           set -euo pipefail
-          command=$(python3 deploy/release.py resolve)
-          bash deploy/ci-ssh.sh "$command"
+          command=$(python3 deploy/ci-plan.py resolve "$RUNNER_TEMP/runtime-artifact")
+          echo "command=$command" >> "$GITHUB_OUTPUT"
+      - name: Retain exact runtime package and release manifest
+        if: needs.plan.outputs.mode != 'retry'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: falky-runtime-${{ github.ref_type == 'tag' && 'production' || 'development' }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/runtime-artifact/
+          if-no-files-found: error
+          retention-days: 90
+      - name: Install complete release or resume exact pending attempt
+        if: github.event_name == 'push'
+        env:
+          VPS_HOST: ${{ vars.VPS_HOST }}
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_KNOWN_HOSTS: ${{ vars.VPS_KNOWN_HOSTS }}
+          RELEASE_COMMAND: ${{ steps.artifact.outputs.command }}
+          RELEASE_MODE: ${{ needs.plan.outputs.mode }}
+        run: |
+          set -euo pipefail
+          if [[ "$RELEASE_MODE" == retry ]]; then
+            bash deploy/ci-ssh.sh "$RELEASE_COMMAND" < /dev/null
+          else
+            bash deploy/ci-ssh.sh "$RELEASE_COMMAND" < "$RUNNER_TEMP/runtime-artifact/runtime.tar"
+          fi

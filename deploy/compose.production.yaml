@@ -1,24 +1,90 @@
-# Published images behind the shared edge proxy; used by both VPS instances.
-# Keep production's project name `falky` to retain its existing volumes.
+# Complete installed application stack; shared edge and networks belong to the host.
+name: ${FALKY_PROJECT_NAME:-falky}
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: 10m
+    max-file: "3"
+
 services:
   caddy:
-    build: !reset null
-    image: ${FALKY_WEB_IMAGE:?set FALKY_WEB_IMAGE to a published digest or local image ID}
-    pull_policy: never
-    ports: !reset []
-    volumes: !override
-      - ./WebCaddyfile:/etc/caddy/Caddyfile:ro
-      - ./web.caddy:/etc/caddy/web.caddy:ro
+    # Caddy with the built web client inside.
+    image: ${FALKY_WEB_IMAGE:?release image required}
+    restart: unless-stopped
+    environment:
+      FALKY_DOMAIN: ${FALKY_DOMAIN:?set FALKY_DOMAIN}
     networks:
       default:
         aliases: ["${FALKY_PROJECT_NAME:-falky}-web"]
+    depends_on:
+      falky:
+        condition: service_healthy
+      livekit:
+        condition: service_started
+    logging: *logging
+
   falky:
-    build: !reset null
-    image: ${FALKY_IMAGE:?set FALKY_IMAGE to a published image digest}
     networks:
       default:
         aliases: ["${FALKY_PROJECT_NAME:-falky}-api"]
+    image: ${FALKY_IMAGE:?release image required}
+    restart: unless-stopped
+    environment:
+      FALKY_PUBLIC_ORIGIN: https://${FALKY_DOMAIN:?set FALKY_DOMAIN in deploy/.env}
+      FALKY_LIVEKIT_API_URL: http://livekit:7880
+      FALKY_LIVEKIT_API_KEY: ${FALKY_LIVEKIT_API_KEY:?set FALKY_LIVEKIT_API_KEY in deploy/.env}
+      FALKY_LIVEKIT_API_SECRET: ${FALKY_LIVEKIT_API_SECRET:?set FALKY_LIVEKIT_API_SECRET in deploy/.env}
+    volumes:
+      - falky_data:/data
+      # Where `falky snapshot` writes; kept apart from the live database.
+      - falky_snapshots:/snapshots
+    # Ready means the database is open and migrated; LiveKit being unreachable
+    # leaves the server ready, with voice reported degraded.
+    healthcheck:
+      test: ["CMD", "/falky", "health", "ready"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+      start_interval: 2s
+    # Longer than the server's own shutdown timeout.
+    stop_grace_period: 15s
+    logging: *logging
+
   livekit:
     networks:
       default:
         aliases: ["${FALKY_PROJECT_NAME:-falky}-voice"]
+    labels:
+      win.lunari.falky.livekit-config: ${FALKY_LIVEKIT_CONFIG_SHA:?release config digest required}
+    image: livekit/livekit-server:v1.13.11@sha256:25cd902de7cacbd5f1f779f6a6ac1eae20ba8f56b0935934ce6b0ab80d1e3d20
+    restart: unless-stopped
+    command: ["--config", "/etc/livekit.yaml"]
+    environment:
+      # The same key pair the server signs tokens and verifies webhooks with.
+      # LiveKit reads each config key from LIVEKIT_<KEY> as well (listed by
+      # `livekit-server help-verbose`): LIVEKIT_WEBHOOK_API_KEY is
+      # webhook.api_key, the key its webhooks are signed with.
+      LIVEKIT_KEYS: "${FALKY_LIVEKIT_API_KEY:?set FALKY_LIVEKIT_API_KEY in deploy/.env}: ${FALKY_LIVEKIT_API_SECRET:?set FALKY_LIVEKIT_API_SECRET in deploy/.env}"
+      LIVEKIT_WEBHOOK_API_KEY: ${FALKY_LIVEKIT_API_KEY:?set FALKY_LIVEKIT_API_KEY in deploy/.env}
+      # The address clients send media to.
+      NODE_IP: ${LIVEKIT_NODE_IP:?set LIVEKIT_NODE_IP in deploy/.env}
+      LIVEKIT_RTC_TCP_PORT: ${LIVEKIT_TCP_PORT:-7881}
+      LIVEKIT_RTC_UDP_PORT_START: ${LIVEKIT_UDP_PORT:-7882}
+      LIVEKIT_RTC_UDP_PORT_END: ${LIVEKIT_UDP_PORT:-7882}
+    volumes:
+      - ${FALKY_INSTANCE_DIR:?instance directory required}/.deploy/livekit.yaml:/etc/livekit.yaml:ro
+    ports:
+      - "${LIVEKIT_TCP_PORT:-7881}:${LIVEKIT_TCP_PORT:-7881}/tcp"
+      - "${LIVEKIT_UDP_PORT:-7882}:${LIVEKIT_UDP_PORT:-7882}/udp"
+    logging: *logging
+
+volumes:
+  falky_data:
+  falky_snapshots:
+
+networks:
+  default:
+    external: true
+    name: ${FALKY_NETWORK:-${FALKY_PROJECT_NAME:-falky}_default}

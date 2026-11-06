@@ -1,4 +1,4 @@
 #!/usr/bin/env bash
 set -euo pipefail
-cd -- "$(dirname -- "$0")"
-exec docker compose --env-file .env -f compose.yaml -f compose.production.yaml "$@"
+instance=$(cd -- "$(dirname -- "$0")" && pwd)
+exec python3 "$instance/active/release.py" --instance "$instance" compose "$@"
