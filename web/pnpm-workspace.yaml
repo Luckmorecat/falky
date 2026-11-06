@@ -1,0 +1,6 @@
+# Preserve npm behavior: the existing lockfile includes recently published packages.
+minimumReleaseAge: 0
+
+allowBuilds:
+  esbuild: true
+  fsevents: true

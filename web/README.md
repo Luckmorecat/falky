@@ -1,11 +1,17 @@
 # Frontend workshops
 
-From `web/`, install the locked dependencies with `npm ci`.
+Install the pnpm version pinned in `web/package.json` (from the repository root):
 
-- `npm run storybook` starts the component workshop at http://localhost:6006.
-- `npm run build-storybook` creates a static workshop in `storybook-static/` (ignored by Git).
-- `npm run dev` keeps the existing full-screen playground at http://localhost:5173/design.html. It includes entry, room, chat, sharing, and access-message scenarios.
-- `npm run dev:mock` starts the app with simulated services for complete user flows; use the printed URL.
+```sh
+npm install --global "$(node -p 'require("./web/package.json").packageManager')"
+```
+
+From `web/`, install the locked dependencies with `pnpm install --frozen-lockfile`.
+
+- `pnpm run storybook` starts the component workshop at http://localhost:6006.
+- `pnpm run build-storybook` creates a static workshop in `storybook-static/` (ignored by Git).
+- `pnpm run dev` keeps the existing full-screen playground at http://localhost:5173/design.html. It includes entry, room, chat, sharing, and access-message scenarios.
+- `pnpm run dev:mock` starts the app with simulated services for complete user flows; use the printed URL.
 
 Storybook is local development tooling. It uses Falky's Onest font and production styles. Its toolbar switches light/dark appearance and Ukrainian/English text without writing app preferences. No backend or device permissions are needed.
 

@@ -7,8 +7,8 @@ changes directory.
 
 ```sh
 cd web
-npm ci
-npm run dev:mock
+pnpm install --frozen-lockfile
+pnpm run dev:mock
 ```
 
 Open the printed **Mock app** URL. One Node process starts Vite and an in-memory
@@ -19,8 +19,8 @@ LiveKit, Docker, database, capture device or browser permission is needed.
 Select a scenario at startup or in the URL:
 
 ```sh
-npm run dev:mock -- --scenario entry
-npm run dev:mock -- --port 5174 --api-port 8081 --scenario remote-share
+pnpm run dev:mock --scenario entry
+pnpm run dev:mock --port 5174 --api-port 8081 --scenario remote-share
 ```
 
 | Scenario | Starting state |
@@ -77,7 +77,7 @@ are simulated. Screen shares are animated canvas video streams through the real
 preview UI. They do not capture a screen or microphone, send audio, encode a real
 codec, exercise DSP, or measure RTP quality. Media diagnostics show unavailable
 values; mock notification and sound actions are silent. For the optional stats
-overlay in mock mode, start with `VITE_DEV_STATS=true npm run dev:mock`.
+overlay in mock mode, start with `VITE_DEV_STATS=true pnpm run dev:mock`.
 
 Mock adapters are selected only by the mock development launcher. Production
 builds always use real adapters, including `--mode mock` with `FALKY_MOCK=1`.
@@ -86,12 +86,12 @@ there is no fallback to Go or LiveKit.
 
 ## Screenshots
 
-From `web/`, install Chromium once with `npx playwright install chromium`, then:
+From `web/`, install Chromium once with `pnpm exec playwright install chromium`, then:
 
 ```sh
-npm run screenshot:mock -- --preset room --output /tmp/falky.png
-npm run screenshot:mock -- --preset screen-share --gpu --output /tmp/share.png
-npm run screenshot:mock -- --preset chat --viewport 390x844 --theme light --lang uk --output /tmp/chat-mobile.png
+pnpm run screenshot:mock --preset room --output /tmp/falky.png
+pnpm run screenshot:mock --preset screen-share --gpu --output /tmp/share.png
+pnpm run screenshot:mock --preset chat --viewport 390x844 --theme light --lang uk --output /tmp/chat-mobile.png
 ```
 
 Each invocation starts its own mock on allocated loopback ports, opens headless
@@ -130,7 +130,7 @@ stderr so hardware versus software rendering can be inspected. On Linux, autodet
 needs a working X display and `DISPLAY`. Without `--gpu`, the command uses the same
 default headless launch as the smoke suite. Both respect
 `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` for an existing browser. Use
-`npm run screenshot:mock -- --help` for all options and `npm run test:screenshot`
+`pnpm run screenshot:mock --help` for all options and `pnpm run test:screenshot`
 to verify captures and cleanup locally.
 
 ## Checks
@@ -139,15 +139,15 @@ The mock checks are local and require only Node. Install Chromium once, then run
 
 ```sh
 cd web
-npx playwright install chromium
-npm run test:mock
-npm run test:browser
-npm run test:runtime
+pnpm exec playwright install chromium
+pnpm run test:mock
+pnpm run test:browser
+pnpm run test:runtime
 ```
 
 On Linux, install missing browser system libraries with
-`npx playwright install --with-deps chromium` if needed. An existing Chromium can
-be used with `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium npm run test:browser`.
+`pnpm exec playwright install --with-deps chromium` if needed. An existing Chromium can
+be used with `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium pnpm run test:browser`.
 The smoke suite launches and stops its own isolated mock instances on allocated
 ports; no existing dev server is required. It checks entry, messaging/retry,
 catch-up, history/unread, settings, synthetic voice/share, failures, reload/reset,

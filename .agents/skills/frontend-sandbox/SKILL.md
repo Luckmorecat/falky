@@ -5,18 +5,18 @@ description: Use when testing Falky UI changes in a browser, controlling mock sc
 
 # Frontend sandbox
 
-Run the commands below from the repository’s `web/` directory. Install dependencies with `npm ci` when needed.
+Run the commands below from the repository’s `web/` directory. Install dependencies with `pnpm install --frozen-lockfile` when needed.
 
 ## Choose the flow
 
-- For UI changes and browser interaction, use `npm run dev:mock`. Open the printed
+- For UI changes and browser interaction, use `pnpm run dev:mock`. Open the printed
   **Mock app** URL; ports are allocated per run. Keep the process running for the
   session and stop your instance when finished.
-- For a screenshot, use `npm run screenshot:mock -- --preset room`. It owns the
+- For a screenshot, use `pnpm run screenshot:mock --preset room`. It owns the
   mock server and headless browser, captures the preset, and shuts both down.
   Use this command directly instead of assembling another capture harness.
 - For real API integration, microphone audio, codecs, screen capture, or LiveKit
-  behavior, use `npm run dev` with the Go + LiveKit stack running.
+  behavior, use `pnpm run dev` with the Go + LiveKit stack running.
 
 Mock mode runs the shared `/` app, controller, and HTTP/WebSocket clients. Keep
 frontend changes on that shared path so they also work with Go. `/design.html`
@@ -25,18 +25,18 @@ media can verify UI states, but provides no evidence of real media transport.
 
 ## Capture and inspect UI changes
 
-Read `npm run screenshot:mock -- --help` for available presets and options. Select
+Read `pnpm run screenshot:mock --help` for available presets and options. Select
 the preset that exposes the changed UI; include a narrow viewport when changing
 responsive layout. For preset/scenario combinations, capture behavior, or GPU
 setup details, read [the screenshot reference](references/sandbox.md#screenshots).
 For example:
 
 ```sh
-npm run screenshot:mock -- --preset chat --viewport 390x844 --theme light --lang uk
-npm run screenshot:mock -- --preset screen-share --gpu
+pnpm run screenshot:mock --preset chat --viewport 390x844 --theme light --lang uk
+pnpm run screenshot:mock --preset screen-share --gpu
 ```
 
-If Chromium is missing, install it with `npx playwright install chromium`, or set
+If Chromium is missing, install it with `pnpm exec playwright install chromium`, or set
 `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` to an installed Chromium executable.
 `--gpu` requests acceleration; use the printed renderer to determine whether the
 host actually used hardware or a software fallback.
