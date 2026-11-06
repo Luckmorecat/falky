@@ -160,6 +160,55 @@ builds always use real adapters, including `--mode mock` with `FALKY_MOCK=1`.
 The mock service is loopback-only by default and its `/rtc` route fails locally;
 there is no fallback to Go or LiveKit.
 
+### One-command screenshots
+
+From `web/`, install Chromium once with `npx playwright install chromium`, then:
+
+```sh
+npm run screenshot:mock -- --preset room --output /tmp/falky.png
+npm run screenshot:mock -- --preset screen-share --gpu --output /tmp/share.png
+npm run screenshot:mock -- --preset chat --viewport 390x844 --theme light --lang uk --output /tmp/chat-mobile.png
+```
+
+Each invocation starts its own mock on allocated loopback ports, opens headless
+Chromium, waits for the selected UI and fonts, writes a PNG and closes both browser
+and server. Cleanup also runs on capture failure, timeout, Ctrl-C and SIGTERM.
+Existing dev servers are untouched. The absolute image path is printed to stdout
+after cleanup; progress/errors go to stderr. No interactive browser setup is needed.
+
+| Preset | Captured UI |
+|---|---|
+| `room` | Populated Lounge, outside voice (default) |
+| `chat` | Chat drawer explicitly opened |
+| `voice` | Joined Lounge with simulated participants |
+| `screen-share` | Joined Lounge displaying Sam's animated synthetic screen |
+| `settings` | Settings panel open |
+| `entry` | Name-entry screen with a valid mock link |
+
+Defaults are 1440×1000, dark theme, English, UTC and device scale 1. Use
+`--viewport WIDTHxHEIGHT`, `--theme dark|light`, `--lang en|uk` and `--full-page`
+to override capture settings. Output defaults to `screenshots/<preset>.png`
+(ignored by Git); parent directories are created and an existing image is replaced.
+CSS animations are disabled for capture and reduced motion is requested;
+synthetic speaking/video content remains a snapshot, not a pixel-identical baseline.
+
+`--scenario` can select any mock fixture. Without `--preset`, it captures that
+fixture's starting screen (`entry` selects the entry preset). The entry scenario
+and entry preset must be used together. Other presets use `populated`, except
+`screen-share`, which uses `remote-share`. When combined with a different non-entry
+scenario, the screen-share preset starts the local visitor's synthetic share.
+
+`--gpu` requests hardware acceleration using full headless Chromium and its
+[`--enable-gpu` flag](https://chromium.googlesource.com/chromium/src.git/+/main/docs/gpu/using-gpu-hardware-in-headless-chrome.md).
+It keeps Chromium's driver autodetection; it does not guarantee hardware rendering
+on hosts without compatible GPU/display drivers. It prints the WebGL renderer to
+stderr so hardware versus software rendering can be inspected. On Linux, autodetection normally
+needs a working X display and `DISPLAY`. Without `--gpu`, the command uses the same
+default headless launch as the smoke suite. Both respect
+`PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` for an existing browser. Use
+`npm run screenshot:mock -- --help` for all options and `npm run test:screenshot`
+to verify captures and cleanup locally.
+
 ### Full Go + LiveKit stack
 
 Vite stands where Caddy stands, on `http://localhost:5173`. You need the server

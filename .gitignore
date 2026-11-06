@@ -18,3 +18,6 @@
 /deploy/.release*.json*
 /deploy/__pycache__/
 /deploy/backups/
+
+# Local mock screenshot captures
+/docs/evidence/mock-screenshots/

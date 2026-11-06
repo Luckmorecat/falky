@@ -1,4 +1,5 @@
 import { defineConfig } from '@playwright/test';
+import { chromiumOptions } from './smoke/browser';
 
 export default defineConfig({
   testDir: './smoke',
@@ -10,7 +11,7 @@ export default defineConfig({
   use: {
     browserName: 'chromium',
     viewport: { width: 1440, height: 1000 },
-    launchOptions: { executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || undefined },
+    launchOptions: chromiumOptions(),
     trace: 'retain-on-failure',
   },
 });

@@ -12,7 +12,9 @@
     "dev:mock": "tsx mock/dev.ts",
     "test:mock": "tsx --test mock/*.test.ts",
     "test:browser": "playwright test",
-    "test:runtime": "tsx scripts/check-runtime.ts"
+    "test:runtime": "tsx scripts/check-runtime.ts",
+    "screenshot:mock": "node --import tsx scripts/screenshot-mock.ts",
+    "test:screenshot": "node --import tsx --test scripts/screenshot-mock.test.ts"
   },
   "dependencies": {
     "@fontsource-variable/onest": "5.3.1",
