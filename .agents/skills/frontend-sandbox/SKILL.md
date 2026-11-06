@@ -28,7 +28,9 @@ media can verify UI states, but provides no evidence of real media transport.
 
 Read `npm run screenshot:mock -- --help` for available presets and options. Select
 the preset that exposes the changed UI; include a narrow viewport when changing
-responsive layout. For example:
+responsive layout. For preset/scenario combinations, capture behavior, or GPU
+setup details, read [the screenshot reference](references/sandbox.md#screenshots).
+For example:
 
 ```sh
 npm run screenshot:mock -- --preset chat --viewport 390x844 --theme light --lang uk
@@ -57,7 +59,7 @@ of commits; PR attachments are independent of repository history.
 Use the printed **Mock controls** URL (`GET /__mock`) to discover scenarios,
 actions, faults, and endpoints. Read `GET /__mock/state` for current room IDs;
 send changes to `POST /__mock/action` and select/reset fixtures with
-`POST /__mock/reset`. Read [the mock guide](../../../docs/web-client.md#frontend-only-with-deterministic-mocks)
+`POST /__mock/reset`. Read [the mock guide](references/sandbox.md#mock-server)
 for payload examples and persistence/reset behavior; types live in
 `mock/protocol.ts`.
 
@@ -73,6 +75,7 @@ When changing the sandbox utilities themselves, use the relevant scripts in
 flows, and `test:screenshot` for capture tooling. When changing adapter selection,
 Vite configuration, or production boundaries, run `test:runtime` to verify that
 normal development selects real adapters and production builds exclude mocks.
+For browser prerequisites and suite coverage, read [the check reference](references/sandbox.md#checks).
 
 For architecture or screen-share diagnostics, read the corresponding section of
 [the web client guide](../../../docs/web-client.md).
