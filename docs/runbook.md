@@ -84,7 +84,7 @@ activation. The local tests prove configuration behavior; they do not mean the
 live host has migrated. Changing a timer or another hosted site needs no Falky
 release or release-state edit.
 
-`Deploy VPS` runs full backend, frontend and deployment checks. The stable
+`Deploy VPS` validates backend, frontend and deployment inputs. The stable
 aggregate `Check` succeeds only when all three jobs pass. PR checks also validate
 every incoming non-merge commit, including bot commits, with read-only permissions;
 fork code never runs through `pull_request_target`. `make check` runs the two
@@ -109,11 +109,21 @@ pulls.
 Backend validation may be reused on PR/master runs only from an ancestor's
 successful master check with unchanged backend/shared inputs. Changes confined to
 `web/`, documentation (`docs/`, `.agents/`, `.claude/`, `GLOSSARY.md`) or root
-release metadata allow reuse. API/server/tooling/workflows/release policy and
+release metadata or the five existing `deploy/*_test.py` suites allow reuse.
+API/server/runtime deployment code/tooling/workflows/release policy and
 unknown paths force validation. Missing history/API results or no candidate among
 the latest 30 successful master runs also force it. Reuse includes that check's
-vulnerability scan. Tags and prepare dispatches run fresh backend checks; frontend
-and deployment checks always run.
+vulnerability scan.
+
+Deployment validation uses the same successful-master ancestor rule, comparing
+complete trees. Changes confined to `server/`, `web/`, `api/`, documentation
+(including root `README.md`) or root release metadata allow reuse because these
+suites use fixture applications and Git trees. Deployment/release code and tests,
+shared tooling, workflows, and unknown paths force fresh validation. Incoming PR
+commits and the current PR body are always validated, even when deployment
+validation is reused. Reuse skips component test steps, not the required jobs;
+the aggregate `Check` still requires every job to succeed. Tags and prepare
+dispatches run fresh backend and deployment checks; frontend checks always run.
 
 Each environment serializes checks/build/install without cancelling an active
 run. The source must descend from the durable highest successful CI revision,

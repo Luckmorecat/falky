@@ -45,17 +45,17 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: ${{ matrix.component != 'web' && '0' || '1' }}
-      - name: Decide whether backend checks are required
-        if: matrix.component == 'server'
-        id: backend
+      - name: Decide whether component checks are required
+        if: matrix.component != 'web'
+        id: validation
         env:
           GH_TOKEN: ${{ github.token }}
-        run: python3 deploy/ci-check.py
+        run: python3 deploy/ci-check.py ${{ matrix.component }}
       - name: Install pinned tools
-        if: matrix.component != 'web' && steps.backend.outputs.run != 'false'
+        if: matrix.component != 'web' && steps.validation.outputs.run != 'false'
         uses: jdx/mise-action@f5be966e4a917d54244728e6a5fdcd1d93a35e6c # v5.2.6
       - name: Install Node.js runtime
-        if: matrix.component != 'server'
+        if: matrix.component == 'web' || (matrix.component == 'deploy' && (steps.validation.outputs.run != 'false' || github.event_name == 'pull_request'))
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '24.21.0'
@@ -64,8 +64,11 @@ jobs:
         if: matrix.component == 'web'
         run: npm install --global "$(node -p 'require("./web/package.json").packageManager')"
       - name: Run component checks
-        if: steps.backend.outputs.run != 'false'
+        if: steps.validation.outputs.run != 'false'
         run: make check-${{ matrix.component }}
+      - name: Install release tooling for incoming commit validation
+        if: matrix.component == 'deploy' && steps.validation.outputs.run == 'false' && github.event_name == 'pull_request'
+        run: npm --prefix release ci --ignore-scripts
       - name: Validate incoming individual commits
         if: matrix.component == 'deploy' && github.event_name == 'pull_request'
         env:
