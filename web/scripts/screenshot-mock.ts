@@ -76,7 +76,7 @@ Existing browser: PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/path/to/chromium`);
     await page.addInitScript(({ state, lang, theme }) => {
       localStorage.setItem(`falky.mock-generation.${state.instanceId}`, String(state.generation));
       const prefix = `falky.mock.${state.instanceId}.`;
-      localStorage.setItem(prefix + 'lang', lang);
+      localStorage.setItem(prefix + 'language', lang);
       localStorage.setItem(prefix + 'theme', theme);
     }, { state, lang: values.lang, theme: values.theme });
     await page.goto(`${app.url}/?scenario=${scenario}`);

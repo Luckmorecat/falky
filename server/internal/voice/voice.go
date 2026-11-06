@@ -196,7 +196,7 @@ func (s *Service) Join(ctx context.Context, visitor identity.Visitor, roomID str
 
 // token mints the token visitor joins the voice of the room roomID with: the
 // visitor's ID as identity and name as display name, for that room only. It
-// may publish the microphone, a screen share and its audio, subscribe, and
+// may publish the microphone, a camera, a screen share and its audio, subscribe, and
 // set its own attributes, which is how a client shows it is deafened (the
 // attribute "deafened"). It may not send data messages: chat goes over HTTP.
 func (s *Service) token(visitor identity.Visitor, roomID string) (string, error) {
@@ -204,6 +204,7 @@ func (s *Service) token(visitor identity.Visitor, roomID string) (string, error)
 	grant.SetCanPublish(true)
 	grant.SetCanPublishSources([]livekit.TrackSource{
 		livekit.TrackSource_MICROPHONE,
+		livekit.TrackSource_CAMERA,
 		livekit.TrackSource_SCREEN_SHARE,
 		livekit.TrackSource_SCREEN_SHARE_AUDIO,
 	})

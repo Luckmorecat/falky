@@ -58,6 +58,7 @@ export function Main() {
       }
       if (e.code === 'KeyM' && getState().voice.status === 'connected') void voice.toggleMute();
       else if (e.code === 'KeyD' && getState().voice.status === 'connected') void voice.toggleDeafen();
+      else if (e.code === 'KeyV' && getState().voice.status === 'connected') void voice.toggleCamera();
       else if (e.key === 'ArrowLeft') stepRoom(-1);
       else if (e.key === 'ArrowRight') stepRoom(1);
     };

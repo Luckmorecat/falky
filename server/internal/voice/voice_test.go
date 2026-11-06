@@ -156,13 +156,10 @@ func TestJoinIssuesATokenForThatRoomOnly(t *testing.T) {
 		t.Errorf("room grants = %+v, want joining %s only", g, roomA)
 	}
 	wantSources := []livekit.TrackSource{
-		livekit.TrackSource_MICROPHONE, livekit.TrackSource_SCREEN_SHARE, livekit.TrackSource_SCREEN_SHARE_AUDIO,
+		livekit.TrackSource_MICROPHONE, livekit.TrackSource_CAMERA, livekit.TrackSource_SCREEN_SHARE, livekit.TrackSource_SCREEN_SHARE_AUDIO,
 	}
 	if !g.GetCanPublish() || !slices.Equal(g.GetCanPublishSources(), wantSources) {
 		t.Errorf("publish = %v %v, want %v", g.GetCanPublish(), g.GetCanPublishSources(), wantSources)
-	}
-	if g.GetCanPublishSource(livekit.TrackSource_CAMERA) {
-		t.Error("the token may publish a camera")
 	}
 	if !g.GetCanSubscribe() || !g.GetCanUpdateOwnMetadata() || g.GetCanPublishData() {
 		t.Errorf("subscribe, own metadata, data = %v %v %v, want true true false",

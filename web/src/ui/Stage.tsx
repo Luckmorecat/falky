@@ -21,6 +21,7 @@ interface Person {
   muted: boolean;
   deafened: boolean;
   sharing: boolean;
+  cameraTrackId: string;
 }
 
 /** Who to show: inside the room's voice, LiveKit knows best and tells more. */
@@ -34,7 +35,7 @@ function usePeople(room: Room): Person[] {
     }
     return room.occupancy
       .filter((p) => voiceState.roomId !== null || voiceState.status === 'idle' || p.visitorId !== selfId)
-      .map((p) => ({ id: p.visitorId, name: p.name, live: false, isSelf: p.visitorId === selfId, muted: false, deafened: false, sharing: false }));
+      .map((p) => ({ id: p.visitorId, name: p.name, live: false, isSelf: p.visitorId === selfId, muted: false, deafened: false, sharing: false, cameraTrackId: '' }));
   }, [room, voiceState, selfId]);
 }
 
@@ -48,6 +49,9 @@ function useWindowSize(): { w: number; h: number } {
   return size;
 }
 
+/** The width of --chat in styles.css. */
+const CHAT_WIDTH = 340;
+
 export function Stage({ room }: { room: Room }) {
   const people = usePeople(room);
   const { w, h } = useWindowSize();
@@ -56,15 +60,18 @@ export function Stage({ room }: { room: Room }) {
   const [picked, setPicked] = useState<string | null>(null);
   const shown = shares.find((p) => p.id === picked) ?? shares[0] ?? null;
 
-  // The chat's width (--chat) stays reserved, so blocks keep their size as it comes in.
-  const width = (narrow ? w : w - 340) - (narrow ? 24 : 72);
+  // The chat comes in over a page that does not move, so nothing may stand where
+  // it lands: blocks stay centred with its width kept free on both sides, and a
+  // shared screen, which wants all the room it can get, stands left of it.
+  const width = narrow ? w - 24 : w - 2 * (CHAT_WIDTH + 24);
+  const shareRoom = narrow ? w - 24 : w - CHAT_WIDTH - 48;
   const height = h - (narrow ? 96 : 112) - (narrow ? 104 : 128) - 16;
   const gap = people.length > 4 ? 12 : 16;
   const miniSize = narrow ? 76 : 104;
   const fit = fitBlocks(people.length, width, height, gap, 460);
   const size = shown ? miniSize : fit.size;
   const gridWidth = shown ? undefined : fit.columns * size + (fit.columns - 1) * gap;
-  const shareWidth = Math.min(width, (height - miniSize - 18) * (16 / 9));
+  const shareWidth = Math.min(shareRoom, (height - miniSize - 18) * (16 / 9));
   const palettes = useMemo(() => assignPalettes(people.map((p) => p.id)), [people]);
 
   const grid = useRef<HTMLDivElement>(null);
@@ -109,7 +116,7 @@ export function Stage({ room }: { room: Room }) {
   }
 
   return (
-    <div className="stage">
+    <div className={`stage${shown ? ' with-share' : ''}`}>
       {shown && (
         <ShareView
           width={shareWidth}
@@ -131,6 +138,7 @@ export function Stage({ room }: { room: Room }) {
             mini={!!shown}
             adjustable={inThisRoom && p.live && !p.isSelf}
             level={p.live ? levelOf(p.id) : undefined}
+            cameraTrackId={p.cameraTrackId}
           />
         ))}
       </div>

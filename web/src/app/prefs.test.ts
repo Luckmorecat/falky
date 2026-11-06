@@ -17,14 +17,17 @@ describe('screen share codec preference', () => {
 });
 
 describe('screen share bitrate preference', () => {
-  it('keeps the default for existing browsers and invalid stored values', () => {
-    expect(prefs.settings().shareBitrate).toBe('1');
-    localStorage.setItem('falky.shareBitrate', '4');
-    expect(prefs.settings().shareBitrate).toBe('1');
+  it('starts automatic and ignores the multiplier older clients saved', () => {
+    localStorage.setItem('falky.shareBitrate', '3');
+    expect(prefs.settings().shareMbps).toBe('0');
   });
 
-  it.each(['1', '2', '3'] as const)('remembers multiplier %s', (shareBitrate) => {
-    prefs.saveSettings({ ...prefs.settings(), shareBitrate });
-    expect(prefs.settings().shareBitrate).toBe(shareBitrate);
+  it('keeps a ceiling within what is on offer', () => {
+    prefs.saveSettings({ ...prefs.settings(), shareMbps: '12' });
+    expect(prefs.settings().shareMbps).toBe('12');
+    localStorage.setItem('falky.shareMbps', '500');
+    expect(prefs.settings().shareMbps).toBe('20');
+    localStorage.setItem('falky.shareMbps', 'many');
+    expect(prefs.settings().shareMbps).toBe('0');
   });
 });

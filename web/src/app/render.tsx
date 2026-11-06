@@ -4,6 +4,7 @@ import { useEffect } from 'react';
 import { createRoot } from 'react-dom/client';
 import { applyAppearance } from './appearance';
 import { boot } from './controller';
+import { installInterfaceSounds } from './interfaceSounds';
 import { useApp } from './store';
 import { t } from '../strings';
 import { Main } from '../ui/Main';
@@ -13,13 +14,8 @@ import { Message } from '../ui/Message';
 function App() {
   const phase = useApp((s) => s.phase);
   // Words are read when rendering, so a new language needs only this render.
-  useApp((s) => s.settings.lang);
-  const fewerEffects = useApp((s) => s.settings.fewerEffects);
+  useApp((s) => s.settings.language);
   const unread = useApp((s) => Object.values(s.chats).reduce((sum, c) => sum + c.unread, 0));
-
-  useEffect(() => {
-    document.body.classList.toggle('reduced', fewerEffects);
-  }, [fewerEffects]);
 
   useEffect(() => {
     document.title = unread ? `(${unread > 99 ? '99+' : unread}) Falky` : 'Falky';
@@ -45,5 +41,6 @@ addEventListener('hashchange', () => {
 });
 
 applyAppearance();
+installInterfaceSounds();
 createRoot(document.getElementById('root')!).render(<App />);
 void boot();

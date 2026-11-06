@@ -18,36 +18,42 @@
   --danger: #ff8a66;
   --danger-bg: #3a1610;
   --dot: rgba(255,255,255,.07);
+  --dots: radial-gradient(var(--dot) .8px, transparent 1.1px);
   --shadow: rgba(0,0,0,.6);
   --ease-out: cubic-bezier(.23,1,.32,1);
   --ease-drawer: cubic-bezier(.32,.72,0,1);
   --chat: 340px;
   --peek: 200px;
   --edge: 20px;
+  --round: 50%;
 }
+/* Without corner-shape a circle would stay a circle; this is the nearest plain radius to the shape. */
+@supports not (corner-shape: superellipse(2)) { :root { --round: 32%; } }
 [data-theme="light"] {
   color-scheme: light;
-  --bg: #fffbf2;
-  --surface: #fffefa;
-  --raised: #f3eee2;
-  --raised-2: #e4ddcc;
-  --fill: rgba(40,32,12,.07);
-  --fill-2: rgba(40,32,12,.13);
-  --text: #14130f;
-  --text-2: rgba(20,19,15,.64);
-  --text-3: rgba(20,19,15,.6);
-  --invert: #14130f;
+  --bg: #fff;
+  --surface: #fff;
+  --raised: #f2f2f2;
+  --raised-2: #e6e6e6;
+  --fill: rgba(0,0,0,.06);
+  --fill-2: rgba(0,0,0,.12);
+  --text: #111;
+  --text-2: rgba(0,0,0,.62);
+  --text-3: rgba(0,0,0,.56);
+  --invert: #111;
   --on-invert: #fff;
-  --signal: #14130f;
+  --signal: #111;
   --on-signal: #fff;
-  --signal-text: #14130f;
-  --level: #14130f;
-  --danger: #c8451f;
-  --danger-bg: #fbe3da;
-  --dot: rgba(20,19,15,.13);
-  --shadow: rgba(70,58,24,.16);
+  --signal-text: #111;
+  --level: #111;
+  --danger: #d0342c;
+  --danger-bg: #fdeceb;
+  --dot: rgba(0,0,0,.12);
+  --shadow: rgba(0,0,0,.14);
 }
 * { box-sizing: border-box; margin: 0; }
+/* Every corner has the orbs' shape: 2^1.77 is SQUIRCLE_N in fx/squircle.ts, so a square at --round is exactly an orb. */
+*, *::before, *::after { corner-shape: superellipse(1.77); }
 html, body { height: 100%; }
 body {
   background: var(--bg);
@@ -58,17 +64,17 @@ body {
 }
 button, input, textarea, select { font: inherit; color: inherit; }
 button { background: none; border: 0; cursor: pointer; -webkit-tap-highlight-color: transparent; }
-svg.i { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; flex: none; display: block; }
+svg.i { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; flex: none; display: block; }
 :focus-visible { outline: 2px solid var(--level); outline-offset: 2px; }
 [hidden] { display: none !important; }
 
 .screen { position: fixed; inset: 0; background-color: var(--bg);
-  background-image: radial-gradient(var(--dot) .8px, transparent 1.1px);
+  background-image: var(--dots);
   background-size: 20px 20px; }
 .screen.center { display: grid; place-items: center; padding: 16px; }
 
 /* Round buttons */
-.ib { position: relative; width: 52px; height: 52px; border-radius: 50%; background: var(--raised);
+.ib { position: relative; width: 52px; height: 52px; border-radius: var(--round); background: var(--raised);
   display: grid; place-items: center; flex: none; transition: transform 140ms var(--ease-out), background-color 160ms ease, color 160ms ease, opacity 160ms ease; }
 .ib:active { transform: scale(.94); }
 @media (hover:hover) and (pointer:fine) { .ib:hover { background: var(--raised-2); } }
@@ -78,54 +84,76 @@ svg.i { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-widt
 .ib.sm svg.i { width: 18px; height: 18px; }
 
 [data-tip]::after { content: attr(data-tip); position: absolute; bottom: calc(100% + 10px); left: 50%; translate: -50% 0;
-  background: var(--invert); color: var(--on-invert); font-size: 13px; line-height: 1; padding: 7px 10px; border-radius: 10px; white-space: nowrap;
+  background: var(--invert); color: var(--on-invert); font-size: 13px; line-height: 1; padding: 7px 10px; border-radius: 15px; white-space: nowrap;
   opacity: 0; scale: .96; transform-origin: bottom center; pointer-events: none; transition: opacity 120ms ease, scale 120ms var(--ease-out); z-index: 20; }
 @media (hover:hover) and (pointer:fine) { [data-tip]:hover::after { opacity: 1; scale: 1; transition-delay: 450ms; } }
 
 /* A voice */
 .orb { position: relative; flex: none; aspect-ratio: 1; }
-.orb canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; will-change: transform; }
-.orb.flat { border-radius: 50%; background: radial-gradient(70% 70% at 36% 30%, var(--core), transparent), radial-gradient(80% 80% at 66% 70%, var(--deep), transparent), linear-gradient(160deg, var(--bright), var(--base)); }
+.orb canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; will-change: transform; pointer-events: none; }
+/* Room for the glow it draws around itself; VOLUME_PAD in orbRenderer.ts. */
+.orb.volume canvas { inset: -18%; width: 136%; height: 136%; }
+.orb-video { position: absolute; inset: 2.5%; z-index: 1; will-change: transform; background: var(--deep); -webkit-mask: var(--squircle) center / 100% 100% no-repeat; mask: var(--squircle) center / 100% 100% no-repeat; }
+.orb-video video { display: block; width: 100%; height: 100%; object-fit: cover; opacity: 0; transition: opacity 240ms ease; }
+.orb-video video.on { opacity: 1; }
+.orb-video video.mirror { transform: scaleX(-1); }
+.orb.flat { -webkit-mask: var(--squircle) center / 100% 100% no-repeat; mask: var(--squircle) center / 100% 100% no-repeat; background: radial-gradient(70% 70% at 36% 30%, var(--core), transparent), radial-gradient(80% 80% at 66% 70%, var(--deep), transparent), linear-gradient(160deg, var(--bright), var(--base)); }
 
 /* Participant block */
 .tile { position: relative; width: var(--t, 420px); height: var(--t, 420px); container-type: size; transform-origin: 0 0; flex: none;
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: clamp(10px, 4.5cqw, 20px); }
 .t-orb { position: relative; flex: none; width: min(78cqw, calc(100cqh - 44px)); }
 .t-orb .orb { width: 100%; transition: opacity 280ms ease; }
-.tile.dim .orb { opacity: .62; }
+.tile.dim .orb:not(:has(video)) { opacity: .62; }
 
 .tile.dim .orb canvas { filter: saturate(.22); }
 /* While someone talks the others step back, so the eye knows where to go. */
 .t-label { transition: opacity 280ms ease; }
-.grid:has(.orb.speaking) .tile:not(:has(.orb.speaking)) .orb { opacity: .5; }
+.grid:has(.orb.speaking) .tile:not(:has(.orb.speaking)) .orb:not(:has(video)) { opacity: .5; }
 .grid:has(.orb.speaking) .tile:not(:has(.orb.speaking)) .t-label { opacity: .6; }
 .t-label { display: flex; gap: 8px; align-items: baseline; justify-content: center; max-width: 100%; min-width: 0; }
 .t-name { font-size: clamp(15px, 5.4cqw, 22px); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
-.t-you { color: var(--text-2); font-size: clamp(12px, 3.3cqw, 15px); flex: none; }
-.t-flag { position: absolute; right: 4%; bottom: 4%; width: clamp(26px, 11cqw, 36px); height: clamp(26px, 11cqw, 36px); border-radius: 50%; display: grid; place-items: center; background: var(--raised); z-index: 2; }
+.t-flag { position: absolute; right: 3%; bottom: 3%; width: clamp(26px, 11cqw, 36px); height: clamp(26px, 11cqw, 36px); border-radius: var(--round); display: grid; place-items: center; background: var(--raised); z-index: 2; }
 .t-flag svg.i { width: 56%; height: 56%; }
-.t-vol { position: absolute; left: 50%; top: 50%; translate: -50% -50%; z-index: 3; width: max(74%, 164px); background: var(--raised); border-radius: 20px; padding: 6px 12px; display: flex; gap: 8px; align-items: center; cursor: default;
-  opacity: 0; transform: scale(.96); pointer-events: none; transition: opacity 140ms ease, transform 180ms var(--ease-out); }
-.t-vol svg.i { width: 18px; height: 18px; }
-.tile.vol-open .t-vol, .t-vol:focus-within { opacity: 1; transform: none; pointer-events: auto; }
-@media (hover:hover) and (pointer:fine) { .t-orb:hover .t-vol { opacity: 1; transform: none; pointer-events: auto; } }
-.t-vol output { font-size: 12px; min-width: 2.8em; text-align: right; font-variant-numeric: tabular-nums; flex: none; }
-input[type=range] { accent-color: var(--level); width: 100%; height: 24px; }
+/* Their volume runs along the orb's right side, corner to corner, and rises out of the lower one. */
+.t-vol { position: absolute; inset: 0; z-index: 3; pointer-events: none; opacity: 0; translate: -10px 0; clip-path: inset(100% -40% -16% 0);
+  transition: opacity 120ms ease, translate 180ms var(--ease-out), clip-path 180ms var(--ease-out); }
+.tile.vol-open .t-vol, .t-vol:focus-within, .t-vol.held { opacity: 1; translate: 0 0; clip-path: inset(-16% -40% -16% 0); transition-duration: 140ms, 320ms, 320ms; }
+@media (hover:hover) and (pointer:fine) { .t-orb:hover .t-vol { opacity: 1; translate: 0 0; clip-path: inset(-16% -40% -16% 0); transition-duration: 140ms, 320ms, 320ms; } }
+.t-vol svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+.t-vol path { fill: none; stroke-linecap: round; vector-effect: non-scaling-stroke; }
+.t-vol-rail { stroke: var(--fill-2); stroke-width: 4px; }
+.t-vol-fill { stroke: var(--level); stroke-width: 4px; }
+.t-vol-grip { stroke: transparent; stroke-width: 36px; cursor: ns-resize; touch-action: none; }
+.tile.vol-open .t-vol-grip, .t-vol.held .t-vol-grip { pointer-events: stroke; }
+@media (hover:hover) and (pointer:fine) { .t-orb:hover .t-vol-grip { pointer-events: stroke; } }
+.t-vol-at { position: absolute; translate: -50% -50%; pointer-events: none; }
+.t-vol-mark { width: 4px; height: 4px; border-radius: var(--round); background: var(--bg); }
+.t-vol-thumb { width: 18px; height: 18px; border-radius: var(--round); background: var(--level); box-shadow: 0 0 0 3px var(--bg); transition: scale 140ms var(--ease-out); }
+.t-vol.held .t-vol-thumb { scale: 1.16; }
+.t-vol input:focus-visible ~ .t-vol-thumb { outline: 2px solid var(--level); outline-offset: 4px; }
+.t-vol-value { translate: calc(-100% - 18px) -50%; padding: 4px 9px; border-radius: 16px; background: var(--raised); color: var(--text); font-size: 12px; line-height: 16px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.t-vol input[type=range] { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+input[type=range] { appearance: none; width: 100%; height: 24px; margin: 0; background: none; cursor: pointer; --at: 0%; }
+input[type=range]::-webkit-slider-runnable-track { height: 4px; border-radius: 2px; background: linear-gradient(to right, var(--level) var(--at), var(--fill-2) var(--at)); }
+input[type=range]::-webkit-slider-thumb { appearance: none; width: 18px; height: 18px; margin-top: -7px; border-radius: var(--round); corner-shape: superellipse(1.77); background: var(--level); box-shadow: 0 0 0 3px var(--surface); }
+input[type=range]::-moz-range-track { height: 4px; border-radius: 2px; background: var(--fill-2); }
+input[type=range]::-moz-range-progress { height: 4px; border-radius: 2px; background: var(--level); }
+input[type=range]::-moz-range-thumb { width: 18px; height: 18px; border: 0; border-radius: var(--round); background: var(--level); box-shadow: 0 0 0 3px var(--surface); }
 .tile.mini { gap: 4px; }
 .tile.mini .t-orb { width: calc(100cqh - 22px); }
 .tile.mini .t-name { font-size: 13px; }
-.tile.mini .t-you { display: none; }
 
 /* Room layout */
-/* The interface stands in the middle of the page; the chat coming forward moves it aside. */
-.main { position: absolute; left: 0; top: 0; bottom: 0; width: 100%; z-index: 11; display: flex; flex-direction: column; align-items: center; pointer-events: none; transition: transform 460ms var(--ease-drawer); }
-.chat-open .main { transform: translateX(calc(var(--chat) / -2)); }
+/* The interface stands in the middle of the page and stays there when the chat comes in. */
+.main { position: absolute; left: 0; top: 0; bottom: 0; width: 100%; z-index: 11; display: flex; flex-direction: column; align-items: center; pointer-events: none; }
 .tile, .dock, .share, .stage-empty, .room-now, .rooms-open .room-list { pointer-events: auto; }
 .topbar { position: absolute; left: 28px; top: 24px; z-index: 5; }
 .mark { font-size: 21px; font-weight: 500; letter-spacing: -.02em; }
 .stage { flex: 1; min-height: 0; width: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px; padding: 0 24px;
   transition: transform 340ms var(--ease-drawer), opacity 220ms ease; }
 .rooms-open .stage { transform: translateY(52px) scale(.9); opacity: .5; }
+.stage.with-share { padding-right: calc(var(--chat) + 24px); }
 .grid { display: flex; flex-wrap: wrap; gap: var(--gap, 16px); justify-content: center; align-content: center; }
 .dock-space { height: 116px; flex: none; }
 .stage-empty { text-align: center; max-width: 340px; }
@@ -135,7 +163,7 @@ input[type=range] { accent-color: var(--level); width: 100%; height: 24px; }
 /* Rooms: the name at the top unfolds into all of them */
 .rooms { position: relative; z-index: 4; flex: none; width: 100%; min-height: 112px; padding-top: 22px; text-align: center; }
 .rooms h1 { font: inherit; }
-.room-now { display: inline-flex; align-items: center; gap: 6px; max-width: min(100%, 560px); padding: 4px 10px 4px 16px; border-radius: 16px; transition: background-color 160ms ease; }
+.room-now { display: inline-flex; align-items: center; gap: 6px; max-width: min(100%, 560px); padding: 4px 10px 4px 16px; border-radius: 24px; transition: background-color 160ms ease; }
 .room-now[disabled] { cursor: default; padding-right: 16px; }
 @media (hover:hover) and (pointer:fine) { .room-now:not([disabled]):hover { background: var(--fill); } }
 .room-now-name { font-size: 40px; font-weight: 500; line-height: 1.15; letter-spacing: -.02em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -146,7 +174,7 @@ input[type=range] { accent-color: var(--level); width: 100%; height: 24px; }
   opacity: 0; transform: translateY(-10px); pointer-events: none; transition: opacity 160ms ease, transform 280ms var(--ease-drawer); }
 .rooms-open .room-list { opacity: 1; transform: none; pointer-events: auto; }
 .rooms-open .clock { opacity: 0; }
-.room { display: flex; align-items: center; gap: 12px; flex: none; width: 232px; border-radius: 20px; padding: 8px 14px 8px 8px; text-align: left; transition: background-color 160ms ease, transform 140ms var(--ease-out); }
+.room { display: flex; align-items: center; gap: 12px; flex: none; width: 232px; border-radius: 30px; padding: 8px 14px 8px 8px; text-align: left; transition: background-color 160ms ease, transform 140ms var(--ease-out); }
 .room:active { transform: scale(.985); }
 @media (hover:hover) and (pointer:fine) { .room:hover { background: var(--fill); } }
 .room.on { background: var(--raised); }
@@ -156,14 +184,14 @@ input[type=range] { accent-color: var(--level); width: 100%; height: 24px; }
 .room-text { display: grid; min-width: 0; flex: 1; }
 .room-name { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .room-name > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.room-new { width: 8px; height: 8px; border-radius: 50%; background: var(--level); flex: none; }
+.room-new { width: 8px; height: 8px; border-radius: var(--round); background: var(--level); flex: none; }
 .room-here { width: 16px; height: 16px; color: var(--signal-text); flex: none; }
 .room-here svg.i { width: 16px; height: 16px; }
 .people { font-size: 13px; color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .people .talk { color: var(--text); }
 
 /* Screen sharing */
-.share { flex: none; position: relative; border-radius: 28px; overflow: hidden; background: #0e0e11; aspect-ratio: 16/9; color: #fff; }
+.share { flex: none; position: relative; border-radius: 42px; overflow: hidden; background: #0e0e11; aspect-ratio: 16/9; color: #fff; }
 .share video { width: 100%; height: 100%; object-fit: contain; display: block; background: #000; }
 .share:fullscreen { border-radius: 0; width: 100% !important; }
 .share-stats { position: absolute; bottom: 14px; left: 14px; width: min(248px, calc(100% - 28px)); padding: 12px 14px 10px; border: 1px solid rgba(255,255,255,.16); border-radius: 14px; background: rgba(10,12,17,.88); color: #f5f7fb; pointer-events: none; font-size: 11px; font-variant-numeric: tabular-nums; }
@@ -193,10 +221,10 @@ input[type=range] { accent-color: var(--level); width: 100%; height: 24px; }
 @media (hover:hover) and (pointer:fine) { .dock .ib:not(.off):not([aria-pressed="true"]):hover { background: var(--fill-2); } }
 .mic-wrap { position: relative; width: 56px; height: 56px; flex: none; display: grid; place-items: center; }
 .dock .mic-wrap .ib:not(.off) { background: var(--invert); color: var(--on-invert); }
-.mic-ring { position: absolute; inset: 0; border-radius: 50%; background: color-mix(in srgb, var(--invert) 30%, transparent); opacity: 0; will-change: transform, opacity; pointer-events: none; }
+.mic-ring { position: absolute; inset: 0; border-radius: var(--round); background: color-mix(in srgb, var(--invert) 30%, transparent); opacity: 0; will-change: transform, opacity; pointer-events: none; }
 .leave { display: flex; align-items: center; gap: 10px; height: 56px; padding: 0 6px 0 20px; border-radius: 99px; background: var(--fill); transition: transform 140ms var(--ease-out), background-color 160ms ease; }
 .leave:active { transform: scale(.97); }
-.leave i { width: 44px; height: 44px; border-radius: 50%; background: var(--fill-2); display: grid; place-items: center; }
+.leave i { width: 44px; height: 44px; border-radius: var(--round); background: var(--fill-2); display: grid; place-items: center; }
 .leave i svg.i { width: 18px; height: 18px; }
 .join { display: flex; align-items: center; gap: 10px; height: 56px; padding: 0 26px 0 22px; border-radius: 99px; background: var(--invert); color: var(--on-invert); font-weight: 600; transition: transform 140ms var(--ease-out); }
 .join:active { transform: scale(.97); }
@@ -210,7 +238,7 @@ input[type=range] { accent-color: var(--level); width: 100%; height: 24px; }
 
 /* Chat: always there, behind a blur that grows towards the edge */
 .chat-btn { display: none; position: absolute; right: 16px; top: 16px; z-index: 12; }
-.badge { min-width: 20px; height: 20px; padding: 0 5px; border-radius: 10px; background: var(--signal); color: var(--on-signal); font-size: 12px; font-weight: 600; line-height: 20px; text-align: center; }
+.badge { min-width: 20px; height: 20px; padding: 0 5px; border-radius: 15px; background: var(--signal); color: var(--on-signal); font-size: 12px; font-weight: 600; line-height: 20px; text-align: center; }
 .chat-btn .badge { position: absolute; top: -2px; right: -2px; transition: opacity 160ms ease, transform 200ms var(--ease-out); }
 .chat-open .chat-btn .badge { opacity: 0; transform: scale(.6); }
 .swap { position: relative; width: 22px; height: 22px; }
@@ -219,34 +247,35 @@ input[type=range] { accent-color: var(--level); width: 100%; height: 24px; }
 .chat-open .swap .a { opacity: 0; filter: blur(3px); transform: scale(.7); }
 .chat-open .swap .b { opacity: 1; filter: none; transform: none; }
 .room-screen { overflow: hidden; }
-/* Past the page's edge at rest, with the start of its lines showing. */
-.chat { position: absolute; right: 0; top: 0; bottom: 0; width: var(--chat); z-index: 10; display: flex; flex-direction: column; overflow: hidden; pointer-events: none; transform: translateX(calc(var(--chat) - var(--peek))); transition: transform 460ms var(--ease-drawer); }
-.chat-open .chat { transform: none; }
-.chat::before { content: ""; position: absolute; inset: 0; z-index: -1; opacity: 0; transition: opacity 240ms ease; background: linear-gradient(to right, transparent, var(--bg) 16%); }
-.chat-open .chat::before { opacity: 1; }
-.chat-zone { position: absolute; left: 0; top: 0; bottom: 0; width: var(--peek); z-index: 5; pointer-events: auto; }
-.chat-open .chat { pointer-events: auto; }
-.chat-open .chat-zone { pointer-events: none; }
-/* Sharp where lines start, then blurring and fading out towards the page's edge. */
-.chat-veil { position: absolute; inset: 0; z-index: 3; pointer-events: none; }
-.chat-veil i, .chat-veil b { position: absolute; inset: 0; transition: opacity 320ms ease; }
-.chat-veil i:nth-child(1) { -webkit-backdrop-filter: blur(24px); backdrop-filter: blur(24px); -webkit-mask-image: linear-gradient(to left, #000 41%, transparent 58%); mask-image: linear-gradient(to left, #000 41%, transparent 58%); }
-.chat-veil i:nth-child(2) { -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px); -webkit-mask-image: linear-gradient(to left, #000 46%, transparent 72%); mask-image: linear-gradient(to left, #000 46%, transparent 72%); }
-.chat-veil i:nth-child(3) { -webkit-backdrop-filter: blur(5px); backdrop-filter: blur(5px); -webkit-mask-image: linear-gradient(to left, #000 54%, transparent 88%); mask-image: linear-gradient(to left, #000 54%, transparent 88%); }
-.chat-veil i:nth-child(4) { -webkit-backdrop-filter: blur(2px); backdrop-filter: blur(2px); }
-.chat-veil b { background: linear-gradient(to left, var(--bg) 41%, transparent 70%); }
-.chat-open .chat-veil i, .chat-open .chat-veil b { opacity: 0; }
-.chat-hint { position: absolute; left: calc(var(--peek) - 48px); bottom: calc(var(--edge) + 13px); z-index: 4; display: flex; gap: 8px; align-items: center; color: var(--text-2); pointer-events: none; transition: opacity 180ms ease; }
+/* Where the mouse brings the chat in: as wide as it gets, and it never moves. */
+.chat-strip { position: absolute; right: 0; top: 0; bottom: 0; width: calc(var(--chat) + 24px); z-index: 10; }
+/* Past the page's edge at rest, with the start of its lines showing. No background: the dots stay. */
+.chat { position: absolute; right: 0; top: 0; bottom: 0; width: var(--chat); z-index: 1; display: flex; flex-direction: column; overflow: hidden; pointer-events: none; transform: translateX(calc(var(--chat) - var(--peek))); transition: transform 460ms var(--ease-drawer); }
+.chat-open .chat { transform: none; pointer-events: auto; }
+/* Sharp where lines start, then blurring and fading out towards the page's edge.
+   It stands still over the sliding chat and draws the page's dots back over its blur. */
+.chat-veil { position: absolute; right: 0; top: 0; bottom: 0; width: var(--peek); z-index: 2; pointer-events: none; }
+.chat-veil i, .chat-veil b, .chat-veil u { position: absolute; inset: 0; transition: opacity 320ms ease; }
+.chat-veil i:nth-child(1) { -webkit-backdrop-filter: blur(24px); backdrop-filter: blur(24px); -webkit-mask-image: linear-gradient(to left, #000, transparent 57px); mask-image: linear-gradient(to left, #000, transparent 57px); }
+.chat-veil i:nth-child(2) { -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px); -webkit-mask-image: linear-gradient(to left, #000 16px, transparent 105px); mask-image: linear-gradient(to left, #000 16px, transparent 105px); }
+.chat-veil i:nth-child(3) { -webkit-backdrop-filter: blur(5px); backdrop-filter: blur(5px); -webkit-mask-image: linear-gradient(to left, #000 44px, transparent 159px); mask-image: linear-gradient(to left, #000 44px, transparent 159px); }
+.chat-veil i:nth-child(4) { -webkit-backdrop-filter: blur(2px); backdrop-filter: blur(2px); -webkit-mask-image: linear-gradient(to left, #000 150px, transparent); mask-image: linear-gradient(to left, #000 150px, transparent); }
+.chat-veil b { background: linear-gradient(to left, var(--bg), transparent 98px); }
+/* As wide as the window from its right edge, so that its dots fall on the page's. */
+.chat-veil u { left: auto; width: 100vw; background-image: var(--dots); background-size: 20px 20px; -webkit-mask-image: linear-gradient(to left, #000 150px, transparent var(--peek)); mask-image: linear-gradient(to left, #000 150px, transparent var(--peek)); }
+.chat-open .chat-veil i, .chat-open .chat-veil b, .chat-open .chat-veil u { opacity: 0; }
+.chat-hint { position: absolute; right: 24px; bottom: calc(var(--edge) + 13px); z-index: 3; display: flex; gap: 8px; align-items: center; color: var(--text-2); pointer-events: none; transition: opacity 180ms ease; }
 .chat-open .chat-hint { opacity: 0; }
 /* Newest at the bottom, with few messages too: the free space stays above them. */
-.feed { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow-y: auto; padding: 22px 20px 10px; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: var(--fill-2) transparent; }
+.feed { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow-y: auto; padding: 28px 20px 12px; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: var(--fill-2) transparent;
+  -webkit-mask-image: linear-gradient(to bottom, transparent, #000 28px); mask-image: linear-gradient(to bottom, transparent, #000 28px); }
 .feed > * { flex: none; }
 .feed::before { content: ""; margin-top: auto; }
 .chat .feed, .chat .composer { opacity: .3; transition: opacity 320ms ease; }
 .chat-open .chat .feed, .chat-open .chat .composer { opacity: 1; }
 /* A new message: the start of the lines clears up for a moment; the far edge stays blurred. */
-.chat.nudge .feed { opacity: .9; }
-.chat.nudge .chat-veil i:nth-child(n+3) { opacity: 0; }
+.chat-strip.nudge .feed { opacity: .9; }
+.chat-strip.nudge .chat-veil i:nth-child(n+3) { opacity: 0; }
 .day { text-align: center; font-size: 12px; color: var(--text-3); padding: 8px 0 14px; }
 .new-line { display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--signal-text); padding: 8px 0 12px; }
 .new-line::after { content: ""; flex: 1; height: 1px; background: color-mix(in srgb, var(--level) 28%, transparent); }
@@ -266,12 +295,12 @@ input[type=range] { accent-color: var(--level); width: 100%; height: 24px; }
   opacity: 0; transform: translateY(6px); pointer-events: none; transition: opacity 140ms ease, transform 200ms var(--ease-out); }
 .to-latest.show { opacity: 1; transform: none; pointer-events: auto; }
 .to-latest svg.i { width: 16px; height: 16px; }
-.composer { flex: none; padding: 8px 12px var(--edge); position: relative; }
-.count { position: absolute; right: 26px; top: -10px; font-size: 12px; color: var(--text-2); }
+.composer { flex: none; padding: 4px 20px var(--edge); position: relative; }
+.count { position: absolute; right: 34px; top: -14px; font-size: 12px; color: var(--text-2); }
 .count.over { color: var(--danger); }
-.field { display: flex; align-items: flex-end; gap: 4px; background: var(--raised); border-radius: 22px; padding: 4px; transition: background-color 160ms ease; }
+.field { display: flex; align-items: flex-end; gap: 4px; background: var(--raised); border-radius: 24px; padding: 4px; transition: background-color 160ms ease; }
 .field:focus-within { background: var(--raised-2); }
-.field textarea { flex: 1; min-width: 0; background: none; border: 0; outline: 0; resize: none; padding: 7px 6px 7px 12px; max-height: 140px; line-height: 1.45; field-sizing: content; }
+.field textarea { flex: 1; min-width: 0; background: none; border: 0; outline: 0; resize: none; padding: 9px 6px 9px 12px; max-height: 140px; line-height: 22px; field-sizing: content; }
 .field textarea::placeholder { color: var(--text-3); }
 .field .ib { background: transparent; }
 .send { background: var(--invert) !important; color: var(--on-invert); transition: opacity 140ms ease, transform 180ms var(--ease-out); }
@@ -280,29 +309,34 @@ input[type=range] { accent-color: var(--level); width: 100%; height: 24px; }
 .empty-chat strong { display: block; color: var(--text); font-weight: 500; font-size: 17px; margin-bottom: 4px; }
 
 /* Settings */
-.sheet { position: absolute; bottom: calc(100% + 18px); left: 50%; width: min(440px, calc(100vw - 32px)); max-height: calc(100dvh - 140px); overflow-y: auto; scrollbar-width: none; translate: -50% 0; background: var(--surface); border-radius: 32px; box-shadow: 0 24px 60px var(--shadow); padding: 24px; z-index: 30;
+.sheet { position: absolute; bottom: calc(100% + 18px); left: 50%; width: min(440px, calc(100vw - 32px)); max-height: calc(100dvh - 140px); overflow-y: auto; scrollbar-width: none; translate: -50% 0; background: var(--surface); border-radius: 48px; box-shadow: 0 24px 60px var(--shadow); padding: 24px; z-index: 30;
   opacity: 0; transform: scale(.97) translateY(8px); transform-origin: 62% 100%; pointer-events: none; transition: opacity 140ms ease, transform 200ms var(--ease-out); }
 .sheet.open { opacity: 1; transform: none; pointer-events: auto; }
 .sheet h2 { font-size: 22px; font-weight: 500; letter-spacing: -.01em; margin-bottom: 18px; }
 .sheet section + section { margin-top: 26px; }
 .sheet h3 { font-size: 13px; font-weight: 600; color: var(--text); margin-bottom: 12px; }
 .setrow { display: grid; gap: 7px; margin-bottom: 14px; font-size: 13px; color: var(--text-2); }
-.setrow select, .setrow input[type=text], .conflict input { width: 100%; height: 46px; border-radius: 16px; background: var(--raised); border: 0; outline-offset: 0; padding: 0 14px; color: var(--text); font-size: 15px; }
-.setrow select { appearance: none; padding-right: 38px; text-overflow: ellipsis; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23888' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6.500 9.500 12 15l5.500-5.500'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 12px center; background-size: 18px; }
+.setrow select, .setrow input[type=text], .conflict input { width: 100%; height: 46px; border-radius: 24px; background: var(--raised); border: 0; outline-offset: 0; padding: 0 14px; color: var(--text); font-size: 15px; }
+.setrow select { appearance: none; padding-right: 38px; text-overflow: ellipsis; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23888' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6.500 9.500 12 15l5.500-5.500'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 12px center; background-size: 18px; }
 .namerow { display: flex; gap: 8px; }
-.btn2 { height: 46px; padding: 0 16px; border-radius: 16px; background: var(--raised-2); flex: none; font-size: 14px; color: var(--text); transition: transform 140ms var(--ease-out), background-color 160ms ease; }
+.btn2 { height: 46px; padding: 0 16px; border-radius: 24px; background: var(--raised-2); flex: none; font-size: 14px; color: var(--text); transition: transform 140ms var(--ease-out), background-color 160ms ease; }
 .btn2:active { transform: scale(.97); }
 .btn2[disabled] { opacity: .45; cursor: default; }
 .meter { height: 10px; border-radius: 5px; overflow: hidden; background: var(--raised-2); }
 .meter div { height: 100%; border-radius: 5px; background: var(--level); transform: scaleX(0); transform-origin: left; will-change: transform; }
 .set-note { font-size: 13px; color: var(--text-3); }
-.seg { display: flex; gap: 2px; padding: 3px; border-radius: 16px; background: var(--raised); }
-.seg button { flex: 1; min-width: 0; height: 40px; border-radius: 13px; font-size: 14px; color: var(--text-2); white-space: nowrap; transition: background-color 160ms ease, color 160ms ease; }
+.set-hint { margin: -6px 0 14px; line-height: 1.35; }
+.toggle + .set-hint { margin-top: 0; }
+.set-head { display: flex; justify-content: space-between; gap: 12px; }
+.set-head b { font-weight: inherit; color: var(--text); font-variant-numeric: tabular-nums; }
+.seg.fit button { font-size: 13px; }
+.seg { display: flex; gap: 2px; padding: 3px; border-radius: 24px; background: var(--raised); }
+.seg button { flex: 1; min-width: 0; height: 40px; border-radius: 20px; font-size: 14px; color: var(--text-2); white-space: nowrap; transition: background-color 160ms ease, color 160ms ease; }
 @media (hover:hover) and (pointer:fine) { .seg button:hover { color: var(--text); } }
 .seg button[aria-pressed="true"] { background: var(--invert); color: var(--on-invert); }
 .toggle { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 7px 0; font-size: 15px; cursor: pointer; }
 .toggle input { appearance: none; width: 44px; height: 26px; border-radius: 13px; background: var(--raised-2); position: relative; flex: none; cursor: pointer; transition: background-color 160ms ease; margin: 0; }
-.toggle input::after { content: ""; position: absolute; top: 3px; left: 3px; width: 20px; height: 20px; border-radius: 50%; background: var(--invert); transition: transform 200ms var(--ease-out); }
+.toggle input::after { content: ""; position: absolute; top: 3px; left: 3px; width: 20px; height: 20px; border-radius: var(--round); background: var(--invert); transition: transform 200ms var(--ease-out); }
 .toggle input:checked { background: var(--signal); }
 .toggle input:checked::after { transform: translateX(18px); background: var(--on-signal); }
 .field-err { color: var(--danger); font-size: 13px; }
@@ -327,27 +361,28 @@ input[type=range] { accent-color: var(--level); width: 100%; height: 24px; }
 .float-top { position: absolute; left: 50%; top: 18px; translate: -50% 0; z-index: 40; display: grid; justify-items: center; gap: 10px; width: min(420px, calc(100vw - 32px)); pointer-events: none; }
 .float-top > * { pointer-events: auto; }
 .banner { display: inline-flex; align-items: center; gap: 10px; background: var(--raised); padding: 10px 18px; border-radius: 99px; font-size: 14px; }
-.pulse { width: 8px; height: 8px; border-radius: 50%; background: var(--level); animation: pulse 1.2s ease-in-out infinite; }
+.pulse { width: 8px; height: 8px; border-radius: var(--round); background: var(--level); animation: pulse 1.2s ease-in-out infinite; }
 @keyframes pulse { 50% { opacity: .25; } }
-.toast { width: 100%; display: flex; gap: 12px; align-items: flex-start; justify-content: space-between; background: var(--raised); padding: 14px 12px 14px 20px; border-radius: 26px; box-shadow: 0 16px 48px var(--shadow);
+.toast { width: 100%; display: flex; gap: 12px; align-items: flex-start; justify-content: space-between; background: var(--raised); padding: 14px 12px 14px 20px; border-radius: 39px; box-shadow: 0 16px 48px var(--shadow);
   transition: opacity 180ms ease, transform 240ms var(--ease-out); @starting-style { opacity: 0; transform: translateY(-8px); } }
 .toast strong { font-weight: 550; }
 .toast p { color: var(--text-2); font-size: 14px; }
 .toast .ib { background: var(--raised-2); flex: none; }
-.conflict { width: 100%; background: var(--surface); box-shadow: 0 16px 48px var(--shadow); border-radius: 28px; padding: 20px; display: grid; gap: 8px; }
+.conflict { width: 100%; background: var(--surface); box-shadow: 0 16px 48px var(--shadow); border-radius: 42px; padding: 20px; display: grid; gap: 8px; }
 .conflict h2 { font-size: 18px; font-weight: 500; overflow-wrap: anywhere; }
 .conflict p { color: var(--text-2); font-size: 14px; }
 .conflict input { flex: 1; min-width: 0; width: auto; }
 
 /* No room or no mouse for the chat beside the stage: it opens over the page */
-@media (max-width: 1000px), (hover: none) {
+@media (max-width: 1180px), (hover: none) {
   :root { --chat: 0px; --peek: 0px; }
   .chat-btn { display: grid; z-index: 13; }
-  .chat-veil, .chat-hint, .chat-zone, .chat::before { display: none; }
-  .chat-open .main { transform: none; }
-  .chat { z-index: 12; pointer-events: auto; width: 100%; background: var(--surface); transform: translateX(100%); visibility: hidden; transition: transform 460ms var(--ease-drawer), visibility 0s linear 460ms; }
+  .chat-veil, .chat-hint { display: none; }
+  .chat-strip { width: 100%; z-index: 12; pointer-events: none; }
+  .chat { pointer-events: auto; width: 100%; background: var(--surface); transform: translateX(100%); visibility: hidden; transition: transform 460ms var(--ease-drawer), visibility 0s linear 460ms; }
   .chat-open .chat { transform: none; visibility: visible; transition: transform 460ms var(--ease-drawer), visibility 0s; }
-  .feed { padding-top: 72px; }
+  .feed { padding-top: 72px; -webkit-mask-image: none; mask-image: none; }
+  .composer { padding-inline: 12px; }
   .chat .feed, .chat .composer { opacity: 1; }
 }
 @media (max-width: 1000px) {
@@ -363,16 +398,24 @@ input[type=range] { accent-color: var(--level); width: 100%; height: 24px; }
   .leave { padding: 0 4px; }
   .leave i { width: 40px; height: 40px; }
   .leave span { display: none; }
-  .dock-sep, .hide-phone, .dock-room { display: none; }
+  .dock-sep, .dock-room { display: none; }
   .dock-move { height: 48px; padding: 0 16px; font-size: 14px; }
   .dock-space { height: 104px; }
   .float-top { top: 72px; }
   .sheet { position: fixed; left: 16px; right: 16px; bottom: 96px; width: auto; translate: 0 0; transform-origin: 50% 100%; }
 }
+/* Too narrow for the screen-share button, and its settings mean nothing without it. */
+@media (max-width: 560px) {
+  .hide-phone { display: none; }
+}
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition-duration: 1ms !important; animation: none !important; }
 }
+/* "Fewer effects": things change at once and stay still; what tells of a voice keeps working. */
+.reduced *, .reduced *::before, .reduced *::after { transition-duration: 1ms !important; transition-delay: 0s !important; animation: none !important; }
+.reduced .chat-veil i { display: none; }
+.reduced.rooms-open .stage { transform: none; }
 @media (prefers-contrast: more) {
   :root { --text-2: rgba(255,255,255,.85); --text-3: rgba(255,255,255,.7); }
-  [data-theme="light"] { --text-2: rgba(20,19,15,.85); --text-3: rgba(20,19,15,.7); }
+  [data-theme="light"] { --text-2: rgba(0,0,0,.85); --text-3: rgba(0,0,0,.7); }
 }

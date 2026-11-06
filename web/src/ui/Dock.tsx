@@ -4,6 +4,7 @@ import { viewRoom, voice } from '../app/controller';
 import { useApp } from '../app/store';
 import { onTick } from '../fx/ticker';
 import { t } from '../strings';
+import { canUseCamera } from '../voice/camera';
 import { canShareScreen } from '../voice/share';
 import { Button } from './Button';
 import { IconButton } from './IconButton';
@@ -52,7 +53,7 @@ export function Dock({ room }: { room: Room | null }) {
       <div className="dock">
         <div className="dock-bg" />
         {room && (
-          <Button variant="join" disabled={joining} onClick={() => void voice.join(room.id)}>
+          <Button variant="join" data-cue="none" disabled={joining} onClick={() => void voice.join(room.id)}>
             <Icon name="mic" />
             {joining ? t.joining : t.join}
           </Button>
@@ -65,6 +66,7 @@ export function Dock({ room }: { room: Room | null }) {
   const muteLabel = v.muted ? t.muteOff : t.muteOn;
   const deafLabel = v.deafened ? t.deafOff : t.deafOn;
   const shareLabel = v.sharing ? t.shareOff : t.shareOn;
+  const cameraLabel = v.camera ? t.cameraOff : t.cameraOn;
 
   return (
     <div className="dock" role="toolbar" aria-label={voiceRoom?.name}>
@@ -72,19 +74,24 @@ export function Dock({ room }: { room: Room | null }) {
       {elsewhere && room && voiceRoom && (
         <>
           <button className="dock-room" onClick={() => viewRoom(voiceRoom.id)} title={t.back(voiceRoom.name)}>{voiceRoom.name}</button>
-          <button className="dock-move" disabled={joining} onClick={() => void voice.join(room.id)}>{joining ? t.joining : t.moveHere}</button>
+          <button className="dock-move" data-cue="none" disabled={joining} onClick={() => void voice.join(room.id)}>{joining ? t.joining : t.moveHere}</button>
           <span className="dock-sep" />
         </>
       )}
-      <IconButton className={v.deafened ? 'off' : ''} aria-pressed={v.deafened} aria-label={deafLabel} data-tip={deafLabel} onClick={() => void voice.toggleDeafen()}>
+      <IconButton className={v.deafened ? 'off' : ''} aria-pressed={v.deafened} data-cue={v.deafened ? 'on' : 'off'} aria-label={deafLabel} data-tip={deafLabel} onClick={() => void voice.toggleDeafen()}>
         <Icon name={v.deafened ? 'headOff' : 'head'} />
       </IconButton>
       <div className="mic-wrap">
         <span ref={ring} className="mic-ring" />
-        <IconButton className={v.muted ? 'off' : ''} aria-pressed={v.muted} aria-label={muteLabel} data-tip={muteLabel} onClick={() => void voice.toggleMute()}>
+        <IconButton className={v.muted ? 'off' : ''} aria-pressed={v.muted} data-cue={v.muted ? 'on' : 'off'} aria-label={muteLabel} data-tip={muteLabel} onClick={() => void voice.toggleMute()}>
           <Icon name={v.muted ? 'micOff' : 'mic'} />
         </IconButton>
       </div>
+      {canUseCamera && (
+        <IconButton aria-pressed={v.camera} data-cue={v.camera ? 'off' : 'on'} aria-label={cameraLabel} data-tip={cameraLabel} onClick={() => void voice.toggleCamera()}>
+          <Icon name="camera" />
+        </IconButton>
+      )}
       {canShareScreen && (
         <IconButton className={`hide-phone${v.sharing ? ' sharing' : ''}`} aria-pressed={v.sharing} aria-label={shareLabel} data-tip={shareLabel} onClick={() => void voice.toggleShare()}>
           <Icon name="screen" />
@@ -92,7 +99,7 @@ export function Dock({ room }: { room: Room | null }) {
       )}
       <span className="dock-sep" />
       <SettingsButton open={sheetOpen} onToggle={() => setSheetOpen(!sheetOpen)} />
-      <button className="leave" aria-label={t.leaveVoice} onClick={() => void voice.leave()}>
+      <button className="leave" data-cue="none" aria-label={t.leaveVoice} onClick={() => void voice.leave()}>
         <span>{t.leave}</span>
         <i><Icon name="x" /></i>
       </button>

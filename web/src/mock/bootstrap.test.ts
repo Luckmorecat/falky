@@ -19,7 +19,7 @@ it('scopes prefs before app load and observes a reset independently of revoked o
   await bootstrap(navigation);
   expect(bodies[0]).toEqual({ scenario: 'entry' });
   expect(new URL(url).hash).toBe('#k=mock-access-link');
-  prefs.saveSettings({ ...prefs.settings(), theme: 'light', lang: 'en' });
+  prefs.saveSettings({ ...prefs.settings(), theme: 'light', language: 'en' });
   // Both failure states leave the independent control channel available.
   state = { ...state, generation: 2, revision: 2, scenario: 'quiet', faults: { ...faultDefaults, liveDisconnected: true } };
   await vi.advanceTimersByTimeAsync(300);
@@ -28,5 +28,5 @@ it('scopes prefs before app load and observes a reset independently of revoked o
   expect(new URL(url).hash).toBe('');
   await bootstrap(navigation);
   expect(bodies.at(-1)).toEqual({ scenario: 'quiet' });
-  expect(prefs.settings()).toMatchObject({ theme: 'dark', lang: 'uk' });
+  expect(prefs.settings()).toMatchObject({ theme: 'dark', language: 'system' });
 });
