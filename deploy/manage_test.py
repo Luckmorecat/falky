@@ -111,7 +111,8 @@ class DeploymentTests(unittest.TestCase):
         self.env_text='FALKY_DOMAIN=test.invalid\nFALKY_LIVEKIT_API_SECRET=secret-must-survive\nFALKY_PROJECT_NAME=falky\n'
         (self.root/'.env').write_text(self.env_text)
         binary=Path(self.temp.name)/'bin'; binary.mkdir()
-        (binary/'docker').write_text('#!'+sys.executable+'\n'+FAKE_DOCKER); (binary/'docker').chmod(0o700)
+        # Only the operator needs sitecustomize's HTTP and interruption hooks.
+        (binary/'docker').write_text('#!'+sys.executable+' -S\n'+FAKE_DOCKER); (binary/'docker').chmod(0o700)
         (binary/'sitecustomize.py').write_text(SITE)
         self.env=os.environ | {'PATH':str(binary)+':'+os.environ['PATH'], 'PYTHONPATH':str(binary)}
         self.archive=Path(self.temp.name)/'runtime.tar'
@@ -171,15 +172,6 @@ class DeploymentTests(unittest.TestCase):
                 self.assertEqual(sum(args[-1:] == ['snapshot'] for args in self.calls()),before)
                 self.assertIsNone(self.snapshot()['pending'])
                 self.assertEqual(self.snapshot()['release'],request['release'])
-    def test_explicit_restore_preserves_ancestry_and_exact_artifacts(self):
-        self.install('a'); self.install('b')
-        backups=list((self.root/'backups').iterdir()); self.assertEqual(len(backups),1)
-        self.call('restore',backups[0].name)
-        self.assertEqual(self.snapshot()['release']['revision'],'a'*40)
-        self.assertEqual(self.snapshot()['ancestry'],'b'*40)
-        self.assertIsNone(self.snapshot()['pending'])
-        self.assertTrue((backups[0]/'runtime.tar').is_file())
-        self.assertTrue(any(args[:2] == ['volume','rm'] for args in self.calls()))
     def legacy_fixture(self):
         old={'release':{'revision':'9'*40,'images':{'server':{'digest':SERVER+'@sha256:'+'9'*64}}},'runtime':'old-runtime-fingerprint'}
         for name in ('compose.yaml','compose.production.yaml','compose.sh','manage.sh','ci-deploy.sh','release.py','prune-backups.py','Caddyfile','WebCaddyfile','web.caddy','livekit.yaml'):
@@ -233,10 +225,17 @@ class DeploymentTests(unittest.TestCase):
         self.assertIsNone(evidence['containers']['caddy'])
         self.assertEqual(evidence['images']['caddy']['id'],'sha256:'+'f'*64)
         self.assertEqual(self.snapshot()['ancestry'],'a'*40)
-    def test_new_explicit_restore_discards_new_writes_after_prior_restore(self):
+    def test_explicit_restore_preserves_artifacts_and_discards_new_writes(self):
         self.install('a'); self.install('b')
-        backup=next((self.root/'backups').iterdir())
+        backups=list((self.root/'backups').iterdir()); self.assertEqual(len(backups),1)
+        backup=backups[0]
         self.call('restore',backup.name)
+        restored=self.snapshot()
+        self.assertEqual(restored['release']['revision'],'a'*40)
+        self.assertEqual(restored['ancestry'],'b'*40)
+        self.assertIsNone(restored['pending'])
+        self.assertTrue((backup/'runtime.tar').is_file())
+        self.assertTrue(any(args[:2] == ['volume','rm'] for args in self.calls()))
         (self.root/'database-writes').write_text('new application writes after restore')
         self.call('backup')
         before=sum(args[:2] == ['volume','rm'] for args in self.calls())
