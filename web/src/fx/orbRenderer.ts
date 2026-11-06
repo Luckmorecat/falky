@@ -37,6 +37,14 @@ float noise(vec3 x) {
 }
 float fbm(vec3 p) { return noise(p) * .84 + noise(p * 2.03 + 3.1) * .16; }
 
+// Mix the coordinates before multiplying so grain cannot collapse along a row or column.
+// Keep the cloud hash separate: changing it would change the flowing colour pattern.
+float grainHash(vec3 p) {
+  p = fract(p * .1031);
+  p += dot(p, p.zyx + 31.32);
+  return fract((p.x + p.y) * p.z);
+}
+
 void main() {
   float r = length(vUv);
   float alpha = smoothstep(1., 1. - uPixel * 1.6, r);
@@ -70,7 +78,7 @@ void main() {
   float edge = pow(1. - n.z, 3.2);
   col = mix(col, mix(uBright, vec3(1.), .35), edge * (.5 + uLevel * .5));
 
-  col += (hash(vec3(gl_FragCoord.xy, uSeed)) - .5) * .045;
+  col += (grainHash(vec3(gl_FragCoord.xy, uSeed)) - .5) * .045;
   gl_FragColor = vec4(col * alpha, alpha);
 }`;
 
