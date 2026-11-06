@@ -4,7 +4,7 @@ import { defineConfig } from 'vitest/config';
 
 // In development Vite stands where Caddy stands in production: it serves the
 // client and forwards the API and LiveKit's signalling, so the page, the API
-// and voice share one origin. See docs/web-client.md.
+// and voice share one origin.
 export default defineConfig(({ command }) => ({
   // Mode names and build-time env never opt a production bundle into mocks.
   resolve: { alias: Object.fromEntries(Object.entries({
