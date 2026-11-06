@@ -24,3 +24,7 @@
 
 # CI-only release tooling
 /release/node_modules/
+
+# Installed runtime/cache (never source or secrets in packages)
+/deploy/.deploy/
+/deploy/active

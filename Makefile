@@ -33,6 +33,7 @@ check-deploy:
 	npm --prefix release test
 	bash -n deploy/manage.sh deploy/compose.sh deploy/ci-deploy.sh deploy/ci-ssh.sh
 	python3 deploy/ci-check_test.py
+	python3 deploy/ci-plan_test.py
 	python3 deploy/manage_test.py
 	python3 deploy/release_test.py
 	python3 deploy/config_test.py

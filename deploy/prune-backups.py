@@ -27,8 +27,9 @@ def docker_json(template, container):
     return json.loads(output)
 
 
-def prune(current, backend, caddy):
-    root = Path("backups")
+def prune(current, backend, image):
+    root = Path("backups").resolve()
+    current = current.resolve()
     # Only a freshly completed, verified backup can initiate deletion.
     if current.parent != root or not completed_bundle(current):
         raise ValueError("Retention requires a completed backup in backups/")
@@ -36,7 +37,10 @@ def prune(current, backend, caddy):
     if not SNAPSHOT_PATH.fullmatch(snapshot):
         raise ValueError("Unexpected current snapshot path")
     bundles = sorted(path for path in root.iterdir() if completed_bundle(path) and path != current)
-    old_bundles = bundles[:max(0, len(bundles) - (KEEP - 1))]
+    pending_path = Path('.deploy/state.json')
+    pending = json.loads(pending_path.read_text()).get('pending') if pending_path.exists() else None
+    pinned = (Path(pending['backup']).resolve() if pending and pending.get('backup') else None)
+    old_bundles = [path for path in bundles[:max(0, len(bundles) - (KEEP - 1))] if path != pinned]
 
     mounts = docker_json("{{json .Mounts}}", backend)
     mounts = [mount for mount in mounts if mount["Destination"] == "/snapshots"]
@@ -45,9 +49,9 @@ def prune(current, backend, caddy):
     volume = mounts[0]["Name"]
     # Docker must not create a replacement volume for a missing source.
     subprocess.run(["docker", "volume", "inspect", volume], check=True, stdout=subprocess.DEVNULL)
-    image = docker_json("{{json .Image}}", caddy)
-    if not re.fullmatch(r"sha256:[a-f0-9]{64}", image):
-        raise ValueError("Retention requires the existing Caddy image ID")
+    if not re.fullmatch(r"caddy:[0-9.]+@sha256:[a-f0-9]{64}", image):
+        raise ValueError("Retention requires a pinned helper image")
+    subprocess.run(["docker", "image", "inspect", image], check=True, stdout=subprocess.DEVNULL)
 
     helper = [
         "docker", "run", "--rm", "--pull", "never", "--network", "none",
@@ -78,5 +82,5 @@ def prune(current, backend, caddy):
 
 if __name__ == "__main__":
     if len(sys.argv) != 4:
-        raise SystemExit("Usage: prune-backups.py completed-backup backend-container caddy-container")
+        raise SystemExit("Usage: prune-backups.py completed-backup backend-container immutable-helper-image")
     prune(Path(sys.argv[1]), sys.argv[2], sys.argv[3])
