@@ -21,3 +21,6 @@
 
 # Local mock screenshot captures
 /docs/evidence/mock-screenshots/
+
+# CI-only release tooling
+/release/node_modules/

@@ -1,0 +1,12 @@
+{
+  "release-type": "falky",
+  "plugins": ["falky-commit-policy"],
+  "initial-version": "1.0.0",
+  "include-component-in-tag": false,
+  "include-v-in-tag": true,
+  "always-update": true,
+  "commit-search-depth": 2147483647,
+  "packages": {
+    ".": {}
+  }
+}
