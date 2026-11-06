@@ -72,14 +72,18 @@ async function main() {
   --gpu                  Request hardware-capable headless Chromium
   --output PATH.json     JSON and sibling CSV (default: profiles/memory-<timestamp>.json)
 
-Each run owns and closes a fresh mock server and browser. English, dark theme,
-1440x1000 viewport, UTC, reduced motion, development stats disabled.
+Each run measures a blank tab, closes Chromium, then measures the mock app in
+a second fresh browser. --warmup and --duration apply to each browser. The
+headline app footprint is app idle median PSS minus blank idle median PSS.
+English, dark theme, 1440x1000 viewport, UTC, reduced motion, stats disabled.
 Entry cannot use --cycles or --join-voice. Other scenarios start outside voice
 unless --join-voice is specified. Measurements cover the mock development app,
 not production or real media transport. PSS/RSS require readable Linux /proc;
 unavailable process totals are null. RSS sums double-count shared pages.
 JS heap/DOM cover the main page target, not separate workers/frames. Browser
 process totals include browser overhead; GPU device memory is not measured.
+Incremental PSS estimates added RAM, including browser work caused by the app;
+shared pages and run variance prevent exact ownership. Negative deltas are kept.
 Post-GC deltas are diagnostic, not a leak verdict or pass/fail memory budget.
 Install once if missing: pnpm exec playwright install chromium
 Existing browser: PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/path/to/chromium`);
@@ -104,7 +108,7 @@ Existing browser: PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/path/to/chromium`);
   process.once('SIGINT', onInterrupt);
   process.once('SIGTERM', onTerminate);
   const timeout = setTimeout(() => cancellation.abort(new Error('Memory profile timed out')),
-    (warmup + duration + cycles * 35 + 90) * 1000);
+    (2 * (warmup + duration) + cycles * 35 + 120) * 1000);
   let app: Awaited<ReturnType<typeof launchMock>> | undefined;
   let browser: Browser | undefined;
   const closeBrowser = () => { void browser?.close().catch(() => {}); };
@@ -112,138 +116,184 @@ Existing browser: PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/path/to/chromium`);
   const pause = (ms: number) => delay(ms, undefined, { signal: cancellation.signal });
   try {
     app = await launchMock(0, { signal: cancellation.signal, stats: false });
+    const mockUrl = app.url;
     console.error(`Mock: ${app.url} | scenario: ${values.scenario} | voice: ${values['join-voice']} | cycles: ${cycles}`);
-    browser = await chromium.launch({ ...chromiumOptions(values.gpu), headless: true,
-      handleSIGINT: false, handleSIGTERM: false, handleSIGHUP: false });
-    cancellation.signal.throwIfAborted();
-    const browserSession = await browser.newBrowserCDPSession();
-    const browserBeforePage = await processMemory(browserSession);
-    const context = await browser.newContext({ viewport: { width: 1440, height: 1000 },
-      locale: 'en', timezoneId: 'UTC', colorScheme: 'dark', reducedMotion: 'reduce', deviceScaleFactor: 1 });
-    const page = await context.newPage();
-    page.setDefaultTimeout(15_000);
-    page.setDefaultNavigationTimeout(15_000);
-    const pageErrors: string[] = [];
-    page.on('pageerror', (error) => pageErrors.push(error.message));
-    const response = await page.request.post(`${app.url}/__mock/bootstrap`, { data: { scenario: values.scenario } });
-    if (!response.ok()) throw new Error(`Mock bootstrap failed: ${response.status()}`);
-    const state: MockState = await response.json();
-    await page.addInitScript((state) => {
-      localStorage.setItem(`falky.mock-generation.${state.instanceId}`, String(state.generation));
-      const prefix = `falky.mock.${state.instanceId}.`;
-      localStorage.setItem(prefix + 'lang', 'en');
-      localStorage.setItem(prefix + 'theme', 'dark');
-    }, state);
-    await page.goto(`${app.url}/?scenario=${values.scenario}`);
-    if (values.scenario === 'entry') {
-      await expect(page.getByRole('textbox', { name: t.name, exact: true })).toBeVisible();
-    } else {
-      await expect(page.getByRole('button', { name: t.settings, exact: true })).toBeVisible();
-      await page.locator('.feed .msg, .feed .empty-chat').first().waitFor({ state: 'attached' });
-      if (values['join-voice']) {
-        await page.getByRole('button', { name: t.join, exact: true }).click();
-        await expect(page.getByRole('toolbar')).toBeVisible();
-        if (values.scenario === 'remote-share') {
-          await page.locator('.share video').waitFor({ state: 'visible' });
-          await page.waitForFunction(() => [...document.querySelectorAll('video')]
-            .some((video) => video.readyState >= 2 && video.videoWidth > 0));
+    async function measureBrowser(kind: 'blank' | 'app') {
+      cancellation.signal.throwIfAborted();
+      const runStartedAt = new Date().toISOString();
+      try {
+        browser = await chromium.launch({ ...chromiumOptions(values.gpu), headless: true,
+          handleSIGINT: false, handleSIGTERM: false, handleSIGHUP: false });
+        cancellation.signal.throwIfAborted();
+        const browserSession = await browser.newBrowserCDPSession();
+        const browserBeforePage = await processMemory(browserSession);
+        const context = await browser.newContext({ viewport: { width: 1440, height: 1000 },
+          locale: 'en', timezoneId: 'UTC', colorScheme: 'dark', reducedMotion: 'reduce', deviceScaleFactor: 1 });
+        const page = await context.newPage();
+        page.setDefaultTimeout(15_000);
+        page.setDefaultNavigationTimeout(15_000);
+        const pageErrors: string[] = [];
+        page.on('pageerror', (error) => pageErrors.push(error.message));
+        if (kind === 'app') {
+          const response = await page.request.post(`${mockUrl}/__mock/bootstrap`, { data: { scenario: values.scenario } });
+          if (!response.ok()) throw new Error(`Mock bootstrap failed: ${response.status()}`);
+          const state: MockState = await response.json();
+          await page.addInitScript((state) => {
+            localStorage.setItem(`falky.mock-generation.${state.instanceId}`, String(state.generation));
+            const prefix = `falky.mock.${state.instanceId}.`;
+            localStorage.setItem(prefix + 'lang', 'en');
+            localStorage.setItem(prefix + 'theme', 'dark');
+          }, state);
+          await page.goto(`${mockUrl}/?scenario=${values.scenario}`);
+          if (values.scenario === 'entry') {
+            await expect(page.getByRole('textbox', { name: t.name, exact: true })).toBeVisible();
+          } else {
+            await expect(page.getByRole('button', { name: t.settings, exact: true })).toBeVisible();
+            await page.locator('.feed .msg, .feed .empty-chat').first().waitFor({ state: 'attached' });
+            if (values['join-voice']) {
+              await page.getByRole('button', { name: t.join, exact: true }).click();
+              await expect(page.getByRole('toolbar')).toBeVisible();
+              if (values.scenario === 'remote-share') {
+                await page.locator('.share video').waitFor({ state: 'visible' });
+                await page.waitForFunction(() => [...document.querySelectorAll('video')]
+                  .some((video) => video.readyState >= 2 && video.videoWidth > 0));
+              }
+            }
+          }
+        } else {
+          // Exercise Playwright's locator world in both runs, including the blank control.
+          await page.goto('about:blank');
+          await page.locator('html').waitFor({ state: 'attached' });
         }
+        await page.evaluate(() => document.fonts.ready);
+        const session = await context.newCDPSession(page);
+        const sampleOrigin = performance.now();
+        async function sample(phase: string, cycle: number | null = null) {
+          cancellation.signal.throwIfAborted();
+          const elapsedMs = performance.now() - sampleOrigin;
+          const heap = await session.send('Runtime.getHeapUsage');
+          const dom = await session.send('Memory.getDOMCounters');
+          return { phase, cycle, elapsedMs, jsHeapUsedBytes: heap.usedSize, jsHeapTotalBytes: heap.totalSize,
+            documents: dom.documents, nodes: dom.nodes, eventListeners: dom.jsEventListeners,
+            browser: await processMemory(browserSession) };
+        }
+        const samples = [await sample('ready')];
+        await pause(warmup * 1000);
+        await session.send('HeapProfiler.collectGarbage');
+        const baseline = await sample('baseline-after-gc');
+        samples.push(baseline);
+        console.error(`${kind === 'blank' ? 'Blank tab' : 'App'} ready; sampling idle for ${duration}s every ${interval}s, after ${warmup}s warmup`);
+        const idleStart = performance.now();
+        // Use actual elapsed time, including collection overhead. Always sample the
+        // end, including when duration is shorter than the requested interval.
+        while (performance.now() - idleStart < duration * 1000) {
+          await pause(Math.min(interval * 1000, Math.max(0, duration * 1000 - (performance.now() - idleStart))));
+          samples.push(await sample('idle'));
+        }
+        for (let cycle = 1; cycle <= (kind === 'app' ? cycles : 0); cycle++) {
+          await page.getByRole('button', { name: t.settings, exact: true }).click();
+          await expect(page.getByRole('dialog', { name: t.settings, exact: true })).toBeVisible();
+          samples.push(await sample('settings-open', cycle));
+          await page.keyboard.press('Escape');
+          // The closed sheet remains mounted and inert; opacity does not make a
+          // locator hidden to Playwright. Observe the control's semantic state.
+          await expect(page.getByRole('button', { name: t.settings, exact: true })).toHaveAttribute('aria-expanded', 'false');
+          samples.push(await sample('settings-closed', cycle));
+        }
+        // Let deferred cleanup and transitions finish before the retained comparison.
+        await pause(500);
+        samples.push(await sample('final-before-gc'));
+        await session.send('HeapProfiler.collectGarbage');
+        const retained = await sample('final-after-gc');
+        samples.push(retained);
+        const url = page.url();
+        await context.close();
+        const browserAfterPage = await processMemory(browserSession);
+        if (pageErrors.length) throw new Error(`Page errors during profile: ${pageErrors.join('; ')}`);
+        const idle = samples.filter((entry) => entry.phase === 'idle');
+        function median(numbers: number[]) {
+          const sorted = numbers.toSorted((a, b) => a - b);
+          const middle = Math.floor(sorted.length / 2);
+          return sorted.length % 2 ? sorted[middle]! : (sorted[middle - 1]! + sorted[middle]!) / 2;
+        }
+        const completePss = samples.flatMap((entry) => entry.browser.pssBytes === null ? [] : [entry.browser.pssBytes]);
+        const summary = {
+          sampleCount: samples.length,
+          idleMedianHeapBytes: median(idle.map((entry) => entry.jsHeapUsedBytes)),
+          idleMedianBrowserPssBytes: idle.every((entry) => entry.browser.pssBytes !== null)
+            ? median(idle.map((entry) => entry.browser.pssBytes!)) : null,
+          sampledPeakHeapBytes: Math.max(...samples.map((entry) => entry.jsHeapUsedBytes)),
+          sampledPeakBrowserPssBytes: completePss.length ? Math.max(...completePss) : null,
+          processMemoryComplete: samples.every((entry) => entry.browser.pssBytes !== null),
+          retainedHeapDeltaBytes: retained.jsHeapUsedBytes - baseline.jsHeapUsedBytes,
+          retainedNodesDelta: retained.nodes - baseline.nodes,
+          retainedEventListenersDelta: retained.eventListeners - baseline.eventListeners,
+        };
+        return { startedAt: runStartedAt, finishedAt: new Date().toISOString(), chromium: browser.version(), url,
+          browserBeforePage, browserAfterPage, summary, samples };
+      } finally {
+        await browser?.close();
+        browser = undefined;
       }
     }
-    await page.evaluate(() => document.fonts.ready);
-    const session = await context.newCDPSession(page);
-    const sampleOrigin = performance.now();
-    async function sample(phase: string, cycle: number | null = null) {
-      cancellation.signal.throwIfAborted();
-      const elapsedMs = performance.now() - sampleOrigin;
-      const heap = await session.send('Runtime.getHeapUsage');
-      const dom = await session.send('Memory.getDOMCounters');
-      return { phase, cycle, elapsedMs, jsHeapUsedBytes: heap.usedSize, jsHeapTotalBytes: heap.totalSize,
-        documents: dom.documents, nodes: dom.nodes, eventListeners: dom.jsEventListeners,
-        browser: await processMemory(browserSession) };
-    }
-    const samples = [await sample('ready')];
-    await pause(warmup * 1000);
-    await session.send('HeapProfiler.collectGarbage');
-    const baseline = await sample('baseline-after-gc');
-    samples.push(baseline);
-    console.error(`Ready; sampling idle for ${duration}s every ${interval}s, after ${warmup}s warmup`);
-    const idleStart = performance.now();
-    // Use actual elapsed time, including collection overhead. Always sample the
-    // end, including when duration is shorter than the requested interval.
-    while (performance.now() - idleStart < duration * 1000) {
-      await pause(Math.min(interval * 1000, Math.max(0, duration * 1000 - (performance.now() - idleStart))));
-      samples.push(await sample('idle'));
-    }
-    for (let cycle = 1; cycle <= cycles; cycle++) {
-      await page.getByRole('button', { name: t.settings, exact: true }).click();
-      await expect(page.getByRole('dialog', { name: t.settings, exact: true })).toBeVisible();
-      samples.push(await sample('settings-open', cycle));
-      await page.keyboard.press('Escape');
-      // The closed sheet remains mounted and inert; opacity does not make a
-      // locator hidden to Playwright. Observe the control's semantic state.
-      await expect(page.getByRole('button', { name: t.settings, exact: true })).toHaveAttribute('aria-expanded', 'false');
-      samples.push(await sample('settings-closed', cycle));
-    }
-    // Let deferred cleanup and transitions finish before the retained comparison.
-    await pause(500);
-    samples.push(await sample('final-before-gc'));
-    await session.send('HeapProfiler.collectGarbage');
-    const retained = await sample('final-after-gc');
-    samples.push(retained);
-    await context.close();
-    const browserAfterPage = await processMemory(browserSession);
-    if (pageErrors.length) throw new Error(`Page errors during profile: ${pageErrors.join('; ')}`);
-    const idle = samples.filter((entry) => entry.phase === 'idle');
-    function median(numbers: number[]) {
-      const sorted = numbers.toSorted((a, b) => a - b);
-      const middle = Math.floor(sorted.length / 2);
-      return sorted.length % 2 ? sorted[middle]! : (sorted[middle - 1]! + sorted[middle]!) / 2;
-    }
-    const completePss = samples.flatMap((entry) => entry.browser.pssBytes === null ? [] : [entry.browser.pssBytes]);
+    // Sequential fresh browsers keep app allocations and caches out of the blank
+    // control, and avoid changing PSS shares by keeping two browsers alive.
+    const blankBaseline = await measureBrowser('blank');
+    const appRun = await measureBrowser('app');
+    if (blankBaseline.chromium !== appRun.chromium) throw new Error('Chromium version changed between baseline and app');
+    const { browserBeforePage, browserAfterPage, samples } = appRun;
+    const baseline = samples.find((entry) => entry.phase === 'baseline-after-gc')!;
+    const retained = samples.at(-1)!;
+    const chromiumOverheadPssBytes = blankBaseline.summary.idleMedianBrowserPssBytes;
+    const appSessionPssBytes = appRun.summary.idleMedianBrowserPssBytes;
     const summary = {
-      sampleCount: samples.length,
-      idleMedianHeapBytes: median(idle.map((entry) => entry.jsHeapUsedBytes)),
-      idleMedianBrowserPssBytes: idle.every((entry) => entry.browser.pssBytes !== null)
-        ? median(idle.map((entry) => entry.browser.pssBytes!)) : null,
-      sampledPeakHeapBytes: Math.max(...samples.map((entry) => entry.jsHeapUsedBytes)),
-      sampledPeakBrowserPssBytes: completePss.length ? Math.max(...completePss) : null,
-      processMemoryComplete: samples.every((entry) => entry.browser.pssBytes !== null),
-      retainedHeapDeltaBytes: retained.jsHeapUsedBytes - baseline.jsHeapUsedBytes,
-      retainedNodesDelta: retained.nodes - baseline.nodes,
-      retainedEventListenersDelta: retained.eventListeners - baseline.eventListeners,
+      ...appRun.summary,
+      chromiumOverheadPssBytes,
+      appIncrementalPssBytes: appSessionPssBytes === null || chromiumOverheadPssBytes === null
+        ? null : appSessionPssBytes - chromiumOverheadPssBytes,
     };
     const report = {
-      schemaVersion: 1, startedAt, finishedAt: new Date().toISOString(),
+      schemaVersion: 2, startedAt, finishedAt: new Date().toISOString(),
+      appStartedAt: appRun.startedAt,
       environment: { platform: process.platform, architecture: process.arch, node: process.version,
-        chromium: browser.version(), executable: chromiumOptions(values.gpu).executablePath ?? chromium.executablePath(),
+        chromium: appRun.chromium, executable: chromiumOptions(values.gpu).executablePath ?? chromium.executablePath(),
         appMode: 'mock-development', viewport: { width: 1440, height: 1000 },
         language: 'en', theme: 'dark', timezone: 'UTC', reducedMotion: true, stats: false, gpuRequested: values.gpu },
       workload: { scenario: values.scenario, joinVoice: values['join-voice'], durationSeconds: duration,
         intervalSeconds: interval, warmupSeconds: warmup, settingsCycles: cycles },
+      appUrl: appRun.url,
       notes: [
         'Mock development app; synthetic media is not evidence of production or real call memory usage.',
         'Heap and DOM counters cover the main page target; separate workers/frames are not aggregated.',
         'Process metrics cover Chromium processes reported by CDP, including browser overhead; exclude Node/Vite/mock.',
         'PSS apportions shared RAM. Summed RSS double-counts shared pages. Neither measures GPU device memory.',
         'Missing/exited/unreadable processes make that sample total null; per-process errors are preserved.',
-        'Peak values are sampled, not guaranteed maxima. GC is forced only at the two labeled checkpoints.',
+        'Blank baseline and app use separate sequential fresh browsers with matching warmup and idle duration.',
+        'Incremental PSS is app idle median minus blank idle median; it estimates added RAM, not exact ownership.',
+        'Shared-page accounting and run variance can produce negative deltas; these are preserved.',
+        'Settings cycles run only in the app, after the matched idle comparison.',
+        'Peak values are sampled, not guaranteed maxima. GC is forced only at two labeled checkpoints per browser.',
         'Retained deltas include lazy initialization and caches; a positive delta alone does not prove a leak.',
       ],
-      browserBeforePage, browserAfterPage, summary, samples,
+      blankBaseline, browserBeforePage, browserAfterPage, summary, samples,
     };
     const csv = [
-      'phase,cycle,elapsedMs,jsHeapUsedBytes,jsHeapTotalBytes,documents,nodes,eventListeners,browserPssBytes,browserRssBytes,measuredProcesses,reportedProcesses',
-      ...samples.map((entry) => [entry.phase, entry.cycle, entry.elapsedMs, entry.jsHeapUsedBytes, entry.jsHeapTotalBytes,
-        entry.documents, entry.nodes, entry.eventListeners, entry.browser.pssBytes, entry.browser.rssBytes,
-        entry.browser.measuredProcesses, entry.browser.processes.length].join(',')),
+      'workload,phase,cycle,elapsedMs,jsHeapUsedBytes,jsHeapTotalBytes,documents,nodes,eventListeners,browserPssBytes,browserRssBytes,measuredProcesses,reportedProcesses,browserPssAboveBlankMedianBytes',
+      ...([{ workload: 'blank', samples: blankBaseline.samples }, { workload: 'app', samples }] as const)
+        .flatMap(({ workload, samples }) => samples.map((entry) => [workload, entry.phase, entry.cycle, entry.elapsedMs,
+          entry.jsHeapUsedBytes, entry.jsHeapTotalBytes, entry.documents, entry.nodes, entry.eventListeners,
+          entry.browser.pssBytes, entry.browser.rssBytes, entry.browser.measuredProcesses, entry.browser.processes.length,
+          workload === 'app' && entry.browser.pssBytes !== null && chromiumOverheadPssBytes !== null
+            ? entry.browser.pssBytes - chromiumOverheadPssBytes : null].join(','))),
     ].join('\n') + '\n';
     await writeFile(csvOutput, csv);
     await writeFile(output, JSON.stringify(report, null, 2) + '\n');
     const mib = (bytes: number | null) => bytes === null ? 'unavailable' : `${(bytes / 1024 ** 2).toFixed(2)} MiB`;
     console.log(`Scenario: ${values.scenario}${values['join-voice'] ? ' (simulated voice)' : ''}`);
+    console.log(`App incremental PSS (idle medians): ${mib(summary.appIncrementalPssBytes)}`);
+    console.log(`Chromium overhead (blank-tab median PSS): ${mib(summary.chromiumOverheadPssBytes)}`);
+    console.log(`App session total (idle median PSS): ${mib(summary.idleMedianBrowserPssBytes)}`);
     console.log(`Idle median JS heap: ${mib(summary.idleMedianHeapBytes)} | sampled peak: ${mib(summary.sampledPeakHeapBytes)}`);
-    console.log(`Idle median browser PSS: ${mib(summary.idleMedianBrowserPssBytes)}`);
     console.log(`Post-GC JS heap: ${mib(baseline.jsHeapUsedBytes)} → ${mib(retained.jsHeapUsedBytes)} | delta: ${mib(summary.retainedHeapDeltaBytes)}`);
     console.log(`Post-GC DOM delta: ${summary.retainedNodesDelta} nodes, ${summary.retainedEventListenersDelta} listeners`);
     console.log(`Sampled peak browser PSS: ${mib(summary.sampledPeakBrowserPssBytes)} | complete coverage: ${summary.processMemoryComplete}`);

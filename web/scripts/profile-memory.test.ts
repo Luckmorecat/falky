@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 
 const cwd = fileURLToPath(new URL('../', import.meta.url));
-async function profile(args: string[], environment: NodeJS.ProcessEnv = {}, interrupt = false) {
+async function profile(args: string[], environment: NodeJS.ProcessEnv = {}, interrupt?: 'blank' | 'app') {
   const child = spawn(process.execPath, ['--import', 'tsx', 'scripts/profile-memory.ts', ...args], {
     cwd, env: { ...process.env, ...environment }, stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -18,7 +18,7 @@ async function profile(args: string[], environment: NodeJS.ProcessEnv = {}, inte
   child.stderr.on('data', (chunk) => {
     stderr += chunk;
     // Interrupt during active collection, after both browser and server exist.
-    if (interrupt && !signalled && stderr.includes('Ready; sampling')) {
+    if (interrupt && !signalled && stderr.includes(`${interrupt === 'blank' ? 'Blank tab' : 'App'} ready; sampling`)) {
       signalled = true;
       child.kill('SIGTERM');
     }
@@ -47,12 +47,20 @@ test('selected scenarios produce consistent reports, including entry and synthet
       assert.ok(result.url);
       assert.ok(result.stdout.includes(output));
       const report = JSON.parse(await readFile(output, 'utf8'));
-      assert.equal(report.schemaVersion, 1);
+      assert.equal(report.schemaVersion, 2);
       assert.equal(report.workload.scenario, scenario);
       assert.equal(report.workload.joinVoice, scenario === 'remote-share');
       assert.equal(report.environment.appMode, 'mock-development');
       assert.equal(report.environment.stats, false);
       assert.ok(report.environment.chromium);
+      assert.equal(report.blankBaseline.url, 'about:blank');
+      assert.equal(report.blankBaseline.chromium, report.environment.chromium);
+      assert.ok(report.appUrl.startsWith(result.url));
+      assert.ok(report.blankBaseline.finishedAt <= report.appStartedAt);
+      const blankBrowser = report.blankBaseline.browserBeforePage.processes.find((entry: { type: string }) => entry.type === 'browser');
+      const appBrowser = report.browserBeforePage.processes.find((entry: { type: string }) => entry.type === 'browser');
+      assert.ok(blankBrowser && appBrowser);
+      assert.notEqual(blankBrowser.pid, appBrowser.pid, 'Control and app must use fresh browsers');
       type Sample = {
         phase: string; cycle: number | null; elapsedMs: number; jsHeapUsedBytes: number;
         jsHeapTotalBytes: number; nodes: number; eventListeners: number;
@@ -63,10 +71,23 @@ test('selected scenarios produce consistent reports, including entry and synthet
       assert.equal(samples.at(-1)!.phase, 'final-after-gc');
       assert.equal(report.summary.sampleCount, samples.length);
       assert.ok(samples.some((sample) => sample.phase === 'idle'), 'Duration shorter than interval still gets an idle sample');
-      const idle = samples.filter((sample) => sample.phase === 'idle');
-      assert.equal(idle.length, 1);
-      assert.equal(report.summary.idleMedianHeapBytes, idle[0]!.jsHeapUsedBytes);
-      assert.equal(report.summary.idleMedianBrowserPssBytes, idle[0]!.browser.pssBytes);
+      for (const run of [report, report.blankBaseline]) {
+        const idle: Sample[] = run.samples.filter((sample: Sample) => sample.phase === 'idle');
+        assert.ok(idle.length >= 1);
+        if (idle.length === 1) {
+          assert.equal(run.summary.idleMedianHeapBytes, idle[0]!.jsHeapUsedBytes);
+          assert.equal(run.summary.idleMedianBrowserPssBytes, idle[0]!.browser.pssBytes);
+        }
+        assert.equal(run.summary.sampleCount, run.samples.length);
+      }
+      assert.ok(report.blankBaseline.samples.every((sample: Sample) => !sample.phase.startsWith('settings-')));
+      const blankPss = report.blankBaseline.summary.idleMedianBrowserPssBytes;
+      const appPss = report.summary.idleMedianBrowserPssBytes;
+      assert.equal(report.summary.chromiumOverheadPssBytes, blankPss);
+      assert.equal(report.summary.appIncrementalPssBytes,
+        blankPss === null || appPss === null ? null : appPss - blankPss);
+      assert.ok(result.stdout.includes('App incremental PSS (idle medians):'));
+      assert.ok(result.stdout.includes('Chromium overhead (blank-tab median PSS):'));
       assert.equal(samples.filter((sample) => sample.phase === 'settings-open').length, scenario === 'populated' ? 2 : 0);
       const baseline = samples.find((sample) => sample.phase === 'baseline-after-gc')!;
       const final = samples.at(-1)!;
@@ -74,23 +95,32 @@ test('selected scenarios produce consistent reports, including entry and synthet
       assert.equal(report.summary.retainedNodesDelta, final.nodes - baseline.nodes);
       assert.equal(report.summary.retainedEventListenersDelta, final.eventListeners - baseline.eventListeners);
       assert.equal(report.summary.sampledPeakHeapBytes, Math.max(...samples.map((sample) => sample.jsHeapUsedBytes)));
-      for (const [index, sample] of samples.entries()) {
+      const blankSamples: Sample[] = report.blankBaseline.samples;
+      const allSamples = [...blankSamples, ...samples];
+      for (const [index, sample] of allSamples.entries()) {
         assert.ok(sample.jsHeapUsedBytes > 0 && sample.jsHeapUsedBytes <= sample.jsHeapTotalBytes);
-        if (index) assert.ok(sample.elapsedMs >= samples[index - 1]!.elapsedMs);
+        if (index && index !== blankSamples.length) {
+          assert.ok(sample.elapsedMs >= allSamples[index - 1]!.elapsedMs);
+        }
         const available = sample.browser.processes.every((entry) => entry.pssBytes !== null);
         assert.equal(sample.browser.pssBytes !== null, available);
         if (available) assert.equal(sample.browser.pssBytes,
           sample.browser.processes.reduce((sum, entry) => sum + entry.pssBytes!, 0));
       }
       const csv = (await readFile(output.replace(/\.json$/, '.csv'), 'utf8')).trim().split('\n');
-      assert.equal(csv.length, samples.length + 1);
+      assert.equal(csv.length, blankSamples.length + samples.length + 1);
       assert.ok(csv[0]!.includes('browserPssBytes'));
-      for (const [index, sample] of samples.entries()) {
+      assert.ok(csv[0]!.includes('browserPssAboveBlankMedianBytes'));
+      for (const [index, sample] of allSamples.entries()) {
         const fields = csv[index + 1]!.split(',');
-        assert.equal(fields.length, 12);
-        assert.equal(fields[0], sample.phase);
-        assert.equal(Number(fields[3]), sample.jsHeapUsedBytes);
-        assert.equal(fields[8], sample.browser.pssBytes === null ? '' : String(sample.browser.pssBytes));
+        const isApp = index >= blankSamples.length;
+        assert.equal(fields.length, 14);
+        assert.equal(fields[0], isApp ? 'app' : 'blank');
+        assert.equal(fields[1], sample.phase);
+        assert.equal(Number(fields[4]), sample.jsHeapUsedBytes);
+        assert.equal(fields[9], sample.browser.pssBytes === null ? '' : String(sample.browser.pssBytes));
+        assert.equal(fields[13], isApp && blankPss !== null && sample.browser.pssBytes !== null
+          ? String(sample.browser.pssBytes - blankPss) : '');
       }
     }
   } finally { await rm(directory, { recursive: true, force: true }); }
@@ -117,10 +147,12 @@ test('invalid arguments fail before launch; launch failure and interruption clea
     const failedWrite = await profile(['--duration', '0.1', '--warmup', '0', '--output', directoryOutput]);
     assert.equal(failedWrite.code, 1, failedWrite.stderr);
     assert.ok(failedWrite.url);
-    const interrupted = await profile(['--duration', '30', '--warmup', '0', '--output', output], {}, true);
-    assert.equal(interrupted.code, 143, interrupted.stderr);
-    assert.ok(interrupted.url);
-    await assert.rejects(readFile(output), 'An interrupted profile must not write a successful report');
+    for (const stage of ['blank', 'app'] as const) {
+      const interrupted = await profile(['--duration', '2', '--warmup', '0', '--output', output], {}, stage);
+      assert.equal(interrupted.code, 143, interrupted.stderr);
+      assert.ok(interrupted.url);
+      await assert.rejects(readFile(output), 'An interrupted profile must not write a successful report');
+    }
     const help = await profile(['--help']);
     assert.equal(help.code, 0);
     assert.equal(help.url, undefined);

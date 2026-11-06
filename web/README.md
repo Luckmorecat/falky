@@ -35,11 +35,27 @@ pnpm run profile:memory --scenario remote-share --join-voice
 pnpm run profile:memory --scenario entry
 ```
 
+Every invocation first measures `about:blank`, closes that browser, and then
+measures the mock app in a second fresh browser with identical launch/context
+settings. Both runs warm up for 3 seconds and sample for 15 seconds at 1-second
+intervals. `--warmup` and `--duration` apply to **each browser**; the default
+invocation takes roughly 36 seconds plus startup and cleanup. Use `--warmup`,
+`--duration` and `--interval` to change these durations (all in seconds).
+
+The headline **app incremental PSS** is the app's idle median PSS minus the blank
+tab's idle median PSS. The blank-tab median is reported separately as Chromium
+overhead, alongside the full app-session total. A blank tab includes browser UI,
+page-engine and graphics overhead that a browser with no tabs would miss. Fresh
+sequential browsers prevent app caches from contaminating the baseline and avoid
+changing shared-memory proportions by keeping two test browsers alive at once.
+The difference estimates added RAM, including browser work caused by the app;
+it cannot assign exact ownership to shared pages. Negative differences are
+preserved, and an unavailable median on either side makes the increment `null`.
+
 `--scenario` accepts `populated` (default), `quiet`, `entry`, or `remote-share`.
-The command waits for the selected UI, history and fonts, warms up for 3 seconds,
-then samples for 15 seconds at 1-second intervals. Use `--warmup`, `--duration`
-and `--interval` to change these durations (all in seconds). `--cycles N` adds
+The app run waits for the selected UI, history and fonts. `--cycles N` adds
 N settings open/close cycles after idle sampling, capturing both states.
+Cycles run only in the app and are excluded from the matched idle comparison.
 `--join-voice` joins simulated voice; `remote-share` also waits for Sam's synthetic
 video to render. Without this flag all scenarios start outside voice. Entry
 does not support settings cycles or joining voice. `--gpu` uses the existing
@@ -47,10 +63,16 @@ hardware-capable headless launch option; hardware acceleration depends on the ho
 
 Each run prints a summary and writes a versioned JSON report plus a sibling CSV
 under `profiles/` (ignored by Git), or to `--output PATH.json`. Reports include
-browser version, workload, timestamps, raw samples and summary metrics. The
+browser version, workload, timestamps, raw samples and summary metrics. JSON
+schema version 2 adds `blankBaseline` with its samples and summary, plus
+`summary.chromiumOverheadPssBytes` and `summary.appIncrementalPssBytes`.
+`summary.idleMedianBrowserPssBytes` remains the full app-session median. CSV rows
+have a `workload` column (`blank` or `app`); app rows also report
+`browserPssAboveBlankMedianBytes` relative to the blank idle median, including
+interaction samples. Blank rows leave that delta empty. The
 fixed environment is 1440×1000, English, dark theme, UTC, reduced motion, with
 the development stats overlay disabled. Each invocation closes its browser and
-mock server, including on failure, timeout, SIGINT or SIGTERM.
+mock server, including on failure, timeout, SIGINT or SIGTERM in either run.
 
 The report measures main-page JavaScript heap, DOM nodes/documents/listeners,
 and Chromium process RAM. On Linux it reads `/proc/<pid>/smaps_rollup` for the
@@ -62,10 +84,11 @@ empty cells for unavailable values. These RAM metrics exclude GPU device memory;
 JavaScript counters do not aggregate separate workers or frames.
 
 The first sample follows UI readiness; it does not measure the navigation peak.
-GC is forced after warmup and at the end for a retained-memory comparison. Idle
-and interaction samples use normal GC. The summary includes idle median heap/PSS,
+In each browser, GC is forced after warmup and at the end for a retained-memory
+comparison. Idle and interaction samples use normal GC. The summary includes idle median heap/PSS,
 sampled peaks and post-GC heap/node/listener deltas. Browser process snapshots
-before creating and after closing the page provide context for browser overhead.
+before creating and after closing each page provide additional context; the
+blank-tab idle median is the reference used for incremental memory.
 Sampling can miss brief peaks. Positive retained deltas can reflect caches or
 lazy initialization, so repeat workloads and compare fresh runs with the same
 Chromium version before diagnosing a leak or setting budgets.
