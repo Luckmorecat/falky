@@ -98,11 +98,11 @@ class PipelineTests(unittest.TestCase):
         output, retry = self.plan()
         self.assertEqual((output['server'], output['web'], retry['mode']), ('false', 'false', 'retry'))
         self.assertEqual(retry['request'], request)
-        for field, value in [('revision', '1' * 40), ('ref', 'refs/tags/v1.2.3'), ('environment', 'production')]:
+        for field, value in [('revision', '1' * 40), ('ref', 'refs/tags/v1.2.3')]:
             with self.subTest(field=field):
                 different = json.loads(json.dumps(request))
                 different['release'][field] = value
-                if field in ('ref', 'environment'):
+                if field == 'ref':
                     different['release'].update(environment='production', ref='refs/tags/v1.2.3')
                 self.snapshot['pending']['request'] = different
                 self.assertIn('operator', self.plan(succeeds=False).stderr.lower())

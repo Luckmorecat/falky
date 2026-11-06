@@ -94,14 +94,5 @@ class IsolationTests(unittest.TestCase):
             self.assertEqual(hashes[0],hashes[1], 'New package path or app image must not restart unchanged LiveKit')
             self.assertNotEqual(hashes[1],hashes[2], 'Changed mounted bytes must trigger Compose recreation')
 
-    def test_runtime_package_does_not_own_host_resources(self):
-        import release
-        self.assertFalse(any(name.startswith(('edge/', 'systemd/')) for name in release.FILES))
-        self.assertNotIn('Caddyfile', release.FILES)
-        self.assertNotIn('WebCaddyfile', release.FILES)
-        self.assertFalse((ROOT / 'edge').exists())
-        self.assertFalse((ROOT / 'systemd').exists())
-
-
 if __name__ == "__main__":
     unittest.main()

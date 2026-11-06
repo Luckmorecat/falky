@@ -30,6 +30,9 @@ class PackageTests(unittest.TestCase):
                 self.assertIn('package.json', names)
                 self.assertIn('compose.production.yaml', names)
                 self.assertNotIn('compose.yaml', names)
+                self.assertNotIn('Caddyfile', names)
+                self.assertNotIn('WebCaddyfile', names)
+                self.assertFalse(any(name.startswith(('edge/', 'systemd/')) for name in names))
                 self.assertFalse(any('edge' in name or '.env' in name or '_test' in name for name in names))
 
     def test_archive_paths_links_duplicates_and_inventory_tampering_are_refused(self):
