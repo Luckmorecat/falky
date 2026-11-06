@@ -17,7 +17,7 @@ const { values } = parseArgs({ options: {
 
 async function main() {
   if (values.help) {
-    console.log(`Usage: npm run screenshot:mock -- [options]
+    console.log(`Usage: pnpm run screenshot:mock [options]
   --preset ${presets.join('|')} (default: room)
   --scenario ${scenarios.join('|')} (default: preset's fixture)
   --output PATH.png            Default: screenshots/<preset>.png
@@ -30,7 +30,7 @@ async function main() {
 Each capture owns and closes a fresh mock server and browser. Screen-share uses
 remote-share; entry uses entry; other presets use populated. --scenario alone
 captures its starting screen. Real hardware rendering depends on host support.
-Install once: npx playwright install chromium
+Install once: pnpm exec playwright install chromium
 Existing browser: PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/path/to/chromium`);
     return;
   }

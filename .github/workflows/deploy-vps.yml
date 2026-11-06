@@ -54,12 +54,15 @@ jobs:
       - name: Install pinned tools
         if: matrix.component != 'web' && steps.backend.outputs.run != 'false'
         uses: jdx/mise-action@f5be966e4a917d54244728e6a5fdcd1d93a35e6c # v5.2.6
-      - name: Install release tooling runtime
-        if: matrix.component == 'deploy'
+      - name: Install Node.js runtime
+        if: matrix.component != 'server'
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '24.21.0'
           package-manager-cache: false
+      - name: Install web package manager
+        if: matrix.component == 'web'
+        run: npm install --global "$(node -p 'require("./web/package.json").packageManager')"
       - name: Run component checks
         if: steps.backend.outputs.run != 'false'
         run: make check-${{ matrix.component }}

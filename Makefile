@@ -42,12 +42,12 @@ check-deploy:
 # The web client: its types match the contract, it type-checks, its tests pass
 # and it builds.
 check-web:
-	$(IN_WEB) npm ci --silent
-	$(IN_WEB) npx openapi-typescript $(API_SPEC) -o $(WEB_API_FRESH) --silent && \
+	$(IN_WEB) pnpm install --frozen-lockfile
+	$(IN_WEB) pnpm exec openapi-typescript $(API_SPEC) -o $(WEB_API_FRESH) --silent && \
 		diff -u $(WEB_API_GEN) $(WEB_API_FRESH) || \
 		{ echo "web/$(WEB_API_GEN) is stale: run make generate-web" >&2; exit 1; }
-	$(IN_WEB) npm test --silent
-	$(IN_WEB) npm run build --silent
+	$(IN_WEB) pnpm test
+	$(IN_WEB) pnpm run build
 
 fmt:
 	$(IN_SERVER) golangci-lint fmt
@@ -81,4 +81,4 @@ generate:
 	$(IN_SERVER) $(OAPI_CODEGEN) -o $(API_GEN) $(API_SPEC)
 
 generate-web:
-	$(IN_WEB) npm run generate
+	$(IN_WEB) pnpm run generate

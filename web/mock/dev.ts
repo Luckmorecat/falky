@@ -11,7 +11,7 @@ const { values } = parseArgs({ options: {
   help: { type: 'boolean', default: false },
 } });
 if (values.help) {
-  console.log(`Usage: npm run dev:mock -- [--port 0] [--api-port 0] [--scenario ${scenarios.join('|')}]\nPorts default to allocated loopback ports. Select a scenario in the URL with ?scenario=entry.`);
+  console.log(`Usage: pnpm run dev:mock [--port 0] [--api-port 0] [--scenario ${scenarios.join('|')}]\nPorts default to allocated loopback ports. Select a scenario in the URL with ?scenario=entry.`);
   process.exit(0);
 }
 function port(value: string) {
