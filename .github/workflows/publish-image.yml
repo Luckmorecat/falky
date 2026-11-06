@@ -29,11 +29,15 @@ jobs:
       - name: Record source revision
         id: source
         run: echo "revision=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-      - name: Set image name
+      - name: Set image name and tag
         id: image
         env:
           REPOSITORY: ${{ github.repository }}
-        run: echo "name=ghcr.io/${REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+          IMAGE_TAG: ${{ github.ref_type == 'tag' && github.ref_name || steps.source.outputs.revision }}
+        run: |
+          tag=${IMAGE_TAG//+/_}
+          echo "name=ghcr.io/${REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+          echo "tag=${tag:0:128}" >> "$GITHUB_OUTPUT"
       - name: Set up Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - name: Log in to GHCR
@@ -53,7 +57,7 @@ jobs:
           platforms: linux/amd64
           push: true
           tags: |
-            ${{ steps.image.outputs.name }}:${{ github.ref_type == 'tag' && github.ref_name || steps.source.outputs.revision }}
+            ${{ steps.image.outputs.name }}:${{ steps.image.outputs.tag }}
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ steps.source.outputs.revision }}
