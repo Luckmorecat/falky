@@ -1,6 +1,6 @@
 ---
 name: frontend-sandbox
-description: Exercise Falky’s shared frontend with its local mock server, scenario controls, and screenshot utility. Use for UI browser checks, reproducing simulated states or faults, and capturing screenshots or PR image evidence.
+description: Use when testing Falky UI changes in a browser, controlling mock scenarios or faults, capturing UI screenshots, or attaching screenshot evidence to a PR. Reuses the local mock server and screenshot utility without the full backend stack.
 ---
 
 # Frontend sandbox
