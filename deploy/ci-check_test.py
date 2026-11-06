@@ -51,7 +51,8 @@ class BackendCheckTests(unittest.TestCase):
                 "status": "completed", "conclusion": "success"} | fields
 
     def test_frontend_and_documentation_only_changes_reuse_success(self):
-        for name in ("web/app.ts", "docs/guide.md", ".agents/guide.md", ".claude/guide.md", "GLOSSARY.md"):
+        for name in ("web/app.ts", "docs/guide.md", ".agents/guide.md", ".claude/guide.md",
+                     "AGENTS.md", "GLOSSARY.md"):
             self.write(name, "changed\n")
         self.commit()
         required, reason = check.decide([self.run_record()])

@@ -17,7 +17,7 @@ def git(*args):
 
 def backend_input(path):
     return not (path.startswith((b"web/", b"docs/", b".agents/", b".claude/"))
-                or path in (b"GLOSSARY.md", b"CHANGELOG.md", b"version.txt",
+                or path in (b"AGENTS.md", b"GLOSSARY.md", b"CHANGELOG.md", b"version.txt",
                             b".release-please-manifest.json"))
 
 
