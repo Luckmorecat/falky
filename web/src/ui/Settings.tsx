@@ -207,6 +207,7 @@ export function Settings({ open }: { open: boolean }) {
         <Segmented label={t.language} value={settings.language} options={[['system', t.languageSystem], ['uk', 'Українська'], ['en', 'English']]} onChange={(language) => updateSettings({ language })} />
         <Segmented label={t.orbLook} value={settings.orbLight} options={[['flat', t.orbLookFlat], ['volume', t.orbLookVolume]]} onChange={(orbLight) => updateSettings({ orbLight })} />
         <p className="set-note set-hint">{t.orbLookHint}</p>
+        <SettingToggle flag="voiceBackground" label={t.voiceBackground} />
         <SettingToggle flag="fewerEffects" label={t.fewerEffects} />
         <p className="set-note set-hint">{t.fewerEffectsHint}</p>
       </section>

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { dismissNotice, setChatOpen, stepRoom, voice } from '../app/controller';
 import { getState, setState, useApp } from '../app/store';
 import { t } from '../strings';
@@ -25,6 +25,7 @@ function Clock({ joinedAt }: { joinedAt: number }) {
 }
 
 export function Main() {
+  const background = useRef<HTMLCanvasElement>(null);
   const room = useApp((s) => s.rooms.find((r) => r.id === s.viewedRoomId) ?? null);
   const voiceState = useApp((s) => s.voice);
   const voiceRoomName = useApp((s) => s.rooms.find((r) => r.id === s.voice.roomId)?.name);
@@ -72,6 +73,7 @@ export function Main() {
 
   return (
     <div className="screen room-screen">
+      <canvas ref={background} className="voice-background" aria-hidden="true" />
       <div className="topbar"><span className="mark">falky</span></div>
 
       <div className="main">
@@ -82,7 +84,7 @@ export function Main() {
               : inVoiceElsewhere ? <span>{t.inOtherRoom(voiceRoomName)}</span>
                 : <span>{room.occupancy.length ? t.notInVoice : t.nobodyInVoice}</span>}
         />
-        {room ? <Stage room={room} /> : <div className="stage" />}
+        {room ? <Stage room={room} background={background} /> : <div className="stage" />}
         <div className="dock-space" />
         <Dock room={room} />
       </div>

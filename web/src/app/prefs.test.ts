@@ -3,6 +3,19 @@ import { prefs } from './prefs';
 
 afterEach(() => localStorage.clear());
 
+describe('reactive background preference', () => {
+  it('requires an explicit opt-in and remembers the switch across reads', () => {
+    expect(prefs.settings().voiceBackground).toBe(false);
+    localStorage.setItem('falky.voiceBackground', 'true');
+    expect(prefs.settings().voiceBackground).toBe(false);
+    prefs.saveSettings({ ...prefs.settings(), voiceBackground: true });
+    expect(localStorage.getItem('falky.voiceBackground')).toBe('on');
+    expect(prefs.settings().voiceBackground).toBe(true);
+    prefs.saveSettings({ ...prefs.settings(), voiceBackground: false });
+    expect(prefs.settings().voiceBackground).toBe(false);
+  });
+});
+
 describe('screen share codec preference', () => {
   it('defaults to VP8 for existing browsers and invalid stored values', () => {
     expect(prefs.settings().shareCodec).toBe('vp8');
