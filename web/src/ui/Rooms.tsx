@@ -19,7 +19,6 @@ export function Rooms({ room, status }: { room: Room | null; status: React.React
   const viewed = useApp((s) => s.viewedRoomId);
   const voiceRoomId = useApp((s) => (s.voice.status === 'idle' ? null : s.voice.roomId));
   const speakers = useApp((s) => s.voice.speakers);
-  const selfId = useApp((s) => s.visitor?.id);
   const closing = useRef<ReturnType<typeof setTimeout> | null>(null);
   const hold = () => {
     if (closing.current) clearTimeout(closing.current);
@@ -63,7 +62,7 @@ export function Rooms({ room, status }: { room: Room | null; status: React.React
                 <span className="people" aria-label={t.inVoiceCount(n)}>
                   {n ? r.occupancy.map((p, k) => (
                     <span key={p.visitorId} className={r.id === voiceRoomId && speakers.includes(p.visitorId) ? 'talk' : ''}>
-                      {p.name}{p.visitorId === selfId ? ` (${t.you})` : ''}{k < n - 1 ? ', ' : ''}
+                      {p.name}{k < n - 1 ? ', ' : ''}
                     </span>
                   )) : t.nobodyInVoice}
                 </span>

@@ -292,8 +292,8 @@ paths:
 
         The token admits the visitor to this room only, under their visitor
         ID as participant identity and their name as display name. It may
-        publish the microphone, a screen share and the screen share's audio
-        (no camera), subscribe to the other participants, and update the
+        publish the microphone, a camera, a screen share and the screen share's
+        audio, subscribe to the other participants, and update the
         participant's own attributes, but not send data messages. It expires
         10 minutes after it is issued, so connect right away; once connected,
         LiveKit renews it.

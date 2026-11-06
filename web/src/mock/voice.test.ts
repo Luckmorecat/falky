@@ -42,7 +42,8 @@ beforeEach(async () => {
   const host: VoiceHost = {
     onChange() {}, onProblem: (problem) => problems.push(problem), onSound() {},
     micId: () => '', speakerId: () => '', micProcessing: () => ({ echoCancellation: true, noiseSuppression: true, autoGainControl: true }),
-    joinMuted: () => joinMuted, shareSettings: () => prefs.settings(), volumeOf: () => 1,
+    joinMuted: () => joinMuted, cameraSettings: () => ({ cameraId: '', cameraResolution: '720', cameraMirror: true }),
+      shareSettings: () => prefs.settings(), volumeOf: () => 1,
   };
   session = new VoiceSession(host);
 });

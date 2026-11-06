@@ -13,7 +13,7 @@ it('offers usable simulated devices, mic levels and alerts without browser captu
   expect(browser.canChooseSpeaker).toBe(true);
   expect(browser.supportedShareCodecs()).toEqual(['vp8', 'h264', 'h265']);
   const devices = await browser.enumerateDevices();
-  expect(devices.map((d) => d.kind)).toEqual(['audioinput', 'audiooutput']);
+  expect(devices.map((d) => d.kind)).toEqual(['audioinput', 'audiooutput', 'videoinput']);
   const changed = vi.fn();
   const stopWatching = browser.watchDevices(changed);
   browser.refreshDevices();

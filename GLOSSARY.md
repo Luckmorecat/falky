@@ -46,6 +46,10 @@ A participant whose microphone is not heard by others.
 **Deafened**:
 A participant who hears no one and is also muted.
 
+**Camera**:
+A participant's camera picture, shown on their orb to the other participants of the same room.
+_Avoid_: Video, webcam
+
 **Screen share**:
 A participant's screen, shown to the other participants of the same room.
 _Avoid_: Stream, broadcast, screencast

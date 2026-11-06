@@ -1,7 +1,7 @@
 import { mockState } from './state';
 import type { MicTest } from '../voice/meter';
 import type { ShareCodec } from '../voice/share';
-import type { VoiceSound } from '../voice/types';
+import type { Sound } from '../voice/sounds';
 
 export const canShareScreen = true;
 export const canChooseSpeaker = true;
@@ -14,6 +14,7 @@ const device = (kind: MediaDeviceKind, deviceId: string, label: string): MediaDe
 export const enumerateDevices = async (): Promise<MediaDeviceInfo[]> => [
   device('audioinput', 'mock-mic', 'Simulated microphone'),
   device('audiooutput', 'mock-speaker', 'Simulated speakers'),
+  device('videoinput', 'mock-camera', 'Simulated camera'),
 ];
 export function watchDevices(onChange: () => void): () => void {
   devices.addEventListener('devicechange', onChange);
@@ -26,7 +27,7 @@ export async function startMicTest(_constraints: MediaTrackConstraints): Promise
   return { level: () => stopped ? 0 : 0.35 + 0.25 * Math.sin(performance.now() / 170), stop: () => { stopped = true; } };
 }
 /** Settings exercise state only; no audio output or OS notification escapes mock mode. */
-export function playSound(_sound: VoiceSound | 'test', _sinkId = ''): void {}
+export function playSound(_sound: Sound, _sinkId = '', _pitch = 0.5): void {}
 let permission: NotificationPermission = 'default';
 export const notificationPermission = (): NotificationPermission => permission;
 export async function requestNotificationPermission(): Promise<NotificationPermission> { return permission = 'granted'; }

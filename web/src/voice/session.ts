@@ -2,6 +2,7 @@ import {
   ConnectionQuality,
   DisconnectReason,
   type LocalAudioTrack,
+  type LocalTrack,
   type LocalTrackPublication,
   type Participant as LkParticipant,
   RemoteAudioTrack,
@@ -12,6 +13,7 @@ import {
   type VideoTrack,
 } from 'livekit-client';
 import { api, ApiError } from '../api/client';
+import { cameraOptions } from './camera';
 import { loudness } from './meter';
 import { shareOptions } from './share';
 import { softClipCurve } from './softclip';
@@ -62,6 +64,8 @@ export class VoiceSession implements VoiceClient {
     this.audio ??= new AudioContext({ latencyHint: 'interactive' });
     void this.audio.resume();
     const deafened = this.snap.deafened;
+    // Moving rooms keeps the camera as it was; a first join never starts it.
+    const keepCamera = this.snap.camera;
     const startMuted = this.snap.status === 'idle' ? this.host.joinMuted() : this.snap.muted && !this.snap.listenOnly;
     this.set({ status: 'joining', joiningRoomId: roomId });
     this.moving = true;
@@ -116,6 +120,7 @@ export class VoiceSession implements VoiceClient {
       void room.localParticipant.setAttributes({ deafened: 'true' }).catch(() => {});
     }
     if (!deafened && !startMuted) await this.enableMic(room);
+    if (keepCamera) await this.enableCamera(room);
     this.refresh();
   }
 
@@ -173,12 +178,61 @@ export class VoiceSession implements VoiceClient {
     this.refresh();
   }
 
-  /** The screen a participant shows, to attach to a video element. */
-  shareTrack(visitorId: string): VideoTrack | null {
+  async toggleCamera(): Promise<void> {
+    const room = this.room;
+    if (!room) return;
+    if (this.snap.camera) await this.disableCamera(room);
+    else await this.enableCamera(room);
+    this.refresh();
+  }
+
+  /** Puts changed camera quality to use: encodings are fixed when a track is published. */
+  async restartCamera(): Promise<void> {
+    const room = this.room;
+    if (!room || !this.snap.camera) return;
+    await this.disableCamera(room);
+    await this.enableCamera(room);
+    this.refresh();
+  }
+
+  async setCamera(deviceId: string): Promise<void> {
+    await this.room?.switchActiveDevice('videoinput', deviceId).catch(() => {});
+  }
+
+  private async enableCamera(room: Room): Promise<void> {
+    try {
+      const { capture, publish } = cameraOptions(this.host.cameraSettings());
+      await room.localParticipant.setCameraEnabled(true, capture, publish);
+    } catch (err) {
+      const name = (err as Error).name;
+      this.host.onProblem(name === 'NotAllowedError' ? 'camera_denied' : name === 'NotFoundError' || name === 'OverconstrainedError' ? 'camera_missing' : 'camera_failed');
+    }
+  }
+
+  /**
+   * Unpublished and stopped rather than muted: the camera's light goes out, and
+   * turning it on again takes up whatever device and quality are chosen by then.
+   */
+  private async disableCamera(room: Room): Promise<void> {
+    const track = room.localParticipant.getTrackPublication(Track.Source.Camera)?.track as LocalTrack | undefined;
+    if (track) await room.localParticipant.unpublishTrack(track, true).catch(() => {});
+  }
+
+  private videoTrack(visitorId: string, source: Track.Source): VideoTrack | null {
     const room = this.room;
     if (!room) return null;
     const p: LkParticipant | undefined = room.localParticipant.identity === visitorId ? room.localParticipant : room.remoteParticipants.get(visitorId);
-    return (p?.getTrackPublication(Track.Source.ScreenShare)?.track as VideoTrack | undefined) ?? null;
+    return (p?.getTrackPublication(source)?.track as VideoTrack | undefined) ?? null;
+  }
+
+  /** The screen a participant shows, to attach to a video element. */
+  shareTrack(visitorId: string): VideoTrack | null {
+    return this.videoTrack(visitorId, Track.Source.ScreenShare);
+  }
+
+  /** A participant's camera, to attach to a video element. */
+  cameraTrack(visitorId: string): VideoTrack | null {
+    return this.videoTrack(visitorId, Track.Source.Camera);
   }
 
   /** How loud a participant is now, from 0 to 1. */
@@ -330,6 +384,8 @@ export class VoiceSession implements VoiceClient {
         deafened: isDeafened(p),
         sharing: p.isScreenShareEnabled,
         shareTrackId: p.getTrackPublication(Track.Source.ScreenShare)?.track?.mediaStreamTrack.id ?? '',
+        camera: p.isCameraEnabled,
+        cameraTrackId: p.getTrackPublication(Track.Source.Camera)?.track?.mediaStreamTrack.id ?? '',
       }));
 
     const shares = new Set(people.filter((p) => p.sharing && !p.local).map((p) => p.id));
@@ -343,6 +399,7 @@ export class VoiceSession implements VoiceClient {
       speakers: room.activeSpeakers.map((p) => p.identity),
       muted: !local.isMicrophoneEnabled,
       sharing: local.isScreenShareEnabled,
+      camera: local.isCameraEnabled,
       quality: q === ConnectionQuality.Excellent || q === ConnectionQuality.Good ? 'good' : q === ConnectionQuality.Poor ? 'poor' : q === ConnectionQuality.Lost ? 'lost' : 'unknown',
     });
   }

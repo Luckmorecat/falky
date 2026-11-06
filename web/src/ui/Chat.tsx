@@ -53,13 +53,16 @@ function PendingRow({ pending, continued, name, selfId }: { pending: PendingMess
 
 /**
  * Always on the page, mostly past its right edge, with the start of its lines
- * showing and blurring away. A mouse over that part or focus in it brings it in
- * and moves the interface aside; only then does it count as read. On a phone
- * there is no hover, so it opens over the page by a button.
+ * showing and blurring away. A mouse anywhere over the strip it comes into, or
+ * focus in it, brings it in; only then does it count as read. It has no
+ * background and nothing else moves, so the page's dots stay and the interface
+ * keeps out of its way for good. The strip itself stands still, so the chat
+ * sliding under the mouse cannot make it flicker. On a phone there is no hover,
+ * so it opens over the page by a button.
  */
 export function Chat({ room }: { room: Room | null }) {
   const open = useApp((s) => s.chatOpen);
-  const lang = useApp((s) => s.settings.lang);
+  const lang = useApp((s) => s.settings.language);
   const unread = useApp((s) => (s.viewedRoomId ? (s.chats[s.viewedRoomId]?.unread ?? 0) : 0));
   const drawer = useDrawerLayout();
   const aside = useRef<HTMLElement>(null);
@@ -163,11 +166,8 @@ export function Chat({ room }: { room: Room | null }) {
   };
 
   return (
-    <aside
-      ref={aside}
-      className={`chat${nudged ? ' nudge' : ''}`}
-      aria-label={t.chat}
-      {...(drawer && !open ? { inert: true } : {})}
+    <div
+      className={`chat-strip${nudged ? ' nudge' : ''}`}
       onPointerEnter={(e) => {
         if (e.pointerType !== 'mouse') return;
         hovering.current = true;
@@ -178,6 +178,12 @@ export function Chat({ room }: { room: Room | null }) {
         hovering.current = false;
         settle();
       }}
+    >
+    <aside
+      ref={aside}
+      className="chat"
+      aria-label={t.chat}
+      {...(drawer && !open ? { inert: true } : {})}
       onFocus={settle}
       onBlur={settle}
     >
@@ -229,9 +235,9 @@ export function Chat({ room }: { room: Room | null }) {
           <IconButton size="small" className="send" aria-label={t.send} disabled={!canPost(draft)} onClick={send}><Icon name="send" /></IconButton>
         </div>
       </div>
-      <div className="chat-veil" aria-hidden="true"><i /><i /><i /><i /><b /></div>
-      {unread > 0 && <div className="chat-hint" aria-hidden="true"><span className="badge">{unread > 99 ? '99+' : unread}</span></div>}
-      <div className="chat-zone" aria-hidden="true" />
     </aside>
+    <div className="chat-veil" aria-hidden="true"><i /><i /><i /><i /><b /><u /></div>
+    {unread > 0 && <div className="chat-hint" aria-hidden="true"><span className="badge">{unread > 99 ? '99+' : unread}</span></div>}
+    </div>
   );
 }

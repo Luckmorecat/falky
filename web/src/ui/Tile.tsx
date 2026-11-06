@@ -1,10 +1,12 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { prefs } from '../app/prefs';
-import { setParticipantVolume } from '../app/controller';
+import { setParticipantVolume, voice } from '../app/controller';
+import { useApp } from '../app/store';
 import { type PaletteName, paletteStyle } from '../fx/palette';
 import { t } from '../strings';
 import { Icon } from './Icon';
 import { Orb } from './Orb';
+import { VolumeSlider } from './VolumeSlider';
 
 export interface TileProps {
   id: string;
@@ -18,10 +20,39 @@ export interface TileProps {
   /** Whether this client hears them, so their volume can change. */
   adjustable?: boolean;
   mini?: boolean;
+  /** Their camera's track when it is on and can be shown. */
+  cameraTrackId?: string;
+}
+
+/**
+ * A camera's picture, laid on the orb so that a rim of its colours stays around
+ * it and the voice still shows. It fades in once frames arrive, never as a black box.
+ */
+function Camera({ id, trackId, mirror }: { id: string; trackId: string; mirror: boolean }) {
+  const video = useRef<HTMLVideoElement>(null);
+  const [playing, setPlaying] = useState(false);
+
+  useEffect(() => {
+    const el = video.current;
+    const track = voice.cameraTrack(id);
+    if (!el || !track) return;
+    track.attach(el);
+    return () => {
+      track.detach(el);
+      setPlaying(false);
+    };
+  }, [id, trackId]);
+
+  return (
+    <div className="orb-video">
+      <video ref={video} className={`${playing ? 'on' : ''}${mirror ? ' mirror' : ''}`} autoPlay playsInline muted onPlaying={() => setPlaying(true)} />
+    </div>
+  );
 }
 
 /** A person in the room: their orb, their name, and how they are heard. */
-export function Tile({ id, name, palette, isSelf, level, muted, deafened, adjustable, mini }: TileProps) {
+export function Tile({ id, name, palette, isSelf, level, muted, deafened, adjustable, mini, cameraTrackId }: TileProps) {
+  const mirror = useApp((s) => s.settings.cameraMirror);
   const [volumeOpen, setVolumeOpen] = useState(false);
   const [volume, setVolume] = useState(() => prefs.volume(id));
 
@@ -40,27 +71,24 @@ export function Tile({ id, name, palette, isSelf, level, muted, deafened, adjust
         // No hover on a touch screen: a tap on the orb brings its controls up instead.
         onPointerUp={adjustable && !mini ? (e) => { if (e.pointerType !== 'mouse') setVolumeOpen(!volumeOpen); } : undefined}
       >
-        <Orb seed={id} palette={palette} level={level} />
+        <Orb seed={id} palette={palette} level={level}>
+          {cameraTrackId && <Camera id={id} trackId={cameraTrackId} mirror={!!isSelf && mirror} />}
+        </Orb>
         {!mini && (deafened ? <span className="t-flag" title={t.statusDeaf}><Icon name="headOff" /></span>
           : muted ? <span className="t-flag" title={t.statusMuted}><Icon name="micOff" /></span> : null)}
         {adjustable && !mini && (
-          <label className="t-vol" onPointerUp={(e) => e.stopPropagation()}>
-            <Icon name="vol" />
-            <input
-              type="range" min="0" max="2" step="0.05" value={volume} aria-label={`${t.volume}: ${name}`}
-              onChange={(e) => {
-                const v = Number(e.target.value);
-                setVolume(v);
-                setParticipantVolume(id, v);
-              }}
-            />
-            <output>{Math.round(volume * 100)}%</output>
-          </label>
+          <VolumeSlider
+            label={`${t.volume}: ${name}`}
+            value={volume}
+            onChange={(v) => {
+              setVolume(v);
+              setParticipantVolume(id, v);
+            }}
+          />
         )}
       </div>
       <div className="t-label">
         <span className="t-name">{name}</span>
-        {isSelf && <span className="t-you">{t.you}</span>}
       </div>
     </article>
   );

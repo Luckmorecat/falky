@@ -1,6 +1,8 @@
+import type { OrbLook } from '../fx/orbRenderer';
 import { preferencePrefix } from '../runtime/preferences';
-import type { Language } from '../strings';
-import type { ShareSettings } from '../voice/share';
+import type { LanguageChoice } from '../strings';
+import type { CameraSettings } from '../voice/camera';
+import { SHARE_BITRATE_MAX, type ShareSettings } from '../voice/share';
 
 /** What this browser remembers for the person. Reads and writes may fail in a private window. */
 function read(key: string): string | null {
@@ -21,7 +23,7 @@ function write(key: string, value: string): void {
 
 export type Theme = 'dark' | 'light' | 'system';
 
-export interface Settings extends ShareSettings {
+export interface Settings extends ShareSettings, CameraSettings {
   micId: string;
   speakerId: string;
   noiseSuppression: boolean;
@@ -29,10 +31,12 @@ export interface Settings extends ShareSettings {
   autoGain: boolean;
   joinMuted: boolean;
   sounds: boolean;
+  uiSounds: boolean;
   notifications: boolean;
   fewerEffects: boolean;
+  orbLight: OrbLook;
   theme: Theme;
-  lang: Language;
+  language: LanguageChoice;
 }
 
 function oneOf<V extends string>(key: string, values: readonly V[], fallback: V): V {
@@ -51,13 +55,20 @@ export const prefs = {
       joinMuted: read('joinMuted') === 'on',
       shareResolution: oneOf('shareResolution', ['720', '1080', '1440'], '1080'),
       shareFps: oneOf('shareFps', ['15', '30', '60'], '30'),
-      shareBitrate: oneOf('shareBitrate', ['1', '2', '3'], '1'),
       shareCodec: oneOf('shareCodec', ['vp8', 'h264', 'h265'], 'vp8'),
       shareFocus: oneOf('shareFocus', ['motion', 'detail'], 'motion'),
       shareAudio: read('shareAudio') !== 'off',
+      // A new key: the old one held a multiplier, which would read here as a few megabits.
+      shareMbps: String(Math.max(0, Math.min(SHARE_BITRATE_MAX, Math.round(Number(read('shareMbps'))) || 0))),
+      cameraId: read('cameraId') ?? '',
+      cameraResolution: oneOf('cameraResolution', ['360', '720', '1080'], '720'),
+      cameraMirror: read('cameraMirror') !== 'off',
+      orbLight: oneOf('orbLight', ['flat', 'volume'], 'flat'),
       theme: oneOf('theme', ['dark', 'light', 'system'], 'dark'),
-      lang: oneOf('lang', ['uk', 'en'], 'uk'),
+      // A new key: the old one was saved with every setting, so it does not say anyone chose.
+      language: oneOf('language', ['system', 'uk', 'en'], 'system'),
       sounds: read('sounds') !== 'off',
+      uiSounds: read('uiSounds') !== 'off',
       notifications: read('notifications') === 'on',
       fewerEffects: read('fewerEffects') === 'on',
     };

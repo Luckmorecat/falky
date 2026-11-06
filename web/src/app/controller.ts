@@ -1,7 +1,7 @@
 import { api, ApiError, type LiveEvent, type Message, type Room, type Visitor } from '../api/client';
 import { LiveConnection } from '../api/live';
 import { countUnread, emptyChat, mergeMessages, type PendingMessage, type RoomChat } from '../chat/timeline';
-import { setLanguage, t } from '../strings';
+import { resolveLanguage, setLanguage, t } from '../strings';
 import { VoiceSession } from '@falky/voice';
 import type { VoiceClient } from '../voice/types';
 import { playSound, notificationPermission, requestNotificationPermission, notificationsAvailable, notify } from '@falky/browser';
@@ -35,6 +35,7 @@ export const voice: VoiceClient = new VoiceSession({
   },
   joinMuted: () => getState().settings.joinMuted,
   shareSettings: () => getState().settings,
+  cameraSettings: () => getState().settings,
   volumeOf: (id) => prefs.volume(id),
 });
 
@@ -364,12 +365,14 @@ document.addEventListener('visibilitychange', () => {
 export function updateSettings(patch: Partial<Settings>): void {
   const settings = { ...getState().settings, ...patch };
   prefs.saveSettings(settings);
-  setLanguage(settings.lang);
+  setLanguage(resolveLanguage(settings.language));
   setState({ settings });
-  if (patch.lang !== undefined || patch.theme !== undefined) applyAppearance();
+  if (patch.language !== undefined || patch.theme !== undefined || patch.fewerEffects !== undefined || patch.orbLight !== undefined) applyAppearance();
   if (patch.noiseSuppression !== undefined || patch.echoCancellation !== undefined || patch.autoGain !== undefined) void voice.applyMicProcessing();
   if (patch.micId !== undefined) void voice.setMic(patch.micId);
   if (patch.speakerId !== undefined) void voice.setSpeaker(patch.speakerId);
+  if (patch.cameraId !== undefined) void voice.setCamera(patch.cameraId);
+  if (patch.cameraResolution !== undefined) void voice.restartCamera();
 }
 
 /** Turns message notifications on, asking the browser first; answers whether they are on. */

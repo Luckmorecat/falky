@@ -9,6 +9,7 @@ import { createRoot } from 'react-dom/client';
 import type { Message as ChatMessage, Room } from '../api/client';
 import { applyAppearance } from '../app/appearance';
 import { voice } from '../app/controller';
+import { installInterfaceSounds } from '../app/interfaceSounds';
 import { getState, setState, useApp } from '../app/store';
 import { emptyChat } from '../chat/timeline';
 import { hashString, PALETTE_NAMES } from '../fx/palette';
@@ -21,7 +22,7 @@ import { Message } from '../ui/Message';
 
 const NAMES = ['Олена', 'Марк', 'Софія', 'Тарас', 'Ірина', 'Богдан', 'Катя', 'Дмитро'];
 const person = (i: number): VoicePerson => ({
-  id: `01JBX6Z8Q3M5W2K7R9T4V1C0D${i}`, name: NAMES[i]!, local: i === 0, muted: false, deafened: false, sharing: false, shareTrackId: '',
+  id: `01JBX6Z8Q3M5W2K7R9T4V1C0D${i}`, name: NAMES[i]!, local: i === 0, muted: false, deafened: false, sharing: false, shareTrackId: '', camera: false, cameraTrackId: '',
 });
 const self = person(0);
 
@@ -42,6 +43,49 @@ const inVoice = (people: VoicePerson[], roomId: string): VoiceSnapshot => ({ ...
 voice.toggleMute = async () => patchVoice({ muted: !getState().voice.muted });
 voice.toggleDeafen = async () => patchVoice({ deafened: !getState().voice.deafened });
 voice.toggleShare = async () => patchVoice({ sharing: !getState().voice.sharing });
+voice.toggleCamera = async () => {
+  const v = getState().voice;
+  const camera = !v.camera;
+  patchVoice({ camera, people: v.people.map((p) => (p.local ? { ...p, camera, cameraTrackId: camera ? 'fake' : '' } : p)) });
+};
+
+/** A moving picture in place of anyone's camera. */
+function fakeCamera(): MediaStream {
+  const canvas = document.createElement('canvas');
+  canvas.width = 640;
+  canvas.height = 360;
+  const ctx = canvas.getContext('2d')!;
+  const paint = () => {
+    const t = performance.now() / 1000;
+    const sky = ctx.createLinearGradient(0, 0, 0, 360);
+    sky.addColorStop(0, '#3b4a63');
+    sky.addColorStop(1, '#c9a27e');
+    ctx.fillStyle = sky;
+    ctx.fillRect(0, 0, 640, 360);
+    const x = 320 + Math.sin(t) * 14;
+    ctx.fillStyle = '#2a2f3a';
+    ctx.beginPath();
+    ctx.ellipse(x, 400, 130, 130, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#e6bd9c';
+    ctx.beginPath();
+    ctx.ellipse(x, 170, 62, 78, 0, 0, Math.PI * 2);
+    ctx.fill();
+  };
+  paint();
+  setInterval(paint, 66);
+  return canvas.captureStream(15);
+}
+const fakeStream = fakeCamera();
+voice.cameraTrack = () => ({
+  attach(el: HTMLMediaElement) {
+    el.srcObject = fakeStream;
+    return el;
+  },
+  detach() {
+    return [];
+  },
+}) as unknown as ReturnType<typeof voice.cameraTrack>;
 voice.leave = async () => setState({ voice: idleVoice });
 voice.join = async (roomId) => setState({ voice: inVoice(ROOM_PEOPLE, roomId) });
 
@@ -65,6 +109,7 @@ const SCENES = {
   listening: 'Поза голосом',
   many: 'Вісім людей',
   share: 'Показ екрана',
+  camera: 'Камери',
   chat: 'Чат',
   empty: 'Порожня кімната',
   entry: 'Вхід',
@@ -84,6 +129,7 @@ function stage(scene: Scene): void {
   if (scene === 'voice' || scene === 'chat') setState({ voice: inVoice(ROOM_PEOPLE, 'lounge') });
   if (scene === 'many') setState({ rooms: [{ ...rooms[0]!, occupancy: many.map((p) => ({ visitorId: p.id, name: p.name })) }, rooms[1]!, rooms[2]!], voice: inVoice(many, 'lounge') });
   if (scene === 'share') setState({ voice: inVoice([{ ...person(1), sharing: true }, ...ROOM_PEOPLE.filter((p) => p.id !== person(1).id)], 'lounge') });
+  if (scene === 'camera') setState({ voice: { ...inVoice(ROOM_PEOPLE.map((p, i) => (i < 2 ? { ...p, camera: true, cameraTrackId: 'fake' } : p)), 'lounge'), camera: true } });
   if (scene === 'entry') setState({ phase: 'entry' });
   if (scene === 'noaccess') setState({ phase: 'noaccess' });
   if (scene === 'revoked') setState({ phase: 'revoked' });
@@ -124,7 +170,7 @@ function Design() {
     return first;
   });
   const phase = useApp((s) => s.phase);
-  useApp((s) => s.settings.lang);
+  useApp((s) => s.settings.language);
   const pick = (next: Scene) => {
     stage(next);
     setScene(next);
@@ -145,4 +191,5 @@ function Design() {
 }
 
 applyAppearance();
+installInterfaceSounds();
 createRoot(document.getElementById('root')!).render(<Design />);

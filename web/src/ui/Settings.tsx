@@ -6,7 +6,8 @@ import { onTick } from '../fx/ticker';
 import { t } from '../strings';
 import type { MicTest } from '../voice/meter';
 import { canChooseSpeaker, enumerateDevices, watchDevices, refreshDevices, startMicTest, playSound, notificationsAvailable } from '@falky/browser';
-import { canShareScreen, supportedShareCodecs, type ShareCodec } from '../voice/share';
+import { canUseCamera } from '../voice/camera';
+import { canShareScreen, SHARE_BITRATE_MAX, SHARE_BITRATE_PRESETS, shareBitrate, supportedShareCodecs, type ShareCodec } from '../voice/share';
 import { Button } from './Button';
 import { Segmented } from './Segmented';
 import { Toggle } from './Toggle';
@@ -28,7 +29,7 @@ type Flag = { [K in keyof SettingsValues]: SettingsValues[K] extends boolean ? K
 
 function SettingToggle({ flag, label }: { flag: Flag; label: string }) {
   const on = useApp((s) => s.settings[flag]);
-  return <Toggle label={label} checked={on} onChange={(checked) => updateSettings({ [flag]: checked })} />;
+  return <Toggle label={label} checked={on} data-cue-always={flag === 'uiSounds' ? '' : undefined} onChange={(checked) => updateSettings({ [flag]: checked })} />;
 }
 
 /** How loud the microphone is: in voice, what goes out; otherwise a test on request. */
@@ -102,6 +103,7 @@ export function Settings({ open }: { open: boolean }) {
   const shareCodecs = supportedShareCodecs();
   const shareCodec = shareCodecs.includes(settings.shareCodec) ? settings.shareCodec : 'vp8';
   const mics = useDevices('audioinput', open);
+  const cameras = useDevices('videoinput', open && canUseCamera);
   const speakers = useDevices('audiooutput', open && canChooseSpeaker);
   const [name, setName] = useState(visitor?.name ?? '');
   const [nameError, setNameError] = useState('');
@@ -152,7 +154,7 @@ export function Settings({ open }: { open: boolean }) {
           </label>
         )}
         <div className="setrow">
-          <Button onClick={() => playSound('test', settings.speakerId)}>{t.testSound}</Button>
+          <Button data-cue="none" onClick={() => playSound('test', settings.speakerId)}>{t.testSound}</Button>
         </div>
         <SettingToggle flag="noiseSuppression" label={t.noiseSuppression} />
         <SettingToggle flag="echoCancellation" label={t.echoCancellation} />
@@ -160,15 +162,40 @@ export function Settings({ open }: { open: boolean }) {
         <SettingToggle flag="joinMuted" label={t.joinMuted} />
       </section>
 
-      {canShareScreen && (
+      {canUseCamera && (
         <section>
+          <h3>{t.sectionCamera}</h3>
+          <label className="setrow">
+            {t.camera}
+            <select value={settings.cameraId} onChange={(e) => updateSettings({ cameraId: e.target.value })}>
+              <option value="">{t.systemDefault}</option>
+              {cameras.map((d, i) => <option key={d.deviceId} value={d.deviceId}>{d.label || `${t.camera} ${i + 1}`}</option>)}
+            </select>
+          </label>
+          <Segmented label={t.cameraQuality} value={settings.cameraResolution} options={[['360', '360p'], ['720', '720p'], ['1080', '1080p']]} onChange={(cameraResolution) => updateSettings({ cameraResolution })} />
+          <SettingToggle flag="cameraMirror" label={t.cameraMirror} />
+        </section>
+      )}
+
+      {canShareScreen && (
+        <section className="hide-phone">
           <h3>{t.sectionShare}</h3>
           <Segmented label={t.shareCodec} value={shareCodec} options={shareCodecs.map((codec) => [codec, codecLabels[codec]])} onChange={(shareCodec) => updateSettings({ shareCodec })} />
           {shareCodec === 'h265' && <p className="set-note">{t.shareCodecFallback}</p>}
           <Segmented label={t.shareResolution} value={settings.shareResolution} options={[['720', '720p'], ['1080', '1080p'], ['1440', '1440p']]} onChange={(shareResolution) => updateSettings({ shareResolution })} />
           <Segmented label={t.shareFps} value={settings.shareFps} options={[['15', '15'], ['30', '30'], ['60', '60']]} onChange={(shareFps) => updateSettings({ shareFps })} />
-          <Segmented label={t.shareBitrate} value={settings.shareBitrate} options={[['1', t.shareBitrateDefault], ['2', 'x2'], ['3', 'x3']]} onChange={(shareBitrate) => updateSettings({ shareBitrate })} />
           <Segmented label={t.shareFocus} value={settings.shareFocus} options={[['motion', t.shareFocusMotion], ['detail', t.shareFocusDetail]]} onChange={(shareFocus) => updateSettings({ shareFocus })} />
+          <p className="set-note set-hint">{t.shareFocusHint[settings.shareFocus]}</p>
+          <div className="setrow">
+            <span className="set-head">
+              {t.shareBitrate}
+              <b>{Number(settings.shareMbps) ? t.shareBitrateFixed(settings.shareMbps) : t.shareBitrateAuto(String(Math.round(shareBitrate(settings) / 100_000) / 10))}</b>
+            </span>
+            <div className="seg fit" role="group" aria-label={t.shareBitrate}>
+              {SHARE_BITRATE_PRESETS.map((v, i) => <button key={v} type="button" aria-pressed={v === settings.shareMbps} onClick={() => updateSettings({ shareMbps: v })}>{t.shareBitratePresets[i]}</button>)}
+            </div>
+            <input type="range" style={{ '--at': `${(Number(settings.shareMbps) / SHARE_BITRATE_MAX) * 100}%` } as React.CSSProperties} aria-label={t.shareBitrate} min="0" max={SHARE_BITRATE_MAX} step="1" value={settings.shareMbps} onChange={(e) => updateSettings({ shareMbps: e.target.value })} />
+          </div>
           <SettingToggle flag="shareAudio" label={t.shareAudio} />
           {sharing && <p className="set-note">{t.shareNextTime}</p>}
         </section>
@@ -177,13 +204,17 @@ export function Settings({ open }: { open: boolean }) {
       <section>
         <h3>{t.sectionLook}</h3>
         <Segmented label={t.theme} value={settings.theme} options={[['dark', t.themeDark], ['light', t.themeLight], ['system', t.themeSystem]]} onChange={(theme) => updateSettings({ theme })} />
-        <Segmented label={t.language} value={settings.lang} options={[['uk', 'Українська'], ['en', 'English']]} onChange={(lang) => updateSettings({ lang })} />
+        <Segmented label={t.language} value={settings.language} options={[['system', t.languageSystem], ['uk', 'Українська'], ['en', 'English']]} onChange={(language) => updateSettings({ language })} />
+        <Segmented label={t.orbLook} value={settings.orbLight} options={[['flat', t.orbLookFlat], ['volume', t.orbLookVolume]]} onChange={(orbLight) => updateSettings({ orbLight })} />
+        <p className="set-note set-hint">{t.orbLookHint}</p>
         <SettingToggle flag="fewerEffects" label={t.fewerEffects} />
+        <p className="set-note set-hint">{t.fewerEffectsHint}</p>
       </section>
 
       <section>
         <h3>{t.sectionAlerts}</h3>
         <SettingToggle flag="sounds" label={t.eventSounds} />
+        <SettingToggle flag="uiSounds" label={t.interfaceSounds} />
         {notificationsAvailable && (
           <Toggle
             label={t.notifications}

@@ -67,7 +67,7 @@ func TestJoiningVoiceReturnsATokenForThatRoomOnly(t *testing.T) {
 		t.Fatalf("video grant = %+v, want joining %s only", g, lounge.ID)
 	}
 	wantSources := []livekit.TrackSource{
-		livekit.TrackSource_MICROPHONE, livekit.TrackSource_SCREEN_SHARE, livekit.TrackSource_SCREEN_SHARE_AUDIO,
+		livekit.TrackSource_MICROPHONE, livekit.TrackSource_CAMERA, livekit.TrackSource_SCREEN_SHARE, livekit.TrackSource_SCREEN_SHARE_AUDIO,
 	}
 	if !slices.Equal(g.GetCanPublishSources(), wantSources) || !g.GetCanSubscribe() ||
 		!g.GetCanUpdateOwnMetadata() || g.GetCanPublishData() {

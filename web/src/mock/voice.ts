@@ -6,6 +6,7 @@ import { mockAction, mockState, refreshMockState, subscribeMockState } from './s
 /** Simulates media only. Joining and room moves still use the public HTTP API. */
 export class VoiceSession implements VoiceClient {
   private tracks = new Map<string, SyntheticShare>();
+  private cameraPicture: SyntheticShare | null = null;
   private snap: VoiceSnapshot = idleVoice;
   private mutedBeforeDeaf = false;
   private operation = 0;
@@ -94,6 +95,16 @@ export class VoiceSession implements VoiceClient {
     this.refresh();
   }
   shareTrack(visitorId: string): ShareTrack | null { return this.tracks.get(visitorId) ?? null; }
+  async toggleCamera(): Promise<void> {
+    if (!this.snap.roomId) return;
+    this.set({ camera: !this.snap.camera });
+    this.refresh();
+  }
+  async restartCamera(): Promise<void> {}
+  async setCamera(_deviceId: string): Promise<void> {}
+  cameraTrack(visitorId: string): ShareTrack | null {
+    return visitorId === mockState()?.visitor?.id ? this.cameraPicture : null;
+  }
   applyVolumes(): void {}
   async setMic(_deviceId: string): Promise<void> {}
   async setSpeaker(_deviceId: string): Promise<void> {}
@@ -117,8 +128,8 @@ export class VoiceSession implements VoiceClient {
     if (state.generation !== this.generation || !state.visitor || state.voiceRoomId !== this.snap.roomId) { this.close(); return; }
     const self = state.visitor;
     const people = [
-      { id: self.id, name: self.name, local: true, muted: this.snap.muted, deafened: this.snap.deafened, sharing: this.snap.sharing, shareTrackId: '' },
-      ...(state.peers[this.snap.roomId] ?? []).map((p) => ({ id: p.visitorId, name: p.name, local: false, muted: p.muted, deafened: p.deafened, sharing: p.sharing, shareTrackId: '' })),
+      { id: self.id, name: self.name, local: true, muted: this.snap.muted, deafened: this.snap.deafened, sharing: this.snap.sharing, shareTrackId: '', camera: this.snap.camera, cameraTrackId: '' },
+      ...(state.peers[this.snap.roomId] ?? []).map((p) => ({ id: p.visitorId, name: p.name, local: false, muted: p.muted, deafened: p.deafened, sharing: p.sharing, shareTrackId: '', camera: false, cameraTrackId: '' })),
     ];
     const sharing = new Set(people.filter((p) => p.sharing).map((p) => p.id));
     for (const [id, track] of this.tracks) {
@@ -134,6 +145,10 @@ export class VoiceSession implements VoiceClient {
       }
       person.shareTrackId = track.id;
     }
+    if (this.snap.camera) {
+      this.cameraPicture ??= new SyntheticShare(self.name);
+      people[0]!.cameraTrackId = this.cameraPicture.id;
+    } else this.stopCamera();
     this.set({ people, status: state.faults.voiceReconnecting ? 'reconnecting' : 'connected', quality: 'unknown' });
     this.set({ speakers: people.filter((p) => this.level(p.id) > 0.1).map((p) => p.id) });
   }
@@ -145,8 +160,13 @@ export class VoiceSession implements VoiceClient {
     this.generation = null;
     for (const track of this.tracks.values()) track.stop();
     this.tracks.clear();
+    this.stopCamera();
     this.snap = idleVoice;
     this.host.onChange(this.snap);
+  }
+  private stopCamera(): void {
+    this.cameraPicture?.stop();
+    this.cameraPicture = null;
   }
   private set(patch: Partial<VoiceSnapshot>): void {
     this.snap = { ...this.snap, ...patch };

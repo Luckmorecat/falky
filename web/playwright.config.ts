@@ -8,7 +8,7 @@ export default defineConfig({
   timeout: 45_000,
   expect: { timeout: 10_000 },
   reporter: 'list',
-  use: {
+  use: { locale: 'uk-UA',
     browserName: 'chromium',
     viewport: { width: 1440, height: 1000 },
     launchOptions: chromiumOptions(),

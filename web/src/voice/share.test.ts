@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { shareOptions, supportedShareCodecs, type ShareSettings } from './share';
 
-const base: ShareSettings = { shareResolution: '1080', shareFps: '30', shareBitrate: '1', shareCodec: 'vp8', shareFocus: 'motion', shareAudio: true };
+const base: ShareSettings = { shareResolution: '1080', shareFps: '30', shareMbps: '0', shareCodec: 'vp8', shareFocus: 'motion', shareAudio: true };
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -62,18 +62,14 @@ describe('shareOptions', () => {
     expect(rate({ shareFps: '15' })).toBeLessThan(rate({}));
   });
 
-  it.each([
-    ['1', 3_000_000, 7_500_000],
-    ['2', 6_000_000, 15_000_000],
-    ['3', 9_000_000, 22_500_000],
-  ] as const)('applies bitrate multiplier %s at different resolutions and frame rates', (shareBitrate, normal, high) => {
-    for (const safari of [false, true]) {
-      const options = shareOptions({ ...base, shareBitrate }, safari);
-      expect(options.publish.screenShareEncoding?.maxBitrate).toBe(normal);
-      expect(options.publish.screenShareEncoding?.maxFramerate).toBe(30);
-      expect(options.capture).toEqual(shareOptions(base, safari).capture);
-      expect(shareOptions({ ...base, shareBitrate, shareResolution: '1440', shareFps: '60' }, safari).publish.screenShareEncoding?.maxBitrate).toBe(high);
-    }
+  it('holds to a fixed bitrate when one is set', () => {
+    const { publish } = shareOptions({ ...base, shareMbps: '12', shareResolution: '720' }, false);
+    expect(publish.screenShareEncoding?.maxBitrate).toBe(12_000_000);
+  });
+
+  it('lets the chosen focus decide what gives way on a weak network', () => {
+    expect(shareOptions({ ...base, shareFocus: 'motion' }, false).publish.degradationPreference).toBe('maintain-framerate');
+    expect(shareOptions({ ...base, shareFocus: 'detail' }, false).publish.degradationPreference).toBe('maintain-resolution');
   });
 
   it('leaves system sound out when sound is off', () => {
