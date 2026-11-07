@@ -1,6 +1,7 @@
 import { api, ApiError, type LiveEvent, type Message, type Room, type Visitor } from '../api/client';
 import { LiveConnection } from '../api/live';
 import { countUnread, emptyChat, mergeMessages, type PendingMessage, type RoomChat } from '../chat/timeline';
+import { MAX_FAVORITES, type PaletteName, pickFavorite } from '../fx/palette';
 import { resolveLanguage, setLanguage, t } from '../strings';
 import { VoiceSession } from '@falky/voice';
 import type { VoiceClient } from '../voice/types';
@@ -361,6 +362,19 @@ document.addEventListener('visibilitychange', () => {
 });
 
 /* ---------- Settings ---------- */
+
+/** A newly chosen colour shows at once; giving up the one being worn hands over to another favourite. */
+export function toggleFavoriteColor(name: PaletteName): void {
+  const { settings: { favoriteColors }, ownColor } = getState();
+  if (favoriteColors.includes(name)) {
+    const rest = favoriteColors.filter((c) => c !== name);
+    updateSettings({ favoriteColors: rest });
+    if (ownColor === name) setState({ ownColor: pickFavorite(rest) });
+  } else if (favoriteColors.length < MAX_FAVORITES) {
+    updateSettings({ favoriteColors: [...favoriteColors, name] });
+    setState({ ownColor: name });
+  }
+}
 
 export function updateSettings(patch: Partial<Settings>): void {
   const settings = { ...getState().settings, ...patch };

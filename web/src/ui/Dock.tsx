@@ -11,12 +11,22 @@ import { IconButton } from './IconButton';
 import { Icon } from './Icon';
 import { Settings } from './Settings';
 
-/** The control center: voice for this visitor, wherever they are looking. */
+/** The control center and the settings it opens, which outlast any change between its states. */
 export function Dock({ room }: { room: Room | null }) {
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  return (
+    <>
+      <Controls room={room} onSettings={() => setSettingsOpen(true)} />
+      <Settings open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+    </>
+  );
+}
+
+/** Voice for this visitor, wherever they are looking. */
+function Controls({ room, onSettings }: { room: Room | null; onSettings(): void }) {
   const v = useApp((s) => s.voice);
   const rooms = useApp((s) => s.rooms);
   const selfId = useApp((s) => s.visitor?.id);
-  const [sheetOpen, setSheetOpen] = useState(false);
   const ring = useRef<HTMLSpanElement>(null);
   const inVoice = v.status === 'connected' || v.status === 'reconnecting' || (v.status === 'joining' && v.roomId !== null);
   const joining = v.status === 'joining';
@@ -32,19 +42,6 @@ export function Dock({ room }: { room: Room | null }) {
     });
   }, [inVoice, selfId]);
 
-  useEffect(() => {
-    if (!sheetOpen) return;
-    const close = (e: Event) => {
-      if (e instanceof KeyboardEvent ? e.key === 'Escape' : !(e.target as Element).closest('.sheet, [data-settings]')) setSheetOpen(false);
-    };
-    document.addEventListener('pointerdown', close);
-    document.addEventListener('keydown', close);
-    return () => {
-      document.removeEventListener('pointerdown', close);
-      document.removeEventListener('keydown', close);
-    };
-  }, [sheetOpen]);
-
   const elsewhere = inVoice && room && v.roomId !== room.id;
   const voiceRoom = rooms.find((r) => r.id === v.roomId);
 
@@ -58,7 +55,7 @@ export function Dock({ room }: { room: Room | null }) {
             {joining ? t.joining : t.join}
           </Button>
         )}
-        <SettingsButton open={sheetOpen} onToggle={() => setSheetOpen(!sheetOpen)} />
+        <SettingsButton onOpen={onSettings} />
       </div>
     );
   }
@@ -98,7 +95,7 @@ export function Dock({ room }: { room: Room | null }) {
         </IconButton>
       )}
       <span className="dock-sep" />
-      <SettingsButton open={sheetOpen} onToggle={() => setSheetOpen(!sheetOpen)} />
+      <SettingsButton onOpen={onSettings} />
       <button className="leave" data-cue="none" aria-label={t.leaveVoice} onClick={() => void voice.leave()}>
         <span>{t.leave}</span>
         <i><Icon name="x" /></i>
@@ -107,13 +104,10 @@ export function Dock({ room }: { room: Room | null }) {
   );
 }
 
-function SettingsButton({ open, onToggle }: { open: boolean; onToggle(): void }) {
+function SettingsButton({ onOpen }: { onOpen(): void }) {
   return (
-    <div className="sheet-anchor">
-      <IconButton data-settings aria-label={t.settings} aria-expanded={open} data-tip={open ? undefined : t.settings} onClick={onToggle}>
-        <Icon name="sliders" />
-      </IconButton>
-      <Settings open={open} />
-    </div>
+    <IconButton aria-label={t.settings} aria-haspopup="dialog" data-cue="open" data-tip={t.settings} onClick={onOpen}>
+      <Icon name="sliders" />
+    </IconButton>
   );
 }

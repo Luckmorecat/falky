@@ -1,4 +1,5 @@
 import type { OrbLook } from '../fx/orbRenderer';
+import { MAX_FAVORITES, PALETTE_NAMES, type PaletteName } from '../fx/palette';
 import { preferencePrefix } from '../runtime/preferences';
 import type { LanguageChoice } from '../strings';
 import type { CameraSettings } from '../voice/camera';
@@ -35,6 +36,7 @@ export interface Settings extends ShareSettings, CameraSettings {
   notifications: boolean;
   fewerEffects: boolean;
   orbLight: OrbLook;
+  favoriteColors: PaletteName[];
   theme: Theme;
   language: LanguageChoice;
 }
@@ -64,6 +66,7 @@ export const prefs = {
       cameraResolution: oneOf('cameraResolution', ['360', '720', '1080'], '720'),
       cameraMirror: read('cameraMirror') !== 'off',
       orbLight: oneOf('orbLight', ['flat', 'volume'], 'flat'),
+      favoriteColors: PALETTE_NAMES.filter((name) => (read('favoriteColors') ?? '').split(',').includes(name)).slice(0, MAX_FAVORITES),
       theme: oneOf('theme', ['dark', 'light', 'system'], 'dark'),
       // A new key: the old one was saved with every setting, so it does not say anyone chose.
       language: oneOf('language', ['system', 'uk', 'en'], 'system'),
@@ -74,7 +77,7 @@ export const prefs = {
     };
   },
   saveSettings(s: Settings): void {
-    for (const [key, value] of Object.entries(s)) write(key, typeof value === 'boolean' ? (value ? 'on' : 'off') : value);
+    for (const [key, value] of Object.entries(s)) write(key, typeof value === 'boolean' ? (value ? 'on' : 'off') : Array.isArray(value) ? value.join(',') : value);
   },
   lastRead: (roomId: string) => read(`read.${roomId}`),
   setLastRead: (roomId: string, messageId: string) => write(`read.${roomId}`, messageId),

@@ -25,10 +25,11 @@ interface Person {
 }
 
 /** Who to show: inside the room's voice, LiveKit knows best and tells more. */
-function usePeople(room: Room): Person[] {
+export function usePeople(room: Room | null): Person[] {
   const voiceState = useApp((s) => s.voice);
   const selfId = useApp((s) => s.visitor?.id);
   return useMemo(() => {
+    if (!room) return [];
     const names = new Map(room.occupancy.map((p) => [p.visitorId, p.name]));
     if (voiceState.roomId === room.id && voiceState.status !== 'idle' && voiceState.people.length) {
       return voiceState.people.map((p) => ({ ...p, name: names.get(p.id) ?? p.name, live: true, isSelf: p.local }));
@@ -72,7 +73,9 @@ export function Stage({ room }: { room: Room }) {
   const size = shown ? miniSize : fit.size;
   const gridWidth = shown ? undefined : fit.columns * size + (fit.columns - 1) * gap;
   const shareWidth = Math.min(shareRoom, (height - miniSize - 18) * (16 / 9));
-  const palettes = useMemo(() => assignPalettes(people.map((p) => p.id)), [people]);
+  const selfId = useApp((s) => s.visitor?.id);
+  const ownColor = useApp((s) => s.ownColor);
+  const palettes = useMemo(() => assignPalettes(people.map((p) => p.id), selfId && ownColor ? { id: selfId, palette: ownColor } : undefined), [people, selfId, ownColor]);
 
   const grid = useRef<HTMLDivElement>(null);
   const rects = useRef(new Map<string, DOMRect>());

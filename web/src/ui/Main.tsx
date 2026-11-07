@@ -42,6 +42,8 @@ export function Main() {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // A modal window has the keyboard to itself: arrows move within it, letters belong to its fields.
+      if (document.querySelector('dialog[open]')) return;
       if (e.key === 'Escape') {
         setState({ roomsOpen: false });
         return;

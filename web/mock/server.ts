@@ -91,8 +91,11 @@ export async function startMockServer(options: { port?: number; scenario?: strin
     return trimmed;
   }
   for (const room of state.rooms) messages.set(room.id, []);
+  // The same two people throughout, as in a real room; their IDs are the ones they hold in voice.
+  const historyAuthors = state.peers[roomIds[0]!]!;
   for (let i = 1; i <= 125; i++) {
-    messages.get(roomIds[0]!)!.push({ id: id(), roomId: roomIds[0]!, authorId: id(), authorName: i % 2 ? 'Sam' : 'Robin',
+    const author = historyAuthors[i % 2]!;
+    messages.get(roomIds[0]!)!.push({ id: id(), roomId: roomIds[0]!, authorId: author.visitorId, authorName: author.name,
       body: i === 125 ? 'Welcome back! Try sending a message or joining voice.' : `Lounge history ${i}`,
       createdAt: new Date().toISOString() });
   }

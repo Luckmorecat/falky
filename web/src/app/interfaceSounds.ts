@@ -3,7 +3,7 @@ import type { InterfaceCue } from '../voice/sounds';
 import { getState } from './store';
 
 const PRESSABLE = 'button, a[href], select, summary, input[type=checkbox]';
-const HOVERABLE = 'button, a[href], select, summary, label.toggle';
+const HOVERABLE = 'button, a[href], select, summary, label.toggle, label.color';
 
 /** What pressing an element should say; read before the press changes anything on it. */
 export function cueFor(target: Element | null): InterfaceCue | null {
