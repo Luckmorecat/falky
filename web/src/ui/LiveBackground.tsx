@@ -1,0 +1,51 @@
+import { type Ref, useEffect, useImperativeHandle, useRef, useState } from 'react';
+import { useApp } from '../app/store';
+import { createBackground } from '../fx/backgroundRenderer';
+import { createThemeWave } from '../fx/themeWave';
+import { effectsReduced, onTick } from '../fx/ticker';
+import type { VoiceSource } from '../fx/voiceField';
+
+// Match CSS/FLIP time even when GPU work delays animation frames.
+const layoutTime = () => Number(document.timeline.currentTime ?? performance.now());
+
+export interface LiveBackgroundHandle {
+  setSources(sources: VoiceSource[]): void;
+  invalidateLayout(): void;
+}
+
+/** Screen-owned canvas; participant membership never resets the theme wave. */
+export function LiveBackground({ ref }: { ref: Ref<LiveBackgroundHandle> }) {
+  const canvas = useRef<HTMLCanvasElement>(null);
+  const [sources, setSources] = useState<VoiceSource[]>([]);
+  const enabled = useApp((s) => s.settings.liveBackground && !s.settings.fewerEffects);
+  const wave = useRef<ReturnType<typeof createThemeWave> | null>(null);
+  const layoutUntil = useRef(0);
+
+  useImperativeHandle(ref, () => ({
+    setSources,
+    invalidateLayout: () => { layoutUntil.current = layoutTime() + 500; },
+  }), []);
+
+  useEffect(() => {
+    if (!enabled) { wave.current = null; return; }
+    const painter = createBackground(canvas.current!, sources);
+    if (!painter) return;
+    wave.current ??= createThemeWave(document.documentElement.dataset.theme === 'light');
+    layoutUntil.current = layoutTime() + 500;
+    let time = 0;
+    const stop = onTick((_now, dt) => {
+      time += dt;
+      if (layoutUntil.current) {
+        painter.invalidateLayout();
+        // Measure once after settling too, even if a slow frame skipped the deadline.
+        if (layoutTime() >= layoutUntil.current) layoutUntil.current = 0;
+      }
+      const reduced = effectsReduced();
+      const theme = wave.current!.frame(document.documentElement.dataset.theme === 'light', dt, reduced);
+      painter.draw(time, 1.5, 480, reduced, theme);
+    });
+    return () => { stop(); painter.dispose(); };
+  }, [enabled, sources]);
+
+  return <canvas ref={canvas} className="live-background" aria-hidden="true" />;
+}

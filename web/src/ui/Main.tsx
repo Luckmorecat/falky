@@ -11,6 +11,7 @@ import { NameConflict } from './Screens';
 import { Rooms } from './Rooms';
 import { Stage } from './Stage';
 import { useShortcuts } from './useShortcuts';
+import { LiveBackground, type LiveBackgroundHandle } from './LiveBackground';
 
 function Clock({ joinedAt }: { joinedAt: number }) {
   const [now, setNow] = useState(() => performance.now());
@@ -28,7 +29,7 @@ function Clock({ joinedAt }: { joinedAt: number }) {
 
 export function Main() {
   useShortcuts();
-  const background = useRef<HTMLCanvasElement>(null);
+  const background = useRef<LiveBackgroundHandle>(null);
   const room = useApp((s) => s.rooms.find((r) => r.id === s.viewedRoomId) ?? null);
   const voiceState = useApp((s) => s.voice);
   const voiceRoomName = useApp((s) => s.rooms.find((r) => r.id === s.voice.roomId)?.name);
@@ -50,7 +51,7 @@ export function Main() {
 
   return (
     <div className="screen room-screen">
-      <canvas ref={background} className="voice-background" aria-hidden="true" />
+      <LiveBackground ref={background} />
       <div className="topbar"><span className="mark">falky</span></div>
 
       <div className="main">
