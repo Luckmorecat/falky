@@ -4,10 +4,11 @@ import { discardMessage, loadOlder, postMessage, retryMessage, setChatOpen } fro
 import { shortcuts } from '../app/shortcuts';
 import { getState, useApp } from '../app/store';
 import { buildFeed, canPost, MESSAGE_MAX, messageLength, type PendingMessage, splitLinks } from '../chat/timeline';
-import { paletteOf, paletteStyle } from '../fx/palette';
+import { assignPalettes, paletteOf, type PaletteName, paletteStyle } from '../fx/palette';
 import { t } from '../strings';
 import { IconButton } from './IconButton';
 import { Icon } from './Icon';
+import { usePeople } from './Stage';
 import { useDrawerLayout } from './useDrawerLayout';
 
 const timeOf = (iso: string) => new Date(iso).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false });
@@ -20,9 +21,9 @@ function Body({ text }: { text: string }) {
   );
 }
 
-const MessageRow = memo(function MessageRow({ message, continued }: { message: Message; continued: boolean }) {
+const MessageRow = memo(function MessageRow({ message, continued, palette }: { message: Message; continued: boolean; palette: PaletteName }) {
   return (
-    <article className={`msg${continued ? ' cont' : ''}`} style={paletteStyle(paletteOf(message.authorId))}>
+    <article className={`msg${continued ? ' cont' : ''}`} style={paletteStyle(palette)}>
       {!continued && (
         <div className="msg-meta">
           <span className="msg-author">{message.authorName}</span>
@@ -34,9 +35,9 @@ const MessageRow = memo(function MessageRow({ message, continued }: { message: M
   );
 });
 
-function PendingRow({ pending, continued, name, selfId }: { pending: PendingMessage; continued: boolean; name: string; selfId: string }) {
+function PendingRow({ pending, continued, name, palette }: { pending: PendingMessage; continued: boolean; name: string; palette: PaletteName }) {
   return (
-    <article className={`msg pending${continued ? ' cont' : ''}`} style={paletteStyle(paletteOf(selfId))}>
+    <article className={`msg pending${continued ? ' cont' : ''}`} style={paletteStyle(palette)}>
       {!continued && <div className="msg-meta"><span className="msg-author">{name}</span></div>}
       <Body text={pending.body} />
       <div className={`msg-state${pending.failed ? ' err' : ''}`}>
@@ -75,6 +76,16 @@ export function Chat({ room }: { room: Room | null }) {
   const chat = useApp((s) => (room ? s.chats[room.id] : undefined));
   const newAfterId = useApp((s) => s.newAfterId);
   const visitor = useApp((s) => s.visitor);
+  const people = usePeople(room);
+  const ownColor = useApp((s) => s.ownColor);
+  const selfId = visitor?.id ?? '';
+  const messages = chat?.messages;
+  // The same colours as the avatars on the stage, and no two alike among those who write.
+  const palettes = useMemo(
+    () => assignPalettes(people.map((p) => p.id), ownColor ? { id: selfId, palette: ownColor } : undefined, [...(messages ?? []).map((m) => m.authorId), selfId]),
+    [people, ownColor, selfId, messages],
+  );
+  const paletteFor = (id: string) => palettes.get(id) ?? paletteOf(id);
   const feed = useRef<HTMLDivElement>(null);
   const [atBottom, setAtBottom] = useState(true);
   const stick = useRef(true);
@@ -196,8 +207,8 @@ export function Chat({ room }: { room: Room | null }) {
         {items.map((item) => {
           if (item.kind === 'day') return <div key={item.key} className="day">{item.label}</div>;
           if (item.kind === 'new') return <div key={item.key} className="new-line">{t.newMessages}</div>;
-          if (item.kind === 'message') return <MessageRow key={item.key} message={item.message} continued={item.continued} />;
-          return <PendingRow key={item.key} pending={item.pending} continued={item.continued} name={visitor?.name ?? ''} selfId={visitor?.id ?? ''} />;
+          if (item.kind === 'message') return <MessageRow key={item.key} message={item.message} continued={item.continued} palette={paletteFor(item.message.authorId)} />;
+          return <PendingRow key={item.key} pending={item.pending} continued={item.continued} name={visitor?.name ?? ''} palette={paletteFor(selfId)} />;
         })}
       </div>
       <button

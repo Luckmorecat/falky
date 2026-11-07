@@ -39,8 +39,12 @@ async function action(page: Page, data: MockAction): Promise<MockState> {
 async function state(page: Page): Promise<MockState> {
   return (await page.request.get(`${app.url}/__mock/state`)).json();
 }
+async function settingsTab(page: Page, name: string) {
+  await page.getByRole('tab', { name, exact: true }).click();
+}
 async function english(page: Page) {
   await page.getByRole('button', { name: 'Налаштування', exact: true }).click();
+  await settingsTab(page, 'Система');
   await page.getByRole('button', { name: 'English', exact: true }).click();
   await page.keyboard.press('Escape');
 }
@@ -99,14 +103,16 @@ test('settings, simulated voice errors and animated local/remote sharing avoid h
   await english(page);
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
   const settings = page.getByRole('dialog', { name: 'Settings' });
+  await settingsTab(page, 'Audio & video');
   await settings.getByRole('combobox', { name: /^Microphone/ }).selectOption({ label: 'Simulated microphone' });
   await settings.getByRole('combobox', { name: /^Speakers/ }).selectOption({ label: 'Simulated speakers' });
   await settings.getByRole('button', { name: 'Test microphone', exact: true }).click();
   await expect.poll(() => settings.locator('.meter > div').evaluate((el) => el.getAttribute('style'))).toMatch(/scaleX\(0\.[1-9]/);
   await settings.getByRole('button', { name: 'Stop test', exact: true }).click();
   await settings.getByRole('button', { name: 'Test sound', exact: true }).click();
-  await settings.getByLabel('Message notifications', { exact: true }).check();
   await settings.getByLabel('Join with microphone off', { exact: true }).check();
+  await settingsTab(page, 'System');
+  await settings.getByLabel('Message notifications', { exact: true }).check();
   await page.keyboard.press('Escape');
   await page.getByRole('button', { name: 'Join', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Unmute microphone', exact: true })).toHaveAttribute('aria-pressed', 'true');
@@ -150,6 +156,7 @@ test('settings, simulated voice errors and animated local/remote sharing avoid h
   await expect(page.getByText('Reconnecting voice', { exact: true })).toHaveCount(0);
   await page.getByRole('button', { name: 'Leave voice', exact: true }).click();
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  await settingsTab(page, 'Audio & video');
   await page.getByLabel('Join with microphone off', { exact: true }).uncheck();
   await page.keyboard.press('Escape');
   await action(page, { type: 'faults', faults: { roomFull: null, micDenied: true } });
@@ -161,6 +168,84 @@ test('settings, simulated voice errors and animated local/remote sharing avoid h
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
   await page.getByRole('button', { name: 'Test microphone', exact: true }).click();
   await expect(page.getByRole('dialog', { name: 'Settings' }).getByRole('alert')).toHaveText('No access to the microphone');
+});
+
+test('settings window: keyboard stays inside, tabs move by arrows, favourite colour sticks', async ({ page }) => {
+  await page.goto(app.url);
+  await english(page);
+  const opener = page.getByRole('button', { name: 'Settings', exact: true });
+  await opener.click();
+  const settings = page.getByRole('dialog', { name: 'Settings' });
+  const tabs = settings.getByRole('tab');
+  await expect(tabs).toHaveText(['Audio & video', 'Screen sharing', 'Profile', 'Shortcuts', 'System']);
+
+  await settingsTab(page, 'Audio & video');
+  await page.keyboard.press('ArrowRight');
+  await expect(settings.getByRole('tab', { name: 'Screen sharing' })).toBeFocused();
+  await expect(settings.getByRole('tab', { name: 'Screen sharing' })).toHaveAttribute('aria-selected', 'true');
+  await page.keyboard.press('ArrowLeft');
+  await page.keyboard.press('ArrowLeft');
+  await expect(settings.getByRole('tab', { name: 'System' })).toBeFocused();
+  await page.keyboard.press('Home');
+  await expect(settings.getByRole('tab', { name: 'Audio & video' })).toBeFocused();
+
+  // Shortcuts of the page behind must not fire, and the room must not change.
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText('Lounge');
+  await page.keyboard.press('Slash');
+  await expect(settings).toBeVisible();
+  await expect(page.locator('.composer textarea')).not.toBeFocused();
+
+  await settingsTab(page, 'Profile');
+  const color = (name: string) => settings.getByRole('checkbox', { name, exact: true });
+  const shown = () => settings.locator('.profile-card .orb').evaluate((el: HTMLElement) => el.style.getPropertyValue('--base'));
+  await color('Lagoon').check();
+  await expect.poll(shown).toBe('#35d3ad');
+  await color('Moss').check();
+  await expect.poll(shown).toBe('#9dc65a');
+  await color('Coral').check();
+  await expect.poll(shown).toBe('#f0684c');
+  await expect(color('Sky')).toBeDisabled();
+  await color('Coral').uncheck();
+  await expect(color('Sky')).toBeEnabled();
+  expect(['#35d3ad', '#9dc65a']).toContain(await shown());
+  await color('Coral').check();
+  await page.keyboard.press('Escape');
+  await expect(settings).toBeHidden();
+  await expect(opener).toBeFocused();
+
+  await page.reload();
+  await opener.click();
+  await settingsTab(page, 'Profile');
+  for (const name of ['Lagoon', 'Moss', 'Coral']) await expect(color(name)).toBeChecked();
+  expect(['#35d3ad', '#9dc65a', '#f0684c']).toContain(await shown());
+  await settings.getByRole('button', { name: 'Close', exact: true }).click();
+  await expect(settings).toBeHidden();
+  await opener.click();
+  await page.mouse.click(4, 4);
+  await expect(settings).toBeHidden();
+});
+
+test('names in chat are one colour each, none alike, and match the avatars', async ({ page }) => {
+  await page.goto(app.url);
+  await english(page);
+  await page.request.post(`${app.url}/__mock/reset`, { data: { scenario: 'populated' } });
+  await page.reload();
+  await page.locator('.msg').first().waitFor();
+  const colours = () => page.evaluate(() => {
+    const byName: Record<string, string[]> = {};
+    for (const msg of document.querySelectorAll<HTMLElement>('.msg')) {
+      const name = msg.querySelector('.msg-author')?.textContent;
+      if (name) (byName[name] ??= []).push(msg.style.getPropertyValue('--base'));
+    }
+    return byName;
+  });
+  const tile = (name: string) => page.locator('.tile', { hasText: name }).evaluate((el: HTMLElement) => el.style.getPropertyValue('--base'));
+  const seen = await colours();
+  for (const name of ['Sam', 'Robin']) {
+    expect(new Set(seen[name]).size).toBe(1);
+    expect(seen[name]![0]).toBe(await tile(name));
+  }
+  expect(seen.Sam![0]).not.toBe(seen.Robin![0]);
 });
 
 test('entry, history/unread, conflict and reset after revoked or disconnected access', async ({ page }) => {
@@ -213,6 +298,7 @@ test('two instances in one browser context isolate visitors and survive a fresh 
     await other.getByRole('button', { name: 'Увійти', exact: true }).click();
     await english(other);
     await other.getByRole('button', { name: 'Settings', exact: true }).click();
+    await settingsTab(other, 'System');
     await other.getByRole('button', { name: 'Light', exact: true }).click();
     await other.keyboard.press('Escape');
     await send(other, 'Only the second instance');
@@ -220,6 +306,7 @@ test('two instances in one browser context isolate visitors and survive a fresh 
     await expect(page.getByText('Only the first instance', { exact: true })).toBeVisible();
     await expect(page.getByText('Only the second instance', { exact: true })).toHaveCount(0);
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
+    await settingsTab(page, 'Profile');
     await expect(page.getByRole('textbox', { name: 'Name', exact: true })).toHaveValue('Alex');
     await page.keyboard.press('Escape');
     await page.request.post(`${app.url}/__mock/reset`, { data: {} });
@@ -227,7 +314,9 @@ test('two instances in one browser context isolate visitors and survive a fresh 
     await other.reload();
     await expect(other.getByText('Only the second instance', { exact: true })).toBeVisible();
     await other.getByRole('button', { name: 'Settings', exact: true }).click();
+    await settingsTab(other, 'Profile');
     await expect(other.getByRole('textbox', { name: 'Name', exact: true })).toHaveValue('Second visitor');
+    await settingsTab(other, 'System');
     await expect(other.getByRole('button', { name: 'Light', exact: true })).toHaveAttribute('aria-pressed', 'true');
     await other.keyboard.press('Escape');
     const port = Number(new URL(second.url).port);
@@ -238,7 +327,9 @@ test('two instances in one browser context isolate visitors and survive a fresh 
     await expect(other.getByText('Only the second instance', { exact: true })).toHaveCount(0);
     await english(other);
     await other.getByRole('button', { name: 'Settings', exact: true }).click();
+    await settingsTab(other, 'Profile');
     await expect(other.getByRole('textbox', { name: 'Name', exact: true })).toHaveValue('Alex');
+    await settingsTab(other, 'System');
     await expect(other.getByRole('button', { name: 'Dark', exact: true })).toHaveAttribute('aria-pressed', 'true');
     await page.goto(`${app.url}/design.html?scene=voice`);
     await expect(page.locator('.room-screen')).toBeVisible();

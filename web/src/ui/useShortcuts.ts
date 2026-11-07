@@ -7,6 +7,8 @@ import { getState, setState } from '../app/store';
 export function useShortcuts(): void {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // A modal window has the keyboard to itself: arrows move within it, letters belong to its fields.
+      if (document.querySelector('dialog[open]')) return;
       if (e.key === shortcuts.closeRooms.key) {
         setState({ roomsOpen: false });
         return;

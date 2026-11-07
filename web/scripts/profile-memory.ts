@@ -195,9 +195,7 @@ Existing browser: PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/path/to/chromium`);
           await expect(page.getByRole('dialog', { name: t.settings, exact: true })).toBeVisible();
           samples.push(await sample('settings-open', cycle));
           await page.keyboard.press('Escape');
-          // The closed sheet remains mounted and inert; opacity does not make a
-          // locator hidden to Playwright. Observe the control's semantic state.
-          await expect(page.getByRole('button', { name: t.settings, exact: true })).toHaveAttribute('aria-expanded', 'false');
+          await expect(page.getByRole('dialog', { name: t.settings, exact: true })).toBeHidden();
           samples.push(await sample('settings-closed', cycle));
         }
         // Let deferred cleanup and transitions finish before the retained comparison.

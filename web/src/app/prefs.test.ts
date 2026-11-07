@@ -36,6 +36,21 @@ describe('screen share codec preference', () => {
   });
 });
 
+describe('favourite colours preference', () => {
+  it('starts empty and ignores colours that do not exist', () => {
+    expect(prefs.settings().favoriteColors).toEqual([]);
+    localStorage.setItem('falky.favoriteColors', 'plaid,moss');
+    expect(prefs.settings().favoriteColors).toEqual(['moss']);
+  });
+
+  it('remembers the choice, and never more than three', () => {
+    prefs.saveSettings({ ...prefs.settings(), favoriteColors: ['sky', 'moss', 'coral'] });
+    expect(prefs.settings().favoriteColors).toEqual(['sky', 'moss', 'coral']);
+    localStorage.setItem('falky.favoriteColors', 'sky,rose,violet,amber,moss');
+    expect(prefs.settings().favoriteColors).toHaveLength(3);
+  });
+});
+
 describe('screen share bitrate preference', () => {
   it('starts automatic and ignores the multiplier older clients saved', () => {
     localStorage.setItem('falky.shareBitrate', '3');

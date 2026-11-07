@@ -12,8 +12,13 @@ test.beforeEach(async ({ page }) => { await page.request.post(`${app.url}/__mock
 async function state(page: Page): Promise<MockState> { return (await page.request.get(`${app.url}/__mock/state`)).json(); }
 async function english(page: Page) {
   await page.getByRole('button', { name: 'Налаштування', exact: true }).click();
+  await page.getByRole('tab', { name: 'Система', exact: true }).click();
   await page.getByRole('button', { name: 'English', exact: true }).click();
   await page.keyboard.press('Escape');
+}
+async function systemSettings(page: Page) {
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  await page.getByRole('tab', { name: 'System', exact: true }).click();
 }
 async function action(page: Page, data: MockAction) {
   const response = await page.request.post(`${app.url}/__mock/action`, { data });
@@ -53,7 +58,7 @@ test.describe('live background', () => {
     await page.clock.install();
     await page.goto(app.url);
     await english(page);
-    await page.getByRole('button', { name: 'Settings', exact: true }).click();
+    await systemSettings(page);
     await page.getByLabel('Live background', { exact: true }).check();
     const field = page.locator('.live-background');
     await expect(field).toHaveAttribute('data-ready', 'true');
@@ -91,7 +96,7 @@ test.describe('live background', () => {
     await page.keyboard.press('Escape');
     await page.getByRole('button', { name: 'Join', exact: true }).click();
     await expect.poll(async () => (await frame()).level).toBeGreaterThan(.15);
-    await page.getByRole('button', { name: 'Settings', exact: true }).click();
+    await systemSettings(page);
     await page.clock.pauseAt(await page.evaluate(() => Date.now() + 10_000));
     await selectTheme('Dark');
     await page.clock.runFor(300);
@@ -114,7 +119,7 @@ test.describe('live background', () => {
     await english(page);
     const field = page.locator('.live-background');
     await expect(field).toBeHidden();
-    await page.getByRole('button', { name: 'Settings', exact: true }).click();
+    await systemSettings(page);
     const toggle = page.getByLabel('Live background', { exact: true });
     await expect(toggle).not.toBeChecked();
     await toggle.check();
@@ -122,7 +127,7 @@ test.describe('live background', () => {
     expect(await page.evaluate((key) => localStorage.getItem(key), `falky.mock.${initial.instanceId}.liveBackground`)).toBe('on');
     await page.keyboard.press('Escape');
     await page.reload();
-    await page.getByRole('button', { name: 'Settings', exact: true }).click();
+    await systemSettings(page);
     await expect(toggle).toBeChecked();
     await page.keyboard.press('Escape');
     await page.getByRole('button', { name: 'Join', exact: true }).click();
@@ -181,7 +186,7 @@ test.describe('live background', () => {
     });
     await expect.poll(shaderTime).toBeGreaterThan(pausedAt);
 
-    await page.getByRole('button', { name: 'Settings', exact: true }).click();
+    await systemSettings(page);
     await page.getByLabel('Fewer effects', { exact: true }).check();
     await expect(field).toBeHidden();
     await expect(toggle).toBeChecked();
@@ -202,7 +207,7 @@ test.describe('live background', () => {
     });
     await page.goto(app.url);
     await english(page);
-    await page.getByRole('button', { name: 'Settings', exact: true }).click();
+    await systemSettings(page);
     await page.getByLabel('Live background', { exact: true }).check();
     await page.keyboard.press('Escape');
     await page.getByRole('button', { name: 'Join', exact: true }).click();
