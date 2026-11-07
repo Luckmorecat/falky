@@ -1,5 +1,22 @@
 # Changelog
 
+## [1.2.0](https://github.com/Luckmorecat/falky/compare/v1.1.0...v1.2.0) (2026-11-07)
+
+
+### Features
+
+* **ui:** add an opt-in voice-reactive background ([845ba60](https://github.com/Luckmorecat/falky/commit/845ba60454a5fccd0934a0aedbf49d2a03416d6a))
+* **ui:** reveal keyboard shortcuts in tooltips ([d22e52a](https://github.com/Luckmorecat/falky/commit/d22e52ab12c63a6ad764360cfccd3272a701e4d0))
+* **web:** add mock memory profiling command ([397ceef](https://github.com/Luckmorecat/falky/commit/397ceefda9ca1d9eff938f5b1d064508bae56582))
+* **web:** camera, one corner shape everywhere and bubbling sounds ([fc79390](https://github.com/Luckmorecat/falky/commit/fc793901e82a68248e80a876d8cda1532f57a516)), refs [#10](https://github.com/Luckmorecat/falky/issues/10) [#14](https://github.com/Luckmorecat/falky/issues/14)
+* **web:** report memory above a blank-tab baseline ([d5d5a76](https://github.com/Luckmorecat/falky/commit/d5d5a76fa05c3d47e38b1a2eeaf5ea0c65cba3cf))
+
+
+### Bug Fixes
+
+* **web:** remove seams from orb grain ([2cee5b4](https://github.com/Luckmorecat/falky/commit/2cee5b4bc5b3dea224d6416fcf0cc81c062c9062))
+* **web:** toggle screen-share fullscreen ([b2bc4a7](https://github.com/Luckmorecat/falky/commit/b2bc4a7ad3c58cff1ef66ef142bbd26ad0d1cdc7))
+
 ## [1.1.0](https://github.com/Luckmorecat/falky/compare/v1.0.0...v1.1.0) (2026-11-06)
 
 
