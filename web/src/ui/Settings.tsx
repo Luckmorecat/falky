@@ -1,6 +1,7 @@
 import { type KeyboardEvent as ReactKeyboardEvent, type ReactNode, useEffect, useRef, useState } from 'react';
 import { enableNotifications, rename, toggleFavoriteColor, updateSettings, voice } from '../app/controller';
 import type { Settings as SettingsValues } from '../app/prefs';
+import { shortcuts } from '../app/shortcuts';
 import { useApp } from '../app/store';
 import { MAX_FAVORITES, ownPalette, PALETTE_NAMES, paletteStyle, type PaletteName } from '../fx/palette';
 import { onTick } from '../fx/ticker';
@@ -263,9 +264,9 @@ function KeysPanel() {
         <section>
           <h3>{t.keysInVoice}</h3>
           <dl className="keys">
-            <Shortcut label={t.keyMute} keys={<kbd>M</kbd>} />
-            <Shortcut label={t.keyDeafen} keys={<kbd>D</kbd>} />
-            {canUseCamera && <Shortcut label={t.keyCamera} keys={<kbd>V</kbd>} />}
+            <Shortcut label={t.keyMute} keys={<kbd>{shortcuts.mute.label}</kbd>} />
+            <Shortcut label={t.keyDeafen} keys={<kbd>{shortcuts.deafen.label}</kbd>} />
+            {canUseCamera && <Shortcut label={t.keyCamera} keys={<kbd>{shortcuts.camera.label}</kbd>} />}
           </dl>
         </section>
       </div>
@@ -273,9 +274,9 @@ function KeysPanel() {
         <section>
           <h3>{t.keysAnywhere}</h3>
           <dl className="keys">
-            <Shortcut label={t.keyChat} keys={<><kbd>/</kbd>{t.keyOr}<kbd>Enter</kbd></>} />
-            <Shortcut label={t.keyRooms} keys={<><kbd>←</kbd><kbd>→</kbd></>} />
-            <Shortcut label={t.keyClose} keys={<kbd>Esc</kbd>} />
+            <Shortcut label={t.keyChat} keys={<><kbd>{shortcuts.chat.label}</kbd>{t.keyOr}<kbd>{shortcuts.chatEnter.label}</kbd></>} />
+            <Shortcut label={t.keyRooms} keys={<><kbd>{shortcuts.previousRoom.label}</kbd><kbd>{shortcuts.nextRoom.label}</kbd></>} />
+            <Shortcut label={t.keyClose} keys={<kbd>{shortcuts.closeRooms.label}</kbd>} />
           </dl>
         </section>
       </div>
@@ -295,6 +296,7 @@ function SystemPanel() {
           <Segmented label={t.language} value={settings.language} options={[['system', t.languageSystem], ['uk', 'Українська'], ['en', 'English']]} onChange={(language) => updateSettings({ language })} />
           <Segmented label={t.orbLook} value={settings.orbLight} options={[['flat', t.orbLookFlat], ['volume', t.orbLookVolume]]} onChange={(orbLight) => updateSettings({ orbLight })} />
           <p className="set-note set-hint">{t.orbLookHint}</p>
+          <SettingToggle flag="liveBackground" label={t.liveBackground} />
           <SettingToggle flag="fewerEffects" label={t.fewerEffects} />
           <p className="set-note set-hint">{t.fewerEffectsHint}</p>
         </section>

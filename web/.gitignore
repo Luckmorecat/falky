@@ -3,4 +3,5 @@ dist/
 test-results/
 playwright-report/
 screenshots/
+profiles/
 storybook-static/

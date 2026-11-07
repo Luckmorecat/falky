@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react';
-import { dismissNotice, setChatOpen, stepRoom, voice } from '../app/controller';
-import { getState, setState, useApp } from '../app/store';
+import { useEffect, useRef, useState } from 'react';
+import { dismissNotice, setChatOpen } from '../app/controller';
+import { shortcuts } from '../app/shortcuts';
+import { useApp } from '../app/store';
 import { t } from '../strings';
 import { IconButton } from './IconButton';
 import { Chat } from './Chat';
@@ -9,6 +10,8 @@ import { Icon } from './Icon';
 import { NameConflict } from './Screens';
 import { Rooms } from './Rooms';
 import { Stage } from './Stage';
+import { useShortcuts } from './useShortcuts';
+import { LiveBackground, type LiveBackgroundHandle } from './LiveBackground';
 
 function Clock({ joinedAt }: { joinedAt: number }) {
   const [now, setNow] = useState(() => performance.now());
@@ -25,6 +28,8 @@ function Clock({ joinedAt }: { joinedAt: number }) {
 }
 
 export function Main() {
+  useShortcuts();
+  const background = useRef<LiveBackgroundHandle>(null);
   const room = useApp((s) => s.rooms.find((r) => r.id === s.viewedRoomId) ?? null);
   const voiceState = useApp((s) => s.voice);
   const voiceRoomName = useApp((s) => s.rooms.find((r) => r.id === s.voice.roomId)?.name);
@@ -40,40 +45,13 @@ export function Main() {
     document.body.classList.toggle('rooms-open', roomsOpen);
   }, [chatOpen, roomsOpen]);
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      // A modal window has the keyboard to itself: arrows move within it, letters belong to its fields.
-      if (document.querySelector('dialog[open]')) return;
-      if (e.key === 'Escape') {
-        setState({ roomsOpen: false });
-        return;
-      }
-      const target = e.target as Element | null;
-      if (target?.closest('input, textarea, select') || e.metaKey || e.ctrlKey || e.altKey) return;
-      // By physical key, so a Ukrainian layout works the same.
-      // Straight to writing, as in most chats; a focused button keeps its own Enter.
-      if (e.code === 'Slash' || e.key === '/' || (e.code === 'Enter' && !target?.closest('button, a'))) {
-        e.preventDefault();
-        setChatOpen(true);
-        document.querySelector<HTMLTextAreaElement>('.composer textarea')?.focus();
-        return;
-      }
-      if (e.code === 'KeyM' && getState().voice.status === 'connected') void voice.toggleMute();
-      else if (e.code === 'KeyD' && getState().voice.status === 'connected') void voice.toggleDeafen();
-      else if (e.code === 'KeyV' && getState().voice.status === 'connected') void voice.toggleCamera();
-      else if (e.key === 'ArrowLeft') stepRoom(-1);
-      else if (e.key === 'ArrowRight') stepRoom(1);
-    };
-    addEventListener('keydown', onKey);
-    return () => removeEventListener('keydown', onKey);
-  }, []);
-
   const inThisRoom = !!room && voiceState.roomId === room.id && voiceState.status !== 'idle';
   const inVoiceElsewhere = !!voiceRoomName && voiceState.status !== 'idle' && !inThisRoom;
   const banner = live === 'reconnecting' ? t.reconnecting : voiceState.status === 'reconnecting' ? t.voiceReconnecting : null;
 
   return (
     <div className="screen room-screen">
+      <LiveBackground ref={background} />
       <div className="topbar"><span className="mark">falky</span></div>
 
       <div className="main">
@@ -84,7 +62,7 @@ export function Main() {
               : inVoiceElsewhere ? <span>{t.inOtherRoom(voiceRoomName)}</span>
                 : <span>{room.occupancy.length ? t.notInVoice : t.nobodyInVoice}</span>}
         />
-        {room ? <Stage room={room} /> : <div className="stage" />}
+        {room ? <Stage room={room} background={background} /> : <div className="stage" />}
         <div className="dock-space" />
         <Dock room={room} />
       </div>
@@ -93,6 +71,8 @@ export function Main() {
         className="chat-btn"
         aria-label={chatOpen ? t.closeChat : unread ? `${t.chat}: ${unread}` : t.chat}
         aria-expanded={chatOpen}
+        data-tip={chatOpen ? t.closeChat : `${t.focusChat} (${shortcuts.chat.label} · ${shortcuts.chatEnter.label})`}
+        data-tip-side="bottom"
         onClick={() => setChatOpen(!chatOpen)}
       >
         <span className="swap"><Icon name="chat" className="a" /><Icon name="x" className="b" /></span>

@@ -6,21 +6,39 @@ let raf = 0;
 let last = 0;
 
 function frame(ms: number): void {
+  raf = 0;
+  if (document.hidden) return;
   const t = ms / 1000;
   const dt = Math.min(0.05, last ? t - last : 0.016);
   last = t;
   for (const fn of listeners) fn(t, dt);
-  raf = listeners.size ? requestAnimationFrame(frame) : 0;
+  schedule();
 }
+
+function schedule(): void {
+  if (!raf && listeners.size && !document.hidden) raf = requestAnimationFrame(frame);
+}
+
+document.addEventListener('visibilitychange', () => {
+  if (raf) cancelAnimationFrame(raf);
+  raf = 0;
+  last = 0;
+  schedule();
+});
 
 export function onTick(fn: TickFn): () => void {
   listeners.add(fn);
   if (!raf) {
     last = 0;
-    raf = requestAnimationFrame(frame);
+    schedule();
   }
   return () => {
     listeners.delete(fn);
+    if (!listeners.size && raf) {
+      cancelAnimationFrame(raf);
+      raf = 0;
+      last = 0;
+    }
   };
 }
 

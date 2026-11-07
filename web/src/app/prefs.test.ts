@@ -3,6 +3,26 @@ import { prefs } from './prefs';
 
 afterEach(() => localStorage.clear());
 
+describe('live background preference', () => {
+  it('carries over the previous preference and lets the renamed switch override it', () => {
+    localStorage.setItem('falky.voiceBackground', 'on');
+    expect(prefs.settings().liveBackground).toBe(true);
+    prefs.saveSettings({ ...prefs.settings(), liveBackground: false });
+    expect(prefs.settings().liveBackground).toBe(false);
+  });
+
+  it('requires an explicit opt-in and remembers the switch across reads', () => {
+    expect(prefs.settings().liveBackground).toBe(false);
+    localStorage.setItem('falky.liveBackground', 'true');
+    expect(prefs.settings().liveBackground).toBe(false);
+    prefs.saveSettings({ ...prefs.settings(), liveBackground: true });
+    expect(localStorage.getItem('falky.liveBackground')).toBe('on');
+    expect(prefs.settings().liveBackground).toBe(true);
+    prefs.saveSettings({ ...prefs.settings(), liveBackground: false });
+    expect(prefs.settings().liveBackground).toBe(false);
+  });
+});
+
 describe('screen share codec preference', () => {
   it('defaults to VP8 for existing browsers and invalid stored values', () => {
     expect(prefs.settings().shareCodec).toBe('vp8');

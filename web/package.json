@@ -15,6 +15,8 @@
     "test:browser": "playwright test",
     "test:runtime": "tsx scripts/check-runtime.ts",
     "screenshot:mock": "node --import tsx scripts/screenshot-mock.ts",
+    "profile:memory": "node --import tsx scripts/profile-memory.ts",
+    "test:memory": "node --import tsx --test scripts/profile-memory.test.ts",
     "test:screenshot": "node --import tsx --test scripts/screenshot-mock.test.ts",
     "storybook": "storybook dev -p 6006 --no-open",
     "build-storybook": "storybook build"

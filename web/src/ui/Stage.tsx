@@ -1,10 +1,12 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { type RefObject, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { Room } from '../api/client';
 import { voice } from '../app/controller';
 import { getState, useApp } from '../app/store';
 import { fitBlocks } from '../fx/layout';
 import { assignPalettes } from '../fx/palette';
 import { effectsReduced } from '../fx/ticker';
+import type { VoiceSource } from '../fx/voiceField';
+import type { LiveBackgroundHandle } from './LiveBackground';
 import { t } from '../strings';
 import { shareStatsEnabled } from '../voice/shareStats';
 import { IconButton } from './IconButton';
@@ -53,7 +55,7 @@ function useWindowSize(): { w: number; h: number } {
 /** The width of --chat in styles.css. */
 const CHAT_WIDTH = 340;
 
-export function Stage({ room }: { room: Room }) {
+export function Stage({ room, background }: { room: Room; background?: RefObject<LiveBackgroundHandle | null> }) {
   const people = usePeople(room);
   const { w, h } = useWindowSize();
   const narrow = useDrawerLayout();
@@ -79,6 +81,29 @@ export function Stage({ room }: { room: Room }) {
 
   const grid = useRef<HTMLDivElement>(null);
   const rects = useRef(new Map<string, DOMRect>());
+  const roomsOpen = useApp((s) => s.roomsOpen);
+  const sourcesKey = people.filter((p) => p.live).map((p) => `${p.id}:${palettes.get(p.id)}`).join();
+
+  useLayoutEffect(() => {
+    background?.current?.invalidateLayout();
+  }, [background, sourcesKey, size, w, h, narrow, room.id, roomsOpen, shown?.id]);
+
+  useEffect(() => {
+    const field = background?.current;
+    if (!field) return;
+    if (!grid.current) { field.setSources([]); return; }
+    const tiles = new Map([...grid.current.querySelectorAll<HTMLElement>('[data-tile]')].map((el) => [el.dataset.tile, el]));
+    const sources: VoiceSource[] = people.filter((p) => p.live).flatMap((p) => {
+      const element = tiles.get(p.id)?.querySelector<HTMLElement>('.orb');
+      return element ? [{ element, palette: palettes.get(p.id)!, level: () => {
+        const person = getState().voice.people.find((person) => person.id === p.id);
+        return person && !person.muted && !person.deafened ? levelOf(p.id)() : 0;
+      } }] : [];
+    });
+    field.setSources(sources);
+    return () => field.setSources([]);
+    // Voice snapshots change with loudness; only membership/palettes rebuild the field.
+  }, [background, sourcesKey, room.id]);
 
   // Blocks glide from where they were when someone joins or leaves.
   useLayoutEffect(() => {
@@ -86,18 +111,21 @@ export function Stage({ room }: { room: Room }) {
     for (const el of blocks) el.getAnimations().forEach((a) => a.cancel());
     const next = new Map(blocks.map((el) => [el.dataset.tile!, el.getBoundingClientRect()]));
     if (!effectsReduced()) {
+      const follow = (animation: Animation) => {
+        void animation.finished.then(() => background?.current?.invalidateLayout(), () => {});
+      };
       for (const el of blocks) {
         const was = rects.current.get(el.dataset.tile!);
         const now = next.get(el.dataset.tile!)!;
         if (!was) {
-          if (rects.current.size) el.animate([{ opacity: 0, transform: 'scale(.94)' }, { opacity: 1, transform: 'none' }], { duration: 320, easing: 'cubic-bezier(.23,1,.32,1)' });
+          if (rects.current.size) follow(el.animate([{ opacity: 0, transform: 'scale(.94)' }, { opacity: 1, transform: 'none' }], { duration: 320, easing: 'cubic-bezier(.23,1,.32,1)' }));
           continue;
         }
         const dx = was.left - now.left;
         const dy = was.top - now.top;
         const s = now.width ? was.width / now.width : 1;
         if (Math.abs(dx) + Math.abs(dy) + Math.abs(s - 1) > 0.5) {
-          el.animate([{ transform: `translate(${dx}px,${dy}px) scale(${s})` }, { transform: 'none' }], { duration: 440, easing: 'cubic-bezier(.32,.72,0,1)' });
+          follow(el.animate([{ transform: `translate(${dx}px,${dy}px) scale(${s})` }, { transform: 'none' }], { duration: 440, easing: 'cubic-bezier(.32,.72,0,1)' }));
         }
       }
     }
@@ -119,7 +147,9 @@ export function Stage({ room }: { room: Room }) {
   }
 
   return (
-    <div className={`stage${shown ? ' with-share' : ''}`}>
+    <div className={`stage${shown ? ' with-share' : ''}`} onTransitionEnd={(event) => {
+      if (event.target === event.currentTarget && event.propertyName === 'transform') background?.current?.invalidateLayout();
+    }}>
       {shown && (
         <ShareView
           width={shareWidth}
