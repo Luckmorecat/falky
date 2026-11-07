@@ -1,7 +1,7 @@
 import type { Meta, StoryObj } from '@storybook/react-vite';
 import { Icon, type IconName } from '../src/ui/Icon';
 
-const names: IconName[] = ['mic', 'micOff', 'head', 'headOff', 'screen', 'sliders', 'x', 'chat', 'send', 'down', 'vol', 'chevron', 'expand'];
+const names: IconName[] = ['mic', 'micOff', 'head', 'headOff', 'screen', 'sliders', 'x', 'chat', 'send', 'down', 'vol', 'chevron', 'expand', 'collapse'];
 const meta = { title: 'Components/Icon', component: Icon, tags: ['autodocs'], args: { name: 'mic' }, argTypes: { name: { control: 'select', options: names } } } satisfies Meta<typeof Icon>;
 export default meta;
 type Story = StoryObj<typeof meta>;
