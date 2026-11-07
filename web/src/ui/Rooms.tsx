@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import type { Room } from '../api/client';
 import { viewRoom } from '../app/controller';
+import { shortcuts } from '../app/shortcuts';
 import { setState, useApp } from '../app/store';
 import { roomPalette } from '../fx/palette';
 import { t } from '../strings';
@@ -40,7 +41,7 @@ export function Rooms({ room, status }: { room: Room | null; status: React.React
       }}
     >
       <h1>
-        <button className="room-now" disabled={!canUnfold} aria-expanded={open} aria-controls="room-list" aria-label={room ? `${t.rooms}: ${room.name}` : t.rooms} onClick={() => setState({ roomsOpen: !open })}>
+        <button className="room-now" disabled={!canUnfold} aria-expanded={open} aria-controls="room-list" aria-label={room ? `${t.rooms}: ${room.name}` : t.rooms} title={canUnfold ? `${t.rooms} (${shortcuts.previousRoom.label} / ${shortcuts.nextRoom.label} · ${shortcuts.closeRooms.label})` : undefined} onClick={() => setState({ roomsOpen: !open })}>
           <span className="room-now-name">{room?.name ?? t.noRoomsTitle}</span>
           {canUnfold && <Icon name="chevron" className="room-chevron" />}
           {unreadElsewhere && <span className="room-new" title={t.newMessages} />}
