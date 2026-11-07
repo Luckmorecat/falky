@@ -1,5 +1,6 @@
 import { api, ApiError, type LiveEvent, type Message, type Room, type Visitor } from '../api/client';
 import { LiveConnection } from '../api/live';
+import { followingLatest } from '../chat/place';
 import { countUnread, emptyChat, mergeMessages, type PendingMessage, type RoomChat } from '../chat/timeline';
 import { MAX_FAVORITES, type PaletteName, pickFavorite } from '../fx/palette';
 import { resolveLanguage, setLanguage, t } from '../strings';
@@ -220,13 +221,18 @@ const reading = (roomId: string): boolean => {
 
 function addMessages(roomId: string, incoming: Message[]): void {
   patchChat(roomId, (c) => ({ messages: mergeMessages(c.messages, incoming) }));
-  if (reading(roomId)) markRead(roomId);
-  else recount(roomId);
+  syncRead(roomId);
 }
 
 function recount(roomId: string): void {
   const self = getState().visitor?.id;
   patchChat(roomId, (c) => ({ unread: countUnread(c.messages, prefs.lastRead(roomId), self) }));
+}
+
+/** Newest messages count as read only while the visitor is actually with them. */
+function syncRead(roomId: string): void {
+  if (reading(roomId) && followingLatest(roomId)) markRead(roomId);
+  else recount(roomId);
 }
 
 function markRead(roomId: string): void {
@@ -260,8 +266,7 @@ async function loadChat(room: Pick<Room, 'id'>): Promise<void> {
         cursor = newest.id;
       }
     }
-    if (reading(roomId)) markRead(roomId);
-    else recount(roomId);
+    syncRead(roomId);
   } catch (err) {
     accessEnded(err);
     patchChat(roomId, { loaded: true });
@@ -301,7 +306,7 @@ async function send(p: PendingMessage): Promise<void> {
   try {
     const message = await api.post(p.roomId, p.requestKey, p.body);
     patchChat(p.roomId, (c) => ({ pending: c.pending.filter((x) => x.requestKey !== p.requestKey), messages: mergeMessages(c.messages, [message]) }));
-    if (reading(p.roomId)) markRead(p.roomId);
+    syncRead(p.roomId);
   } catch (err) {
     if (accessEnded(err)) return;
     const code = err instanceof ApiError ? err.code : 'other';
@@ -346,8 +351,14 @@ export function stepRoom(delta: number): void {
 function openReading(roomId: string): void {
   const chat = getState().chats[roomId];
   // Unread stays marked by the line until the chat closes or the room changes.
+  // A saved place up in the history must not mark the newer messages read.
   setState({ newAfterId: chat?.unread ? prefs.lastRead(roomId) : null });
-  markRead(roomId);
+  if (followingLatest(roomId)) markRead(roomId);
+}
+
+/** The visitor came back to the newest messages, by scrolling or the latest button. */
+export function markLatestRead(roomId: string): void {
+  if (reading(roomId)) markRead(roomId);
 }
 
 export function setChatOpen(open: boolean): void {
@@ -358,7 +369,7 @@ export function setChatOpen(open: boolean): void {
 
 document.addEventListener('visibilitychange', () => {
   const s = getState();
-  if (document.visibilityState === 'visible' && s.chatOpen && s.viewedRoomId) markRead(s.viewedRoomId);
+  if (document.visibilityState === 'visible' && s.chatOpen && s.viewedRoomId) syncRead(s.viewedRoomId);
 });
 
 /* ---------- Settings ---------- */
