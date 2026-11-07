@@ -4,8 +4,9 @@ import { voice } from '../app/controller';
 import { getState, useApp } from '../app/store';
 import { fitBlocks } from '../fx/layout';
 import { assignPalettes } from '../fx/palette';
-import { effectsReduced, onTick } from '../fx/ticker';
-import { createVoiceBackground, type VoiceSource } from '../fx/voiceBackgroundRenderer';
+import { effectsReduced } from '../fx/ticker';
+import type { VoiceSource } from '../fx/voiceField';
+import type { LiveBackgroundHandle } from './LiveBackground';
 import { t } from '../strings';
 import { shareStatsEnabled } from '../voice/shareStats';
 import { IconButton } from './IconButton';
@@ -53,7 +54,7 @@ function useWindowSize(): { w: number; h: number } {
 /** The width of --chat in styles.css. */
 const CHAT_WIDTH = 340;
 
-export function Stage({ room, background }: { room: Room; background?: RefObject<HTMLCanvasElement | null> }) {
+export function Stage({ room, background }: { room: Room; background?: RefObject<LiveBackgroundHandle | null> }) {
   const people = usePeople(room);
   const { w, h } = useWindowSize();
   const narrow = useDrawerLayout();
@@ -77,18 +78,17 @@ export function Stage({ room, background }: { room: Room; background?: RefObject
 
   const grid = useRef<HTMLDivElement>(null);
   const rects = useRef(new Map<string, DOMRect>());
-  const backgroundEnabled = useApp((s) => s.settings.voiceBackground && !s.settings.fewerEffects);
   const roomsOpen = useApp((s) => s.roomsOpen);
-  const layoutUntil = useRef(0);
   const sourcesKey = people.filter((p) => p.live).map((p) => `${p.id}:${palettes.get(p.id)}`).join();
 
   useLayoutEffect(() => {
-    layoutUntil.current = performance.now() + 500;
-  }, [sourcesKey, size, room.id, roomsOpen, shown?.id]);
+    background?.current?.invalidateLayout();
+  }, [background, sourcesKey, size, w, h, narrow, room.id, roomsOpen, shown?.id]);
 
   useEffect(() => {
-    const canvas = background?.current;
-    if (!canvas || !backgroundEnabled || !sourcesKey || !grid.current) return;
+    const field = background?.current;
+    if (!field) return;
+    if (!grid.current) { field.setSources([]); return; }
     const tiles = new Map([...grid.current.querySelectorAll<HTMLElement>('[data-tile]')].map((el) => [el.dataset.tile, el]));
     const sources: VoiceSource[] = people.filter((p) => p.live).flatMap((p) => {
       const element = tiles.get(p.id)?.querySelector<HTMLElement>('.orb');
@@ -97,19 +97,10 @@ export function Stage({ room, background }: { room: Room; background?: RefObject
         return person && !person.muted && !person.deafened ? levelOf(p.id)() : 0;
       } }] : [];
     });
-    const painter = createVoiceBackground(canvas, sources);
-    if (!painter) return;
-    let time = 0;
-    const stop = onTick((_now, dt) => {
-      if (document.hidden) return;
-      time += dt;
-      // Follow FLIP and room-picker transforms only while the layout settles.
-      if (performance.now() < layoutUntil.current) painter.invalidateLayout();
-      painter.draw(time, 1.5, 480, effectsReduced());
-    });
-    return () => { stop(); painter.dispose(); };
+    field.setSources(sources);
+    return () => field.setSources([]);
     // Voice snapshots change with loudness; only membership/palettes rebuild the field.
-  }, [background, backgroundEnabled, sourcesKey, room.id]);
+  }, [background, sourcesKey, room.id]);
 
   // Blocks glide from where they were when someone joins or leaves.
   useLayoutEffect(() => {
@@ -117,18 +108,21 @@ export function Stage({ room, background }: { room: Room; background?: RefObject
     for (const el of blocks) el.getAnimations().forEach((a) => a.cancel());
     const next = new Map(blocks.map((el) => [el.dataset.tile!, el.getBoundingClientRect()]));
     if (!effectsReduced()) {
+      const follow = (animation: Animation) => {
+        void animation.finished.then(() => background?.current?.invalidateLayout(), () => {});
+      };
       for (const el of blocks) {
         const was = rects.current.get(el.dataset.tile!);
         const now = next.get(el.dataset.tile!)!;
         if (!was) {
-          if (rects.current.size) el.animate([{ opacity: 0, transform: 'scale(.94)' }, { opacity: 1, transform: 'none' }], { duration: 320, easing: 'cubic-bezier(.23,1,.32,1)' });
+          if (rects.current.size) follow(el.animate([{ opacity: 0, transform: 'scale(.94)' }, { opacity: 1, transform: 'none' }], { duration: 320, easing: 'cubic-bezier(.23,1,.32,1)' }));
           continue;
         }
         const dx = was.left - now.left;
         const dy = was.top - now.top;
         const s = now.width ? was.width / now.width : 1;
         if (Math.abs(dx) + Math.abs(dy) + Math.abs(s - 1) > 0.5) {
-          el.animate([{ transform: `translate(${dx}px,${dy}px) scale(${s})` }, { transform: 'none' }], { duration: 440, easing: 'cubic-bezier(.32,.72,0,1)' });
+          follow(el.animate([{ transform: `translate(${dx}px,${dy}px) scale(${s})` }, { transform: 'none' }], { duration: 440, easing: 'cubic-bezier(.32,.72,0,1)' }));
         }
       }
     }
@@ -150,7 +144,9 @@ export function Stage({ room, background }: { room: Room; background?: RefObject
   }
 
   return (
-    <div className={`stage${shown ? ' with-share' : ''}`}>
+    <div className={`stage${shown ? ' with-share' : ''}`} onTransitionEnd={(event) => {
+      if (event.target === event.currentTarget && event.propertyName === 'transform') background?.current?.invalidateLayout();
+    }}>
       {shown && (
         <ShareView
           width={shareWidth}
