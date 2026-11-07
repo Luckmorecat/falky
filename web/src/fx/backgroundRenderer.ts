@@ -1,18 +1,19 @@
-/** A shared point field: each voice stirs colour outward from its orb. */
+/** Two passes on one canvas: a theme surface and a shared field of voice-reactive dots. */
 import { hexToRgb } from './orbRenderer';
-import { PALETTES, type PaletteName } from './palette';
+import { PALETTES } from './palette';
+import { THEME_WAVE_GLSL, type ThemeFrame } from './themeWave';
+import { createVoiceField, HISTORY, SAMPLE_INTERVAL, type VoiceSource } from './voiceField';
 
-const HISTORY = 32;
-const SAMPLE_INTERVAL = .1;
 function vertexSource(count: number): string {
   return `
 precision highp float;
 attribute vec2 aPoint;
 uniform vec2 uSize;
-uniform float uTime, uDpr, uStrength, uSpread, uLight, uHistoryPhase;
+uniform float uTime, uDpr, uStrength, uSpread, uHistoryPhase;
+${THEME_WAVE_GLSL}
 uniform float uActive[${count}];
 uniform vec4 uVoices[${count}];
-uniform vec3 uColors[${count}];
+uniform vec3 uColorsDark[${count}], uColorsLight[${count}];
 uniform vec4 uHistory[${count * (HISTORY / 4)}];
 varying vec4 vColor;
 
@@ -47,6 +48,10 @@ float arrivingLevel(int voice, float delay) {
 
 void main() {
   vec2 p = aPoint;
+  float light, activity;
+  vec2 themeOffset;
+  vec3 themeTint;
+  themeDot(aPoint, light, themeOffset, themeTint, activity);
   vec2 offset = vec2(0.);
   vec3 color = vec3(0.);
   float energy = 0.;
@@ -79,15 +84,16 @@ void main() {
     float force = level * uStrength * falloff * (.32 + patches * .9);
     // A small outward push makes the speaker readable through the stronger eddies.
     offset += (vec2(dy, -dx) * .78 + outward * .42) * force * 70.;
-    color += uColors[i] * force;
+    color += mix(uColorsDark[i], uColorsLight[i], light) * force;
     energy += force;
   }
-  p += offset;
+  p += offset + themeOffset;
   float glow = clamp(energy, 0., 1.);
-  vec3 ink = mix(vec3(1.), vec3(0.), uLight);
-  vColor = vec4(mix(ink, color / max(energy, .001), min(1., glow * 2.)), mix(.09 + .03 * uLight, .8, glow));
+  vec3 ink = mix(mix(vec3(1.), vec3(0.), light), themeTint, activity * .75);
+  float opacity = .09 + .03 * light + activity * .48;
+  vColor = vec4(mix(ink, color / max(energy, .001), min(1., glow * 2.)), mix(opacity, .8, glow));
   gl_Position = vec4(p.x / uSize.x * 2. - 1., 1. - p.y / uSize.y * 2., 0., 1.);
-  gl_PointSize = (2.1 + glow * 2.8) * uDpr;
+  gl_PointSize = (2.1 + glow * 2.8 + activity * 1.6) * uDpr;
 }`;
 }
 const fragment = `
@@ -99,50 +105,67 @@ void main() {
   gl_FragColor = vec4(vColor.rgb * alpha, alpha);
 }`;
 
-export interface VoiceSource {
-  element: HTMLElement;
-  palette: PaletteName;
-  level: () => number;
-}
+const surfaceVertex = `
+attribute vec2 aPoint;
+void main() { gl_Position = vec4(aPoint, 0., 1.); }
+`;
+const surfaceFragment = `
+precision highp float;
+uniform vec2 uSize;
+uniform float uDpr;
+${THEME_WAVE_GLSL}
+void main() {
+  vec2 p = vec2(gl_FragCoord.x / uDpr, uSize.y - gl_FragCoord.y / uDpr);
+  // Match --bg in styles.css; stay opaque while CSS changes underneath.
+  vec3 color = mix(vec3(22., 22., 21.) / 255., vec3(1.), themeAt(p));
+  gl_FragColor = vec4(color, 1.);
+}`;
 
-export function createVoiceBackground(canvas: HTMLCanvasElement, sources: VoiceSource[]) {
+export function createBackground(canvas: HTMLCanvasElement, sources: VoiceSource[]) {
   const gl = canvas.getContext('webgl', { alpha: true, antialias: false, depth: false, premultipliedAlpha: true, powerPreference: 'high-performance' });
   if (!gl) return null; // The CSS dots remain visible when WebGL isn't available.
+  // Keep the theme wave available even when a room exceeds the voice uniform budget.
+  if (Math.max(1, sources.length) * 12 + 16 > gl.getParameter(gl.MAX_VERTEX_UNIFORM_VECTORS)) sources = [];
   const count = Math.max(1, sources.length);
-  // Eight packed history vectors, position, colour, and activity per voice.
-  // Leave room for the other uniforms; oversized rooms retain the CSS dots.
-  if (count * 11 + 12 > gl.getParameter(gl.MAX_VERTEX_UNIFORM_VECTORS)) return null;
   const shaders: WebGLShader[] = [];
-  const program = gl.createProgram();
-  if (!program) return null;
-  for (const [type, source] of [[gl.VERTEX_SHADER, vertexSource(count)], [gl.FRAGMENT_SHADER, fragment]] as const) {
-    const shader = gl.createShader(type);
-    if (!shader) {
-      shaders.forEach((s) => gl.deleteShader(s));
-      gl.deleteProgram(program);
-      return null;
+  const programs: WebGLProgram[] = [];
+  const build = (vertex: string, fragment: string) => {
+    const program = gl.createProgram();
+    if (!program) return null;
+    programs.push(program);
+    for (const [type, source] of [[gl.VERTEX_SHADER, vertex], [gl.FRAGMENT_SHADER, fragment]] as const) {
+      const shader = gl.createShader(type);
+      if (!shader) return null;
+      shaders.push(shader);
+      gl.shaderSource(shader, source);
+      gl.compileShader(shader);
+      gl.attachShader(program, shader);
     }
-    gl.shaderSource(shader, source);
-    gl.compileShader(shader);
-    shaders.push(shader);
-    gl.attachShader(program, shader);
-  }
-  gl.linkProgram(program);
-  if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
-    // Shader compilation can fail on a device; the static dots remain.
-    shaders.forEach((s) => gl.deleteShader(s));
-    gl.deleteProgram(program);
-    return null;
-  }
+    gl.linkProgram(program);
+    return gl.getProgramParameter(program, gl.LINK_STATUS) ? program : null;
+  };
+  const releasePrograms = () => {
+    shaders.forEach((shader) => gl.deleteShader(shader));
+    programs.forEach((program) => gl.deleteProgram(program));
+  };
+  const program = build(vertexSource(count), fragment);
+  const surface = build(surfaceVertex, surfaceFragment);
+  if (!program || !surface) { releasePrograms(); return null; }
   gl.useProgram(program);
   const uniform = (name: string) => gl.getUniformLocation(program, name);
-  const uniforms = Object.fromEntries(['uSize', 'uTime', 'uDpr', 'uStrength', 'uSpread', 'uLight', 'uHistoryPhase', 'uActive[0]', 'uVoices[0]', 'uColors[0]', 'uHistory[0]'].map((name) => [name, uniform(name)]));
+  const uniforms = Object.fromEntries(['uSize', 'uTime', 'uDpr', 'uStrength', 'uSpread', 'uTheme', 'uThemeDirection', 'uThemeFromLight', 'uHistoryPhase', 'uActive[0]', 'uVoices[0]', 'uColorsDark[0]', 'uColorsLight[0]', 'uHistory[0]'].map((name) => [name, uniform(name)]));
+  const surfaceUniforms = Object.fromEntries(['uSize', 'uDpr', 'uTheme', 'uThemeFromLight'].map((name) => [name, gl.getUniformLocation(surface, name)]));
+  const surfaceAttribute = gl.getAttribLocation(surface, 'aPoint');
+  const surfaceBuffer = gl.createBuffer();
   const buffer = gl.createBuffer();
-  if (!buffer) {
-    shaders.forEach((s) => gl.deleteShader(s));
-    gl.deleteProgram(program);
+  if (!buffer || !surfaceBuffer) {
+    gl.deleteBuffer(buffer);
+    gl.deleteBuffer(surfaceBuffer);
+    releasePrograms();
     return null;
   }
+  gl.bindBuffer(gl.ARRAY_BUFFER, surfaceBuffer);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, -1, 1, 1, -1, 1, 1]), gl.STATIC_DRAW);
   gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
   const attribute = gl.getAttribLocation(program, 'aPoint');
   gl.enableVertexAttribArray(attribute);
@@ -150,20 +173,18 @@ export function createVoiceBackground(canvas: HTMLCanvasElement, sources: VoiceS
   gl.enable(gl.BLEND);
   gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
   gl.clearColor(0, 0, 0, 0);
-  const voices = new Float32Array(count * 4);
-  const colors = new Float32Array(count * 3);
-  const history = new Float32Array(count * HISTORY);
-  const active = new Float32Array(count);
+  const field = createVoiceField(count);
+  const { voices, history, active } = field;
+  const colorsDark = new Float32Array(count * 3);
+  const colorsLight = new Float32Array(count * 3);
   const sourceColors = sources.slice(0, count).map(({ palette }) => ({ dark: hexToRgb(PALETTES[palette][1]), light: hexToRgb(PALETTES[palette][0]) }));
-  let lastSample = 0;
-  let lastTime = 0;
   let width = 0;
   let height = 0;
   let points = 0;
   let geometryDirty = true;
   let measuredDpr = 0;
-  let theme: boolean | undefined;
-  let drawn: { time: number; strength: number; spread: number; reduced: boolean; moving: boolean } | undefined;
+  sourceColors.forEach((color, i) => { colorsDark.set(color.dark, i * 3); colorsLight.set(color.light, i * 3); });
+  let drawn: { time: number; strength: number; spread: number; reduced: boolean; moving: boolean; theme: ThemeFrame } | undefined;
   const invalidate = () => { geometryDirty = true; };
   const resized = new ResizeObserver(invalidate);
   resized.observe(canvas);
@@ -177,7 +198,7 @@ export function createVoiceBackground(canvas: HTMLCanvasElement, sources: VoiceS
   return {
     renderer,
     invalidateLayout: invalidate,
-    draw(time: number, strength: number, spread: number, reduced: boolean) {
+    draw(time: number, strength: number, spread: number, reduced: boolean, theme: ThemeFrame) {
       if (gl.isContextLost()) { delete canvas.dataset.ready; return; }
       // Tiny soft points don't benefit from a full 2x/3x screen-sized buffer.
       const dpr = Math.min(devicePixelRatio || 1, 1.5);
@@ -193,6 +214,7 @@ export function createVoiceBackground(canvas: HTMLCanvasElement, sources: VoiceS
         const positions: number[] = [];
         for (let y = 10; y < height; y += 20) for (let x = 10; x < width; x += 20) positions.push(x, y);
         points = positions.length / 2;
+        gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
         gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(positions), gl.STATIC_DRAW);
         gl.viewport(0, 0, canvas.width, canvas.height);
         for (let i = 0; i < Math.min(sources.length, count); i++) {
@@ -203,58 +225,44 @@ export function createVoiceBackground(canvas: HTMLCanvasElement, sources: VoiceS
         }
       }
       if (!width || !height) return;
-      const light = document.documentElement.dataset.theme === 'light';
-      const themeChanged = light !== theme;
-      if (themeChanged) {
-        sourceColors.forEach((color, i) => colors.set(light ? color.light : color.dark, i * 3));
-        theme = light;
-      }
-      const previousTime = lastTime;
-      const dt = Math.min(.05, Math.max(0, time - previousTime));
-      lastTime = time;
-      const sampleTime = Math.floor((time + 1e-7) / SAMPLE_INTERVAL) * SAMPLE_INTERVAL;
-      const sampleDue = sampleTime > lastSample;
-      if (sampleDue) {
-        for (let i = 0; i < count; i++) history.copyWithin(i * HISTORY + 1, i * HISTORY, (i + 1) * HISTORY - 1);
-        lastSample = sampleTime;
-      }
-      for (let i = 0; i < Math.min(sources.length, count); i++) {
-        const target = sources[i]!.level();
-        const previous = voices[i * 4 + 2]!;
-        const level = previous + (target - previous) * (1 - Math.exp(-dt * (target > previous ? 12 : 2.8)));
-        voices[i * 4 + 2] = level;
-        if (sampleDue) {
-          const fraction = Math.max(0, Math.min(1, (sampleTime - previousTime) / Math.max(time - previousTime, .0001)));
-          history[i * HISTORY] = previous + (level - previous) * fraction;
-        }
-        let peak = level;
-        for (let j = 0; j < HISTORY; j++) peak = Math.max(peak, history[i * HISTORY + j]!);
-        active[i] = peak > .001 ? 1 : 0;
-      }
-      const moving = !reduced && strength > 0 && active.some((value) => value > 0);
+      const voice = field.update(time, sources);
+      const themeChanged = drawn?.theme.progress !== theme.progress || drawn?.theme.direction !== theme.direction || drawn?.theme.fromLight !== theme.fromLight;
+      const moving = !reduced && strength > 0 && voice.moving;
       // Keep the last frame while paused or silent, rather than clearing a
       // screen-sized buffer every frame just to draw the identical dot grid.
       if (!layoutChanged && !themeChanged && drawn && drawn.strength === strength && drawn.spread === spread && drawn.reduced === reduced && drawn.moving === moving && (!moving || drawn.time === time)) return;
+      gl.useProgram(surface);
+      gl.bindBuffer(gl.ARRAY_BUFFER, surfaceBuffer);
+      gl.enableVertexAttribArray(surfaceAttribute);
+      gl.vertexAttribPointer(surfaceAttribute, 2, gl.FLOAT, false, 0, 0);
+      gl.uniform2f(surfaceUniforms.uSize!, width, height);
+      gl.uniform1f(surfaceUniforms.uDpr!, dpr);
+      gl.uniform1f(surfaceUniforms.uTheme!, theme.progress);
+      gl.uniform1f(surfaceUniforms.uThemeFromLight!, theme.fromLight ? 1 : 0);
+      gl.drawArrays(gl.TRIANGLES, 0, 6);
+      gl.useProgram(program);
+      gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+      gl.enableVertexAttribArray(attribute);
+      gl.vertexAttribPointer(attribute, 2, gl.FLOAT, false, 0, 0);
       gl.uniform2f(uniforms.uSize!, width, height);
       gl.uniform1f(uniforms.uTime!, time);
       gl.uniform1f(uniforms.uDpr!, dpr);
       gl.uniform1f(uniforms.uStrength!, reduced ? 0 : strength);
       gl.uniform1f(uniforms.uSpread!, spread);
-      gl.uniform1f(uniforms.uLight!, light ? 1 : 0);
-      gl.uniform1f(uniforms.uHistoryPhase!, Math.max(0, time - lastSample));
+      gl.uniform1f(uniforms.uTheme!, theme.progress);
+      gl.uniform1f(uniforms.uThemeDirection!, reduced ? 0 : theme.direction);
+      gl.uniform1f(uniforms.uThemeFromLight!, theme.fromLight ? 1 : 0);
+      gl.uniform1f(uniforms.uHistoryPhase!, voice.phase);
       gl.uniform1fv(uniforms['uActive[0]']!, active);
       gl.uniform4fv(uniforms['uVoices[0]']!, voices);
-      gl.uniform3fv(uniforms['uColors[0]']!, colors);
+      gl.uniform3fv(uniforms['uColorsDark[0]']!, colorsDark);
+      gl.uniform3fv(uniforms['uColorsLight[0]']!, colorsLight);
       gl.uniform4fv(uniforms['uHistory[0]']!, history);
-      gl.clear(gl.COLOR_BUFFER_BIT);
       gl.drawArrays(gl.POINTS, 0, points);
-      drawn = { time, strength, spread, reduced, moving };
+      drawn = { time, strength, spread, reduced, moving, theme };
     },
     clear() {
-      for (let i = 0; i < count; i++) voices[i * 4 + 2] = 0;
-      history.fill(0);
-      active.fill(0);
-      lastSample = lastTime;
+      field.clear();
       drawn = undefined;
     },
     dispose() {
@@ -263,8 +271,8 @@ export function createVoiceBackground(canvas: HTMLCanvasElement, sources: VoiceS
       window.removeEventListener('resize', invalidate);
       document.fonts.removeEventListener('loadingdone', invalidate);
       gl.deleteBuffer(buffer);
-      shaders.forEach((s) => gl.deleteShader(s));
-      gl.deleteProgram(program);
+      gl.deleteBuffer(surfaceBuffer);
+      releasePrograms();
       canvas.width = canvas.height = 1;
     },
   };

@@ -34,7 +34,7 @@ export interface Settings extends ShareSettings, CameraSettings {
   uiSounds: boolean;
   notifications: boolean;
   fewerEffects: boolean;
-  voiceBackground: boolean;
+  liveBackground: boolean;
   orbLight: OrbLook;
   theme: Theme;
   language: LanguageChoice;
@@ -72,7 +72,7 @@ export const prefs = {
       uiSounds: read('uiSounds') !== 'off',
       notifications: read('notifications') === 'on',
       fewerEffects: read('fewerEffects') === 'on',
-      voiceBackground: read('voiceBackground') === 'on',
+      liveBackground: (read('liveBackground') ?? read('voiceBackground')) === 'on',
     };
   },
   saveSettings(s: Settings): void {

@@ -22,18 +22,104 @@ async function action(page: Page, data: MockAction) {
   await page.waitForResponse(async (r) => r.url().endsWith('/__mock/state') && r.ok() && (await r.json()).revision >= next.revision);
 }
 
-test.describe('reactive voice background', () => {
+test.describe('live background', () => {
+  test('spreads the background in silence, reverses, and keeps speech independent', async ({ page }) => {
+    await page.addInitScript(() => {
+      const draw = WebGLRenderingContext.prototype.drawArrays;
+      WebGLRenderingContext.prototype.drawArrays = function (mode, first, count) {
+        draw.call(this, mode, first, count);
+        const canvas = this.canvas;
+        if (!(canvas instanceof HTMLCanvasElement) || !canvas.matches('.live-background') || mode !== this.POINTS) return;
+        const program = this.getParameter(this.CURRENT_PROGRAM) as WebGLProgram;
+        const theme = this.getUniform(program, this.getUniformLocation(program, 'uTheme')!) as number;
+        const direction = this.getUniform(program, this.getUniformLocation(program, 'uThemeDirection')!) as number;
+        const top = new Uint8Array(4), bottom = new Uint8Array(4);
+        this.readPixels(20, canvas.height - 20, 1, 1, this.RGBA, this.UNSIGNED_BYTE, top);
+        this.readPixels(canvas.width - 20, 20, 1, 1, this.RGBA, this.UNSIGNED_BYTE, bottom);
+        const level = this.getUniform(program, this.getUniformLocation(program, 'uVoices[0]')!) as Float32Array;
+        const row = new Uint8Array(canvas.width * 4);
+        this.readPixels(0, Math.floor(canvas.height / 2), canvas.width, 1, this.RGBA, this.UNSIGNED_BYTE, row);
+        let blendedPixels = 0;
+        for (let x = 0; x < canvas.width; x++) if (row[x * 4]! > 30 && row[x * 4]! < 240) blendedPixels++;
+        const centre = new Uint8Array(200 * 200 * 4);
+        this.readPixels(Math.floor(canvas.width / 2) - 100, Math.floor(canvas.height / 2) - 100, 200, 200, this.RGBA, this.UNSIGNED_BYTE, centre);
+        let collisionPixels = 0;
+        for (let i = 0; i < centre.length; i += 4) {
+          if (Math.max(centre[i]!, centre[i + 1]!, centre[i + 2]!) - Math.min(centre[i]!, centre[i + 1]!, centre[i + 2]!) > 20) collisionPixels++;
+        }
+        canvas.dataset.frame = JSON.stringify({ theme, direction, blendedPixels, collisionPixels, top: [...top], bottom: [...bottom], level: level[2] });
+      };
+    });
+    await page.clock.install();
+    await page.goto(app.url);
+    await english(page);
+    await page.getByRole('button', { name: 'Settings', exact: true }).click();
+    await page.getByLabel('Live background', { exact: true }).check();
+    const field = page.locator('.live-background');
+    await expect(field).toHaveAttribute('data-ready', 'true');
+    const frame = () => field.evaluate((canvas) => JSON.parse((canvas as HTMLElement).dataset.frame!) as { theme: number; direction: number; blendedPixels: number; collisionPixels: number; top: number[]; bottom: number[]; level: number });
+    await expect.poll(async () => (await frame()).theme).toBe(0);
+    await page.clock.pauseAt(await page.evaluate(() => Date.now() + 10_000));
+    const selectTheme = (name: string) => page.getByRole('button', { name, exact: true }).evaluate((button: HTMLButtonElement) => button.click());
+    await selectTheme('Light');
+    await page.clock.runFor(300);
+    const middle = await frame();
+    expect(middle.theme).toBeGreaterThan(.2);
+    expect(middle.theme).toBeLessThan(.8);
+    expect(middle.top).toEqual([255, 255, 255, 255]);
+    expect(middle.bottom).toEqual([255, 255, 255, 255]);
+    expect(middle.direction).toBe(1);
+    expect(middle.blendedPixels).toBeGreaterThan(100);
+    expect(middle.collisionPixels).toBeGreaterThan(20);
+    await page.screenshot({ path: 'screenshots/live-background-theme-wave.png' });
+
+    await selectTheme('Dark');
+    await page.clock.runFor(150);
+    expect((await frame()).theme).toBeLessThan(middle.theme);
+    expect((await frame()).direction).toBe(-1);
+    await page.clock.runFor(600);
+    await expect.poll(async () => (await frame()).theme).toBe(0);
+    expect((await frame()).top).toEqual([22, 22, 21, 255]);
+
+    // The screen still owns the wave when an empty room has no voice sources.
+    await page.clock.resume();
+    const lounge = (await state(page)).rooms[0]!.id;
+    await action(page, { type: 'participants', roomId: lounge, participants: [] });
+    await selectTheme('Light');
+    await expect.poll(async () => (await frame()).theme).toBe(1);
+    expect((await frame()).bottom).toEqual([255, 255, 255, 255]);
+    await page.keyboard.press('Escape');
+    await page.getByRole('button', { name: 'Join', exact: true }).click();
+    await expect.poll(async () => (await frame()).level).toBeGreaterThan(.15);
+    await page.getByRole('button', { name: 'Settings', exact: true }).click();
+    await page.clock.pauseAt(await page.evaluate(() => Date.now() + 10_000));
+    await selectTheme('Dark');
+    await page.clock.runFor(300);
+    expect((await frame()).theme).toBeGreaterThan(0);
+    expect((await frame()).theme).toBeLessThan(1);
+    expect((await frame()).level).toBeGreaterThan(0);
+    await page.clock.resume();
+    await expect.poll(async () => (await frame()).theme).toBe(0);
+    await expect.poll(async () => (await frame()).level).toBeGreaterThan(0);
+
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await selectTheme('Light');
+    await expect.poll(async () => (await frame()).theme).toBe(1);
+    expect((await frame()).top).toEqual([255, 255, 255, 255]);
+    expect((await frame()).bottom).toEqual([255, 255, 255, 255]);
+  });
+
   test('persists the opt-in and follows every orb through room layouts', async ({ page }) => {
     await page.goto(app.url);
     await english(page);
-    const field = page.locator('.voice-background');
+    const field = page.locator('.live-background');
     await expect(field).toBeHidden();
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
-    const toggle = page.getByLabel('Reactive background', { exact: true });
+    const toggle = page.getByLabel('Live background', { exact: true });
     await expect(toggle).not.toBeChecked();
     await toggle.check();
     const initial = await state(page);
-    expect(await page.evaluate((key) => localStorage.getItem(key), `falky.mock.${initial.instanceId}.voiceBackground`)).toBe('on');
+    expect(await page.evaluate((key) => localStorage.getItem(key), `falky.mock.${initial.instanceId}.liveBackground`)).toBe('on');
     await page.keyboard.press('Escape');
     await page.reload();
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
@@ -103,7 +189,7 @@ test.describe('reactive voice background', () => {
     await expect(field).toHaveAttribute('data-ready', 'true');
     await toggle.uncheck();
     await expect(field).toBeHidden();
-    expect(await page.evaluate((key) => localStorage.getItem(key), `falky.mock.${initial.instanceId}.voiceBackground`)).toBe('off');
+    expect(await page.evaluate((key) => localStorage.getItem(key), `falky.mock.${initial.instanceId}.liveBackground`)).toBe('off');
   });
 
   test('retains the static dots when WebGL is unavailable', async ({ page }) => {
@@ -117,11 +203,11 @@ test.describe('reactive voice background', () => {
     await page.goto(app.url);
     await english(page);
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
-    await page.getByLabel('Reactive background', { exact: true }).check();
+    await page.getByLabel('Live background', { exact: true }).check();
     await page.keyboard.press('Escape');
     await page.getByRole('button', { name: 'Join', exact: true }).click();
     await expect(page.getByRole('toolbar')).toBeVisible();
-    await expect(page.locator('.voice-background')).toBeHidden();
+    await expect(page.locator('.live-background')).toBeHidden();
     expect(await page.locator('.room-screen').evaluate((el) => getComputedStyle(el).backgroundImage)).toContain('radial-gradient');
   });
 });
