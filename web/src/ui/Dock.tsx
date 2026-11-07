@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Room } from '../api/client';
 import { viewRoom, voice } from '../app/controller';
+import { shortcuts } from '../app/shortcuts';
 import { useApp } from '../app/store';
 import { onTick } from '../fx/ticker';
 import { t } from '../strings';
@@ -78,17 +79,17 @@ export function Dock({ room }: { room: Room | null }) {
           <span className="dock-sep" />
         </>
       )}
-      <IconButton className={v.deafened ? 'off' : ''} aria-pressed={v.deafened} data-cue={v.deafened ? 'on' : 'off'} aria-label={deafLabel} data-tip={deafLabel} onClick={() => void voice.toggleDeafen()}>
+      <IconButton className={v.deafened ? 'off' : ''} aria-pressed={v.deafened} data-cue={v.deafened ? 'on' : 'off'} aria-label={deafLabel} data-tip={`${deafLabel} (${shortcuts.deafen.label})`} onClick={() => void voice.toggleDeafen()}>
         <Icon name={v.deafened ? 'headOff' : 'head'} />
       </IconButton>
       <div className="mic-wrap">
         <span ref={ring} className="mic-ring" />
-        <IconButton className={v.muted ? 'off' : ''} aria-pressed={v.muted} data-cue={v.muted ? 'on' : 'off'} aria-label={muteLabel} data-tip={muteLabel} onClick={() => void voice.toggleMute()}>
+        <IconButton className={v.muted ? 'off' : ''} aria-pressed={v.muted} data-cue={v.muted ? 'on' : 'off'} aria-label={muteLabel} data-tip={`${muteLabel} (${shortcuts.mute.label})`} onClick={() => void voice.toggleMute()}>
           <Icon name={v.muted ? 'micOff' : 'mic'} />
         </IconButton>
       </div>
       {canUseCamera && (
-        <IconButton aria-pressed={v.camera} data-cue={v.camera ? 'off' : 'on'} aria-label={cameraLabel} data-tip={cameraLabel} onClick={() => void voice.toggleCamera()}>
+        <IconButton aria-pressed={v.camera} data-cue={v.camera ? 'off' : 'on'} aria-label={cameraLabel} data-tip={`${cameraLabel} (${shortcuts.camera.label})`} onClick={() => void voice.toggleCamera()}>
           <Icon name="camera" />
         </IconButton>
       )}

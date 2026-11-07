@@ -1,6 +1,7 @@
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { Message, Room } from '../api/client';
 import { discardMessage, loadOlder, postMessage, retryMessage, setChatOpen } from '../app/controller';
+import { shortcuts } from '../app/shortcuts';
 import { getState, useApp } from '../app/store';
 import { buildFeed, canPost, MESSAGE_MAX, messageLength, type PendingMessage, splitLinks } from '../chat/timeline';
 import { paletteOf, paletteStyle } from '../fx/palette';
@@ -212,7 +213,7 @@ export function Chat({ room }: { room: Room | null }) {
       </button>
       <div className="composer">
         {count > MESSAGE_MAX - 400 && <span className={`count${count > MESSAGE_MAX ? ' over' : ''}`}>{count} / {MESSAGE_MAX}</span>}
-        <div className="field">
+        <div className="field" data-tip={`${t.focusChat} (${shortcuts.chat.label} · ${shortcuts.chatEnter.label})`}>
           <textarea
             ref={input}
             rows={1}
