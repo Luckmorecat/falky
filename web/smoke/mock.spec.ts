@@ -254,6 +254,11 @@ test('entry, history/unread, conflict and reset after revoked or disconnected ac
   await page.getByRole('button', { name: 'Увійти', exact: true }).click();
   await english(page);
   await expect(page.getByText('Welcome back! Try sending a message or joining voice.', { exact: true })).toBeVisible();
+  // The first trip to the top loads the older page and keeps the message that was already there.
+  // A second trip reaches the newly loaded start, which is the only place that row is mounted.
+  const older = page.waitForResponse((response) => response.url().includes('/messages') && response.url().includes('before='));
+  await page.locator('.feed').evaluate((el) => { el.scrollTop = 0; });
+  await older;
   await page.locator('.feed').evaluate((el) => { el.scrollTop = 0; });
   await expect(page.getByText('Lounge history 1', { exact: true })).toBeAttached();
   const lounge = (await state(page)).rooms[0]!.id;
@@ -261,6 +266,8 @@ test('entry, history/unread, conflict and reset after revoked or disconnected ac
   await action(page, { type: 'message', roomId: lounge, body: 'Unread in Lounge', authorName: 'Sam' });
   await expect(page.getByRole('button', { name: 'Rooms: Games', exact: true }).getByTitle('New messages')).toBeVisible();
   await room(page, 'Lounge');
+  // The room reopens where it was left, at the older history, so the new line is below.
+  await page.getByRole('button', { name: 'Latest', exact: true }).click();
   await expect(page.getByText('Unread in Lounge', { exact: true })).toBeVisible();
   await action(page, { type: 'name-conflict', active: true });
   await expect(page.getByRole('alertdialog')).toBeVisible();
@@ -335,4 +342,116 @@ test('two instances in one browser context isolate visitors and survive a fresh 
     await expect(page.locator('.room-screen')).toBeVisible();
     await expect(page.locator('h1')).not.toBeEmpty();
   } finally { await other.close(); await second.close(); }
+});
+
+async function openChat(page: Page) {
+  await page.mouse.move(1400, 420);
+  await expect(page.locator('body')).toHaveClass(/chat-open/);
+}
+
+async function closeChat(page: Page) {
+  await page.mouse.move(280, 420);
+  await expect(page.locator('body')).not.toHaveClass(/chat-open/);
+}
+
+/** The message under the top edge of the feed, and how far its top sits from that edge. */
+async function readingAnchor(page: Page) {
+  return page.locator('.feed').evaluate((feed) => {
+    const edge = feed.getBoundingClientRect().top;
+    const row = [...feed.querySelectorAll<HTMLElement>('[data-row]')].find((el) => el.querySelector('.msg-text') && el.getBoundingClientRect().bottom > edge + 2);
+    const box = row?.getBoundingClientRect();
+    return { text: row?.querySelector('.msg-text')?.textContent ?? '', offset: box ? Math.round(box.top - edge) : null, mounted: feed.querySelectorAll('.msg').length };
+  });
+}
+
+/** The same line, within a pixel. Subpixel rounding can move the reported offset by one. */
+async function expectPlace(page: Page, anchor: { text: string; offset: number | null }) {
+  await expect.poll(async () => {
+    const next = await readingAnchor(page);
+    return next.text === anchor.text && next.offset !== null && anchor.offset !== null && Math.abs(next.offset - anchor.offset) <= 1;
+  }).toBe(true);
+}
+
+/** Two matching reads, so a measurement pass in between does not get stored as the place. */
+async function settledAnchor(page: Page) {
+  let previous = '';
+  let stable = { text: '', offset: null as number | null, mounted: 0 };
+  await expect.poll(async () => {
+    const next = await readingAnchor(page);
+    const key = `${next.text}:${next.offset}`;
+    const same = key === previous && next.text !== '';
+    previous = key;
+    stable = next;
+    return same;
+  }).toBe(true);
+  return stable;
+}
+
+test('chat keeps each room reading place, pages without jumping, and virtualizes the history', async ({ page }) => {
+  const olderPages: string[] = [];
+  page.on('request', (request) => {
+    const url = new URL(request.url());
+    if (url.pathname.endsWith('/messages') && url.searchParams.has('before')) olderPages.push(url.search);
+  });
+  await page.goto(app.url);
+  await english(page);
+  await openChat(page);
+  await expect(page.getByText('Welcome back! Try sending a message or joining voice.', { exact: true })).toBeVisible();
+  await page.locator('.feed').evaluate((el) => { el.scrollTop = 720; });
+  const lounge = await settledAnchor(page);
+  await closeChat(page);
+  await openChat(page);
+  await expectPlace(page, lounge);
+
+  await room(page, 'Games');
+  await openChat(page);
+  await expect(page.getByText('Nothing here yet', { exact: true })).toBeVisible();
+  const loungeId = (await state(page)).rooms[0]!.id;
+  await action(page, { type: 'message', roomId: loungeId, body: 'Unread while the history was open', authorName: 'Sam' });
+  await room(page, 'Lounge');
+  await openChat(page);
+  await expectPlace(page, lounge);
+  await expect(page).toHaveTitle('(1) Falky');
+  await page.getByRole('button', { name: 'Latest', exact: true }).click();
+  await expect(page.getByText('Unread while the history was open', { exact: true })).toBeVisible();
+  await expect(page).toHaveTitle('Falky');
+  const followed = await settledAnchor(page);
+  await action(page, { type: 'message', roomId: loungeId, body: 'Arrived at the bottom', authorName: 'Sam' });
+  await expect(page.getByText('Arrived at the bottom', { exact: true })).toBeVisible();
+  await page.locator('.feed').evaluate((el) => { el.scrollTop -= 640; });
+  const parked = await settledAnchor(page);
+  expect(parked.text).not.toBe('Arrived at the bottom');
+  await action(page, { type: 'message', roomId: loungeId, body: 'Arrived while reading', authorName: 'Sam' });
+  await expectPlace(page, parked);
+  expect(followed.text).not.toBe(parked.text);
+
+  let resumeOlder: (() => void) | undefined;
+  await page.route(/\/messages\?.*\bbefore=/, async (route) => {
+    await new Promise<void>((resolve) => { resumeOlder = resolve; });
+    await route.continue();
+  });
+  const held = page.getByText('Lounge history 26', { exact: true });
+  await page.locator('.feed').evaluate((el) => { el.scrollTop = 0; });
+  await expect.poll(() => resumeOlder !== undefined).toBe(true);
+  await expect(held).toBeVisible();
+  const beforePage = Math.round((await held.boundingBox())!.y);
+  resumeOlder!();
+  expect(olderPages).toHaveLength(1);
+  await expect.poll(async () => {
+    const box = await held.boundingBox();
+    return box ? Math.abs(Math.round(box.y) - beforePage) : 1_000;
+  }).toBeLessThanOrEqual(2);
+  await expect.poll(() => page.locator('.feed .msg').count()).toBeLessThan(40);
+  // The older page stayed above the message that was on screen. Scrolling up mounts its start.
+  await page.locator('.feed').evaluate((el) => { el.scrollTop = 0; });
+  await expect(page.getByText('Lounge history 1', { exact: true })).toBeAttached();
+  await expect.poll(() => page.locator('.feed .msg').count()).toBeLessThan(40);
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.getByRole('button', { name: 'Close chat', exact: true }).click();
+  await page.getByRole('button', { name: /^Chat/ }).click();
+  const phone = await settledAnchor(page);
+  await page.getByRole('button', { name: 'Close chat', exact: true }).click();
+  await page.getByRole('button', { name: /^Chat/ }).click();
+  await expectPlace(page, phone);
 });

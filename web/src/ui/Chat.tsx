@@ -1,9 +1,10 @@
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { Message, Room } from '../api/client';
-import { discardMessage, loadOlder, postMessage, retryMessage, setChatOpen } from '../app/controller';
+import { discardMessage, loadOlder, markLatestRead, postMessage, retryMessage, setChatOpen } from '../app/controller';
 import { shortcuts } from '../app/shortcuts';
 import { getState, useApp } from '../app/store';
-import { buildFeed, canPost, MESSAGE_MAX, messageLength, type PendingMessage, splitLinks } from '../chat/timeline';
+import { atBottom, followingLatest, rememberedPlace, rememberPlace, scrollToAnchor, sliceRange, stack, type Anchor } from '../chat/place';
+import { buildFeed, canPost, MESSAGE_MAX, messageLength, type FeedItem, type PendingMessage, splitLinks } from '../chat/timeline';
 import { assignPalettes, paletteOf, type PaletteName, paletteStyle } from '../fx/palette';
 import { t } from '../strings';
 import { IconButton } from './IconButton';
@@ -13,6 +14,37 @@ import { useDrawerLayout } from './useDrawerLayout';
 
 const timeOf = (iso: string) => new Date(iso).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false });
 
+type FeedRow = FeedItem | { kind: 'loading'; key: 'loading' };
+
+/** Rough height until the row is measured. Close enough that prepending history does not jump. */
+function estimateHeight(row: FeedRow): number {
+  if (row.kind === 'loading' || row.kind === 'day') return 36;
+  if (row.kind === 'new') return 33;
+  const text = row.kind === 'message' ? row.message.body : row.pending.body;
+  const lines = Math.max(1, Math.ceil(text.length / 36));
+  const head = row.continued ? 3 : 36;
+  return head + lines * 20 + (row.kind === 'pending' ? 22 : 0);
+}
+
+const leadOf = (rows: FeedRow[], index: number) => {
+  const prev = rows[index - 1];
+  return prev?.kind === 'day' || prev?.kind === 'new';
+};
+
+/** The message under the feed's top edge, measured from the screen so the text — not a day line — is what we keep. */
+function textAnchor(el: HTMLElement): Anchor | null {
+  const edge = el.getBoundingClientRect().top;
+  const row = [...el.querySelectorAll<HTMLElement>('[data-row]')].find((node) => {
+    const text = node.querySelector('.msg-text');
+    return !!text && text.getBoundingClientRect().bottom > edge + 2;
+  });
+  const text = row?.querySelector<HTMLElement>('.msg-text');
+  const key = row?.dataset.row;
+  if (!row || !text || !key) return null;
+  const rowTop = row.getBoundingClientRect().top;
+  return { key, offset: rowTop - edge, pad: text.getBoundingClientRect().top - rowTop };
+}
+
 function Body({ text }: { text: string }) {
   return (
     <div className="msg-text">
@@ -21,9 +53,9 @@ function Body({ text }: { text: string }) {
   );
 }
 
-const MessageRow = memo(function MessageRow({ message, continued, palette }: { message: Message; continued: boolean; palette: PaletteName }) {
+const MessageRow = memo(function MessageRow({ message, continued, lead, palette }: { message: Message; continued: boolean; lead: boolean; palette: PaletteName }) {
   return (
-    <article className={`msg${continued ? ' cont' : ''}`} style={paletteStyle(palette)}>
+    <article className={`msg${continued ? ' cont' : ''}${lead ? ' lead' : ''}`} style={paletteStyle(palette)}>
       {!continued && (
         <div className="msg-meta">
           <span className="msg-author">{message.authorName}</span>
@@ -35,9 +67,9 @@ const MessageRow = memo(function MessageRow({ message, continued, palette }: { m
   );
 });
 
-function PendingRow({ pending, continued, name, palette }: { pending: PendingMessage; continued: boolean; name: string; palette: PaletteName }) {
+function PendingRow({ pending, continued, lead, name, palette }: { pending: PendingMessage; continued: boolean; lead: boolean; name: string; palette: PaletteName }) {
   return (
-    <article className={`msg pending${continued ? ' cont' : ''}`} style={paletteStyle(palette)}>
+    <article className={`msg pending${continued ? ' cont' : ''}${lead ? ' lead' : ''}`} style={paletteStyle(palette)}>
       {!continued && <div className="msg-meta"><span className="msg-author">{name}</span></div>}
       <Body text={pending.body} />
       <div className={`msg-state${pending.failed ? ' err' : ''}`}>
@@ -87,35 +119,126 @@ export function Chat({ room }: { room: Room | null }) {
   );
   const paletteFor = (id: string) => palettes.get(id) ?? paletteOf(id);
   const feed = useRef<HTMLDivElement>(null);
-  const [atBottom, setAtBottom] = useState(true);
-  const stick = useRef(true);
-  /** Height before older messages arrive, to keep what is on screen in place. */
-  const heightBefore = useRef<number | null>(null);
+  const heights = useRef(new Map<string, number>());
+  const scrollRef = useRef(0);
+  /** Older pages wait until the saved place has been applied, so the first paint at the top does not fetch them. */
+  const placed = useRef(false);
+  const placedRoom = useRef<string | null>(null);
+  const adjusting = useRef(false);
+  const [scrollPos, setScrollPos] = useState(0);
+  const [measured, setMeasured] = useState(0);
+  const [frame, setFrame] = useState({ width: 0, height: 0, top: 28, bottom: 12 });
+  const [atBottomNow, setAtBottomNow] = useState(() => !room || followingLatest(room.id));
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const input = useRef<HTMLTextAreaElement>(null);
+  const announced = useRef('');
+  const [live, setLive] = useState('');
 
   const draft = room ? (drafts[room.id] ?? '') : '';
   const items = useMemo(() => (chat ? buildFeed(chat, visitor?.id, newAfterId) : []), [chat, visitor?.id, newAfterId, lang]);
+  const rows = useMemo<FeedRow[]>(() => {
+    const list: FeedRow[] = [];
+    if (chat?.loadingOlder) list.push({ kind: 'loading', key: 'loading' });
+    list.push(...items);
+    return list;
+  }, [chat?.loadingOlder, items]);
   const count = messageLength(draft);
+  const keys = useMemo(() => rows.map((row) => row.key), [rows]);
+  const heightsNow = rows.map((row) => heights.current.get(row.key) ?? estimateHeight(row));
+  const laid = stack(heightsNow, frame.top, frame.bottom, frame.height);
+  const visible = sliceRange(laid.tops, scrollPos, frame.height);
+  const topGap = laid.tops[visible.start] ?? 0;
+  const bottomGap = Math.max(0, laid.scrollHeight - (laid.tops[visible.end] ?? laid.scrollHeight));
+
+  const note = (el: HTMLDivElement) => {
+    if (!room) return;
+    const top = el.scrollTop;
+    const bottom = atBottom(top, el.scrollHeight, el.clientHeight);
+    const anchor = bottom ? null : textAnchor(el);
+    const was = followingLatest(room.id);
+    rememberPlace(room.id, { following: bottom, anchor });
+    setAtBottomNow(bottom);
+    if (bottom && !was) markLatestRead(room.id);
+  };
 
   useLayoutEffect(() => {
+    const el = feed.current;
+    if (!el || !room) return;
+    if (placedRoom.current !== room.id) {
+      placedRoom.current = room.id;
+      placed.current = false;
+    }
+    const style = getComputedStyle(el);
+    const top = Number.parseFloat(style.getPropertyValue('--feed-top')) || 28;
+    const bottomInset = Number.parseFloat(style.getPropertyValue('--feed-bottom')) || 12;
+    const height = el.clientHeight;
+    const width = el.clientWidth;
+    if (height !== frame.height || width !== frame.width || top !== frame.top || bottomInset !== frame.bottom) {
+      setFrame({ width, height, top, bottom: bottomInset });
+      return;
+    }
+    let changed = false;
+    for (const node of el.querySelectorAll<HTMLElement>('[data-row]')) {
+      const key = node.dataset.row;
+      if (!key) continue;
+      const heightOf = Math.round(node.getBoundingClientRect().height * 10) / 10;
+      if (heightOf > 0 && heights.current.get(key) !== heightOf) {
+        heights.current.set(key, heightOf);
+        changed = true;
+      }
+    }
+    if (changed) {
+      setMeasured((n) => n + 1);
+      return;
+    }
+    const place = rememberedPlace(room.id) ?? { following: true, anchor: null };
+    const max = Math.max(0, laid.scrollHeight - height);
+    const next = place.following ? max : place.anchor ? scrollToAnchor(keys, laid.tops, place.anchor, max) : null;
+    setAtBottomNow((prev) => (prev === place.following ? prev : place.following));
+    placed.current = true;
+    let kept = el.scrollTop;
+    if (next !== null && Math.abs(kept - next) > 1) {
+      adjusting.current = true;
+      el.scrollTop = next;
+      adjusting.current = false;
+      kept = el.scrollTop;
+    }
+    // The row top is back. If the text inside it gained padding, move by that so the line stays.
+    const anchor = !place.following ? place.anchor : null;
+    if (anchor?.pad !== undefined) {
+      const row = el.querySelector<HTMLElement>(`[data-row="${anchor.key}"]`);
+      const text = row?.querySelector<HTMLElement>('.msg-text');
+      if (row && text) {
+        const delta = text.getBoundingClientRect().top - row.getBoundingClientRect().top - anchor.pad;
+        if (Math.abs(delta) > 1) {
+          adjusting.current = true;
+          el.scrollTop += delta;
+          adjusting.current = false;
+          kept = el.scrollTop;
+          rememberPlace(room.id, { following: false, anchor: { key: anchor.key, offset: anchor.offset - delta, pad: anchor.pad + delta } });
+        }
+      }
+    }
+    if (Math.abs(scrollRef.current - kept) > 0.5) {
+      scrollRef.current = kept;
+      setScrollPos((prev) => (Math.abs(prev - kept) < 0.5 ? prev : kept));
+    }
+  }, [rows, frame, measured, room?.id, open, keys, laid.scrollHeight, visible.start, visible.end]);
+
+  useEffect(() => {
     const el = feed.current;
     if (!el) return;
-    if (heightBefore.current !== null) {
-      el.scrollTop += el.scrollHeight - heightBefore.current;
-      heightBefore.current = null;
-    } else if (stick.current) {
-      el.scrollTop = el.scrollHeight;
-    }
-  }, [items]);
-
-  // Each room and each opening starts at the newest message.
-  useLayoutEffect(() => {
-    stick.current = true;
-    setAtBottom(true);
-    const el = feed.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, [room?.id, open]);
+    const watch = new ResizeObserver(() => {
+      const style = getComputedStyle(el);
+      const top = Number.parseFloat(style.getPropertyValue('--feed-top')) || 28;
+      const bottom = Number.parseFloat(style.getPropertyValue('--feed-bottom')) || 12;
+      const height = el.clientHeight;
+      const width = el.clientWidth;
+      setFrame((prev) => (prev.width === width && prev.height === height && prev.top === top && prev.bottom === bottom ? prev : { width, height, top, bottom }));
+    });
+    watch.observe(el);
+    return () => watch.disconnect();
+  }, [room?.id]);
 
   useEffect(() => {
     if (open && drawer && matchMedia('(pointer: fine)').matches) input.current?.focus({ preventScroll: true });
@@ -157,13 +280,24 @@ export function Chat({ room }: { room: Room | null }) {
   const onScroll = () => {
     const el = feed.current;
     if (!el || !room) return;
-    const bottom = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
-    stick.current = bottom;
-    setAtBottom(bottom);
-    if (el.scrollTop < 120 && chat?.hasOlder && !chat.loadingOlder) {
-      heightBefore.current = el.scrollHeight;
-      void loadOlder(room.id);
-    }
+    const top = el.scrollTop;
+    scrollRef.current = top;
+    setScrollPos((prev) => (Math.abs(prev - top) < 0.5 ? prev : top));
+    if (!adjusting.current) note(el);
+    if (placed.current && top < 120 && chat?.hasOlder && !chat.loadingOlder) void loadOlder(room.id);
+  };
+
+  const followBottom = () => {
+    if (!room) return;
+    rememberPlace(room.id, { following: true, anchor: null });
+    setAtBottomNow(true);
+    const el = feed.current;
+    if (!el) return;
+    const next = Math.max(0, el.scrollHeight - el.clientHeight);
+    el.scrollTop = next;
+    scrollRef.current = next;
+    setScrollPos(next);
+    markLatestRead(room.id);
   };
 
   const setDraft = (value: string) => {
@@ -172,10 +306,24 @@ export function Chat({ room }: { room: Room | null }) {
 
   const send = () => {
     if (!room || !canPost(draft)) return;
+    rememberPlace(room.id, { following: true, anchor: null });
     postMessage(room.id, draft);
     setDraft('');
-    stick.current = true;
+    setAtBottomNow(true);
   };
+
+  useEffect(() => {
+    announced.current = '';
+    setLive('');
+  }, [room?.id]);
+
+  useEffect(() => {
+    const id = newest?.id ?? '';
+    if (!open || !id || id === announced.current) return;
+    const first = announced.current === '';
+    announced.current = id;
+    if (!first && newest) setLive(`${newest.authorName}: ${newest.body}`);
+  }, [open, newest, room?.id]);
 
   return (
     <div
@@ -199,26 +347,36 @@ export function Chat({ room }: { room: Room | null }) {
       onFocus={settle}
       onBlur={settle}
     >
-      <div className="feed" ref={feed} onScroll={onScroll} aria-live="polite">
-        {chat?.loadingOlder && <div className="day">{t.loadingOlder}</div>}
-        {chat?.loaded && !items.length && (
+      <div className="live-msg" aria-live="polite">{live}</div>
+      <div className="feed" ref={feed} onScroll={onScroll}>
+        {chat?.loaded && !rows.length && (
           <div className="empty-chat"><strong>{t.emptyChatTitle}</strong>{t.emptyChatBody}</div>
         )}
-        {items.map((item) => {
-          if (item.kind === 'day') return <div key={item.key} className="day">{item.label}</div>;
-          if (item.kind === 'new') return <div key={item.key} className="new-line">{t.newMessages}</div>;
-          if (item.kind === 'message') return <MessageRow key={item.key} message={item.message} continued={item.continued} palette={paletteFor(item.message.authorId)} />;
-          return <PendingRow key={item.key} pending={item.pending} continued={item.continued} name={visitor?.name ?? ''} palette={paletteFor(selfId)} />;
-        })}
+        {rows.length > 0 && (
+          <>
+            <div className="feed-gap" style={{ height: topGap }} />
+            {rows.slice(visible.start, visible.end).map((row, offset) => {
+              const index = visible.start + offset;
+              const lead = leadOf(rows, index);
+              return (
+                <div key={row.key} data-row={row.key}>
+                  {row.kind === 'loading' ? <div className="day">{t.loadingOlder}</div>
+                    : row.kind === 'day' ? <div className="day">{row.label}</div>
+                      : row.kind === 'new' ? <div className="new-line">{t.newMessages}</div>
+                        : row.kind === 'message' ? <MessageRow message={row.message} continued={row.continued} lead={lead} palette={paletteFor(row.message.authorId)} />
+                          : <PendingRow pending={row.pending} continued={row.continued} lead={lead} name={visitor?.name ?? ''} palette={paletteFor(selfId)} />}
+                </div>
+              );
+            })}
+            <div className="feed-gap" style={{ height: bottomGap }} />
+          </>
+        )}
       </div>
       <button
-        className={`to-latest${atBottom ? '' : ' show'}`}
-        tabIndex={atBottom ? -1 : 0}
-        aria-hidden={atBottom}
-        onClick={() => {
-          const el = feed.current;
-          if (el) el.scrollTop = el.scrollHeight;
-        }}
+        className={`to-latest${atBottomNow ? '' : ' show'}`}
+        tabIndex={atBottomNow ? -1 : 0}
+        aria-hidden={atBottomNow}
+        onClick={followBottom}
       >
         <Icon name="down" />{t.toLatest}
       </button>
