@@ -1,15 +1,41 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { copyFile, mkdir, mkdtemp, readFile, rm, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { build, resolveConfig } from 'vite';
 
 const originalMarker = process.env.FALKY_MOCK;
 const originalNodeEnv = process.env.NODE_ENV;
+const originalRevision = process.env.FALKY_BUILD_REVISION;
+const originalRef = process.env.FALKY_BUILD_REF;
 const temporary = await mkdtemp(join(tmpdir(), 'falky-runtime-'));
 try {
   delete process.env.FALKY_MOCK;
+  const revision = 'abcdef0123456789abcdef0123456789abcdef01';
+  process.env.FALKY_BUILD_REVISION = revision;
+  process.env.FALKY_BUILD_REF = 'refs/heads/master';
+  const development = await resolveConfig({}, 'build');
+  assert.equal(development.define?.['import.meta.env.VITE_BUILD_VERSION'], JSON.stringify('dev abcdef0'));
+  process.env.FALKY_BUILD_REF = 'refs/tags/v1.2.3+build.4';
+  const production = await resolveConfig({}, 'build');
+  assert.equal(production.define?.['import.meta.env.VITE_BUILD_VERSION'], JSON.stringify('v1.2.3+build.4'));
+  process.env.FALKY_BUILD_REVISION = '';
+  await assert.rejects(resolveConfig({}, 'build'), /build metadata/i);
+  process.env.FALKY_BUILD_REVISION = revision;
+  process.env.FALKY_BUILD_REF = 'refs/heads/feature';
+  await assert.rejects(resolveConfig({}, 'build'), /build metadata/i);
+  delete process.env.FALKY_BUILD_REVISION;
+  delete process.env.FALKY_BUILD_REF;
+  const archive = join(temporary, 'archive');
+  await mkdir(archive);
+  await copyFile('vite.config.ts', join(archive, 'vite.config.ts'));
+  await copyFile('package.json', join(archive, 'package.json'));
+  await symlink(resolve('node_modules'), join(archive, 'node_modules'), 'dir');
+  const withoutGit = await resolveConfig({ configFile: join(archive, 'vite.config.ts') }, 'serve');
+  assert.equal(withoutGit.define?.['import.meta.env.VITE_BUILD_VERSION'], JSON.stringify('dev unknown'));
   const normal = await resolveConfig({}, 'serve');
+  assert.match(String(normal.define?.['import.meta.env.VITE_BUILD_VERSION']), /^"dev [a-f0-9]{7}"$/);
+  console.log('Build identity: development SHA, exact release tag, missing/invalid metadata rejection, and local archive fallback verified.');
   assert.deepEqual(normal.server.proxy, {
     '/api': { target: 'http://127.0.0.1:8080', ws: true },
     '/rtc': { target: 'http://127.0.0.1:7880', ws: true },
@@ -22,6 +48,9 @@ try {
   process.env.NODE_ENV = 'production';
   for (const mode of ['production', 'mock']) {
     if (mode === 'mock') process.env.FALKY_MOCK = '1';
+    process.env.FALKY_BUILD_REVISION = revision;
+    process.env.FALKY_BUILD_REF = mode === 'production' ? 'refs/heads/master' : 'refs/tags/v1.2.3+build.4';
+    const version = mode === 'production' ? 'dev abcdef0' : 'v1.2.3+build.4';
     const modules = new Set<string>();
     const chunks = new Map<string, { imports: string[]; modules: string[] }>();
     let assets = '';
@@ -41,6 +70,9 @@ try {
         },
       }],
     });
+    assert.ok(assets.includes(version), 'The settings footer must use the source build identity');
+    const html = await readFile(join(temporary, mode, 'index.html'), 'utf8');
+    assert.ok(html.includes(`<span class="build-version">${version}</span>`), 'The global footer must be present before app startup');
     const initial = new Set<string>();
     function visit(name: string): void {
       if (initial.has(name)) return;
@@ -68,5 +100,9 @@ try {
   else process.env.FALKY_MOCK = originalMarker;
   if (originalNodeEnv === undefined) delete process.env.NODE_ENV;
   else process.env.NODE_ENV = originalNodeEnv;
+  if (originalRevision === undefined) delete process.env.FALKY_BUILD_REVISION;
+  else process.env.FALKY_BUILD_REVISION = originalRevision;
+  if (originalRef === undefined) delete process.env.FALKY_BUILD_REF;
+  else process.env.FALKY_BUILD_REF = originalRef;
   await rm(temporary, { recursive: true, force: true });
 }
