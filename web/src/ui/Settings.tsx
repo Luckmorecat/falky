@@ -401,8 +401,6 @@ export function Settings({ open, onClose }: { open: boolean; onClose(): void }) 
       {panel('profile', <ProfilePanel />)}
       {showKeys && panel('keys', <KeysPanel />)}
       {panel('system', <SystemPanel />)}
-      {/* Native modals cover and inert the page footer, so keep a selectable copy here. */}
-      <span className="build-version">{import.meta.env.VITE_BUILD_VERSION}</span>
     </dialog>
   );
 }

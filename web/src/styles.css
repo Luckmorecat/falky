@@ -68,11 +68,9 @@ svg.i { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-widt
 :focus-visible { outline: 2px solid var(--level); outline-offset: 2px; }
 [hidden] { display: none !important; }
 
-.build-version { position: fixed; left: max(12px, env(safe-area-inset-left)); bottom: max(8px, env(safe-area-inset-bottom)); z-index: 50;
+.build-version { position: absolute; left: max(12px, env(safe-area-inset-left)); bottom: max(8px, env(safe-area-inset-bottom)); z-index: 1;
   color: var(--text); opacity: .5; font-size: 11px; line-height: 16px; user-select: text; }
-body:has(.settings[open]) > .build-version { visibility: hidden; }
-:root:has(.share:fullscreen) .build-version { display: none; }
-.settings > .build-version { position: static; flex: none; align-self: flex-start; margin: 0 20px max(8px, env(safe-area-inset-bottom)); }
+.room-screen:has(.settings[open], .share:fullscreen) .build-version { visibility: hidden; }
 
 .screen { position: fixed; inset: 0; background-color: var(--bg);
   background-image: var(--dots);
@@ -438,8 +436,8 @@ kbd { min-width: 34px; height: 34px; padding: 0 10px; display: inline-grid; plac
   .chat { pointer-events: auto; width: 100%; background: var(--surface); transform: translateX(100%); visibility: hidden; transition: transform 460ms var(--ease-drawer), visibility 0s linear 460ms; }
   .chat-open .chat { transform: none; visibility: visible; transition: transform 460ms var(--ease-drawer), visibility 0s; }
   .feed { --feed-top: 72px; -webkit-mask-image: none; mask-image: none; }
-  .composer { padding-inline: 12px; padding-bottom: calc(var(--edge) + 20px); }
-  .to-latest { bottom: 88px; }
+  .composer { padding-inline: 12px; }
+  .chat-open .build-version { visibility: hidden; }
   .chat .feed, .chat .composer { opacity: 1; }
 }
 @media (max-width: 1000px) {

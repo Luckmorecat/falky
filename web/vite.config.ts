@@ -39,10 +39,7 @@ export default defineConfig(({ command }) => {
       voice: command === 'serve' && process.env.FALKY_MOCK === '1' ? 'mock/voice.ts' : 'voice/session.ts',
       bootstrap: command === 'serve' && process.env.FALKY_MOCK === '1' ? 'mock/bootstrap.ts' : 'runtime/bootstrap.ts',
     }).map(([name, path]) => [`@falky/${name}`, fileURLToPath(new URL(`./src/${path}`, import.meta.url))])) },
-    plugins: [react(), {
-      name: 'build-version',
-      transformIndexHtml: { order: 'pre', handler: (html) => html.replace('%FALKY_BUILD_VERSION%', version) },
-    }],
+    plugins: [react()],
     server: {
       port: 5173,
       strictPort: true,
