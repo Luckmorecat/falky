@@ -57,9 +57,9 @@ function Body({ text }: { text: string }) {
   );
 }
 
-const MessageRow = memo(function MessageRow({ message, continued, lead, palette }: { message: Message; continued: boolean; lead: boolean; palette: PaletteName | undefined }) {
+const MessageRow = memo(function MessageRow({ message, own, continued, lead, palette }: { message: Message; own: boolean; continued: boolean; lead: boolean; palette: PaletteName | undefined }) {
   return (
-    <article className={`msg${continued ? ' cont' : ''}${lead ? ' lead' : ''}`} style={paletteStyle(palette)}>
+    <article className={`msg${own ? ' own' : ''}${continued ? ' cont' : ''}${lead ? ' lead' : ''}`} style={paletteStyle(palette)}>
       {!continued && (
         <div className="msg-meta">
           <span className="msg-author">{message.authorName}</span>
@@ -73,7 +73,7 @@ const MessageRow = memo(function MessageRow({ message, continued, lead, palette 
 
 function PendingRow({ pending, continued, lead, name, palette }: { pending: PendingMessage; continued: boolean; lead: boolean; name: string; palette: PaletteName | undefined }) {
   return (
-    <article className={`msg pending${continued ? ' cont' : ''}${lead ? ' lead' : ''}`} style={paletteStyle(palette)}>
+    <article className={`msg own pending${continued ? ' cont' : ''}${lead ? ' lead' : ''}`} style={paletteStyle(palette)}>
       {!continued && <div className="msg-meta"><span className="msg-author">{name}</span></div>}
       <Body text={pending.body} />
       <div className={`msg-state${pending.failed ? ' err' : ''}`}>
@@ -371,7 +371,7 @@ export function Chat({ room }: { room: Room | null }) {
                   {row.kind === 'loading' ? <div className="day">{t.loadingOlder}</div>
                     : row.kind === 'day' ? <div className="day">{row.label}</div>
                       : row.kind === 'new' ? <div className="new-line">{t.newMessages}</div>
-                        : row.kind === 'message' ? <MessageRow message={row.message} continued={row.continued} lead={lead} palette={paletteFor(row.message.authorId)} />
+                        : row.kind === 'message' ? <MessageRow message={row.message} own={row.message.authorId === selfId} continued={row.continued} lead={lead} palette={paletteFor(row.message.authorId)} />
                           : <PendingRow pending={row.pending} continued={row.continued} lead={lead} name={visitor?.name ?? ''} palette={paletteFor(selfId)} />}
                 </div>
               );
