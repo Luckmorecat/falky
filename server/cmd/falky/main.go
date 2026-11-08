@@ -27,12 +27,14 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"slices"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/kisshot/falky/server/internal/admin"
+	"github.com/kisshot/falky/server/internal/attachments"
 	"github.com/kisshot/falky/server/internal/chat"
 	"github.com/kisshot/falky/server/internal/httpapi"
 	"github.com/kisshot/falky/server/internal/identity"
@@ -60,7 +62,7 @@ Quote a name that has spaces: falky room create "Living room"
 
 // migrationSources lists the embedded migrations of each module that owns
 // tables; platform applies them as one sequence ordered by version.
-var migrationSources = []fs.FS{identity.Migrations(), rooms.Migrations(), chat.Migrations()}
+var migrationSources = []fs.FS{identity.Migrations(), rooms.Migrations(), chat.Migrations(), attachments.Migrations()}
 
 // shutdownTimeout bounds how long serve waits for in-flight requests.
 const shutdownTimeout = 10 * time.Second
@@ -341,6 +343,29 @@ func serveOn(ctx context.Context, logger *slog.Logger, cfg platform.Config, db *
 	}
 	hub := realtime.New(realtime.WithLogger(logger), realtime.WithConnectedFunc(ident.ColourConnected))
 	events := httpapi.Events{Hub: hub, Logger: logger}
+	root := cfg.AttachmentRoot
+	if root == "" {
+		root = filepath.Join(filepath.Dir(cfg.DBPath), "attachments")
+	}
+	options := []attachments.Option{
+		attachments.WithExpiryPublisher(events.AttachmentsExpired),
+		attachments.WithErrorHandler(func(err error) { logger.Error("attachment cleanup failed", "error", err) }),
+	}
+	if cfg.AttachmentPostedBytes > 0 {
+		options = append(options, attachments.WithPostedQuota(cfg.AttachmentPostedBytes))
+	}
+	store, err := attachments.New(db, root, options...)
+	if err != nil {
+		return errors.Join(err, ls.public.Close(), ls.internal.Close(), ls.admin.Close())
+	}
+	if err := store.Recover(ctx); err != nil {
+		return errors.Join(err, store.Close(context.Background()), ls.public.Close(), ls.internal.Close(), ls.admin.Close())
+	}
+	defer func() { _ = store.Close(context.Background()) }()
+	runCtx, stopRun := context.WithCancel(context.WithoutCancel(ctx))
+	defer stopRun()
+	attachmentsDone := make(chan struct{})
+	go func() { defer close(attachmentsDone); store.Run(runCtx) }()
 	rs := rooms.New(db, rooms.WithPublisher(events.RoomChanged), rooms.WithNameCheck(ident.NameTaken))
 	vs := voice.New(voice.NewClient(cfg.LiveKitAPIURL, cfg.LiveKitAPIKey, cfg.LiveKitAPISecret), ident, rs, voice.Config{
 		URL: cfg.LiveKitURL, APIKey: cfg.LiveKitAPIKey, APISecret: cfg.LiveKitAPISecret, RoomCap: cfg.VoiceRoomCap,
@@ -353,12 +378,15 @@ func serveOn(ctx context.Context, logger *slog.Logger, cfg platform.Config, db *
 		Identity: ident,
 		Rooms:    rs,
 		Chat: chat.New(db,
+			chat.WithAttachments(store),
 			chat.WithPostLimit(platform.NewLimiter(postBurst, postInterval, time.Now)),
 			chat.WithPublisher(events.MessageCreated)),
 		Voice:        vs,
 		EnterLimit:   platform.NewLimiter(enterBurst, enterInterval, time.Now),
 		Live:         hub,
 		PublicOrigin: cfg.PublicOrigin,
+		Attachments:  store,
+		Shutdown:     runCtx,
 	})
 	adminHandler := admin.Handler(admin.Deps{
 		Logger: logger, Identity: ident, Rooms: rs, Voice: vs, AccessRevoked: events.AccessRevoked,
@@ -389,7 +417,7 @@ func serveOn(ctx context.Context, logger *slog.Logger, cfg platform.Config, db *
 		go func() { errc <- fmt.Errorf("%s listener: %w", s.name, s.srv.Serve(s.ln)) }()
 	}
 
-	var err error
+	err = nil
 	select {
 	case <-ctx.Done():
 		logger.Info("shutting down")
@@ -397,13 +425,19 @@ func serveOn(ctx context.Context, logger *slog.Logger, cfg platform.Config, db *
 	}
 	stopRefresh()
 	<-refreshed
+	stopRun()
+	<-attachmentsDone
 	shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownTimeout)
 	defer cancel()
+	closed := make(chan error, 1)
+	go func() { closed <- store.Close(context.Background()) }()
 	for _, s := range servers {
 		if e := s.srv.Shutdown(shutdownCtx); e != nil {
 			err = errors.Join(err, fmt.Errorf("shut down %s listener: %w", s.name, e))
+			err = errors.Join(err, s.srv.Close())
 		}
 	}
+	err = errors.Join(err, <-closed)
 	// The servers do not track the WebSocket connections they handed over.
 	if e := hub.Shutdown(shutdownCtx); e != nil {
 		err = errors.Join(err, fmt.Errorf("shut down live updates: %w", e))

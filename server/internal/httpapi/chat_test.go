@@ -3,6 +3,7 @@ package httpapi
 import (
 	"fmt"
 	"net/http"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -105,13 +106,13 @@ func TestPostingIsIdempotentByRequestKey(t *testing.T) {
 	}
 
 	again := attemptPost(t, b, lounge.ID, "k1", "hello")
-	if again.StatusCode() != http.StatusOK || again.JSON200 == nil || *again.JSON200 != created {
+	if again.StatusCode() != http.StatusOK || again.JSON200 == nil || !reflect.DeepEqual(*again.JSON200, created) {
 		t.Errorf("PostMessage repeated = %d %s, want 200 with %+v", again.StatusCode(), again.Body, created)
 	}
 	changed := attemptPost(t, b, lounge.ID, "k1", "hello?")
 	wantError(t, "PostMessage with the same key and another body", changed.StatusCode(), changed.Body, http.StatusConflict, "request_key_reused")
 
-	if got := history(t, b, lounge.ID, api.ListMessagesParams{}); len(got) != 1 || got[0] != created {
+	if got := history(t, b, lounge.ID, api.ListMessagesParams{}); len(got) != 1 || !reflect.DeepEqual(got[0], created) {
 		t.Errorf("history = %+v, want only %+v", got, created)
 	}
 }

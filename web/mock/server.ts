@@ -125,7 +125,7 @@ export async function startMockServer(options: { port?: number; scenario?: strin
     const author = historyAuthors[i % 2]!;
     messages.get(roomIds[0]!)!.push({ id: id(), roomId: roomIds[0]!, authorId: author.visitorId, authorName: author.name,
       body: i === 125 ? 'Welcome back! Try sending a message or joining voice.' : `Lounge history ${i}`,
-      createdAt: new Date().toISOString() });
+      attachments: [], createdAt: new Date().toISOString() });
   }
   const fixtureMessages = structuredClone(messages);
   const fixturePeers = structuredClone(state.peers);
@@ -272,7 +272,7 @@ export async function startMockServer(options: { port?: number; scenario?: strin
         if (typeof input.body !== 'string' || !input.body.trim() || [...input.body].length > 4000) throw new Refused(400, 'invalid_message', 'Invalid message body');
         const authorName = typeof input.authorName === 'string' ? input.authorName : 'Sam';
         const author = Object.values(state.peers).flat().find((peer) => peer.name === authorName);
-        const message: Schema['Message'] = { id: id(), roomId: input.roomId as string, authorId: author?.visitorId ?? id(), authorName, body: input.body, createdAt: new Date().toISOString() };
+        const message: Schema['Message'] = { id: id(), roomId: input.roomId as string, authorId: author?.visitorId ?? id(), authorName, body: input.body, attachments: [], createdAt: new Date().toISOString() };
         assignColour(message.authorId);
         history.push(message);
         publish('message.created', message, message.roomId);
@@ -360,7 +360,7 @@ export async function startMockServer(options: { port?: number; scenario?: strin
       const sendFault = state.faults.send;
       state.faults.send = 'none';
       if (sendFault === 'fail') { state.revision++; throw new Refused(503, 'internal', 'Scripted send failure; retry the message'); }
-      const message: Schema['Message'] = { id: id(), roomId: match[1]!, authorId: state.visitor.id, authorName: state.visitor.name, body: input.body, createdAt: new Date().toISOString() };
+      const message: Schema['Message'] = { id: id(), roomId: match[1]!, authorId: state.visitor.id, authorName: state.visitor.name, body: input.body, attachments: [], createdAt: new Date().toISOString() };
       history.push(message);
       requests.set(input.requestKey, message);
       publish('message.created', message, message.roomId);

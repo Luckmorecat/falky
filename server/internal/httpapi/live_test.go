@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"reflect"
 	"testing"
 	"time"
 
@@ -151,7 +152,7 @@ func TestNewMessagesReachEveryConnectedVisitorWithinASecond(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: payload: %v", name, err)
 		}
-		if e.Type != api.EventTypeMessageCreated || e.RoomId != lounge.ID || got != m {
+		if e.Type != api.EventTypeMessageCreated || e.RoomId != lounge.ID || !reflect.DeepEqual(got, m) {
 			t.Errorf("%s got %s in room %q with %+v, want message.created in %s with %+v", name, e.Type, e.RoomId, got, lounge.ID, m)
 		}
 	}

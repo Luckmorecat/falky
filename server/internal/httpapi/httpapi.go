@@ -9,6 +9,7 @@ import (
 	"net/http"
 
 	"github.com/kisshot/falky/server/internal/api"
+	"github.com/kisshot/falky/server/internal/attachments"
 	"github.com/kisshot/falky/server/internal/chat"
 	"github.com/kisshot/falky/server/internal/identity"
 	"github.com/kisshot/falky/server/internal/platform"
@@ -32,12 +33,15 @@ const maxRequestBody = 64 << 10
 
 // Deps are what the handlers serve from.
 type Deps struct {
-	Logger   *slog.Logger
-	Health   *platform.Health
-	Metrics  http.Handler
-	Identity *identity.Service
-	Rooms    *rooms.Service
-	Chat     *chat.Service
+	Logger      *slog.Logger
+	Health      *platform.Health
+	Metrics     http.Handler
+	Identity    *identity.Service
+	Rooms       *rooms.Service
+	Chat        *chat.Service
+	Attachments *attachments.Store
+	// Shutdown wakes blocked upload readers before the application waits for Store.Close.
+	Shutdown context.Context
 	Voice    *voice.Service
 	// EnterLimit limits entering per client IP. Posting is limited by Chat,
 	// which knows whether it only repeats a stored message.
@@ -78,12 +82,18 @@ func New(deps Deps) Handlers {
 	)
 
 	public := http.NewServeMux()
+	a := attachmentHandlers{store: deps.Attachments, rooms: deps.Rooms, resolve: resolve, origin: deps.PublicOrigin, errs: errs, shutdown: deps.Shutdown}
+	public.HandleFunc("POST /api/rooms/{id}/attachments", attachmentRoute(a.upload))
+	public.HandleFunc("GET /api/attachments/limits", attachmentRoute(a.limits))
+	public.HandleFunc("GET /api/attachments/{id}", attachmentRoute(a.status))
+	public.HandleFunc("DELETE /api/attachments/{id}", attachmentRoute(a.cancel))
+	public.HandleFunc("GET /api/attachments/{id}/content", attachmentRoute(a.content))
 	public.Handle("GET /api/live", live{
 		origin: deps.PublicOrigin, resolve: resolve, identity: deps.Identity, rooms: deps.Rooms, hub: deps.Live,
 		logger: deps.Logger,
 	})
-	public.Handle("/api/", operations)
-	public.HandleFunc("/", notFound)
+	public.Handle("/api/", http.MaxBytesHandler(operations, maxRequestBody))
+	public.Handle("/", http.MaxBytesHandler(http.HandlerFunc(notFound), maxRequestBody))
 
 	internal := http.NewServeMux()
 	internal.Handle("/health/", operations)
@@ -92,7 +102,7 @@ func New(deps Deps) Handlers {
 		http.MaxBytesHandler(liveKitWebhook{voice: deps.Voice, logger: deps.Logger}, maxWebhookBody))
 	internal.HandleFunc("/", notFound)
 
-	return Handlers{Public: http.MaxBytesHandler(public, maxRequestBody), Internal: internal}
+	return Handlers{Public: public, Internal: internal}
 }
 
 type server struct {

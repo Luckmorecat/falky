@@ -12,6 +12,7 @@ import (
 	"github.com/oklog/ulid/v2"
 
 	"github.com/kisshot/falky/server/internal/api"
+	"github.com/kisshot/falky/server/internal/attachments"
 	"github.com/kisshot/falky/server/internal/chat"
 	"github.com/kisshot/falky/server/internal/identity"
 	"github.com/kisshot/falky/server/internal/realtime"
@@ -145,5 +146,12 @@ func encodeEvent(typ api.EventType, roomID string, setPayload func(*api.Event_Pa
 func (e Events) VisitorColourChanged(c identity.Colour) {
 	e.publish(api.EventTypeVisitorColourChanged, "", func(p *api.Event_Payload) error {
 		return p.FromVisitorColour(colourBody(c))
+	})
+}
+
+// AttachmentsExpired publishes committed posted tombstones in their room.
+func (e Events) AttachmentsExpired(expiry attachments.Expiry) {
+	e.publish(api.EventTypeAttachmentsExpired, expiry.RoomID, func(p *api.Event_Payload) error {
+		return p.FromAttachmentsExpired(api.AttachmentsExpired{AttachmentIds: expiry.IDs})
 	})
 }

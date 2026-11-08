@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -194,6 +195,55 @@ func TestServeRefusesToStartWithoutTheLiveKitKeys(t *testing.T) {
 	}
 	if _, err := os.Stat(dbPath); !errors.Is(err, fs.ErrNotExist) {
 		t.Errorf("database file: %v, want none created", err)
+	}
+}
+
+func TestShutdownInterruptsBlockedMultipartReader(t *testing.T) {
+	dir := t.TempDir()
+	vars := map[string]string{platform.EnvDBPath: filepath.Join(dir, "falky.db"), platform.EnvAdminSocket: filepath.Join(dir, "admin.sock")}
+	cfg, err := platform.LoadConfig(env(vars))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stop, public := startServerOn(t, cfg, io.Discard)
+	_, link, _ := runLinkShow(t, env(vars))
+	c, err := api.NewClientWithResponses(public)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entered, err := c.EnterWithResponse(t.Context(), api.EnterRequest{Secret: strings.TrimSpace(strings.Split(link, "#k=")[1]), Name: "Bob"})
+	if err != nil || entered.JSON201 == nil {
+		t.Fatalf("enter=%+v %v", entered, err)
+	}
+	_, room, _ := runCommand(t, env(vars), "room", "create", "Lounge")
+	conn, err := (&net.Dialer{}).DialContext(t.Context(), "tcp", strings.TrimPrefix(public, "http://"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close() }()
+	if err := conn.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	_, err = fmt.Fprintf(conn, "POST /api/rooms/%s/attachments HTTP/1.1\r\nHost: localhost\r\nCookie: %s\r\nContent-Type: multipart/form-data; boundary=slow\r\nContent-Length: 1000000\r\nExpect: 100-continue\r\n\r\n", strings.TrimSpace(room), entered.HTTPResponse.Cookies()[0].String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader := bufio.NewReader(conn)
+	response, err := http.ReadResponse(reader, nil)
+	if err != nil || response.StatusCode != 100 {
+		t.Fatalf("body admission=%+v %v", response, err)
+	}
+	_ = response.Body.Close()
+	_, err = io.WriteString(conn, "--slow\r\nContent-Disposition: form-data; name=\"file\"; filename=\"slow.txt\"\r\n\r\npartial")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stopped := make(chan struct{})
+	go func() { stop(); close(stopped) }()
+	select {
+	case <-stopped:
+	case <-time.After(3 * time.Second):
+		t.Fatal("shutdown left a blocked request reader")
 	}
 }
 
@@ -399,7 +449,7 @@ func TestMessagesRoomsAndVisitorsSurviveARestart(t *testing.T) {
 		t.Fatalf("ListMessages: %v", err)
 	}
 	if history.StatusCode() != http.StatusOK || history.JSON200 == nil || len(history.JSON200.Messages) != 1 ||
-		history.JSON200.Messages[0] != *posted.JSON201 {
+		!reflect.DeepEqual(history.JSON200.Messages[0], *posted.JSON201) {
 		t.Errorf("ListMessages after restart = %d %s, want only %+v", history.StatusCode(), history.Body, *posted.JSON201)
 	}
 }

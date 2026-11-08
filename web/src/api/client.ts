@@ -10,10 +10,13 @@ export type VoiceCredentials = Schemas['VoiceCredentials'];
 export type RoomChange = Schemas['RoomChange'];
 export type OccupancyChange = Schemas['OccupancyChange'];
 export type AccessRevoked = Schemas['AccessRevoked'];
+export type Attachment = Schemas['Attachment'];
+export type AttachmentsExpired = Schemas['AttachmentsExpired'];
 
 /** A live update, narrowed by its type. Unknown types are ignored by callers. */
 export type LiveEvent = { eventId: string; timestamp: string; roomId?: string } & (
   | { type: 'message.created'; payload: Message }
+  | { type: 'attachments.expired'; payload: AttachmentsExpired }
   | { type: 'room.changed'; payload: RoomChange }
   | { type: 'occupancy.changed'; payload: OccupancyChange }
   | { type: 'access.revoked'; payload: AccessRevoked }

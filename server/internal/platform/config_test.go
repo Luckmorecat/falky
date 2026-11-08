@@ -16,9 +16,10 @@ func TestLoadConfigDefaultsToLoopback(t *testing.T) {
 		t.Fatalf("LoadConfig: %v", err)
 	}
 	want := Config{
-		PublicAddr:    "127.0.0.1:8080",
-		InternalAddr:  "127.0.0.1:9090",
-		DBPath:        "falky.db",
+		PublicAddr:     "127.0.0.1:8080",
+		InternalAddr:   "127.0.0.1:9090",
+		DBPath:         "falky.db",
+		AttachmentRoot: "attachments", AttachmentPostedBytes: 5_000_000_000,
 		SnapshotDir:   "snapshots",
 		AdminSocket:   "falky-admin.sock",
 		PublicOrigin:  "http://127.0.0.1:8080",
@@ -51,9 +52,10 @@ func TestLoadConfigReadsEnvironment(t *testing.T) {
 		t.Fatalf("LoadConfig: %v", err)
 	}
 	want := Config{
-		PublicAddr:       ":8080",
-		InternalAddr:     ":9090",
-		DBPath:           "/data/falky.db",
+		PublicAddr:     ":8080",
+		InternalAddr:   ":9090",
+		DBPath:         "/data/falky.db",
+		AttachmentRoot: "/data/attachments", AttachmentPostedBytes: 5_000_000_000,
 		SnapshotDir:      "/snapshots",
 		AdminSocket:      "/run/falky/admin.sock",
 		PublicOrigin:     "https://falky.example",
@@ -102,5 +104,21 @@ func TestLiveKitURLDefaultsToThePublicOrigin(t *testing.T) {
 	}
 	if cfg.LiveKitURL != "wss://falky.example" {
 		t.Errorf("LiveKitURL = %q, want wss://falky.example", cfg.LiveKitURL)
+	}
+}
+
+func TestAttachmentConfigFollowsDatabaseAndValidatesQuota(t *testing.T) {
+	cfg, err := LoadConfig(env(map[string]string{EnvDBPath: "/data/falky.db"}))
+	if err != nil || cfg.AttachmentRoot != "/data/attachments" || cfg.AttachmentPostedBytes != 5_000_000_000 {
+		t.Fatalf("defaults=%+v %v", cfg, err)
+	}
+	cfg, err = LoadConfig(env(map[string]string{EnvAttachmentRoot: "/data/files", EnvAttachmentPostedBytes: "123"}))
+	if err != nil || cfg.AttachmentRoot != "/data/files" || cfg.AttachmentPostedBytes != 123 {
+		t.Fatalf("configured=%+v %v", cfg, err)
+	}
+	for _, value := range []string{"0", "-1", "bytes", "9223372036854775808"} {
+		if _, err := LoadConfig(env(map[string]string{EnvAttachmentPostedBytes: value})); err == nil {
+			t.Errorf("quota %q accepted", value)
+		}
 	}
 }
