@@ -23,6 +23,7 @@ try {
   for (const mode of ['production', 'mock']) {
     if (mode === 'mock') process.env.FALKY_MOCK = '1';
     const modules = new Set<string>();
+    const chunks = new Map<string, { imports: string[]; modules: string[] }>();
     let assets = '';
     await build({
       mode,
@@ -32,12 +33,29 @@ try {
         generateBundle(_options, bundle) {
           for (const output of Object.values(bundle)) {
             if (output.type !== 'chunk') continue;
-            for (const id of Object.keys(output.modules)) modules.add(id.replaceAll('\\', '/'));
+            const ids = Object.keys(output.modules).map((id) => id.replaceAll('\\', '/'));
+            for (const id of ids) modules.add(id);
+            chunks.set(output.fileName, { imports: output.imports, modules: ids });
             assets += output.code;
           }
         },
       }],
     });
+    const initial = new Set<string>();
+    function visit(name: string): void {
+      if (initial.has(name)) return;
+      initial.add(name);
+      for (const dependency of chunks.get(name)?.imports ?? []) visit(dependency);
+    }
+    const render = [...chunks].find(([, chunk]) => chunk.modules.some((id) => id.endsWith('/src/app/render.tsx')));
+    assert.ok(render, 'The app renderer must be emitted');
+    visit(render[0]);
+    const initialModules = [...initial].flatMap((name) => chunks.get(name)!.modules);
+    assert.ok(initialModules.some((id) => id.endsWith('/src/ui/Chat.tsx')), 'Chat stays in the initial interface');
+    assert.ok([...modules].some((id) => id.endsWith('/src/ui/Settings.tsx')), 'Settings must be emitted');
+    assert.ok([...modules].some((id) => id.includes('/livekit-client/')), 'LiveKit must be emitted');
+    assert.ok(!initialModules.some((id) => id.endsWith('/src/ui/Settings.tsx')), 'Settings must load on demand');
+    assert.ok(!initialModules.some((id) => id.includes('/livekit-client/')), 'LiveKit must load in the background');
     assert.ok([...modules].some((id) => id.endsWith('/src/voice/session.ts')), 'Real voice must be emitted');
     assert.ok([...modules].some((id) => id.endsWith('/src/runtime/browser.ts')), 'Real browser adapter must be emitted');
     assert.deepEqual([...modules].filter((id) => /\/(?:src\/)?mock\//.test(id)), []);

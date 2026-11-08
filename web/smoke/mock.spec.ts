@@ -170,6 +170,43 @@ test('settings, simulated voice errors and animated local/remote sharing avoid h
   await expect(page.getByRole('dialog', { name: 'Settings' }).getByRole('alert')).toHaveText('No access to the microphone');
 });
 
+test('settings downloads on first open and retains its tab when reopened', async ({ page }) => {
+  let requests = 0;
+  let release!: () => void;
+  const download = new Promise<void>((resolve) => { release = resolve; });
+  await page.route('**/src/ui/Settings.tsx*', async (route) => {
+    requests++;
+    await download;
+    await route.continue();
+  });
+  await page.goto(app.url);
+  const opener = page.getByRole('button', { name: 'Налаштування', exact: true });
+  await expect(opener).toBeVisible();
+  expect(requests).toBe(0);
+  await opener.click();
+  await expect.poll(() => requests).toBe(1);
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText('Lounge');
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  release();
+  const settings = page.getByRole('dialog', { name: 'Налаштування' });
+  await expect(settings).toBeVisible();
+  await settingsTab(page, 'Система');
+  await page.keyboard.press('Escape');
+  await expect(opener).toBeFocused();
+  await opener.click();
+  await expect(settings.getByRole('tab', { name: 'Система', exact: true })).toHaveAttribute('aria-selected', 'true');
+  expect(requests).toBe(1);
+});
+
+test('a failed settings download leaves the interface usable and shows a notice', async ({ page }) => {
+  await page.route('**/src/ui/Settings.tsx*', (route) => route.abort('failed'));
+  await page.goto(app.url);
+  await page.getByRole('button', { name: 'Налаштування', exact: true }).click();
+  await expect(page.getByRole('status')).toContainText('Перевір інтернет');
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText('Lounge');
+  await expect(page.locator('.composer textarea')).toBeEnabled();
+});
+
 test('settings window: keyboard stays inside, tabs move by arrows, favourite colour sticks', async ({ page }) => {
   await page.goto(app.url);
   await english(page);

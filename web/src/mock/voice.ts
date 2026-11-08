@@ -3,6 +3,9 @@ import { idleVoice, type VoiceHost, type VoiceSnapshot, type VoiceClient, type S
 import { SyntheticShare } from './share';
 import { mockAction, mockState, refreshMockState, subscribeMockState } from './state';
 
+/** Mock media needs no SDK download. */
+export async function preloadVoice(): Promise<void> {}
+
 /** Simulates media only. Joining and room moves still use the public HTTP API. */
 export class VoiceSession implements VoiceClient {
   private tracks = new Map<string, SyntheticShare>();
