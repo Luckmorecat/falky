@@ -123,7 +123,8 @@ function stage(scene: Scene): void {
   const chats = Object.fromEntries(rooms.map((r) => [r.id, { ...emptyChat(), loaded: true, messages: r.id === 'lounge' ? messages : [] }]));
   const many = NAMES.map((_, i) => person(i));
   setState({
-    phase: 'ready', visitor: { id: self.id, name: self.name, nameTaken: false }, live: 'open', chats, notice: null, roomsOpen: false,
+    phase: 'ready', visitor: { id: self.id, name: self.name, nameTaken: false, colour: { visitorId: self.id, palette: 'sky', revision: 1 } }, live: 'open', chats, notice: null, roomsOpen: false,
+    colours: Object.fromEntries(NAMES.map((_, i) => { const id = person(i).id; return [id, { visitorId: id, palette: PALETTE_NAMES[i % PALETTE_NAMES.length]!, revision: 1 }]; })),
     rooms, viewedRoomId: scene === 'empty' ? 'work' : 'lounge', chatOpen: scene === 'chat', voice: idleVoice,
   });
   if (scene === 'voice' || scene === 'chat') setState({ voice: inVoice(ROOM_PEOPLE, 'lounge') });

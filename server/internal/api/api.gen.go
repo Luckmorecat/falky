@@ -52,10 +52,11 @@ func (e EventV) Valid() bool {
 
 // Defines values for EventType.
 const (
-	EventTypeAccessRevoked    EventType = "access.revoked"
-	EventTypeMessageCreated   EventType = "message.created"
-	EventTypeOccupancyChanged EventType = "occupancy.changed"
-	EventTypeRoomChanged      EventType = "room.changed"
+	EventTypeAccessRevoked        EventType = "access.revoked"
+	EventTypeMessageCreated       EventType = "message.created"
+	EventTypeOccupancyChanged     EventType = "occupancy.changed"
+	EventTypeRoomChanged          EventType = "room.changed"
+	EventTypeVisitorColourChanged EventType = "visitor.colour.changed"
 )
 
 // Valid indicates whether the value is a known member of the EventType enum.
@@ -68,6 +69,8 @@ func (e EventType) Valid() bool {
 	case EventTypeOccupancyChanged:
 		return true
 	case EventTypeRoomChanged:
+		return true
+	case EventTypeVisitorColourChanged:
 		return true
 	default:
 		return false
@@ -95,6 +98,66 @@ func (e HealthStatus) Valid() bool {
 	}
 }
 
+// Defines values for PaletteName.
+const (
+	PaletteNameAmber   PaletteName = "amber"
+	PaletteNameApricot PaletteName = "apricot"
+	PaletteNameAurora  PaletteName = "aurora"
+	PaletteNameClay    PaletteName = "clay"
+	PaletteNameCoral   PaletteName = "coral"
+	PaletteNameIndigo  PaletteName = "indigo"
+	PaletteNameLagoon  PaletteName = "lagoon"
+	PaletteNameLime    PaletteName = "lime"
+	PaletteNameMoss    PaletteName = "moss"
+	PaletteNameOcean   PaletteName = "ocean"
+	PaletteNamePlum    PaletteName = "plum"
+	PaletteNameRose    PaletteName = "rose"
+	PaletteNameRuby    PaletteName = "ruby"
+	PaletteNameSky     PaletteName = "sky"
+	PaletteNameSunset  PaletteName = "sunset"
+	PaletteNameViolet  PaletteName = "violet"
+)
+
+// Valid indicates whether the value is a known member of the PaletteName enum.
+func (e PaletteName) Valid() bool {
+	switch e {
+	case PaletteNameAmber:
+		return true
+	case PaletteNameApricot:
+		return true
+	case PaletteNameAurora:
+		return true
+	case PaletteNameClay:
+		return true
+	case PaletteNameCoral:
+		return true
+	case PaletteNameIndigo:
+		return true
+	case PaletteNameLagoon:
+		return true
+	case PaletteNameLime:
+		return true
+	case PaletteNameMoss:
+		return true
+	case PaletteNameOcean:
+		return true
+	case PaletteNamePlum:
+		return true
+	case PaletteNameRose:
+		return true
+	case PaletteNameRuby:
+		return true
+	case PaletteNameSky:
+		return true
+	case PaletteNameSunset:
+		return true
+	case PaletteNameViolet:
+		return true
+	default:
+		return false
+	}
+}
+
 // AccessRevoked Why the visitor's access ended. Their cookie is refused from now on; they enter again through the current access link, as a new visitor.
 type AccessRevoked struct {
 	// Reason `link_replaced`: the access link was replaced, which ends every visitor's access.
@@ -107,6 +170,14 @@ type AccessRevoked struct {
 //
 // Example: link_replaced
 type AccessRevokedReason string
+
+// ColourRequest An explicit palette choice for the cookie owner.
+type ColourRequest struct {
+	// Palette One of the shared sixteen visitor palettes.
+	//
+	// Example: sky
+	Palette PaletteName `json:"palette"`
+}
 
 // EnterRequest The access link's secret and the name to enter under.
 type EnterRequest struct {
@@ -134,7 +205,7 @@ type Error struct {
 	Message string `json:"message"`
 }
 
-// Event A live update, as sent over `GET /api/live`. `type` says what happened and which schema `payload` has: `message.created` carries a `Message`, `room.changed` a `RoomChange`, `occupancy.changed` an `OccupancyChange`, `access.revoked` an `AccessRevoked`. Clients ignore event types they do not know.
+// Event A live update, as sent over `GET /api/live`. `type` says what happened and which schema `payload` has: `message.created` carries a `Message`, `room.changed` a `RoomChange`, `occupancy.changed` an `OccupancyChange`, `visitor.colour.changed` a `VisitorColour`, `access.revoked` an `AccessRevoked`. Clients ignore event types they do not know.
 //
 // Example: {"eventId":"01JBX8C4P0G7J9M1Q4S6V8X0ZA","payload":{"authorId":"01JBX6Z8Q3M5W2K7R9T4V1C0DE","authorName":"Bob","body":"Anyone up for a game?","createdAt":"2026-11-04T18:30:05.123Z","id":"01JBX8C4N2F6H8K0P3R5T7W9YZ","roomId":"01JBX7A2K9D4F6H8M0P3R5T7VW"},"roomId":"01JBX7A2K9D4F6H8M0P3R5T7VW","timestamp":"2026-11-04T18:30:05.140Z","type":"message.created","v":1}
 type Event struct {
@@ -156,7 +227,7 @@ type Event struct {
 	// Example: 2026-11-04T18:30:05.140Z
 	Timestamp time.Time `json:"timestamp"`
 
-	// Type What an event reports: `message.created`, a message was posted (its payload is the `Message`); `room.changed`, a room was created or renamed (its payload is the `RoomChange`); `occupancy.changed`, someone joined or left a room's voice, or a participant's new name reached it (its payload is the `OccupancyChange`); `access.revoked`, the visitor's access ended (its payload is the `AccessRevoked`), and the server closes the connection next.
+	// Type What an event reports: `message.created`, a message was posted (its payload is the `Message`); `room.changed`, a room was created or renamed (its payload is the `RoomChange`); `occupancy.changed`, someone joined or left a room's voice, or a participant's new name reached it (its payload is the `OccupancyChange`); `access.revoked`, the visitor's access ended (its payload is the `AccessRevoked`), and the server closes the connection next; `visitor.colour.changed`, an explicit saved colour change (its payload is the `VisitorColour`) to all visitors.
 	//
 	// Example: message.created
 	Type EventType `json:"type"`
@@ -177,7 +248,7 @@ type Event_Payload struct {
 // Example: 1
 type EventV int
 
-// EventType What an event reports: `message.created`, a message was posted (its payload is the `Message`); `room.changed`, a room was created or renamed (its payload is the `RoomChange`); `occupancy.changed`, someone joined or left a room's voice, or a participant's new name reached it (its payload is the `OccupancyChange`); `access.revoked`, the visitor's access ended (its payload is the `AccessRevoked`), and the server closes the connection next.
+// EventType What an event reports: `message.created`, a message was posted (its payload is the `Message`); `room.changed`, a room was created or renamed (its payload is the `RoomChange`); `occupancy.changed`, someone joined or left a room's voice, or a participant's new name reached it (its payload is the `OccupancyChange`); `access.revoked`, the visitor's access ended (its payload is the `AccessRevoked`), and the server closes the connection next; `visitor.colour.changed`, an explicit saved colour change (its payload is the `VisitorColour`) to all visitors.
 //
 // Example: message.created
 type EventType string
@@ -288,6 +359,11 @@ type OccupancyChange struct {
 	RoomId string `json:"roomId"`
 }
 
+// PaletteName One of the shared sixteen visitor palettes.
+//
+// Example: sky
+type PaletteName string
+
 // Participant A visitor connected to a room's voice.
 type Participant struct {
 	// Name The participant's name.
@@ -363,6 +439,9 @@ type RoomList struct {
 
 // Visitor A person who entered through the access link.
 type Visitor struct {
+	// Colour One persistent assignment. Revisions increase per visitor on every accepted save and survive restart. Equal revisions always identify the same palette. Clients merge by revision because events and responses may arrive out of order.
+	Colour VisitorColour `json:"colour"`
+
 	// Id The visitor's ID, a ULID; it never changes.
 	//
 	// Example: 01JBX6Z8Q3M5W2K7R9T4V1C0DE
@@ -377,6 +456,40 @@ type Visitor struct {
 	//
 	// Example: false
 	NameTaken bool `json:"nameTaken"`
+}
+
+// VisitorColour One persistent assignment. Revisions increase per visitor on every accepted save and survive restart. Equal revisions always identify the same palette. Clients merge by revision because events and responses may arrive out of order.
+type VisitorColour struct {
+	// Palette One of the shared sixteen visitor palettes.
+	//
+	// Example: sky
+	Palette PaletteName `json:"palette"`
+
+	// Revision The monotonically increasing per-visitor assignment revision.
+	//
+	// Example: 1
+	Revision int64 `json:"revision"`
+
+	// VisitorId The existing visitor's ID.
+	//
+	// Example: 01JBX6Z8Q3M5W2K7R9T4V1C0DE
+	VisitorId string `json:"visitorId"`
+}
+
+// VisitorColourList Current assignments for known IDs, deduplicated in request order.
+type VisitorColourList struct {
+	// Colours The current assignments, including historical authors.
+	//
+	// Example: [{"palette":"sky","revision":1,"visitorId":"01JBX6Z8Q3M5W2K7R9T4V1C0DE"}]
+	Colours []VisitorColour `json:"colours"`
+}
+
+// VisitorColourLookup A bounded batch of explicit visitor IDs, never a roster query.
+type VisitorColourLookup struct {
+	// VisitorIds Existing visitor IDs to look up; unknown IDs are omitted.
+	//
+	// Example: ["01JBX6Z8Q3M5W2K7R9T4V1C0DE"]
+	VisitorIds []string `json:"visitorIds"`
 }
 
 // VoiceCredentials What a client connects to a room's voice with.
@@ -425,8 +538,14 @@ type EnterJSONRequestBody = EnterRequest
 // RenameMeJSONRequestBody defines body for RenameMe for application/json ContentType.
 type RenameMeJSONRequestBody = RenameRequest
 
+// SetMyColourJSONRequestBody defines body for SetMyColour for application/json ContentType.
+type SetMyColourJSONRequestBody = ColourRequest
+
 // PostMessageJSONRequestBody defines body for PostMessage for application/json ContentType.
 type PostMessageJSONRequestBody = PostMessageRequest
+
+// LookupVisitorColoursJSONRequestBody defines body for LookupVisitorColours for application/json ContentType.
+type LookupVisitorColoursJSONRequestBody = VisitorColourLookup
 
 // AsMessage returns the union data inside the Event_Payload as a Message
 func (t Event_Payload) AsMessage() (Message, error) {
@@ -522,6 +641,32 @@ func (t *Event_Payload) FromAccessRevoked(v AccessRevoked) error {
 
 // MergeAccessRevoked performs a merge with any union data inside the Event_Payload, using the provided AccessRevoked
 func (t *Event_Payload) MergeAccessRevoked(v AccessRevoked) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsVisitorColour returns the union data inside the Event_Payload as a VisitorColour
+func (t Event_Payload) AsVisitorColour() (VisitorColour, error) {
+	var body VisitorColour
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromVisitorColour overwrites any union data inside the Event_Payload as the provided VisitorColour
+func (t *Event_Payload) FromVisitorColour(v VisitorColour) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeVisitorColour performs a merge with any union data inside the Event_Payload, using the provided VisitorColour
+func (t *Event_Payload) MergeVisitorColour(v VisitorColour) error {
 	b, err := json.Marshal(v)
 	if err != nil {
 		return err
@@ -659,6 +804,24 @@ type ClientInterface interface {
 	// Corresponds with PATCH /api/me (the `RenameMe` operationId).
 	RenameMe(ctx context.Context, body RenameMeJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
+	// SetMyColourWithBody Save the current visitor's colour.
+	//
+	// Saves only the cookie owner. Any palette is allowed, including duplicates. Every accepted save advances the persistent revision, including an unchanged palette, and broadcasts visitor.colour.changed to all live connections.
+	//
+	// Takes any type of body and a specified content type.
+	//
+	// Corresponds with PUT /api/me/colour (the `SetMyColour` operationId).
+	SetMyColourWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// SetMyColour Save the current visitor's colour.
+	//
+	// Saves only the cookie owner. Any palette is allowed, including duplicates. Every accepted save advances the persistent revision, including an unchanged palette, and broadcasts visitor.colour.changed to all live connections.
+	//
+	// Takes a body of the `application/json` content type.
+	//
+	// Corresponds with PUT /api/me/colour (the `SetMyColour` operationId).
+	SetMyColour(ctx context.Context, body SetMyColourJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// ListRooms List every room with its occupancy.
 	//
 	// Returns every room, in the order they were created, each with the participants in its voice. The operator creates and renames rooms.
@@ -701,6 +864,24 @@ type ClientInterface interface {
 	//
 	// Corresponds with POST /api/rooms/{id}/voice (the `JoinVoice` operationId).
 	JoinVoice(ctx context.Context, id RoomId, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// LookupVisitorColoursWithBody Read current colours for explicit visitor IDs.
+	//
+	// Returns current assignments, including disconnected historical authors whose access was revoked. Unknown IDs are omitted and repeated IDs appear once. At most 100 IDs per request; clients batch larger history sets. This reveals neither connection status nor a visitor roster. Read again after live opens to recover colour changes missed while disconnected.
+	//
+	// Takes any type of body and a specified content type.
+	//
+	// Corresponds with POST /api/visitor-colours (the `LookupVisitorColours` operationId).
+	LookupVisitorColoursWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// LookupVisitorColours Read current colours for explicit visitor IDs.
+	//
+	// Returns current assignments, including disconnected historical authors whose access was revoked. Unknown IDs are omitted and repeated IDs appear once. At most 100 IDs per request; clients batch larger history sets. This reveals neither connection status nor a visitor roster. Read again after live opens to recover colour changes missed while disconnected.
+	//
+	// Takes a body of the `application/json` content type.
+	//
+	// Corresponds with POST /api/visitor-colours (the `LookupVisitorColours` operationId).
+	LookupVisitorColours(ctx context.Context, body LookupVisitorColoursJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// GetLiveness Report that the process is running.
 	//
@@ -810,6 +991,44 @@ func (c *Client) RenameMe(ctx context.Context, body RenameMeJSONRequestBody, req
 	return c.Client.Do(req)
 }
 
+// SetMyColourWithBody Save the current visitor's colour.
+//
+// Saves only the cookie owner. Any palette is allowed, including duplicates. Every accepted save advances the persistent revision, including an unchanged palette, and broadcasts visitor.colour.changed to all live connections.
+//
+// Takes any type of body and a specified content type.
+//
+// Corresponds with PUT /api/me/colour (the `SetMyColour` operationId).
+func (c *Client) SetMyColourWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewSetMyColourRequestWithBody(c.Server, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// SetMyColour Save the current visitor's colour.
+//
+// Saves only the cookie owner. Any palette is allowed, including duplicates. Every accepted save advances the persistent revision, including an unchanged palette, and broadcasts visitor.colour.changed to all live connections.
+//
+// Takes a body of the `application/json` content type.
+//
+// Corresponds with PUT /api/me/colour (the `SetMyColour` operationId).
+func (c *Client) SetMyColour(ctx context.Context, body SetMyColourJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewSetMyColourRequest(c.Server, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
 // ListRooms List every room with its occupancy.
 //
 // Returns every room, in the order they were created, each with the participants in its voice. The operator creates and renames rooms.
@@ -893,6 +1112,44 @@ func (c *Client) PostMessage(ctx context.Context, id RoomId, body PostMessageJSO
 // Corresponds with POST /api/rooms/{id}/voice (the `JoinVoice` operationId).
 func (c *Client) JoinVoice(ctx context.Context, id RoomId, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewJoinVoiceRequest(c.Server, id)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// LookupVisitorColoursWithBody Read current colours for explicit visitor IDs.
+//
+// Returns current assignments, including disconnected historical authors whose access was revoked. Unknown IDs are omitted and repeated IDs appear once. At most 100 IDs per request; clients batch larger history sets. This reveals neither connection status nor a visitor roster. Read again after live opens to recover colour changes missed while disconnected.
+//
+// Takes any type of body and a specified content type.
+//
+// Corresponds with POST /api/visitor-colours (the `LookupVisitorColours` operationId).
+func (c *Client) LookupVisitorColoursWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewLookupVisitorColoursRequestWithBody(c.Server, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// LookupVisitorColours Read current colours for explicit visitor IDs.
+//
+// Returns current assignments, including disconnected historical authors whose access was revoked. Unknown IDs are omitted and repeated IDs appear once. At most 100 IDs per request; clients batch larger history sets. This reveals neither connection status nor a visitor roster. Read again after live opens to recover colour changes missed while disconnected.
+//
+// Takes a body of the `application/json` content type.
+//
+// Corresponds with POST /api/visitor-colours (the `LookupVisitorColours` operationId).
+func (c *Client) LookupVisitorColours(ctx context.Context, body LookupVisitorColoursJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewLookupVisitorColoursRequest(c.Server, body)
 	if err != nil {
 		return nil, err
 	}
@@ -1035,6 +1292,46 @@ func NewRenameMeRequestWithBody(server string, contentType string, body io.Reade
 	}
 
 	req, err := http.NewRequest(http.MethodPatch, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewSetMyColourRequest calls the generic SetMyColour builder with application/json body
+func NewSetMyColourRequest(server string, body SetMyColourJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewSetMyColourRequestWithBody(server, "application/json", bodyReader)
+}
+
+// NewSetMyColourRequestWithBody constructs an http.Request for the SetMyColour method, with any body, and a specified content type
+func NewSetMyColourRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/me/colour")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPut, queryURL.String(), body)
 	if err != nil {
 		return nil, err
 	}
@@ -1229,6 +1526,46 @@ func NewJoinVoiceRequest(server string, id RoomId) (*http.Request, error) {
 	return req, nil
 }
 
+// NewLookupVisitorColoursRequest calls the generic LookupVisitorColours builder with application/json body
+func NewLookupVisitorColoursRequest(server string, body LookupVisitorColoursJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewLookupVisitorColoursRequestWithBody(server, "application/json", bodyReader)
+}
+
+// NewLookupVisitorColoursRequestWithBody constructs an http.Request for the LookupVisitorColours method, with any body, and a specified content type
+func NewLookupVisitorColoursRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/visitor-colours")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
 // NewGetLivenessRequest constructs an http.Request for the GetLiveness method
 func NewGetLivenessRequest(server string) (*http.Request, error) {
 	var err error
@@ -1372,6 +1709,24 @@ type ClientWithResponsesInterface interface {
 	// Corresponds with PATCH /api/me (the `RenameMe` operationId).
 	RenameMeWithResponse(ctx context.Context, body RenameMeJSONRequestBody, reqEditors ...RequestEditorFn) (*RenameMeResponse, error)
 
+	// SetMyColourWithBodyWithResponse Save the current visitor's colour.
+	//
+	// Saves only the cookie owner. Any palette is allowed, including duplicates. Every accepted save advances the persistent revision, including an unchanged palette, and broadcasts visitor.colour.changed to all live connections.
+	//
+	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with PUT /api/me/colour (the `SetMyColour` operationId).
+	SetMyColourWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*SetMyColourResponse, error)
+
+	// SetMyColourWithResponse Save the current visitor's colour.
+	//
+	// Saves only the cookie owner. Any palette is allowed, including duplicates. Every accepted save advances the persistent revision, including an unchanged palette, and broadcasts visitor.colour.changed to all live connections.
+	//
+	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with PUT /api/me/colour (the `SetMyColour` operationId).
+	SetMyColourWithResponse(ctx context.Context, body SetMyColourJSONRequestBody, reqEditors ...RequestEditorFn) (*SetMyColourResponse, error)
+
 	// ListRoomsWithResponse List every room with its occupancy.
 	//
 	// Returns every room, in the order they were created, each with the participants in its voice. The operator creates and renames rooms.
@@ -1420,6 +1775,24 @@ type ClientWithResponsesInterface interface {
 	//
 	// Corresponds with POST /api/rooms/{id}/voice (the `JoinVoice` operationId).
 	JoinVoiceWithResponse(ctx context.Context, id RoomId, reqEditors ...RequestEditorFn) (*JoinVoiceResponse, error)
+
+	// LookupVisitorColoursWithBodyWithResponse Read current colours for explicit visitor IDs.
+	//
+	// Returns current assignments, including disconnected historical authors whose access was revoked. Unknown IDs are omitted and repeated IDs appear once. At most 100 IDs per request; clients batch larger history sets. This reveals neither connection status nor a visitor roster. Read again after live opens to recover colour changes missed while disconnected.
+	//
+	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /api/visitor-colours (the `LookupVisitorColours` operationId).
+	LookupVisitorColoursWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*LookupVisitorColoursResponse, error)
+
+	// LookupVisitorColoursWithResponse Read current colours for explicit visitor IDs.
+	//
+	// Returns current assignments, including disconnected historical authors whose access was revoked. Unknown IDs are omitted and repeated IDs appear once. At most 100 IDs per request; clients batch larger history sets. This reveals neither connection status nor a visitor roster. Read again after live opens to recover colour changes missed while disconnected.
+	//
+	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /api/visitor-colours (the `LookupVisitorColours` operationId).
+	LookupVisitorColoursWithResponse(ctx context.Context, body LookupVisitorColoursJSONRequestBody, reqEditors ...RequestEditorFn) (*LookupVisitorColoursResponse, error)
 
 	// GetLivenessWithResponse Report that the process is running.
 	//
@@ -1641,6 +2014,68 @@ func (r RenameMeResponse) StatusCode() int {
 
 // ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
 func (r RenameMeResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type SetMyColourResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *VisitorColour
+	// JSON400 the response for an HTTP 400 `application/json` response
+	JSON400 *Error
+	// JSON401 the response for an HTTP 401 `application/json` response
+	JSON401 *VisitorRequired
+	// JSONDefault the response for an HTTP default `application/json` response
+	JSONDefault *Error
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r SetMyColourResponse) GetJSON200() *VisitorColour {
+	return r.JSON200
+}
+
+// GetJSON400 returns the response for an HTTP 400 `application/json` response
+func (r SetMyColourResponse) GetJSON400() *Error {
+	return r.JSON400
+}
+
+// GetJSON401 returns the response for an HTTP 401 `application/json` response
+func (r SetMyColourResponse) GetJSON401() *VisitorRequired {
+	return r.JSON401
+}
+
+// GetJSONDefault returns the response for an HTTP default `application/json` response
+func (r SetMyColourResponse) GetJSONDefault() *Error {
+	return r.JSONDefault
+}
+
+// GetBody returns the raw response body bytes
+func (r SetMyColourResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r SetMyColourResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r SetMyColourResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r SetMyColourResponse) ContentType() string {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.Header.Get("Content-Type")
 	}
@@ -1937,6 +2372,68 @@ func (r JoinVoiceResponse) ContentType() string {
 	return ""
 }
 
+type LookupVisitorColoursResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *VisitorColourList
+	// JSON400 the response for an HTTP 400 `application/json` response
+	JSON400 *Error
+	// JSON401 the response for an HTTP 401 `application/json` response
+	JSON401 *VisitorRequired
+	// JSONDefault the response for an HTTP default `application/json` response
+	JSONDefault *Error
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r LookupVisitorColoursResponse) GetJSON200() *VisitorColourList {
+	return r.JSON200
+}
+
+// GetJSON400 returns the response for an HTTP 400 `application/json` response
+func (r LookupVisitorColoursResponse) GetJSON400() *Error {
+	return r.JSON400
+}
+
+// GetJSON401 returns the response for an HTTP 401 `application/json` response
+func (r LookupVisitorColoursResponse) GetJSON401() *VisitorRequired {
+	return r.JSON401
+}
+
+// GetJSONDefault returns the response for an HTTP default `application/json` response
+func (r LookupVisitorColoursResponse) GetJSONDefault() *Error {
+	return r.JSONDefault
+}
+
+// GetBody returns the raw response body bytes
+func (r LookupVisitorColoursResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r LookupVisitorColoursResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r LookupVisitorColoursResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r LookupVisitorColoursResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
 type GetLivenessResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
@@ -2115,6 +2612,36 @@ func (c *ClientWithResponses) RenameMeWithResponse(ctx context.Context, body Ren
 	return ParseRenameMeResponse(rsp)
 }
 
+// SetMyColourWithBodyWithResponse Save the current visitor's colour.
+//
+// Saves only the cookie owner. Any palette is allowed, including duplicates. Every accepted save advances the persistent revision, including an unchanged palette, and broadcasts visitor.colour.changed to all live connections.
+//
+// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with PUT /api/me/colour (the `SetMyColour` operationId).
+func (c *ClientWithResponses) SetMyColourWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*SetMyColourResponse, error) {
+	rsp, err := c.SetMyColourWithBody(ctx, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseSetMyColourResponse(rsp)
+}
+
+// SetMyColourWithResponse Save the current visitor's colour.
+//
+// Saves only the cookie owner. Any palette is allowed, including duplicates. Every accepted save advances the persistent revision, including an unchanged palette, and broadcasts visitor.colour.changed to all live connections.
+//
+// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with PUT /api/me/colour (the `SetMyColour` operationId).
+func (c *ClientWithResponses) SetMyColourWithResponse(ctx context.Context, body SetMyColourJSONRequestBody, reqEditors ...RequestEditorFn) (*SetMyColourResponse, error) {
+	rsp, err := c.SetMyColour(ctx, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseSetMyColourResponse(rsp)
+}
+
 // ListRoomsWithResponse List every room with its occupancy.
 //
 // Returns every room, in the order they were created, each with the participants in its voice. The operator creates and renames rooms.
@@ -2192,6 +2719,36 @@ func (c *ClientWithResponses) JoinVoiceWithResponse(ctx context.Context, id Room
 		return nil, err
 	}
 	return ParseJoinVoiceResponse(rsp)
+}
+
+// LookupVisitorColoursWithBodyWithResponse Read current colours for explicit visitor IDs.
+//
+// Returns current assignments, including disconnected historical authors whose access was revoked. Unknown IDs are omitted and repeated IDs appear once. At most 100 IDs per request; clients batch larger history sets. This reveals neither connection status nor a visitor roster. Read again after live opens to recover colour changes missed while disconnected.
+//
+// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /api/visitor-colours (the `LookupVisitorColours` operationId).
+func (c *ClientWithResponses) LookupVisitorColoursWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*LookupVisitorColoursResponse, error) {
+	rsp, err := c.LookupVisitorColoursWithBody(ctx, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseLookupVisitorColoursResponse(rsp)
+}
+
+// LookupVisitorColoursWithResponse Read current colours for explicit visitor IDs.
+//
+// Returns current assignments, including disconnected historical authors whose access was revoked. Unknown IDs are omitted and repeated IDs appear once. At most 100 IDs per request; clients batch larger history sets. This reveals neither connection status nor a visitor roster. Read again after live opens to recover colour changes missed while disconnected.
+//
+// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /api/visitor-colours (the `LookupVisitorColours` operationId).
+func (c *ClientWithResponses) LookupVisitorColoursWithResponse(ctx context.Context, body LookupVisitorColoursJSONRequestBody, reqEditors ...RequestEditorFn) (*LookupVisitorColoursResponse, error) {
+	rsp, err := c.LookupVisitorColours(ctx, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseLookupVisitorColoursResponse(rsp)
 }
 
 // GetLivenessWithResponse Report that the process is running.
@@ -2379,6 +2936,53 @@ func ParseRenameMeResponse(rsp *http.Response) (*RenameMeResponse, error) {
 			return nil, err
 		}
 		response.JSON409 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && true:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSONDefault = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseSetMyColourResponse parses an HTTP response from a SetMyColourWithResponse call
+func ParseSetMyColourResponse(rsp *http.Response) (*SetMyColourResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &SetMyColourResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest VisitorColour
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest VisitorRequired
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && true:
 		var dest Error
@@ -2622,6 +3226,53 @@ func ParseJoinVoiceResponse(rsp *http.Response) (*JoinVoiceResponse, error) {
 	return response, nil
 }
 
+// ParseLookupVisitorColoursResponse parses an HTTP response from a LookupVisitorColoursWithResponse call
+func ParseLookupVisitorColoursResponse(rsp *http.Response) (*LookupVisitorColoursResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &LookupVisitorColoursResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest VisitorColourList
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest VisitorRequired
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && true:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSONDefault = &dest
+
+	}
+
+	return response, nil
+}
+
 // ParseGetLivenessResponse parses an HTTP response from a GetLivenessWithResponse call
 func ParseGetLivenessResponse(rsp *http.Response) (*GetLivenessResponse, error) {
 	bodyBytes, err := io.ReadAll(rsp.Body)
@@ -2706,6 +3357,9 @@ type ServerInterface interface {
 	// RenameMe Change the current visitor's name.
 	// (PATCH /api/me)
 	RenameMe(w http.ResponseWriter, r *http.Request)
+	// SetMyColour Save the current visitor's colour.
+	// (PUT /api/me/colour)
+	SetMyColour(w http.ResponseWriter, r *http.Request)
 	// ListRooms List every room with its occupancy.
 	// (GET /api/rooms)
 	ListRooms(w http.ResponseWriter, r *http.Request)
@@ -2718,6 +3372,9 @@ type ServerInterface interface {
 	// JoinVoice Join a room's voice.
 	// (POST /api/rooms/{id}/voice)
 	JoinVoice(w http.ResponseWriter, r *http.Request, id RoomId)
+	// LookupVisitorColours Read current colours for explicit visitor IDs.
+	// (POST /api/visitor-colours)
+	LookupVisitorColours(w http.ResponseWriter, r *http.Request)
 	// GetLiveness Report that the process is running.
 	// (GET /health/live)
 	GetLiveness(w http.ResponseWriter, r *http.Request)
@@ -2768,6 +3425,20 @@ func (siw *ServerInterfaceWrapper) RenameMe(w http.ResponseWriter, r *http.Reque
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.RenameMe(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// SetMyColour operation middleware
+func (siw *ServerInterfaceWrapper) SetMyColour(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.SetMyColour(w, r)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -2902,6 +3573,20 @@ func (siw *ServerInterfaceWrapper) JoinVoice(w http.ResponseWriter, r *http.Requ
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.JoinVoice(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// LookupVisitorColours operation middleware
+func (siw *ServerInterfaceWrapper) LookupVisitorColours(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.LookupVisitorColours(w, r)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -3062,6 +3747,8 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/enter", wrapper.Enter)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/me", wrapper.GetMe)
 	m.HandleFunc(http.MethodPatch+" "+options.BaseURL+"/api/me", wrapper.RenameMe)
+	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/me/colour", wrapper.SetMyColour)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/visitor-colours", wrapper.LookupVisitorColours)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/rooms", wrapper.ListRooms)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/rooms/{id}/messages", wrapper.ListMessages)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/rooms/{id}/messages", wrapper.PostMessage)
@@ -3307,6 +3994,73 @@ type RenameMedefaultJSONResponse struct {
 }
 
 func (response RenameMedefaultJSONResponse) VisitRenameMeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetMyColourRequestObject struct {
+	Body *SetMyColourJSONRequestBody
+}
+
+type SetMyColourResponseObject interface {
+	VisitSetMyColourResponse(w http.ResponseWriter) error
+}
+
+type SetMyColour200JSONResponse VisitorColour
+
+func (response SetMyColour200JSONResponse) VisitSetMyColourResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetMyColour400JSONResponse Error
+
+func (response SetMyColour400JSONResponse) VisitSetMyColourResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetMyColour401JSONResponse struct{ VisitorRequiredJSONResponse }
+
+func (response SetMyColour401JSONResponse) VisitSetMyColourResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetMyColourdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response SetMyColourdefaultJSONResponse) VisitSetMyColourResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
@@ -3671,6 +4425,73 @@ func (response JoinVoicedefaultJSONResponse) VisitJoinVoiceResponse(w http.Respo
 	return err
 }
 
+type LookupVisitorColoursRequestObject struct {
+	Body *LookupVisitorColoursJSONRequestBody
+}
+
+type LookupVisitorColoursResponseObject interface {
+	VisitLookupVisitorColoursResponse(w http.ResponseWriter) error
+}
+
+type LookupVisitorColours200JSONResponse VisitorColourList
+
+func (response LookupVisitorColours200JSONResponse) VisitLookupVisitorColoursResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type LookupVisitorColours400JSONResponse Error
+
+func (response LookupVisitorColours400JSONResponse) VisitLookupVisitorColoursResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type LookupVisitorColours401JSONResponse struct{ VisitorRequiredJSONResponse }
+
+func (response LookupVisitorColours401JSONResponse) VisitLookupVisitorColoursResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type LookupVisitorColoursdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response LookupVisitorColoursdefaultJSONResponse) VisitLookupVisitorColoursResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type GetLivenessRequestObject struct {
 }
 
@@ -3772,6 +4593,9 @@ type StrictServerInterface interface {
 	// RenameMe Change the current visitor's name.
 	// (PATCH /api/me)
 	RenameMe(ctx context.Context, request RenameMeRequestObject) (RenameMeResponseObject, error)
+	// SetMyColour Save the current visitor's colour.
+	// (PUT /api/me/colour)
+	SetMyColour(ctx context.Context, request SetMyColourRequestObject) (SetMyColourResponseObject, error)
 	// ListRooms List every room with its occupancy.
 	// (GET /api/rooms)
 	ListRooms(ctx context.Context, request ListRoomsRequestObject) (ListRoomsResponseObject, error)
@@ -3784,6 +4608,9 @@ type StrictServerInterface interface {
 	// JoinVoice Join a room's voice.
 	// (POST /api/rooms/{id}/voice)
 	JoinVoice(ctx context.Context, request JoinVoiceRequestObject) (JoinVoiceResponseObject, error)
+	// LookupVisitorColours Read current colours for explicit visitor IDs.
+	// (POST /api/visitor-colours)
+	LookupVisitorColours(ctx context.Context, request LookupVisitorColoursRequestObject) (LookupVisitorColoursResponseObject, error)
 	// GetLiveness Report that the process is running.
 	// (GET /health/live)
 	GetLiveness(ctx context.Context, request GetLivenessRequestObject) (GetLivenessResponseObject, error)
@@ -3917,6 +4744,37 @@ func (sh *strictHandler) RenameMe(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// SetMyColour operation middleware
+func (sh *strictHandler) SetMyColour(w http.ResponseWriter, r *http.Request) {
+	var request SetMyColourRequestObject
+
+	var body SetMyColourJSONRequestBody
+	if err := runtime.BindJSONBody(r, &body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.SetMyColour(ctx, request.(SetMyColourRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "SetMyColour")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(SetMyColourResponseObject); ok {
+		if err := validResponse.VisitSetMyColourResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
 // ListRooms operation middleware
 func (sh *strictHandler) ListRooms(w http.ResponseWriter, r *http.Request) {
 	var request ListRoomsRequestObject
@@ -4020,6 +4878,37 @@ func (sh *strictHandler) JoinVoice(w http.ResponseWriter, r *http.Request, id Ro
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(JoinVoiceResponseObject); ok {
 		if err := validResponse.VisitJoinVoiceResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// LookupVisitorColours operation middleware
+func (sh *strictHandler) LookupVisitorColours(w http.ResponseWriter, r *http.Request) {
+	var request LookupVisitorColoursRequestObject
+
+	var body LookupVisitorColoursJSONRequestBody
+	if err := runtime.BindJSONBody(r, &body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.LookupVisitorColours(ctx, request.(LookupVisitorColoursRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "LookupVisitorColours")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(LookupVisitorColoursResponseObject); ok {
+		if err := validResponse.VisitLookupVisitorColoursResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

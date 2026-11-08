@@ -3,7 +3,6 @@ import type { Room } from '../api/client';
 import { voice } from '../app/controller';
 import { getState, useApp } from '../app/store';
 import { fitBlocks } from '../fx/layout';
-import { assignPalettes } from '../fx/palette';
 import { effectsReduced } from '../fx/ticker';
 import type { VoiceSource } from '../fx/voiceField';
 import type { LiveBackgroundHandle } from './LiveBackground';
@@ -75,14 +74,12 @@ export function Stage({ room, background }: { room: Room; background?: RefObject
   const size = shown ? miniSize : fit.size;
   const gridWidth = shown ? undefined : fit.columns * size + (fit.columns - 1) * gap;
   const shareWidth = Math.min(shareRoom, (height - miniSize - 18) * (16 / 9));
-  const selfId = useApp((s) => s.visitor?.id);
-  const ownColor = useApp((s) => s.ownColor);
-  const palettes = useMemo(() => assignPalettes(people.map((p) => p.id), selfId && ownColor ? { id: selfId, palette: ownColor } : undefined), [people, selfId, ownColor]);
+  const colours = useApp((s) => s.colours);
 
   const grid = useRef<HTMLDivElement>(null);
   const rects = useRef(new Map<string, DOMRect>());
   const roomsOpen = useApp((s) => s.roomsOpen);
-  const sourcesKey = people.filter((p) => p.live).map((p) => `${p.id}:${palettes.get(p.id)}`).join();
+  const sourcesKey = people.filter((p) => p.live).map((p) => `${p.id}:${colours[p.id]?.palette}`).join();
 
   useLayoutEffect(() => {
     background?.current?.invalidateLayout();
@@ -95,7 +92,7 @@ export function Stage({ room, background }: { room: Room; background?: RefObject
     const tiles = new Map([...grid.current.querySelectorAll<HTMLElement>('[data-tile]')].map((el) => [el.dataset.tile, el]));
     const sources: VoiceSource[] = people.filter((p) => p.live).flatMap((p) => {
       const element = tiles.get(p.id)?.querySelector<HTMLElement>('.orb');
-      return element ? [{ element, palette: palettes.get(p.id)!, level: () => {
+      return element && colours[p.id] ? [{ element, palette: colours[p.id]!.palette, level: () => {
         const person = getState().voice.people.find((person) => person.id === p.id);
         return person && !person.muted && !person.deafened ? levelOf(p.id)() : 0;
       } }] : [];
@@ -165,7 +162,7 @@ export function Stage({ room, background }: { room: Room; background?: RefObject
             key={p.id}
             id={p.id}
             name={p.name}
-            palette={palettes.get(p.id)!}
+            palette={colours[p.id]?.palette}
             isSelf={p.isSelf}
             muted={p.muted}
             deafened={p.deafened}

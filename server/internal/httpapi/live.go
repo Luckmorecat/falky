@@ -139,3 +139,11 @@ func encodeEvent(typ api.EventType, roomID string, setPayload func(*api.Event_Pa
 	}
 	return json.Marshal(event)
 }
+
+// VisitorColourChanged publishes an explicit saved colour to every visitor,
+// including every tab of its author. It reveals no connection membership.
+func (e Events) VisitorColourChanged(c identity.Colour) {
+	e.publish(api.EventTypeVisitorColourChanged, "", func(p *api.Event_Payload) error {
+		return p.FromVisitorColour(colourBody(c))
+	})
+}

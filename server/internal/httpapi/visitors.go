@@ -159,7 +159,7 @@ var visitorRequired = api.VisitorRequiredJSONResponse{
 
 // visitorBody is v as the contract shows it.
 func (s *server) visitorBody(v identity.Visitor) api.Visitor {
-	return api.Visitor{Id: v.ID, Name: v.Name, NameTaken: s.identity.NameTaken(v)}
+	return api.Visitor{Id: v.ID, Name: v.Name, NameTaken: s.identity.NameTaken(v), Colour: colourBody(v.Colour)}
 }
 
 func invalidName(err error) api.InvalidNameJSONResponse {
@@ -173,3 +173,35 @@ func nameTaken() api.NameTakenJSONResponse {
 // yourNameTaken is the answer refusing live updates or voice to a visitor
 // whose name another connected visitor holds.
 var yourNameTaken = api.Error{Code: "name_taken", Message: "another visitor has your name; rename first"}
+
+// SetMyColour persists first, then publishes outside the writer transaction.
+func (s *server) SetMyColour(ctx context.Context, req api.SetMyColourRequestObject) (api.SetMyColourResponseObject, error) {
+	c, err := s.identity.SetColour(ctx, currentVisitor(ctx).ID, string(req.Body.Palette))
+	if errors.Is(err, identity.ErrInvalidPalette) {
+		return api.SetMyColour400JSONResponse{Code: "invalid_palette", Message: "choose one of the sixteen palettes"}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	s.events.VisitorColourChanged(c)
+	return api.SetMyColour200JSONResponse(colourBody(c)), nil
+}
+
+func (s *server) LookupVisitorColours(ctx context.Context, req api.LookupVisitorColoursRequestObject) (api.LookupVisitorColoursResponseObject, error) {
+	if req.Body.VisitorIds == nil || len(req.Body.VisitorIds) > 100 {
+		return api.LookupVisitorColours400JSONResponse{Code: "invalid_request", Message: "visitorIds must be an array of at most 100 IDs"}, nil
+	}
+	colours, err := s.identity.Colours(ctx, req.Body.VisitorIds)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]api.VisitorColour, 0, len(colours))
+	for _, colour := range colours {
+		result = append(result, colourBody(colour))
+	}
+	return api.LookupVisitorColours200JSONResponse{Colours: result}, nil
+}
+
+func colourBody(c identity.Colour) api.VisitorColour {
+	return api.VisitorColour{VisitorId: c.VisitorID, Palette: api.PaletteName(c.Palette), Revision: c.Revision}
+}

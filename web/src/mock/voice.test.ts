@@ -13,10 +13,10 @@ let joinMuted = false;
 beforeEach(async () => {
   state = {
     instanceId: crypto.randomUUID(), generation: 1, revision: 1, scenario: 'populated', scenarios: ['populated'],
-    visitor: { id: 'self', name: 'Alex', nameTaken: false }, voiceRoomId: null,
+    visitor: { id: 'self', name: 'Alex', nameTaken: false, colour: { visitorId: 'self', palette: 'sky', revision: 1 } }, voiceRoomId: null,
     rooms: [{ id: 'lounge', name: 'Lounge', occupancy: [] }, { id: 'games', name: 'Games', occupancy: [] }],
     peers: { lounge: [{ visitorId: 'sam', name: 'Sam', muted: false, deafened: false, sharing: false }] },
-    faults: { send: 'none', delayMs: 0, liveDisconnected: false, roomFull: null, micDenied: false, shareFailure: false, voiceReconnecting: false },
+    faults: { send: 'none', colourSave: 'none', colourDelayMs: 0, colourResponseDelayMs: 0, delayMs: 0, liveDisconnected: false, roomFull: null, micDenied: false, shareFailure: false, voiceReconnecting: false },
     accessLink: '/#k=mock',
   };
   // HTTP is the external boundary. Exercise the normal api.joinVoice client, never replace it.

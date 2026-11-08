@@ -12,6 +12,9 @@ export interface MockPeer {
 }
 export interface MockFaults {
   send: 'none' | 'fail' | 'lost-response';
+  colourSave: 'none' | 'fail';
+  colourDelayMs: number;
+  colourResponseDelayMs: number;
   delayMs: number;
   liveDisconnected: boolean;
   roomFull: string | null;
@@ -34,6 +37,7 @@ export interface MockState {
 }
 /** Generation is required for asynchronous browser voice operations. */
 export type MockAction =
+  | { type: 'colour'; visitorId: string; palette: Schema['PaletteName'] }
   | { type: 'message'; roomId: string; body: string; authorName?: string }
   | { type: 'participants'; roomId: string; participants: MockPeer[] }
   | { type: 'faults'; faults: Partial<MockFaults> }

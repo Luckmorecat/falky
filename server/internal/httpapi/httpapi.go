@@ -62,6 +62,7 @@ func New(deps Deps) Handlers {
 		chat:       deps.Chat,
 		voice:      deps.Voice,
 		enterLimit: deps.EnterLimit,
+		events:     Events{Hub: deps.Live, Logger: deps.Logger},
 	}
 	errs := errorWriter{logger: deps.Logger}
 	resolve := visitorResolver{identity: deps.Identity, errs: errs}
@@ -95,6 +96,7 @@ func New(deps Deps) Handlers {
 }
 
 type server struct {
+	events     Events
 	logger     *slog.Logger
 	health     *platform.Health
 	identity   *identity.Service

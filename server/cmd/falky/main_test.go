@@ -152,9 +152,6 @@ func TestReadinessAndTheHealthCommandFailWhenTheDatabaseIsGone(t *testing.T) {
 	if err != nil {
 		t.Fatalf("openMigrated: %v", err)
 	}
-	if err := db.Close(); err != nil {
-		t.Fatalf("Close: %v", err)
-	}
 
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
@@ -165,6 +162,12 @@ func TestReadinessAndTheHealthCommandFailWhenTheDatabaseIsGone(t *testing.T) {
 			t.Errorf("serveOn: %v", err)
 		}
 	})
+
+	// Startup must finish its required colour backfill before simulating an outage.
+	get(t, "http://"+ls.internal.Addr().String()+"/health/live")
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
 
 	if code, body := get(t, "http://"+ls.internal.Addr().String()+"/health/ready"); code != http.StatusServiceUnavailable ||
 		!strings.Contains(body, `"database":"unavailable"`) {
@@ -844,5 +847,22 @@ func TestARestoredSnapshotHasWhatWasPostedBeforeItAndKeepsTheVisitors(t *testing
 	}
 	if !slices.Contains(bodies, "before the snapshot") || slices.Contains(bodies, "after the snapshot") {
 		t.Errorf("restored messages %q, want the one posted before the snapshot and not the one after", bodies)
+	}
+}
+
+func TestServeFailsExplicitlyWhenColourInitializationCannotComplete(t *testing.T) {
+	ls := newListeners(t, filepath.Join(t.TempDir(), "admin.sock"))
+	logger := platform.NewLogger(io.Discard, 0)
+	cfg := platform.Config{DBPath: filepath.Join(t.TempDir(), "falky.db")}
+	db, ms, err := openMigrated(t.Context(), cfg, logger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	err = serveOn(t.Context(), logger, cfg, db, ms, ls)
+	if err == nil || !strings.Contains(err.Error(), "initialize visitor colours") {
+		t.Fatalf("startup = %v, want explicit backfill failure", err)
 	}
 }

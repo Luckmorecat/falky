@@ -36,19 +36,12 @@ describe('screen share codec preference', () => {
   });
 });
 
-describe('favourite colours preference', () => {
-  it('starts empty and ignores colours that do not exist', () => {
-    expect(prefs.settings().favoriteColors).toEqual([]);
-    localStorage.setItem('falky.favoriteColors', 'plaid,moss');
-    expect(prefs.settings().favoriteColors).toEqual(['moss']);
-  });
-
-  it('remembers the choice, and never more than three', () => {
-    prefs.saveSettings({ ...prefs.settings(), favoriteColors: ['sky', 'moss', 'coral'] });
-    expect(prefs.settings().favoriteColors).toEqual(['sky', 'moss', 'coral']);
-    localStorage.setItem('falky.favoriteColors', 'sky,rose,violet,amber,moss');
-    expect(prefs.settings().favoriteColors).toHaveLength(3);
-  });
+it('discards obsolete favourite colours without touching other preferences', () => {
+  localStorage.setItem('falky.favoriteColors', 'sky,rose,moss');
+  localStorage.setItem('falky.theme', 'light');
+  expect(prefs.settings()).not.toHaveProperty('favoriteColors');
+  expect(localStorage.getItem('falky.favoriteColors')).toBeNull();
+  expect(prefs.settings().theme).toBe('light');
 });
 
 describe('screen share bitrate preference', () => {

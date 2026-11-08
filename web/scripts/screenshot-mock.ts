@@ -7,7 +7,7 @@ import { chromiumOptions } from '../smoke/browser';
 import { launchMock } from '../smoke/launcher';
 import { setLanguage, t } from '../src/strings';
 
-const presets = ['room', 'chat', 'voice', 'screen-share', 'settings', 'entry'] as const;
+const presets = ['room', 'chat', 'voice', 'screen-share', 'settings', 'profile', 'entry'] as const;
 const { values } = parseArgs({ options: {
   preset: { type: 'string' }, scenario: { type: 'string' }, output: { type: 'string' },
   viewport: { type: 'string', default: '1440x1000' }, theme: { type: 'string', default: 'dark' },
@@ -100,9 +100,14 @@ Existing browser: PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/path/to/chromium`);
         await page.locator('.share video').waitFor({ state: 'visible' });
         await page.waitForFunction(() => [...document.querySelectorAll('video')].some((video) => video.readyState >= 2 && video.videoWidth > 0));
       }
-      if (preset === 'settings') {
+      if (preset === 'settings' || preset === 'profile') {
         await page.getByRole('button', { name: t.settings, exact: true }).click();
         await expect(page.getByRole('dialog', { name: t.settings, exact: true })).toBeVisible();
+        if (preset === 'profile') {
+          await page.getByRole('tab', { name: t.sectionProfile, exact: true }).click();
+          await expect(page.locator('.colors input:checked')).toHaveCount(1);
+          await expect(page.locator('.profile-card .orb canvas')).toBeVisible();
+        }
       }
     }
     await page.evaluate(() => document.fonts.ready);

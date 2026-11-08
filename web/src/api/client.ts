@@ -2,6 +2,7 @@ import type { components } from './schema.gen';
 
 type Schemas = components['schemas'];
 export type Visitor = Schemas['Visitor'];
+export type VisitorColour = Schemas['VisitorColour'];
 export type Room = Schemas['Room'];
 export type Participant = Schemas['Participant'];
 export type Message = Schemas['Message'];
@@ -16,6 +17,7 @@ export type LiveEvent = { eventId: string; timestamp: string; roomId?: string } 
   | { type: 'room.changed'; payload: RoomChange }
   | { type: 'occupancy.changed'; payload: OccupancyChange }
   | { type: 'access.revoked'; payload: AccessRevoked }
+  | { type: 'visitor.colour.changed'; payload: VisitorColour }
 );
 
 /** A refused or failed request. `code` is the contract's error code, or `network`. */
@@ -58,6 +60,8 @@ export const api = {
   enter: (secret: string, name: string) => call<Visitor>('POST', '/api/enter', { secret, name }),
   me: () => call<Visitor>('GET', '/api/me'),
   rename: (name: string) => call<Visitor>('PATCH', '/api/me', { name }),
+  setColour: (palette: Schemas['PaletteName']) => call<VisitorColour>('PUT', '/api/me/colour', { palette }),
+  colours: (visitorIds: string[]) => call<Schemas['VisitorColourList']>('POST', '/api/visitor-colours', { visitorIds }).then((r) => r.colours),
   rooms: () => call<Schemas['RoomList']>('GET', '/api/rooms').then((r) => r.rooms),
   /** Newest first with `before` or neither; oldest first with `after`. */
   messages: (roomId: string, q: { before?: string; after?: string; limit?: number } = {}) => {

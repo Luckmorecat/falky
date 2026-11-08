@@ -9,6 +9,8 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"math/big"
+	"sync"
 	"time"
 
 	"github.com/kisshot/falky/server/internal/platform"
@@ -34,6 +36,9 @@ type Service struct {
 	origin       string
 	now          func() time.Time
 	reservations *reservations
+	colourMu     sync.Mutex
+	connected    map[string]bool
+	chooseColour func(int) int
 }
 
 // Option changes how New sets up the Service.
@@ -46,9 +51,16 @@ func WithClock(now func() time.Time) Option {
 }
 
 // New returns the service over db. publicOrigin is where visitors reach the
-// server, for example https://falky.example; links are built on it.
+// server, for example https://falky.example; links are built on it. After applying
+// migrations, call InitializeColours and check its error before serving requests.
 func New(db *platform.DB, publicOrigin string, opts ...Option) *Service {
-	s := &Service{db: db, origin: publicOrigin, now: time.Now, reservations: newReservations()}
+	s := &Service{db: db, origin: publicOrigin, now: time.Now, reservations: newReservations(), connected: make(map[string]bool), chooseColour: func(n int) int {
+		value, err := rand.Int(rand.Reader, big.NewInt(int64(n)))
+		if err != nil {
+			panic("colour randomness: " + err.Error())
+		}
+		return int(value.Int64())
+	}}
 	for _, opt := range opts {
 		opt(s)
 	}

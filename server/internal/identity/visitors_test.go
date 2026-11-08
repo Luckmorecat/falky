@@ -190,7 +190,7 @@ func TestVisitorHasTheCurrentNameAndFailsForUnknownVisitors(t *testing.T) {
 	if _, err := f.ident.Rename(t.Context(), v.ID, "Robert"); err != nil {
 		t.Fatalf("Rename: %v", err)
 	}
-	if got, err := f.ident.Visitor(t.Context(), v.ID); err != nil || got != (identity.Visitor{ID: v.ID, Name: "Robert"}) {
+	if got, err := f.ident.Visitor(t.Context(), v.ID); err != nil || got != (identity.Visitor{ID: v.ID, Name: "Robert", Colour: v.Colour}) {
 		t.Errorf("Visitor after renaming = %+v, %v, want Robert", got, err)
 	}
 	if got, err := f.ident.Visitor(t.Context(), "01JBX6Z8Q3M5W2K7R9T4V1C0DE"); !errors.Is(err, identity.ErrNoVisitor) {
@@ -269,7 +269,7 @@ func TestRenamingChangesTheNameAndMovesTheReservation(t *testing.T) {
 		t.Errorf("Rename to own name in other case = %+v, %v, want BOB", v, err)
 	}
 	renamed, err := f.ident.Rename(t.Context(), bob.ID, " Rob ")
-	if err != nil || renamed != (identity.Visitor{ID: bob.ID, Name: "Rob"}) {
+	if err != nil || renamed != (identity.Visitor{ID: bob.ID, Name: "Rob", Colour: bob.Colour}) {
 		t.Fatalf("Rename to Rob = %+v, %v, want %s named Rob", renamed, err, bob.ID)
 	}
 	if got, err := f.ident.Resolve(t.Context(), token); err != nil || got != renamed {

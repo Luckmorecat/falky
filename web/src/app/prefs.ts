@@ -1,5 +1,4 @@
 import type { OrbLook } from '../fx/orbRenderer';
-import { MAX_FAVORITES, PALETTE_NAMES, type PaletteName } from '../fx/palette';
 import { preferencePrefix } from '../runtime/preferences';
 import type { LanguageChoice } from '../strings';
 import type { CameraSettings } from '../voice/camera';
@@ -37,7 +36,6 @@ export interface Settings extends ShareSettings, CameraSettings {
   fewerEffects: boolean;
   liveBackground: boolean;
   orbLight: OrbLook;
-  favoriteColors: PaletteName[];
   theme: Theme;
   language: LanguageChoice;
 }
@@ -49,6 +47,8 @@ function oneOf<V extends string>(key: string, values: readonly V[], fallback: V)
 
 export const prefs = {
   settings(): Settings {
+    // Old browser-only favourites are intentionally not imported into shared identity.
+    try { localStorage.removeItem(`${preferencePrefix}favoriteColors`); } catch { /* Private storage may be unavailable. */ }
     return {
       micId: read('micId') ?? '',
       speakerId: read('speakerId') ?? '',
@@ -67,7 +67,6 @@ export const prefs = {
       cameraResolution: oneOf('cameraResolution', ['360', '720', '1080'], '720'),
       cameraMirror: read('cameraMirror') !== 'off',
       orbLight: oneOf('orbLight', ['flat', 'volume'], 'flat'),
-      favoriteColors: PALETTE_NAMES.filter((name) => (read('favoriteColors') ?? '').split(',').includes(name)).slice(0, MAX_FAVORITES),
       theme: oneOf('theme', ['dark', 'light', 'system'], 'dark'),
       // A new key: the old one was saved with every setting, so it does not say anyone chose.
       language: oneOf('language', ['system', 'uk', 'en'], 'system'),

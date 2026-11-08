@@ -94,6 +94,7 @@ svg.i { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-widt
 
 /* A voice */
 .orb { position: relative; flex: none; aspect-ratio: 1; }
+.orb.colour-loading { background: var(--fill); -webkit-mask: var(--squircle) center / 100% 100% no-repeat; mask: var(--squircle) center / 100% 100% no-repeat; }
 .orb canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; will-change: transform; pointer-events: none; }
 /* Room for the glow it draws around itself; VOLUME_PAD in orbRenderer.ts. */
 .orb.volume canvas { inset: -18%; width: 136%; height: 136%; }
@@ -343,6 +344,7 @@ input[type=range]::-moz-range-thumb { width: 18px; height: 18px; border: 0; bord
 .profile-card strong { max-width: 100%; font-size: 18px; font-weight: 500; overflow-wrap: anywhere; }
 .colors { border: 0; padding: 0; min-width: 0; }
 .colors legend { width: 100%; padding: 0; font-size: 15px; font-weight: 600; margin-bottom: 12px; }
+.colour-error { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 12px; }
 .colors legend b { font-size: 14px; font-weight: 450; color: var(--text-2); }
 .colors .set-note + .set-note { margin-top: 6px; }
 .color-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); gap: 4px; margin-bottom: 12px; }

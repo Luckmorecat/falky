@@ -48,6 +48,46 @@ export interface paths {
         patch: operations["renameMe"];
         trace?: never;
     };
+    "/api/me/colour": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Save the current visitor's colour.
+         * @description Saves only the cookie owner. Any palette is allowed, including duplicates. Every accepted save advances the persistent revision, including an unchanged palette, and broadcasts visitor.colour.changed to all live connections.
+         */
+        put: operations["setMyColour"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/visitor-colours": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Read current colours for explicit visitor IDs.
+         * @description Returns current assignments, including disconnected historical authors whose access was revoked. Unknown IDs are omitted and repeated IDs appear once. At most 100 IDs per request; clients batch larger history sets. This reveals neither connection status nor a visitor roster. Read again after live opens to recover colour changes missed while disconnected.
+         */
+        post: operations["lookupVisitorColours"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/rooms": {
         parameters: {
             query?: never;
@@ -258,6 +298,56 @@ export interface components {
              * @example false
              */
             nameTaken: boolean;
+            colour: components["schemas"]["VisitorColour"];
+        };
+        /**
+         * @description One of the shared sixteen visitor palettes.
+         * @example sky
+         * @enum {string}
+         */
+        PaletteName: "sky" | "apricot" | "lagoon" | "rose" | "violet" | "amber" | "moss" | "coral" | "indigo" | "plum" | "sunset" | "aurora" | "lime" | "clay" | "ocean" | "ruby";
+        /** @description One persistent assignment. Revisions increase per visitor on every accepted save and survive restart. Equal revisions always identify the same palette. Clients merge by revision because events and responses may arrive out of order. */
+        VisitorColour: {
+            /**
+             * @description The existing visitor's ID.
+             * @example 01JBX6Z8Q3M5W2K7R9T4V1C0DE
+             */
+            visitorId: string;
+            palette: components["schemas"]["PaletteName"];
+            /**
+             * Format: int64
+             * @description The monotonically increasing per-visitor assignment revision.
+             * @example 1
+             */
+            revision: number;
+        };
+        /** @description An explicit palette choice for the cookie owner. */
+        ColourRequest: {
+            palette: components["schemas"]["PaletteName"];
+        };
+        /** @description A bounded batch of explicit visitor IDs, never a roster query. */
+        VisitorColourLookup: {
+            /**
+             * @description Existing visitor IDs to look up; unknown IDs are omitted.
+             * @example [
+             *       "01JBX6Z8Q3M5W2K7R9T4V1C0DE"
+             *     ]
+             */
+            visitorIds: string[];
+        };
+        /** @description Current assignments for known IDs, deduplicated in request order. */
+        VisitorColourList: {
+            /**
+             * @description The current assignments, including historical authors.
+             * @example [
+             *       {
+             *         "visitorId": "01JBX6Z8Q3M5W2K7R9T4V1C0DE",
+             *         "palette": "sky",
+             *         "revision": 1
+             *       }
+             *     ]
+             */
+            colours: components["schemas"]["VisitorColour"][];
         };
         /** @description The access link's secret and the name to enter under. */
         EnterRequest: {
@@ -415,7 +505,7 @@ export interface components {
             body: string;
         };
         /**
-         * @description A live update, as sent over `GET /api/live`. `type` says what happened and which schema `payload` has: `message.created` carries a `Message`, `room.changed` a `RoomChange`, `occupancy.changed` an `OccupancyChange`, `access.revoked` an `AccessRevoked`. Clients ignore event types they do not know.
+         * @description A live update, as sent over `GET /api/live`. `type` says what happened and which schema `payload` has: `message.created` carries a `Message`, `room.changed` a `RoomChange`, `occupancy.changed` an `OccupancyChange`, `visitor.colour.changed` a `VisitorColour`, `access.revoked` an `AccessRevoked`. Clients ignore event types they do not know.
          * @example {
          *       "v": 1,
          *       "type": "message.created",
@@ -451,7 +541,7 @@ export interface components {
              */
             roomId?: string;
             /** @description What happened, in the schema `type` names. */
-            payload: components["schemas"]["Message"] | components["schemas"]["RoomChange"] | components["schemas"]["OccupancyChange"] | components["schemas"]["AccessRevoked"];
+            payload: components["schemas"]["Message"] | components["schemas"]["RoomChange"] | components["schemas"]["OccupancyChange"] | components["schemas"]["AccessRevoked"] | components["schemas"]["VisitorColour"];
             /**
              * Format: date-time
              * @description When the server published the event, in UTC.
@@ -460,11 +550,11 @@ export interface components {
             timestamp: string;
         };
         /**
-         * @description What an event reports: `message.created`, a message was posted (its payload is the `Message`); `room.changed`, a room was created or renamed (its payload is the `RoomChange`); `occupancy.changed`, someone joined or left a room's voice, or a participant's new name reached it (its payload is the `OccupancyChange`); `access.revoked`, the visitor's access ended (its payload is the `AccessRevoked`), and the server closes the connection next.
+         * @description What an event reports: `message.created`, a message was posted (its payload is the `Message`); `room.changed`, a room was created or renamed (its payload is the `RoomChange`); `occupancy.changed`, someone joined or left a room's voice, or a participant's new name reached it (its payload is the `OccupancyChange`); `access.revoked`, the visitor's access ended (its payload is the `AccessRevoked`), and the server closes the connection next; `visitor.colour.changed`, an explicit saved colour change (its payload is the `VisitorColour`) to all visitors.
          * @example message.created
          * @enum {string}
          */
-        EventType: "message.created" | "room.changed" | "occupancy.changed" | "access.revoked";
+        EventType: "message.created" | "room.changed" | "occupancy.changed" | "access.revoked" | "visitor.colour.changed";
         /** @description A room as it is after being created or renamed. */
         RoomChange: {
             /**
@@ -688,6 +778,78 @@ export interface operations {
             400: components["responses"]["InvalidName"];
             401: components["responses"]["VisitorRequired"];
             409: components["responses"]["NameTaken"];
+            default: components["responses"]["Error"];
+        };
+    };
+    setMyColour: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description The exact palette to save. */
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ColourRequest"];
+            };
+        };
+        responses: {
+            /** @description The current confirmed assignment. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VisitorColour"];
+                };
+            };
+            /** @description An unknown palette (invalid_palette); nothing is changed. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            401: components["responses"]["VisitorRequired"];
+            default: components["responses"]["Error"];
+        };
+    };
+    lookupVisitorColours: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description The explicit visitor IDs to resolve. */
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VisitorColourLookup"];
+            };
+        };
+        responses: {
+            /** @description The current confirmed assignments. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VisitorColourList"];
+                };
+            };
+            /** @description A missing ID list or more than 100 IDs (invalid_request). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            401: components["responses"]["VisitorRequired"];
             default: components["responses"]["Error"];
         };
     };

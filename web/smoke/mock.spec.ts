@@ -207,7 +207,7 @@ test('a failed settings download leaves the interface usable and shows a notice'
   await expect(page.locator('.composer textarea')).toBeEnabled();
 });
 
-test('settings window: keyboard stays inside, tabs move by arrows, favourite colour sticks', async ({ page }) => {
+test('settings window: keyboard stays inside, tabs move by arrows, one confirmed colour persists', async ({ page }) => {
   await page.goto(app.url);
   await english(page);
   const opener = page.getByRole('button', { name: 'Settings', exact: true });
@@ -233,19 +233,17 @@ test('settings window: keyboard stays inside, tabs move by arrows, favourite col
   await expect(page.locator('.composer textarea')).not.toBeFocused();
 
   await settingsTab(page, 'Profile');
-  const color = (name: string) => settings.getByRole('checkbox', { name, exact: true });
+  const color = (name: string) => settings.getByRole('radio', { name, exact: true });
   const shown = () => settings.locator('.profile-card .orb').evaluate((el: HTMLElement) => el.style.getPropertyValue('--base'));
-  await color('Lagoon').check();
-  await expect.poll(shown).toBe('#35d3ad');
-  await color('Moss').check();
-  await expect.poll(shown).toBe('#9dc65a');
-  await color('Coral').check();
-  await expect.poll(shown).toBe('#f0684c');
-  await expect(color('Sky')).toBeDisabled();
-  await color('Coral').uncheck();
+  await expect(settings.getByRole('radio')).toHaveCount(16);
+  await expect(settings.locator('.color input:checked')).toHaveCount(1);
+  for (const [name, base] of [['Lagoon', '#35d3ad'], ['Moss', '#9dc65a'], ['Coral', '#f0684c']] as const) {
+    await color(name).click();
+    await expect(color(name)).toBeChecked();
+    await expect.poll(shown).toBe(base);
+    await expect(settings.locator('.color input:checked')).toHaveCount(1);
+  }
   await expect(color('Sky')).toBeEnabled();
-  expect(['#35d3ad', '#9dc65a']).toContain(await shown());
-  await color('Coral').check();
   await page.keyboard.press('Escape');
   await expect(settings).toBeHidden();
   await expect(opener).toBeFocused();
@@ -253,8 +251,9 @@ test('settings window: keyboard stays inside, tabs move by arrows, favourite col
   await page.reload();
   await opener.click();
   await settingsTab(page, 'Profile');
-  for (const name of ['Lagoon', 'Moss', 'Coral']) await expect(color(name)).toBeChecked();
-  expect(['#35d3ad', '#9dc65a', '#f0684c']).toContain(await shown());
+  await expect(color('Coral')).toBeChecked();
+  await expect(settings.locator('.color input:checked')).toHaveCount(1);
+  expect(await shown()).toBe('#f0684c');
   await settings.getByRole('button', { name: 'Close', exact: true }).click();
   await expect(settings).toBeHidden();
   await opener.click();
@@ -262,7 +261,7 @@ test('settings window: keyboard stays inside, tabs move by arrows, favourite col
   await expect(settings).toBeHidden();
 });
 
-test('names in chat are one colour each, none alike, and match the avatars', async ({ page }) => {
+test('chat and avatars render the same authoritative colour for each visitor', async ({ page }) => {
   await page.goto(app.url);
   await english(page);
   await page.request.post(`${app.url}/__mock/reset`, { data: { scenario: 'populated' } });
