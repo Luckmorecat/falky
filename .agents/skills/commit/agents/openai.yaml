@@ -1,0 +1,5 @@
+interface:
+  display_name: "Commit"
+  short_description: "Group changes into semantic commits and create them"
+policy:
+  allow_implicit_invocation: true

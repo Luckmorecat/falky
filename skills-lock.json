@@ -7,6 +7,12 @@
       "skillPath": "skills/engineering/codebase-design/SKILL.md",
       "computedHash": "aa11a96c08451f4ff86052d5da94004a8c97bb4ea41b2ac8a4300c189f66c89c"
     },
+    "commit": {
+      "source": "Luckmorecat/skills",
+      "sourceType": "github",
+      "skillPath": "skills/commit/SKILL.md",
+      "computedHash": "b88a3004722573cffa9edb187963de0e7cad545e33d67610471166e2a37a460c"
+    },
     "domain-modeling": {
       "source": "mattpocock/skills",
       "sourceType": "github",
