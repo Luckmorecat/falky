@@ -1,14 +1,18 @@
-import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import type { Message, Room } from '../api/client';
-import { discardMessage, loadOlder, markLatestRead, postMessage, retryMessage, setChatOpen } from '../app/controller';
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import type { Attachment, Message, Room } from '../api/client';
+import { addFiles, discardMessage, loadOlder, markLatestRead, postMessage, retryMessage, setChatOpen } from '../app/controller';
 import { shortcuts } from '../app/shortcuts';
 import { getState, useApp } from '../app/store';
 import { atBottom, followingLatest, rememberedPlace, rememberPlace, scrollToAnchor, sliceRange, stack, type Anchor } from '../chat/place';
+import { gallerySize } from '../chat/gallery';
+import { isImage } from '../chat/images';
 import { buildFeed, canPost, MESSAGE_MAX, messageLength, type FeedItem, type PendingMessage, splitLinks } from '../chat/timeline';
 import { type PaletteName, paletteStyle } from '../fx/palette';
 import { t } from '../strings';
+import { ComposerTray, Gallery, type OpenImage } from './Attachments';
 import { IconButton } from './IconButton';
 import { Icon } from './Icon';
+import { Lightbox, type ViewerItem } from './Lightbox';
 import { useDrawerLayout } from './useDrawerLayout';
 
 function afterPaint(fn: () => void): () => void {
@@ -25,9 +29,12 @@ function estimateHeight(row: FeedRow): number {
   if (row.kind === 'loading' || row.kind === 'day') return 36;
   if (row.kind === 'new') return 33;
   const text = row.kind === 'message' ? row.message.body : row.pending.body;
-  const lines = Math.max(1, Math.ceil(text.length / 36));
+  const attachments = row.kind === 'message' ? row.message.attachments : row.pending.attachments;
+  const images = attachments.filter(isImage).slice(0, 4);
+  const lines = text.trim() ? Math.max(1, Math.ceil(text.length / 36)) : 0;
   const head = row.continued ? 3 : 36;
-  return head + lines * 20 + (row.kind === 'pending' ? 22 : 0);
+  const media = (images.length ? gallerySize(images, 300).height + 4 : 0) + (attachments.length - images.length) * 52;
+  return head + lines * 20 + media + (row.kind === 'pending' ? 22 : 0);
 }
 
 const leadOf = (rows: FeedRow[], index: number) => {
@@ -35,14 +42,17 @@ const leadOf = (rows: FeedRow[], index: number) => {
   return prev?.kind === 'day' || prev?.kind === 'new';
 };
 
+/** A message's first part: its pictures, or its text when it has none. */
+const CONTENT = '.msg-gallery, .att-file, .msg-text';
+
 /** The message under the feed's top edge, measured from the screen so the text — not a day line — is what we keep. */
 function textAnchor(el: HTMLElement): Anchor | null {
   const edge = el.getBoundingClientRect().top;
   const row = [...el.querySelectorAll<HTMLElement>('[data-row]')].find((node) => {
-    const text = node.querySelector('.msg-text');
+    const text = node.querySelector(CONTENT);
     return !!text && text.getBoundingClientRect().bottom > edge + 2;
   });
-  const text = row?.querySelector<HTMLElement>('.msg-text');
+  const text = row?.querySelector<HTMLElement>(CONTENT);
   const key = row?.dataset.row;
   if (!row || !text || !key) return null;
   const rowTop = row.getBoundingClientRect().top;
@@ -57,7 +67,7 @@ function Body({ text }: { text: string }) {
   );
 }
 
-const MessageRow = memo(function MessageRow({ message, own, continued, lead, palette }: { message: Message; own: boolean; continued: boolean; lead: boolean; palette: PaletteName | undefined }) {
+const MessageRow = memo(function MessageRow({ message, own, continued, lead, palette, onOpen }: { message: Message; own: boolean; continued: boolean; lead: boolean; palette: PaletteName | undefined; onOpen: OpenImage }) {
   return (
     <article className={`msg${own ? ' own' : ''}${continued ? ' cont' : ''}${lead ? ' lead' : ''}`} style={paletteStyle(palette)}>
       {!continued && (
@@ -66,7 +76,8 @@ const MessageRow = memo(function MessageRow({ message, own, continued, lead, pal
           <time className="msg-time" dateTime={message.createdAt}>{timeOf(message.createdAt)}</time>
         </div>
       )}
-      <Body text={message.body} />
+      {message.attachments.length > 0 && <Gallery attachments={message.attachments} onOpen={onOpen} />}
+      {message.body.trim() && <Body text={message.body} />}
     </article>
   );
 });
@@ -75,7 +86,8 @@ function PendingRow({ pending, continued, lead, name, palette }: { pending: Pend
   return (
     <article className={`msg own pending${continued ? ' cont' : ''}${lead ? ' lead' : ''}`} style={paletteStyle(palette)}>
       {!continued && <div className="msg-meta"><span className="msg-author">{name}</span></div>}
-      <Body text={pending.body} />
+      {pending.attachments.length > 0 && <Gallery attachments={pending.attachments} local />}
+      {pending.body.trim() && <Body text={pending.body} />}
       <div className={`msg-state${pending.failed ? ' err' : ''}`}>
         {pending.failed ? (
           <>
@@ -128,10 +140,19 @@ export function Chat({ room }: { room: Room | null }) {
   const [atBottomNow, setAtBottomNow] = useState(() => !room || followingLatest(room.id));
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const input = useRef<HTMLTextAreaElement>(null);
+  const picker = useRef<HTMLInputElement>(null);
+  const uploads = useApp((s) => (room ? s.uploads[room.id] : undefined));
+  const readyCount = uploads?.filter((u) => u.status === 'ready').length ?? 0;
+  const busy = uploads?.some((u) => u.status === 'uploading') ?? false;
+  const [viewing, setViewing] = useState<string | null>(null);
+  const viewingRef = useRef(false);
+  viewingRef.current = viewing !== null;
+  const [dropping, setDropping] = useState(false);
   const announced = useRef('');
   const [live, setLive] = useState('');
 
   const draft = room ? (drafts[room.id] ?? '') : '';
+  const sendable = canPost(draft, readyCount) && !busy;
   const items = useMemo(() => (chat ? buildFeed(chat, visitor?.id, newAfterId) : []), [chat, visitor?.id, newAfterId, lang]);
   const rows = useMemo<FeedRow[]>(() => {
     const list: FeedRow[] = [];
@@ -205,7 +226,7 @@ export function Chat({ room }: { room: Room | null }) {
       const anchor = !place.following ? place.anchor : null;
       if (anchor?.pad !== undefined) {
         const row = el.querySelector<HTMLElement>(`[data-row="${anchor.key}"]`);
-        const text = row?.querySelector<HTMLElement>('.msg-text');
+        const text = row?.querySelector<HTMLElement>(CONTENT);
         if (row && text) {
           const delta = text.getBoundingClientRect().top - row.getBoundingClientRect().top - anchor.pad;
           if (Math.abs(delta) > 1) {
@@ -274,7 +295,7 @@ export function Chat({ room }: { room: Room | null }) {
   const settle = () => {
     if (drawer) return;
     if (settling.current) clearTimeout(settling.current);
-    const wanted = () => hovering.current || !!aside.current?.contains(document.activeElement);
+    const wanted = () => hovering.current || viewingRef.current || !!aside.current?.contains(document.activeElement);
     if (wanted()) {
       if (!getState().chatOpen) setChatOpen(true);
       return;
@@ -313,7 +334,7 @@ export function Chat({ room }: { room: Room | null }) {
   };
 
   const send = () => {
-    if (!room || !canPost(draft)) return;
+    if (!room || !sendable) return;
     rememberPlace(room.id, { following: true, anchor: null });
     postMessage(room.id, draft);
     setDraft('');
@@ -330,8 +351,27 @@ export function Chat({ room }: { room: Room | null }) {
     if (!open || !id || id === announced.current) return;
     const first = announced.current === '';
     announced.current = id;
-    if (!first && newest) setLive(`${newest.authorName}: ${newest.body}`);
+    if (!first && newest) setLive(`${newest.authorName}: ${newest.body.trim() ? newest.body : t.imagesSummary(newest.attachments.length)}`);
   }, [open, newest, room?.id]);
+
+  /** Every picture in the room, oldest first, so the viewer can step through them all. */
+  const viewerItems = useMemo<ViewerItem[]>(() => (chat?.messages ?? []).flatMap((m) => m.attachments
+    .filter(isImage)
+    .map((attachment: Attachment) => ({ attachment, authorName: m.authorName, createdAt: m.createdAt }))), [chat?.messages]);
+
+  const openImage = useCallback<OpenImage>((id) => setViewing(id), []);
+  const closeViewer = () => {
+    setViewing(null);
+    // The chat stays while the person is still with it.
+    requestAnimationFrame(settle);
+  };
+
+  useEffect(() => { setViewing(null); }, [room?.id]);
+
+  const hasFiles = (e: React.DragEvent) => e.dataTransfer.types.includes('Files');
+  const takeFiles = (list: FileList | File[] | null | undefined) => {
+    if (room && list && list.length) addFiles(room.id, list);
+  };
 
   return (
     <div
@@ -345,6 +385,29 @@ export function Chat({ room }: { room: Room | null }) {
         if (e.pointerType !== 'mouse') return;
         hovering.current = false;
         settle();
+      }}
+      onDragEnter={(e) => {
+        if (!room || !hasFiles(e)) return;
+        e.preventDefault();
+        setDropping(true);
+        if (!getState().chatOpen) setChatOpen(true);
+      }}
+      onDragOver={(e) => {
+        if (!room || !hasFiles(e)) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'copy';
+      }}
+      onDragLeave={(e) => {
+        if (e.currentTarget.contains(e.relatedTarget as Node | null)) return;
+        setDropping(false);
+        settle();
+      }}
+      onDrop={(e) => {
+        if (!hasFiles(e)) return;
+        e.preventDefault();
+        setDropping(false);
+        takeFiles(e.dataTransfer.files);
+        input.current?.focus({ preventScroll: true });
       }}
     >
     <aside
@@ -371,7 +434,7 @@ export function Chat({ room }: { room: Room | null }) {
                   {row.kind === 'loading' ? <div className="day">{t.loadingOlder}</div>
                     : row.kind === 'day' ? <div className="day">{row.label}</div>
                       : row.kind === 'new' ? <div className="new-line">{t.newMessages}</div>
-                        : row.kind === 'message' ? <MessageRow message={row.message} own={row.message.authorId === selfId} continued={row.continued} lead={lead} palette={paletteFor(row.message.authorId)} />
+                        : row.kind === 'message' ? <MessageRow message={row.message} own={row.message.authorId === selfId} continued={row.continued} lead={lead} palette={paletteFor(row.message.authorId)} onOpen={openImage} />
                           : <PendingRow pending={row.pending} continued={row.continued} lead={lead} name={visitor?.name ?? ''} palette={paletteFor(selfId)} />}
                 </div>
               );
@@ -388,9 +451,29 @@ export function Chat({ room }: { room: Room | null }) {
       >
         <Icon name="down" />{t.toLatest}
       </button>
+      {dropping && (
+        <div className="drop-zone" aria-hidden="true">
+          <div><Icon name="image" />{t.dropImages}</div>
+        </div>
+      )}
       <div className="composer">
+        {room && <ComposerTray roomId={room.id} />}
         {count > MESSAGE_MAX - 400 && <span className={`count${count > MESSAGE_MAX ? ' over' : ''}`}>{count} / {MESSAGE_MAX}</span>}
         <div className="field" data-tip={`${t.focusChat} (${shortcuts.chat.label} · ${shortcuts.chatEnter.label})`}>
+          <IconButton size="small" className="attach" aria-label={t.attachImage} disabled={!room} onClick={() => picker.current?.click()}><Icon name="image" /></IconButton>
+          <input
+            ref={picker}
+            type="file"
+            accept="image/*"
+            multiple
+            hidden
+            tabIndex={-1}
+            onChange={(e) => {
+              takeFiles(e.currentTarget.files);
+              e.currentTarget.value = '';
+              input.current?.focus({ preventScroll: true });
+            }}
+          />
           <textarea
             ref={input}
             rows={1}
@@ -399,6 +482,13 @@ export function Chat({ room }: { room: Room | null }) {
             aria-label={t.message}
             disabled={!room}
             onChange={(e) => setDraft(e.target.value)}
+            onPaste={(e) => {
+              const pasted = [...e.clipboardData.files].filter((f) => f.type.startsWith('image/'));
+              if (!pasted.length) return;
+              // A copied picture often comes with its address as text: the picture is what was meant.
+              e.preventDefault();
+              takeFiles(pasted);
+            }}
             onKeyDown={(e) => {
               if (e.key === 'Escape') {
                 e.currentTarget.blur();
@@ -410,10 +500,11 @@ export function Chat({ room }: { room: Room | null }) {
               }
             }}
           />
-          <IconButton size="small" className="send" aria-label={t.send} disabled={!canPost(draft)} onClick={send}><Icon name="send" /></IconButton>
+          <IconButton size="small" className="send" aria-label={t.send} disabled={!sendable} onClick={send}><Icon name="send" /></IconButton>
         </div>
       </div>
     </aside>
+    {viewing && <Lightbox items={viewerItems} startId={viewing} onClose={closeViewer} />}
     <div className="chat-veil" aria-hidden="true"><i /><i /><i /><i /><b /><u /></div>
     {unread > 0 && <div className="chat-hint" aria-hidden="true"><span className="badge">{unread > 99 ? '99+' : unread}</span></div>}
     </div>
