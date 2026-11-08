@@ -1,6 +1,7 @@
 import '@fontsource-variable/onest/index.css';
 import '../styles.css';
 import { useEffect } from 'react';
+import { preloadVoice } from '@falky/voice';
 import { createRoot } from 'react-dom/client';
 import { applyAppearance } from './appearance';
 import { boot } from './controller';
@@ -20,6 +21,37 @@ function App() {
   useEffect(() => {
     document.title = unread ? `(${unread > 99 ? '99+' : unread}) Falky` : 'Falky';
   }, [unread]);
+
+  useEffect(() => {
+    if (phase !== 'entry' && phase !== 'ready') return;
+    let frame = 0;
+    let observer: PerformanceObserver | undefined;
+    function afterPaint() {
+      // Also give a newly mounted interface a frame when the page painted earlier.
+      frame = requestAnimationFrame(() => {
+        frame = requestAnimationFrame(() => {
+          // A failed background download must not interrupt chat. Join can retry.
+          void preloadVoice().catch(() => {});
+        });
+      });
+    }
+    if (typeof PerformanceObserver !== 'undefined'
+      && PerformanceObserver.supportedEntryTypes.includes('paint')
+      && !performance.getEntriesByName('first-contentful-paint').length) {
+      observer = new PerformanceObserver((list) => {
+        if (!list.getEntries().some((entry) => entry.name === 'first-contentful-paint')) return;
+        observer?.disconnect();
+        afterPaint();
+      });
+      observer.observe({ type: 'paint', buffered: true });
+    } else {
+      afterPaint();
+    }
+    return () => {
+      observer?.disconnect();
+      cancelAnimationFrame(frame);
+    };
+  }, [phase]);
 
   switch (phase) {
     case 'loading':

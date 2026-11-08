@@ -21,7 +21,7 @@ export default defineConfig(({ command }) => ({
       '/rtc': { target: 'http://127.0.0.1:7880', ws: true },
     },
   },
-  // LiveKit's SDK is most of the bundle, and the first screen needs it soon anyway.
+  // The deferred LiveKit SDK remains a single large chunk.
   build: { target: 'es2022', chunkSizeWarningLimit: 1000 },
   test: { environment: 'jsdom', include: ['src/**/*.test.ts'] },
 }));

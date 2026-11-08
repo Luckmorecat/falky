@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Room } from '../api/client';
-import { viewRoom, voice } from '../app/controller';
+import { showNotice, viewRoom, voice } from '../app/controller';
 import { shortcuts } from '../app/shortcuts';
 import { useApp } from '../app/store';
 import { onTick } from '../fx/ticker';
@@ -10,15 +10,30 @@ import { canShareScreen } from '../voice/share';
 import { Button } from './Button';
 import { IconButton } from './IconButton';
 import { Icon } from './Icon';
-import { Settings } from './Settings';
+import type { Settings as SettingsDialog } from './Settings';
 
 /** The control center and the settings it opens, which outlast any change between its states. */
 export function Dock({ room }: { room: Room | null }) {
+  const [Settings, setSettings] = useState<typeof SettingsDialog | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+
+  async function openSettings() {
+    if (!Settings) {
+      try {
+        const module = await import('./Settings');
+        setSettings(() => module.Settings);
+      } catch {
+        showNotice(t.settings, t.errors.network);
+        return;
+      }
+    }
+    setSettingsOpen(true);
+  }
+
   return (
     <>
-      <Controls room={room} onSettings={() => setSettingsOpen(true)} />
-      <Settings open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+      <Controls room={room} onSettings={() => void openSettings()} />
+      {Settings && <Settings open={settingsOpen} onClose={() => setSettingsOpen(false)} />}
     </>
   );
 }

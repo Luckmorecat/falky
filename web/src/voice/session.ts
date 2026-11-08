@@ -1,16 +1,13 @@
-import {
-  ConnectionQuality,
-  DisconnectReason,
-  type LocalAudioTrack,
-  type LocalTrack,
-  type LocalTrackPublication,
-  type Participant as LkParticipant,
+import type {
+  LocalAudioTrack,
+  LocalTrack,
+  LocalTrackPublication,
+  Participant as LkParticipant,
   RemoteAudioTrack,
-  type RemoteParticipant,
+  RemoteParticipant,
   Room,
-  RoomEvent,
   Track,
-  type VideoTrack,
+  VideoTrack,
 } from 'livekit-client';
 import { api, ApiError } from '../api/client';
 import { cameraOptions } from './camera';
@@ -29,6 +26,22 @@ interface Meter {
   buf: Float32Array<ArrayBuffer>;
 }
 
+let sdk: Pick<typeof import('livekit-client'), 'ConnectionQuality' | 'DisconnectReason' | 'RemoteAudioTrack' | 'Room' | 'RoomEvent' | 'Track'>;
+let loading: Promise<void> | null = null;
+
+/** Warm the SDK after the interface paints; joining can also start or await it. */
+export function preloadVoice(): Promise<void> {
+  return loading ??= import('livekit-client').then(
+    ({ ConnectionQuality, DisconnectReason, RemoteAudioTrack, Room, RoomEvent, Track }) => {
+      sdk = { ConnectionQuality, DisconnectReason, RemoteAudioTrack, Room, RoomEvent, Track };
+    },
+    (error: unknown) => {
+      loading = null;
+      throw error;
+    },
+  );
+}
+
 const isDeafened = (p: LkParticipant) => p.attributes.deafened === 'true';
 
 /** One visitor's connection to one room's voice at a time, over LiveKit. */
@@ -42,6 +55,7 @@ export class VoiceSession implements VoiceClient {
   private refreshQueued = false;
   /** Set while asking the server to move us, which also removes us from the old room. */
   private moving = false;
+  private operation = 0;
   private removedWhileMoving = false;
   private knownShares = new Set<string>();
   /** What each remote track is raised by above 100%. */
@@ -63,6 +77,7 @@ export class VoiceSession implements VoiceClient {
     // In the click's gesture, so that browsers let it start.
     this.audio ??= new AudioContext({ latencyHint: 'interactive' });
     void this.audio.resume();
+    const operation = ++this.operation;
     const deafened = this.snap.deafened;
     // Moving rooms keeps the camera as it was; a first join never starts it.
     const keepCamera = this.snap.camera;
@@ -72,8 +87,11 @@ export class VoiceSession implements VoiceClient {
     this.removedWhileMoving = false;
     let creds;
     try {
+      await preloadVoice();
+      if (operation !== this.operation) return;
       creds = await api.joinVoice(roomId);
     } catch (err) {
+      if (operation !== this.operation) return;
       this.moving = false;
       const code = err instanceof ApiError ? err.code : 'network';
       // Refused with `room_full` the visitor stays where they were, unless
@@ -87,11 +105,12 @@ export class VoiceSession implements VoiceClient {
       else this.host.onProblem('join_failed');
       return;
     }
+    if (operation !== this.operation) return;
     this.moving = false;
     this.teardownRoom();
 
     const speakerId = this.host.speakerId();
-    const room = new Room({
+    const room = new sdk.Room({
       adaptiveStream: true,
       dynacast: true,
       audioCaptureDefaults: this.micOptions(),
@@ -214,7 +233,7 @@ export class VoiceSession implements VoiceClient {
    * turning it on again takes up whatever device and quality are chosen by then.
    */
   private async disableCamera(room: Room): Promise<void> {
-    const track = room.localParticipant.getTrackPublication(Track.Source.Camera)?.track as LocalTrack | undefined;
+    const track = room.localParticipant.getTrackPublication(sdk.Track.Source.Camera)?.track as LocalTrack | undefined;
     if (track) await room.localParticipant.unpublishTrack(track, true).catch(() => {});
   }
 
@@ -227,12 +246,12 @@ export class VoiceSession implements VoiceClient {
 
   /** The screen a participant shows, to attach to a video element. */
   shareTrack(visitorId: string): VideoTrack | null {
-    return this.videoTrack(visitorId, Track.Source.ScreenShare);
+    return this.room ? this.videoTrack(visitorId, sdk.Track.Source.ScreenShare) : null;
   }
 
   /** A participant's camera, to attach to a video element. */
   cameraTrack(visitorId: string): VideoTrack | null {
-    return this.videoTrack(visitorId, Track.Source.Camera);
+    return this.room ? this.videoTrack(visitorId, sdk.Track.Source.Camera) : null;
   }
 
   /** How loud a participant is now, from 0 to 1. */
@@ -259,7 +278,7 @@ export class VoiceSession implements VoiceClient {
 
   /** Applies changed noise, echo and gain settings to the microphone in use. */
   async applyMicProcessing(): Promise<void> {
-    const track = this.room?.localParticipant.getTrackPublication(Track.Source.Microphone)?.track as LocalAudioTrack | undefined;
+    const track = this.room?.localParticipant.getTrackPublication(sdk.Track.Source.Microphone)?.track as LocalAudioTrack | undefined;
     await track?.restartTrack(this.micOptions()).catch(() => {});
     this.refresh();
   }
@@ -281,45 +300,45 @@ export class VoiceSession implements VoiceClient {
   private bind(room: Room): void {
     const refresh = () => this.queueRefresh();
     room
-      .on(RoomEvent.TrackSubscribed, (track, _pub, participant) => {
-        if (track.kind === Track.Kind.Audio) {
-          if (track instanceof RemoteAudioTrack) this.addBoost(track);
+      .on(sdk.RoomEvent.TrackSubscribed, (track, _pub, participant) => {
+        if (track.kind === sdk.Track.Kind.Audio) {
+          if (track instanceof sdk.RemoteAudioTrack) this.addBoost(track);
           const el = track.attach();
           this.sinkHost.append(el);
           this.applyVolumesFor(participant);
         }
         refresh();
       })
-      .on(RoomEvent.TrackUnsubscribed, (track) => {
-        if (track.kind === Track.Kind.Audio) track.detach().forEach((el) => el.remove());
+      .on(sdk.RoomEvent.TrackUnsubscribed, (track) => {
+        if (track.kind === sdk.Track.Kind.Audio) track.detach().forEach((el) => el.remove());
         refresh();
       })
-      .on(RoomEvent.ParticipantConnected, () => {
+      .on(sdk.RoomEvent.ParticipantConnected, () => {
         this.host.onSound('join');
         refresh();
       })
-      .on(RoomEvent.ParticipantDisconnected, () => {
+      .on(sdk.RoomEvent.ParticipantDisconnected, () => {
         this.host.onSound('leave');
         refresh();
       })
-      .on(RoomEvent.TrackPublished, refresh)
-      .on(RoomEvent.TrackUnpublished, refresh)
-      .on(RoomEvent.TrackMuted, refresh)
-      .on(RoomEvent.TrackUnmuted, refresh)
-      .on(RoomEvent.LocalTrackPublished, refresh)
-      .on(RoomEvent.LocalTrackUnpublished, refresh)
-      .on(RoomEvent.ParticipantAttributesChanged, refresh)
-      .on(RoomEvent.ParticipantNameChanged, refresh)
-      .on(RoomEvent.ActiveSpeakersChanged, refresh)
-      .on(RoomEvent.ConnectionQualityChanged, (_q, p) => {
+      .on(sdk.RoomEvent.TrackPublished, refresh)
+      .on(sdk.RoomEvent.TrackUnpublished, refresh)
+      .on(sdk.RoomEvent.TrackMuted, refresh)
+      .on(sdk.RoomEvent.TrackUnmuted, refresh)
+      .on(sdk.RoomEvent.LocalTrackPublished, refresh)
+      .on(sdk.RoomEvent.LocalTrackUnpublished, refresh)
+      .on(sdk.RoomEvent.ParticipantAttributesChanged, refresh)
+      .on(sdk.RoomEvent.ParticipantNameChanged, refresh)
+      .on(sdk.RoomEvent.ActiveSpeakersChanged, refresh)
+      .on(sdk.RoomEvent.ConnectionQualityChanged, (_q, p) => {
         if (p.isLocal) refresh();
       })
-      .on(RoomEvent.Reconnecting, () => this.set({ status: 'reconnecting' }))
-      .on(RoomEvent.Reconnected, () => {
+      .on(sdk.RoomEvent.Reconnecting, () => this.set({ status: 'reconnecting' }))
+      .on(sdk.RoomEvent.Reconnected, () => {
         this.set({ status: 'connected' });
         refresh();
       })
-      .on(RoomEvent.Disconnected, (reason) => {
+      .on(sdk.RoomEvent.Disconnected, (reason) => {
         if (room !== this.room) return;
         if (this.moving) {
           this.removedWhileMoving = true;
@@ -328,16 +347,16 @@ export class VoiceSession implements VoiceClient {
         const closingInStatus = this.snap.status;
         this.close();
         if (closingInStatus === 'joining') return;
-        if (reason === DisconnectReason.DUPLICATE_IDENTITY) this.host.onProblem('tab_taken');
-        else if (reason === DisconnectReason.PARTICIPANT_REMOVED) this.host.onProblem('removed');
-        else if (reason !== DisconnectReason.CLIENT_INITIATED) this.host.onProblem('lost');
+        if (reason === sdk.DisconnectReason.DUPLICATE_IDENTITY) this.host.onProblem('tab_taken');
+        else if (reason === sdk.DisconnectReason.PARTICIPANT_REMOVED) this.host.onProblem('removed');
+        else if (reason !== sdk.DisconnectReason.CLIENT_INITIATED) this.host.onProblem('lost');
       });
   }
 
   private applyVolumesFor(p: RemoteParticipant): void {
     const v = this.snap.deafened ? 0 : this.host.volumeOf(p.identity);
-    p.setVolume(Math.min(v, 1), Track.Source.Microphone);
-    p.setVolume(Math.min(v, 1), Track.Source.ScreenShareAudio);
+    p.setVolume(Math.min(v, 1), sdk.Track.Source.Microphone);
+    p.setVolume(Math.min(v, 1), sdk.Track.Source.ScreenShareAudio);
     for (const pub of p.audioTrackPublications.values()) {
       const boost = pub.track && this.boosts.get(pub.track as RemoteAudioTrack);
       if (boost) boost.gain.value = Math.max(v, 1);
@@ -383,9 +402,9 @@ export class VoiceSession implements VoiceClient {
         muted: !p.isMicrophoneEnabled,
         deafened: isDeafened(p),
         sharing: p.isScreenShareEnabled,
-        shareTrackId: p.getTrackPublication(Track.Source.ScreenShare)?.track?.mediaStreamTrack.id ?? '',
+        shareTrackId: p.getTrackPublication(sdk.Track.Source.ScreenShare)?.track?.mediaStreamTrack.id ?? '',
         camera: p.isCameraEnabled,
-        cameraTrackId: p.getTrackPublication(Track.Source.Camera)?.track?.mediaStreamTrack.id ?? '',
+        cameraTrackId: p.getTrackPublication(sdk.Track.Source.Camera)?.track?.mediaStreamTrack.id ?? '',
       }));
 
     const shares = new Set(people.filter((p) => p.sharing && !p.local).map((p) => p.id));
@@ -400,7 +419,7 @@ export class VoiceSession implements VoiceClient {
       muted: !local.isMicrophoneEnabled,
       sharing: local.isScreenShareEnabled,
       camera: local.isCameraEnabled,
-      quality: q === ConnectionQuality.Excellent || q === ConnectionQuality.Good ? 'good' : q === ConnectionQuality.Poor ? 'poor' : q === ConnectionQuality.Lost ? 'lost' : 'unknown',
+      quality: q === sdk.ConnectionQuality.Excellent || q === sdk.ConnectionQuality.Good ? 'good' : q === sdk.ConnectionQuality.Poor ? 'poor' : q === sdk.ConnectionQuality.Lost ? 'lost' : 'unknown',
     });
   }
 
@@ -410,7 +429,7 @@ export class VoiceSession implements VoiceClient {
     if (!ctx) return;
     const wanted = new Map<string, MediaStreamTrack>();
     for (const p of everyone) {
-      const pub = p.getTrackPublication(Track.Source.Microphone) as LocalTrackPublication | undefined;
+      const pub = p.getTrackPublication(sdk.Track.Source.Microphone) as LocalTrackPublication | undefined;
       const mst = pub?.track?.mediaStreamTrack;
       if (mst && !pub?.isMuted) wanted.set(p.identity, mst);
     }
@@ -443,6 +462,7 @@ export class VoiceSession implements VoiceClient {
   }
 
   private close(): void {
+    this.operation++;
     this.moving = false;
     this.teardownRoom();
     this.knownShares.clear();
