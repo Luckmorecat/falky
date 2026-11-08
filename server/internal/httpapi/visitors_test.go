@@ -96,7 +96,7 @@ func startPublic(t *testing.T, enterBurst int) publicServer {
 
 // startPublicLimited is startPublic that also limits posting to postBurst
 // messages per visitor with no refill during the test.
-func startPublicLimited(t *testing.T, enterBurst, postBurst int) publicServer {
+func startPublicLimited(t *testing.T, enterBurst, postBurst int, identityOptions ...identity.Option) publicServer {
 	t.Helper()
 	ms, err := platform.LoadMigrations(identity.Migrations(), rooms.Migrations(), chat.Migrations())
 	if err != nil {
@@ -115,7 +115,10 @@ func startPublicLimited(t *testing.T, enterBurst, postBurst int) publicServer {
 		t.Fatalf("Migrate: %v", err)
 	}
 	clk := &clock{now: time.Now()}
-	ident := identity.New(db, testOrigin, identity.WithClock(clk.Now))
+	ident := identity.New(db, testOrigin, append(identityOptions, identity.WithClock(clk.Now))...)
+	if err := ident.InitializeColours(t.Context()); err != nil {
+		t.Fatalf("InitializeColours: %v", err)
+	}
 	if _, err := ident.EnsureLink(t.Context()); err != nil {
 		t.Fatalf("EnsureLink: %v", err)
 	}
@@ -126,7 +129,7 @@ func startPublicLimited(t *testing.T, enterBurst, postBurst int) publicServer {
 	logs := &syncBuffer{}
 	logger := platform.NewLogger(logs, 0)
 	start := time.Now()
-	hub := realtime.New()
+	hub := realtime.New(realtime.WithConnectedFunc(ident.ColourConnected))
 	events := Events{Hub: hub, Logger: logger}
 	rs := rooms.New(db, rooms.WithPublisher(events.RoomChanged), rooms.WithNameCheck(ident.NameTaken))
 	lk := voicetest.New()
@@ -403,7 +406,7 @@ func TestRenamingMeChangesTheNameUnlessItIsTakenOrInvalid(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RenameMe: %v", err)
 	}
-	want := api.Visitor{Id: me.Id, Name: "Rob"}
+	want := api.Visitor{Id: me.Id, Name: "Rob", Colour: me.Colour}
 	if res.StatusCode() != http.StatusOK || res.JSON200 == nil || *res.JSON200 != want {
 		t.Fatalf("RenameMe(Rob) = %d %s, want 200 with %+v", res.StatusCode(), res.Body, want)
 	}

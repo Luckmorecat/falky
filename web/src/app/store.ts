@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from 'react';
-import type { Room, Visitor } from '../api/client';
+import type { Room, Visitor, VisitorColour } from '../api/client';
 import type { RoomChat } from '../chat/timeline';
-import { type PaletteName, pickFavorite } from '../fx/palette';
+import type { PaletteName } from '../fx/palette';
 import { idleVoice, type VoiceSnapshot } from '../voice/types';
 import { prefs, type Settings } from './prefs';
 
@@ -26,8 +26,9 @@ export interface AppState {
   voice: VoiceSnapshot;
   notice: Notice | null;
   settings: Settings;
-  /** The favourite colour worn since the app opened: chance decides once, so it never changes mid-talk. */
-  ownColor: PaletteName | null;
+  /** Only server-confirmed assignments; missing IDs render without a visitor colour. */
+  colours: Record<string, VisitorColour>;
+  colourSave: { palette: PaletteName; pending: boolean; failed: boolean } | null;
 }
 
 let state: AppState = {
@@ -43,7 +44,8 @@ let state: AppState = {
   voice: idleVoice,
   notice: null,
   settings: prefs.settings(),
-  ownColor: pickFavorite(prefs.settings().favoriteColors),
+  colours: {},
+  colourSave: null,
 };
 
 const listeners = new Set<() => void>();

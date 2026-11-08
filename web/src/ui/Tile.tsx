@@ -11,7 +11,7 @@ import { VolumeSlider } from './VolumeSlider';
 export interface TileProps {
   id: string;
   name: string;
-  palette: PaletteName;
+  palette?: PaletteName;
   isSelf?: boolean;
   /** How loud they are now; absent outside the room's voice, where it is not known. */
   level?: () => number;

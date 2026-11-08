@@ -333,7 +333,10 @@ func serveOn(ctx context.Context, logger *slog.Logger, cfg platform.Config, db *
 	health := platform.NewHealth(logger)
 	health.Require("database", func(ctx context.Context) error { return db.CheckMigrated(ctx, ms) })
 	ident := identity.New(db, cfg.PublicOrigin)
-	hub := realtime.New(realtime.WithLogger(logger))
+	if err := ident.InitializeColours(ctx); err != nil {
+		return errors.Join(err, ls.public.Close(), ls.internal.Close(), ls.admin.Close())
+	}
+	hub := realtime.New(realtime.WithLogger(logger), realtime.WithConnectedFunc(ident.ColourConnected))
 	events := httpapi.Events{Hub: hub, Logger: logger}
 	rs := rooms.New(db, rooms.WithPublisher(events.RoomChanged), rooms.WithNameCheck(ident.NameTaken))
 	vs := voice.New(voice.NewClient(cfg.LiveKitAPIURL, cfg.LiveKitAPIKey, cfg.LiveKitAPISecret), ident, rs, voice.Config{

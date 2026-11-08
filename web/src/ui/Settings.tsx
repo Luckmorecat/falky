@@ -1,9 +1,9 @@
 import { type KeyboardEvent as ReactKeyboardEvent, type ReactNode, useEffect, useRef, useState } from 'react';
-import { enableNotifications, rename, toggleFavoriteColor, updateSettings, voice } from '../app/controller';
+import { enableNotifications, rename, setVisitorColour, updateSettings, voice } from '../app/controller';
 import type { Settings as SettingsValues } from '../app/prefs';
 import { shortcuts } from '../app/shortcuts';
 import { useApp } from '../app/store';
-import { MAX_FAVORITES, ownPalette, PALETTE_NAMES, paletteStyle, type PaletteName } from '../fx/palette';
+import { PALETTE_NAMES, paletteStyle, type PaletteName } from '../fx/palette';
 import { onTick } from '../fx/ticker';
 import { t } from '../strings';
 import type { MicTest } from '../voice/meter';
@@ -191,11 +191,10 @@ function SharePanel() {
 }
 
 function ColorOption({ name }: { name: PaletteName }) {
-  const favorites = useApp((s) => s.settings.favoriteColors);
-  const chosen = favorites.includes(name);
+  const chosen = useApp((s) => s.visitor ? s.colours[s.visitor.id]?.palette === name : false);
   return (
     <label className="color">
-      <input type="checkbox" checked={chosen} disabled={!chosen && favorites.length >= MAX_FAVORITES} onChange={() => toggleFavoriteColor(name)} />
+      <input type="radio" name="visitor-colour" checked={chosen} readOnly onClick={() => void setVisitorColour(name)} />
       <span className="orb flat" style={paletteStyle(name)} aria-hidden="true" />
       <i aria-hidden="true"><Icon name="check" /></i>
       {t.colorNames[name]}
@@ -205,8 +204,8 @@ function ColorOption({ name }: { name: PaletteName }) {
 
 function ProfilePanel() {
   const visitor = useApp((s) => s.visitor);
-  const ownColor = useApp((s) => s.ownColor);
-  const favoriteCount = useApp((s) => s.settings.favoriteColors.length);
+  const ownColour = useApp((s) => s.visitor ? s.colours[s.visitor.id]?.palette : undefined);
+  const colourSave = useApp((s) => s.colourSave);
   const [name, setName] = useState(visitor?.name ?? '');
   const [nameError, setNameError] = useState('');
   const selfId = visitor?.id ?? '';
@@ -223,7 +222,7 @@ function ProfilePanel() {
   return (
     <div className="profile">
       <div className="profile-card">
-        <Orb seed={selfId} palette={ownPalette(selfId, selfId, ownColor)} still />
+        <Orb seed={selfId} palette={ownColour} still />
         <strong>{name.trim() || visitor?.name}</strong>
       </div>
       <div>
@@ -236,12 +235,13 @@ function ProfilePanel() {
           {nameError && <span className="field-err" role="alert">{nameError}</span>}
         </form>
         <fieldset className="colors">
-          <legend className="set-head">{t.favoriteColors}<b>{t.favoriteColorsCount(favoriteCount, MAX_FAVORITES)}</b></legend>
+          <legend className="set-head">{t.visitorColour}</legend>
           <div className="color-grid">
             {PALETTE_NAMES.map((name) => <ColorOption key={name} name={name} />)}
           </div>
-          <p className="set-note">{t.favoriteColorsHint}</p>
-          <p className="set-note">{t.favoriteColorsLocal}</p>
+          <p className="set-note">{t.visitorColourHint}</p>
+          {colourSave?.pending && <p className="set-note" role="status">{t.colourSaving}</p>}
+          {colourSave?.failed && <div className="colour-error"><span className="field-err" role="alert">{t.colourSaveFailed}</span><Button onClick={() => void setVisitorColour(colourSave.palette)}>{t.retry}</Button></div>}
         </fieldset>
       </div>
     </div>

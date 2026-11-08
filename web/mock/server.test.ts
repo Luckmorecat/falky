@@ -249,3 +249,69 @@ test('malformed name and message field types are invalid_request while missing o
     await expectError(messages, { requestKey: 'shape-check', body: value }, 'invalid_message');
   }
 });
+
+test('colour routes confirm exact duplicate choices, validate bounded explicit lookup and recover historical revisions without a roster', async () => {
+  const { call, bootstrap, server } = await client();
+  const me = await (await call('/api/me')).json();
+  assert.equal(me.colour.visitorId, me.id); assert.equal(me.colour.revision, 1);
+  const samId = bootstrap.rooms[0].occupancy[0].visitorId;
+  const initial = await (await call('/api/visitor-colours', { visitorIds: [samId, me.id, samId, 'unknown'] })).json();
+  assert.deepEqual(initial.colours.map((c: { visitorId: string }) => c.visitorId), [samId, me.id]);
+  assert.equal((await fetch(server.url + '/api/me/colour', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: '{"palette":"moss"}' })).status, 401);
+  for (const input of [{}, { palette: 'plaid' }, { palette: null }]) assert.equal((await call('/api/me/colour', input, 'PUT')).status, 400);
+  assert.deepEqual((await (await call('/api/me')).json()).colour, me.colour);
+  const duplicate = await (await call('/api/me/colour', { palette: initial.colours[0].palette, visitorId: samId }, 'PUT')).json();
+  assert.equal(duplicate.visitorId, me.id); assert.equal(duplicate.palette, initial.colours[0].palette); assert.equal(duplicate.revision, 2);
+  assert.deepEqual((await (await call('/api/visitor-colours', { visitorIds: [samId] })).json()).colours[0], initial.colours[0]);
+  const same = await (await call('/api/me/colour', { palette: duplicate.palette }, 'PUT')).json(); assert.equal(same.revision, 3);
+  assert.deepEqual((await (await call('/api/me', { name: 'Colour owner' }, 'PATCH')).json()).colour, same);
+  for (const input of [{}, { visitorIds: null }, { visitorIds: Array(101).fill(samId) }]) assert.equal((await call('/api/visitor-colours', input)).status, 400);
+  assert.deepEqual(await (await call('/api/visitor-colours', { visitorIds: [] })).json(), { colours: [] });
+  await call('/__mock/action', { type: 'participants', roomId: bootstrap.rooms[0].id, participants: [] });
+  await call('/__mock/action', { type: 'colour', visitorId: samId, palette: 'ruby' });
+  assert.deepEqual(await (await call('/api/visitor-colours', { visitorIds: [samId] })).json(), { colours: [{ visitorId: samId, palette: 'ruby', revision: 2 }] });
+  const reload = await (await call('/__mock/bootstrap', {})).json(); assert.deepEqual(reload.visitor.colour, same);
+});
+
+test('after palette exhaustion automatic historical assignments avoid connected-held colours when offline-only colours exist', async () => {
+  const { call, bootstrap } = await client();
+  const roomId = bootstrap.rooms[0].id;
+  const peerIds = bootstrap.rooms[0].occupancy.map((p: { visitorId: string }) => p.visitorId);
+  const held = new Set((await (await call('/api/visitor-colours', { visitorIds: peerIds })).json()).colours.map((c: { palette: string }) => c.palette));
+  // Scripted voice peers remain connected; these new historical authors never join.
+  for (let i = 0; i < 22; i++) await call('/__mock/action', { type: 'message', roomId, authorName: `Offline ${i}`, body: `History ${i}` });
+  const history = (await (await call(`/api/rooms/${roomId}/messages?limit=100`)).json()).messages;
+  const authorIds = history.filter((m: { authorName: string }) => m.authorName.startsWith('Offline ')).reverse().map((m: { authorId: string }) => m.authorId);
+  const colours = (await (await call('/api/visitor-colours', { visitorIds: authorIds })).json()).colours;
+  for (const colour of colours.slice(16)) assert.ok(!held.has(colour.palette), 'Exhausted allocations must not reuse a connected-held colour while offline-only choices remain');
+});
+
+test('colour saves broadcast to both tabs, fail without changing state and delayed old responses retain their accepted revision', async () => {
+  const { call, server, cookie } = await client();
+  const { WebSocket } = await import('ws');
+  const tabs = [0, 1].map(() => new WebSocket(server.url.replace('http', 'ws') + '/api/live', { origin: server.url, headers: { cookie: cookie() } }));
+  try {
+    await Promise.all(tabs.map((ws) => new Promise<void>((resolve, reject) => { ws.once('open', resolve); ws.once('error', reject); })));
+    const events: { type: string; payload: { visitorId: string; palette: string; revision: number } }[][] = [[], []];
+    tabs.forEach((ws, i) => ws.on('message', (raw) => events[i]!.push(JSON.parse(String(raw)))));
+    const original = (await (await call('/api/me')).json()).colour;
+    await call('/__mock/action', { type: 'faults', faults: { colourSave: 'fail' } });
+    assert.equal((await call('/api/me/colour', { palette: 'rose' }, 'PUT')).status, 503);
+    assert.deepEqual((await (await call('/api/me')).json()).colour, original);
+    await call('/__mock/action', { type: 'faults', faults: { colourResponseDelayMs: 150 } });
+    const delayed = call('/api/me/colour', { palette: 'rose' }, 'PUT');
+    for (let i = 0; i < 100; i++) {
+      if ((await (await call('/api/me')).json()).colour.revision === 2) break;
+      await new Promise((resolve) => setTimeout(resolve, 2));
+    }
+    const latest = await (await call('/api/me/colour', { palette: 'moss' }, 'PUT')).json();
+    const older = await (await delayed).json();
+    assert.equal(older.revision, 2); assert.equal(older.palette, 'rose'); assert.equal(latest.revision, 3);
+    assert.deepEqual((await (await call('/api/me')).json()).colour, latest);
+    for (const received of events) assert.deepEqual(received.filter((e) => e.type === 'visitor.colour.changed').map((e) => e.payload), [older, latest]);
+    const closed = Promise.all(tabs.map((ws) => new Promise((resolve) => ws.once('close', resolve))));
+    await call('/__mock/action', { type: 'faults', faults: { liveDisconnected: true } }); await closed;
+    await call('/__mock/action', { type: 'colour', visitorId: latest.visitorId, palette: 'ruby' });
+    assert.deepEqual((await (await call('/api/visitor-colours', { visitorIds: [latest.visitorId] })).json()).colours, [{ visitorId: latest.visitorId, palette: 'ruby', revision: 4 }]);
+  } finally { tabs.forEach((ws) => ws.terminate()); }
+});

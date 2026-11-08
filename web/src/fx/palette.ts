@@ -34,50 +34,11 @@ export function hashString(s: string): number {
   return h >>> 0;
 }
 
-/** A visitor's colour wherever nothing else competes for it, such as in chat. */
-export const paletteOf = (visitorId: string): PaletteName => at(hashString(visitorId));
-
-/** How many colours a person can call their favourites. */
-export const MAX_FAVORITES = 3;
-
-/** One of the favourites, by chance; nothing when there are none. */
-export const pickFavorite = (favorites: readonly PaletteName[], random: () => number = Math.random): PaletteName | null =>
-  favorites[Math.floor(random() * favorites.length)] ?? null;
-
-/** The colour worn right now, for its owner alone; anyone else keeps their usual colour. */
-export const ownPalette = (visitorId: string, selfId: string | undefined, own: PaletteName | null): PaletteName =>
-  (visitorId === selfId && own) || paletteOf(visitorId);
-
 /** Rooms take colours in their stable list order, so the first rooms never repeat. */
 export const roomPalette = (index: number): PaletteName => at(index);
 
-/**
- * Colours for the people in one room: each keeps their own colour when it is
- * free, otherwise takes the next free one. Those in voice go first, in an order
- * every client shares, so everyone sees the same colours on them. A colour
- * someone chose for themself is theirs on this screen, whether or not they are
- * in voice yet, so nobody's changes when they come in. Those who only write
- * follow in the order given: oldest first means a newcomer disturbs nobody.
- */
-export function assignPalettes(voiceIds: readonly string[], chosen?: { id: string; palette: PaletteName }, writerIds: readonly string[] = []): Map<string, PaletteName> {
-  const taken = new Set<PaletteName>();
-  const out = new Map<string, PaletteName>();
-  if (chosen) {
-    taken.add(chosen.palette);
-    out.set(chosen.id, chosen.palette);
-  }
-  for (const id of [...[...voiceIds].sort(), ...writerIds]) {
-    if (out.has(id)) continue;
-    let i = hashString(id);
-    let name = at(i);
-    for (let tries = 0; taken.has(name) && tries < PALETTE_NAMES.length; tries++) name = at(++i);
-    taken.add(name);
-    out.set(id, name);
-  }
-  return out;
-}
-
-export function paletteStyle(name: PaletteName): CSSProperties {
+export function paletteStyle(name: PaletteName | undefined): CSSProperties {
+  if (!name) return { '--base': 'var(--text-3)', '--deep': 'var(--fill)' } as CSSProperties;
   const [base, bright, deep, core] = PALETTES[name];
   return { '--base': base, '--bright': bright, '--deep': deep, '--core': core } as CSSProperties;
 }

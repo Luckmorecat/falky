@@ -128,6 +128,74 @@ paths:
           $ref: "#/components/responses/NameTaken"
         default:
           $ref: "#/components/responses/Error"
+  /api/me/colour:
+    put:
+      operationId: setMyColour
+      tags: [visitors]
+      summary: Save the current visitor's colour.
+      description: >-
+        Saves only the cookie owner. Any palette is allowed, including duplicates.
+        Every accepted save advances the persistent revision, including an unchanged
+        palette, and broadcasts visitor.colour.changed to all live connections.
+      requestBody:
+        description: The exact palette to save.
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ColourRequest"
+      responses:
+        "200":
+          description: The current confirmed assignment.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VisitorColour"
+        "400":
+          description: An unknown palette (invalid_palette); nothing is changed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          $ref: "#/components/responses/VisitorRequired"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/visitor-colours:
+    post:
+      operationId: lookupVisitorColours
+      tags: [visitors]
+      summary: Read current colours for explicit visitor IDs.
+      description: >-
+        Returns current assignments, including disconnected historical authors whose
+        access was revoked. Unknown IDs are omitted and repeated IDs appear once.
+        At most 100 IDs per request; clients batch larger history sets. This reveals
+        neither connection status nor a visitor roster. Read again after live opens
+        to recover colour changes missed while disconnected.
+      requestBody:
+        description: The explicit visitor IDs to resolve.
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/VisitorColourLookup"
+      responses:
+        "200":
+          description: The current confirmed assignments.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VisitorColourList"
+        "400":
+          description: A missing ID list or more than 100 IDs (invalid_request).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          $ref: "#/components/responses/VisitorRequired"
+        default:
+          $ref: "#/components/responses/Error"
   /api/rooms:
     get:
       operationId: listRooms
@@ -609,7 +677,7 @@ components:
     Visitor:
       type: object
       description: A person who entered through the access link.
-      required: [id, name, nameTaken]
+      required: [id, name, nameTaken, colour]
       properties:
         id:
           type: string
@@ -628,6 +696,63 @@ components:
             stay closed to this visitor until they rename; reading and posting
             messages stay open.
           example: false
+        colour:
+          $ref: "#/components/schemas/VisitorColour"
+    PaletteName:
+      type: string
+      description: One of the shared sixteen visitor palettes.
+      enum: [sky, apricot, lagoon, rose, violet, amber, moss, coral, indigo, plum, sunset, aurora, lime, clay, ocean, ruby]
+      example: sky
+    VisitorColour:
+      type: object
+      description: >-
+        One persistent assignment. Revisions increase per visitor on every accepted
+        save and survive restart. Equal revisions always identify the same palette.
+        Clients merge by revision because events and responses may arrive out of order.
+      required: [visitorId, palette, revision]
+      properties:
+        visitorId:
+          type: string
+          description: The existing visitor's ID.
+          example: 01JBX6Z8Q3M5W2K7R9T4V1C0DE
+        palette:
+          $ref: "#/components/schemas/PaletteName"
+        revision:
+          type: integer
+          format: int64
+          minimum: 1
+          description: The monotonically increasing per-visitor assignment revision.
+          example: 1
+    ColourRequest:
+      type: object
+      description: An explicit palette choice for the cookie owner.
+      required: [palette]
+      properties:
+        palette:
+          $ref: "#/components/schemas/PaletteName"
+    VisitorColourLookup:
+      type: object
+      description: A bounded batch of explicit visitor IDs, never a roster query.
+      required: [visitorIds]
+      properties:
+        visitorIds:
+          type: array
+          maxItems: 100
+          description: Existing visitor IDs to look up; unknown IDs are omitted.
+          items:
+            type: string
+          example: [01JBX6Z8Q3M5W2K7R9T4V1C0DE]
+    VisitorColourList:
+      type: object
+      description: Current assignments for known IDs, deduplicated in request order.
+      required: [colours]
+      properties:
+        colours:
+          type: array
+          description: The current assignments, including historical authors.
+          example: [{visitorId: 01JBX6Z8Q3M5W2K7R9T4V1C0DE, palette: sky, revision: 1}]
+          items:
+            $ref: "#/components/schemas/VisitorColour"
     EnterRequest:
       type: object
       description: The access link's secret and the name to enter under.
@@ -805,7 +930,8 @@ components:
         A live update, as sent over `GET /api/live`. `type` says what happened
         and which schema `payload` has: `message.created` carries a `Message`,
         `room.changed` a `RoomChange`, `occupancy.changed` an
-        `OccupancyChange`, `access.revoked` an `AccessRevoked`. Clients ignore
+        `OccupancyChange`, `visitor.colour.changed` a `VisitorColour`,
+        `access.revoked` an `AccessRevoked`. Clients ignore
         event types they do not know.
       required: [v, type, eventId, payload, timestamp]
       properties:
@@ -834,6 +960,7 @@ components:
             - $ref: "#/components/schemas/RoomChange"
             - $ref: "#/components/schemas/OccupancyChange"
             - $ref: "#/components/schemas/AccessRevoked"
+            - $ref: "#/components/schemas/VisitorColour"
         timestamp:
           type: string
           format: date-time
@@ -861,8 +988,9 @@ components:
         someone joined or left a room's voice, or a participant's new name
         reached it (its payload is the `OccupancyChange`); `access.revoked`,
         the visitor's access ended (its payload is the `AccessRevoked`), and
-        the server closes the connection next.
-      enum: [message.created, room.changed, occupancy.changed, access.revoked]
+        the server closes the connection next; `visitor.colour.changed`, an explicit
+        saved colour change (its payload is the `VisitorColour`) to all visitors.
+      enum: [message.created, room.changed, occupancy.changed, access.revoked, visitor.colour.changed]
       example: message.created
     RoomChange:
       type: object

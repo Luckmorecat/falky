@@ -1,9 +1,10 @@
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomInt } from 'node:crypto';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { WebSocket, WebSocketServer } from 'ws';
 import { scenarios, type MockState, type Scenario, type Schema } from './protocol.ts';
 
+const palettes: Schema['PaletteName'][] = ['sky', 'apricot', 'lagoon', 'rose', 'violet', 'amber', 'moss', 'coral', 'indigo', 'plum', 'sunset', 'aurora', 'lime', 'clay', 'ocean', 'ruby'];
 const alphabet = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
 const validId = /^[0-7][0-9A-HJKMNP-TV-Z]{25}$/;
 function encodeId(value: bigint) {
@@ -44,12 +45,30 @@ export async function startMockServer(options: { port?: number; scenario?: strin
   let sequence = BigInt('0x' + randomBytes(10).toString('hex'));
   const id = () => encodeId((BigInt(Date.now()) << 80n) + sequence++);
   const roomIds = [id(), id(), id()];
+  const colours = new Map<string, Schema['VisitorColour']>();
+  function assignColour(visitorId: string): Schema['VisitorColour'] {
+    const existing = colours.get(visitorId);
+    if (existing) return existing;
+    const unused = palettes.filter((palette) => ![...colours.values()].some((c) => c.palette === palette));
+    const connected = new Set(Object.values(state.peers).flat().map((peer) => peer.visitorId));
+    if (state.visitor && sockets.clients.size) connected.add(state.visitor.id);
+    const uses = palettes.map((palette) => [...connected].filter((id) => colours.get(id)?.palette === palette).length);
+    const minimum = Math.min(...uses);
+    const choices = unused.length ? unused : palettes.filter((_, i) => uses[i] === minimum);
+    const colour = { visitorId, palette: choices[randomInt(choices.length)]!, revision: 1 };
+    colours.set(visitorId, colour);
+    return colour;
+  }
+  function visitor(name: string): Schema['Visitor'] {
+    const visitorId = id();
+    return { id: visitorId, name, nameTaken: false, colour: assignColour(visitorId) };
+  }
   const messages = new Map<string, Schema['Message'][]>();
   const state: MockState = {
     instanceId, generation: 1, revision: 1, scenario: scenarioName(options.scenario ?? 'populated'), scenarios,
-    visitor: { id: id(), name: 'Alex', nameTaken: false }, voiceRoomId: null,
+    visitor: null, voiceRoomId: null,
     rooms: roomIds.map((roomId, i) => ({ id: roomId, name: ['Lounge', 'Games', 'Quiet'][i]!, occupancy: [] })),
-    peers: {}, faults: { send: 'none', delayMs: 0, liveDisconnected: false, roomFull: null, micDenied: false, shareFailure: false, voiceReconnecting: false },
+    peers: {}, faults: { send: 'none', colourSave: 'none', colourDelayMs: 0, colourResponseDelayMs: 0, delayMs: 0, liveDisconnected: false, roomFull: null, micDenied: false, shareFailure: false, voiceReconnecting: false },
     accessLink: '/#k=mock-access-link',
   };
   if (state.scenario === 'entry') state.visitor = null;
@@ -66,6 +85,15 @@ export async function startMockServer(options: { port?: number; scenario?: strin
       if (socket.bufferedAmount > 1024 * 1024) socket.close(4000, 'Event queue full');
       else if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(event));
     }
+  }
+  function changeColour(visitorId: string, palette: unknown): Schema['VisitorColour'] {
+    if (!palettes.includes(palette as Schema['PaletteName'])) throw new Refused(400, 'invalid_palette', 'Unknown palette');
+    const current = colours.get(visitorId)!;
+    const colour = { visitorId, palette: palette as Schema['PaletteName'], revision: current.revision + 1 };
+    colours.set(visitorId, colour);
+    if (state.visitor?.id === visitorId) state.visitor.colour = colour;
+    publish('visitor.colour.changed', colour);
+    return colour;
   }
   function occupancy() {
     for (const room of state.rooms) {
@@ -104,14 +132,16 @@ export async function startMockServer(options: { port?: number; scenario?: strin
   let publicOrigin = '';
   function seed(scenario: Scenario) {
     state.scenario = scenario;
-    state.visitor = scenario === 'entry' ? null : { id: id(), name: 'Alex', nameTaken: false };
+    colours.clear();
+    for (const history of fixtureMessages.values()) for (const message of history) assignColour(message.authorId);
+    state.visitor = scenario === 'entry' ? null : visitor('Alex');
     state.voiceRoomId = null;
     state.peers = scenario === 'quiet' ? {} : structuredClone(fixturePeers);
     for (const peers of Object.values(state.peers)) for (const peer of peers) peer.sharing = scenario === 'remote-share' && peer.name === 'Sam';
     messages.clear();
     for (const [roomId, history] of fixtureMessages) messages.set(roomId, scenario === 'quiet' ? [] : structuredClone(history));
     for (const room of state.rooms) room.occupancy = (state.peers[room.id] ?? []).map(({ visitorId, name }) => ({ visitorId, name }));
-    state.faults = { send: 'none', delayMs: 0, liveDisconnected: false, roomFull: null, micDenied: false, shareFailure: false, voiceReconnecting: false };
+    state.faults = { send: 'none', colourSave: 'none', colourDelayMs: 0, colourResponseDelayMs: 0, delayMs: 0, liveDisconnected: false, roomFull: null, micDenied: false, shareFailure: false, voiceReconnecting: false };
     requests.clear();
     conflictName = null;
     accessSecret = 'mock-access-link';
@@ -156,7 +186,7 @@ export async function startMockServer(options: { port?: number; scenario?: strin
     }
     const generation = state.generation;
     const hasBody = req.headers['transfer-encoding'] || Number(req.headers['content-length'] ?? 0) > 0;
-    const input = (req.method === 'POST' || req.method === 'PATCH') && hasBody ? await body(req) : {};
+    const input = (req.method === 'POST' || req.method === 'PATCH' || req.method === 'PUT') && hasBody ? await body(req) : {};
     if (generation !== state.generation) throw new Refused(409, 'invalid_request', 'Mock generation changed');
     if (url.pathname === '/__mock/bootstrap' && req.method === 'POST') {
       if (input.scenario !== undefined && scenarioName(input.scenario) !== state.scenario) reset(scenarioName(input.scenario));
@@ -165,7 +195,7 @@ export async function startMockServer(options: { port?: number; scenario?: strin
     }
     if (url.pathname === '/__mock' && req.method === 'GET') return json(res, 200, {
       scenarios, endpoints: { bootstrap: 'POST /__mock/bootstrap {scenario?}', state: 'GET /__mock/state', reset: 'POST /__mock/reset {scenario?}', action: 'POST /__mock/action' },
-      actions: ['message', 'participants', 'faults', 'name-conflict', 'revoke', 'voice-leave'],
+      actions: ['colour', 'message', 'participants', 'faults', 'name-conflict', 'revoke', 'voice-leave'],
       faults: state.faults,
       lifecycle: 'Same-scenario bootstrap preserves state. Reset advances generation; poll state independently of /api/live. Voice leave requires the current generation.',
     });
@@ -180,7 +210,8 @@ export async function startMockServer(options: { port?: number; scenario?: strin
         const faults = input.faults;
         if (!faults || typeof faults !== 'object' || Array.isArray(faults)) throw new Refused(400, 'invalid_request', 'Expected faults object');
         for (const [key, value] of Object.entries(faults)) {
-          if (key === 'delayMs' && typeof value === 'number' && Number.isInteger(value) && value >= 0 && value <= 30_000) state.faults.delayMs = value;
+          if (['delayMs', 'colourDelayMs', 'colourResponseDelayMs'].includes(key) && typeof value === 'number' && Number.isInteger(value) && value >= 0 && value <= 30_000) state.faults[key as 'delayMs' | 'colourDelayMs' | 'colourResponseDelayMs'] = value;
+          else if (key === 'colourSave' && ['none', 'fail'].includes(String(value))) state.faults.colourSave = value as MockState['faults']['colourSave'];
           else if (key === 'send' && ['none', 'fail', 'lost-response'].includes(String(value))) state.faults.send = value as MockState['faults']['send'];
           else if (key === 'roomFull' && (value === null || state.rooms.some((room) => room.id === value))) state.faults.roomFull = value as string | null;
           else if (['liveDisconnected', 'micDenied', 'shareFailure', 'voiceReconnecting'].includes(key) && typeof value === 'boolean') {
@@ -188,6 +219,9 @@ export async function startMockServer(options: { port?: number; scenario?: strin
           } else throw new Refused(400, 'invalid_request', 'Invalid fault value');
         }
         if (state.faults.liveDisconnected) for (const socket of sockets.clients) socket.close(4000, 'Scripted disconnect');
+      } else if (input.type === 'colour') {
+        if (typeof input.visitorId !== 'string' || !colours.has(input.visitorId)) throw new Refused(404, 'not_found', 'Unknown visitor');
+        changeColour(input.visitorId, input.palette);
       } else if (input.type === 'voice-leave') {
         if (input.generation !== state.generation) throw new Refused(409, 'invalid_request', 'Mock generation changed');
         state.voiceRoomId = null;
@@ -203,6 +237,7 @@ export async function startMockServer(options: { port?: number; scenario?: strin
             typeof peer.name !== 'string' || !peer.name.trim() || [...peer.name.trim()].length > 32 || /[\p{Cc}\p{Cf}]/u.test(peer.name) ||
             ['muted', 'deafened', 'sharing'].some((key) => typeof peer[key] !== 'boolean')) throw new Refused(400, 'invalid_request', 'Invalid scripted participant');
           ids.add(peer.visitorId);
+          assignColour(peer.visitorId);
         }
         for (const room of state.rooms) state.peers[room.id] = (state.peers[room.id] ?? []).filter((peer) => !ids.has(peer.visitorId));
         state.peers[input.roomId as string] = peers.map((raw) => {
@@ -238,6 +273,7 @@ export async function startMockServer(options: { port?: number; scenario?: strin
         const authorName = typeof input.authorName === 'string' ? input.authorName : 'Sam';
         const author = Object.values(state.peers).flat().find((peer) => peer.name === authorName);
         const message: Schema['Message'] = { id: id(), roomId: input.roomId as string, authorId: author?.visitorId ?? id(), authorName, body: input.body, createdAt: new Date().toISOString() };
+        assignColour(message.authorId);
         history.push(message);
         publish('message.created', message, message.roomId);
       } else throw new Refused(400, 'invalid_request', 'Unknown action');
@@ -257,7 +293,7 @@ export async function startMockServer(options: { port?: number; scenario?: strin
       const chosen = name(input.name);
       state.voiceRoomId = null;
       for (const socket of sockets.clients) socket.close(4000, 'Visitor entered again');
-      state.visitor = { id: id(), name: chosen, nameTaken: false };
+      state.visitor = visitor(chosen);
       occupancy();
       requests.clear();
       token = randomBytes(24).toString('hex');
@@ -266,6 +302,27 @@ export async function startMockServer(options: { port?: number; scenario?: strin
       return json(res, 201, state.visitor);
     }
     if (!authenticated(req) || !state.visitor) throw new Refused(401, 'visitor_required', 'Enter through the access link');
+    if (url.pathname === '/api/visitor-colours' && req.method === 'POST') {
+      if (!Array.isArray(input.visitorIds) || input.visitorIds.length > 100 || input.visitorIds.some((id) => typeof id !== 'string')) throw new Refused(400, 'invalid_request', 'Expected at most 100 visitor IDs');
+      return json(res, 200, { colours: [...new Set(input.visitorIds as string[])].flatMap((id) => colours.has(id) ? [colours.get(id)!] : []) } satisfies Schema['VisitorColourList']);
+    }
+    if (url.pathname === '/api/me/colour' && req.method === 'PUT') {
+      if (!palettes.includes(input.palette as Schema['PaletteName'])) throw new Refused(400, 'invalid_palette', 'Unknown palette');
+      const visitorId = state.visitor.id;
+      const delay = state.faults.colourDelayMs;
+      const responseDelay = state.faults.colourResponseDelayMs;
+      const failure = state.faults.colourSave;
+      state.faults.colourDelayMs = 0; state.faults.colourResponseDelayMs = 0; state.faults.colourSave = 'none';
+      state.revision++;
+      if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
+      if (generation !== state.generation) throw new Refused(409, 'invalid_request', 'Mock generation changed');
+      if (!authenticated(req) || state.visitor?.id !== visitorId) throw new Refused(401, 'visitor_required', 'Enter through the access link');
+      if (failure === 'fail') throw new Refused(503, 'internal', 'Scripted colour save failure; retry the colour');
+      const colour = changeColour(visitorId, input.palette);
+      state.revision++;
+      if (responseDelay) await new Promise((resolve) => setTimeout(resolve, responseDelay));
+      return json(res, 200, colour);
+    }
     if (url.pathname === '/api/me' && req.method === 'GET') return json(res, 200, state.visitor);
     if (url.pathname === '/api/me' && req.method === 'PATCH') {
       state.visitor.name = name(input.name);

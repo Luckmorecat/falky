@@ -15,8 +15,9 @@ import (
 // Visitor is a person who entered through the access link.
 type Visitor struct {
 	// ID is a ULID; it never changes.
-	ID   string
-	Name string
+	ID     string
+	Name   string
+	Colour Colour
 }
 
 // ErrWrongSecret reports a secret that is not the current access link's.
@@ -66,7 +67,12 @@ func (s *Service) Enter(ctx context.Context, secret, name string) (Visitor, stri
 			VALUES (?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`, v.ID, v.Name); err != nil {
 			return err
 		}
-		_, err := tx.ExecContext(ctx, `INSERT INTO visitor_tokens (token_hash, visitor_id, generation, created_at)
+		var err error
+		v.Colour, err = s.allocateColour(ctx, tx, v.ID)
+		if err != nil {
+			return err
+		}
+		_, err = tx.ExecContext(ctx, `INSERT INTO visitor_tokens (token_hash, visitor_id, generation, created_at)
 			VALUES (?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`, hashToken(token), v.ID, generation)
 		return err
 	})
@@ -87,17 +93,19 @@ func (s *Service) Resolve(ctx context.Context, token string) (Visitor, error) {
 		return Visitor{}, ErrNoVisitor
 	}
 	var v Visitor
-	err := s.db.Read().QueryRowContext(ctx, `SELECT v.id, v.name
+	err := s.db.Read().QueryRowContext(ctx, `SELECT v.id, v.name, c.palette, c.revision
 		FROM visitor_tokens t
 		JOIN visitors v ON v.id = t.visitor_id
+ JOIN visitor_colours c ON c.visitor_id = v.id
 		JOIN access a ON a.id = 1 AND a.generation = t.generation
-		WHERE t.token_hash = ?`, hashToken(token)).Scan(&v.ID, &v.Name)
+		WHERE t.token_hash = ?`, hashToken(token)).Scan(&v.ID, &v.Name, &v.Colour.Palette, &v.Colour.Revision)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Visitor{}, ErrNoVisitor
 	}
 	if err != nil {
 		return Visitor{}, fmt.Errorf("resolve visitor: %w", err)
 	}
+	v.Colour.VisitorID = v.ID
 	return v, nil
 }
 
@@ -106,18 +114,19 @@ func (s *Service) Resolve(ctx context.Context, token string) (Visitor, error) {
 // generation. It fails with ErrNoVisitor otherwise.
 func (s *Service) Visitor(ctx context.Context, visitorID string) (Visitor, error) {
 	var v Visitor
-	err := s.db.Read().QueryRowContext(ctx, `SELECT v.id, v.name
-		FROM visitors v
+	err := s.db.Read().QueryRowContext(ctx, `SELECT v.id, v.name, c.palette, c.revision
+		FROM visitors v JOIN visitor_colours c ON c.visitor_id = v.id
 		WHERE v.id = ? AND EXISTS (SELECT 1
 			FROM visitor_tokens t
 			JOIN access a ON a.id = 1 AND a.generation = t.generation
-			WHERE t.visitor_id = v.id)`, visitorID).Scan(&v.ID, &v.Name)
+			WHERE t.visitor_id = v.id)`, visitorID).Scan(&v.ID, &v.Name, &v.Colour.Palette, &v.Colour.Revision)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Visitor{}, ErrNoVisitor
 	}
 	if err != nil {
 		return Visitor{}, fmt.Errorf("look up visitor: %w", err)
 	}
+	v.Colour.VisitorID = v.ID
 	return v, nil
 }
 
@@ -155,7 +164,13 @@ func (s *Service) Rename(ctx context.Context, visitorID, name string) (Visitor, 
 		return Visitor{}, fmt.Errorf("rename visitor: %w", err)
 	}
 	s.reservations.move(key, visitorID)
-	return Visitor{ID: visitorID, Name: name}, nil
+	var colour Colour
+	err = s.db.Read().QueryRowContext(ctx, "SELECT palette, revision FROM visitor_colours WHERE visitor_id = ?", visitorID).Scan(&colour.Palette, &colour.Revision)
+	if err != nil {
+		return Visitor{}, fmt.Errorf("renamed visitor colour: %w", err)
+	}
+	colour.VisitorID = visitorID
+	return Visitor{ID: visitorID, Name: name, Colour: colour}, nil
 }
 
 // Connect counts a live-update connection of the visitor visitorID, who is

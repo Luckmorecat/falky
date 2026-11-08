@@ -97,3 +97,27 @@ This profiles the **mock development app**. Simulated media does not exercise
 real codecs, audio processing or network transport, and these figures are not a
 production footprint. Run `pnpm run profile:memory --help` for option bounds and
 `pnpm run test:memory` to check scenario selection, report consistency and cleanup.
+
+## Shared visitor colours in the mock
+
+The mock app uses the same confirmed colour controller and public API as Go:
+`PUT /api/me/colour` saves one palette, and `POST /api/visitor-colours` reads up to
+100 explicit visitor IDs, including historical authors. Successful saves publish
+`visitor.colour.changed` to every live tab. Per-visitor colour revisions are
+independent of the simulator's control-state revision. Same-scenario reloads keep
+assignments; resetting the fixture or restarting the process creates fresh state.
+
+Use `GET /__mock/state` to find a visitor ID, then script a colour edit with
+`POST /__mock/action` and `{ "type": "colour", "visitorId": "ID", "palette": "moss" }`.
+The `faults` action accepts one-shot `colourSave: "fail"`, `colourDelayMs` (before
+acceptance) and `colourResponseDelayMs` (after acceptance) to exercise failed saves
+and response ordering. `liveDisconnected` remains available for missed-event
+recovery without posting another message. The simulator still models one current
+visitor plus scripted peers; two tabs share that visitor's session.
+
+Capture Profile directly with the existing isolated screenshot utility:
+
+```sh
+pnpm run screenshot:mock --preset profile
+pnpm run screenshot:mock --preset profile --viewport 390x844 --theme light --lang uk
+```

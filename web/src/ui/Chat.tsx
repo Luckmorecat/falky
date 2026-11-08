@@ -5,11 +5,10 @@ import { shortcuts } from '../app/shortcuts';
 import { getState, useApp } from '../app/store';
 import { atBottom, followingLatest, rememberedPlace, rememberPlace, scrollToAnchor, sliceRange, stack, type Anchor } from '../chat/place';
 import { buildFeed, canPost, MESSAGE_MAX, messageLength, type FeedItem, type PendingMessage, splitLinks } from '../chat/timeline';
-import { assignPalettes, paletteOf, type PaletteName, paletteStyle } from '../fx/palette';
+import { type PaletteName, paletteStyle } from '../fx/palette';
 import { t } from '../strings';
 import { IconButton } from './IconButton';
 import { Icon } from './Icon';
-import { usePeople } from './Stage';
 import { useDrawerLayout } from './useDrawerLayout';
 
 function afterPaint(fn: () => void): () => void {
@@ -58,7 +57,7 @@ function Body({ text }: { text: string }) {
   );
 }
 
-const MessageRow = memo(function MessageRow({ message, continued, lead, palette }: { message: Message; continued: boolean; lead: boolean; palette: PaletteName }) {
+const MessageRow = memo(function MessageRow({ message, continued, lead, palette }: { message: Message; continued: boolean; lead: boolean; palette: PaletteName | undefined }) {
   return (
     <article className={`msg${continued ? ' cont' : ''}${lead ? ' lead' : ''}`} style={paletteStyle(palette)}>
       {!continued && (
@@ -72,7 +71,7 @@ const MessageRow = memo(function MessageRow({ message, continued, lead, palette 
   );
 });
 
-function PendingRow({ pending, continued, lead, name, palette }: { pending: PendingMessage; continued: boolean; lead: boolean; name: string; palette: PaletteName }) {
+function PendingRow({ pending, continued, lead, name, palette }: { pending: PendingMessage; continued: boolean; lead: boolean; name: string; palette: PaletteName | undefined }) {
   return (
     <article className={`msg pending${continued ? ' cont' : ''}${lead ? ' lead' : ''}`} style={paletteStyle(palette)}>
       {!continued && <div className="msg-meta"><span className="msg-author">{name}</span></div>}
@@ -113,16 +112,9 @@ export function Chat({ room }: { room: Room | null }) {
   const chat = useApp((s) => (room ? s.chats[room.id] : undefined));
   const newAfterId = useApp((s) => s.newAfterId);
   const visitor = useApp((s) => s.visitor);
-  const people = usePeople(room);
-  const ownColor = useApp((s) => s.ownColor);
+  const colours = useApp((s) => s.colours);
   const selfId = visitor?.id ?? '';
-  const messages = chat?.messages;
-  // The same colours as the avatars on the stage, and no two alike among those who write.
-  const palettes = useMemo(
-    () => assignPalettes(people.map((p) => p.id), ownColor ? { id: selfId, palette: ownColor } : undefined, [...(messages ?? []).map((m) => m.authorId), selfId]),
-    [people, ownColor, selfId, messages],
-  );
-  const paletteFor = (id: string) => palettes.get(id) ?? paletteOf(id);
+  const paletteFor = (id: string) => colours[id]?.palette;
   const feed = useRef<HTMLDivElement>(null);
   const heights = useRef(new Map<string, number>());
   const scrollRef = useRef(0);
