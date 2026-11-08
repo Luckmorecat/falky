@@ -318,9 +318,9 @@ input[type=range]::-moz-range-thumb { width: 18px; height: 18px; border: 0; bord
 .empty-chat strong { display: block; color: var(--text); font-weight: 500; font-size: 17px; margin-bottom: 4px; }
 
 /* Settings: a window of its own, with its parts along the top. It keeps its size, so nothing jumps between them. */
-.settings { width: min(880px, calc(100vw - 32px)); height: min(680px, calc(100dvh - 32px)); max-width: none; max-height: none; margin: auto; padding: 0; border: 0; border-radius: 48px; overflow: hidden; background: var(--surface); color: var(--text); box-shadow: 0 24px 60px var(--shadow);
+.settings { flex-direction: column; width: min(880px, calc(100vw - 32px)); height: min(680px, calc(100dvh - 32px)); max-width: none; max-height: none; margin: auto; padding: 0; border: 0; border-radius: 48px; overflow: hidden; background: var(--surface); color: var(--text); box-shadow: 0 24px 60px var(--shadow);
   opacity: 0; transform: scale(.97) translateY(8px); transition: opacity 140ms ease, transform 200ms var(--ease-out), overlay 200ms allow-discrete, display 200ms allow-discrete; }
-.settings[open] { display: flex; flex-direction: column; opacity: 1; transform: none; @starting-style { opacity: 0; transform: scale(.97) translateY(8px); } }
+.settings[open] { display: flex; opacity: 1; transform: none; @starting-style { opacity: 0; transform: scale(.97) translateY(8px); } }
 .settings::backdrop { background: rgba(0,0,0,.55); opacity: 0; transition: opacity 160ms ease, overlay 160ms allow-discrete, display 160ms allow-discrete; }
 .settings[open]::backdrop { opacity: 1; @starting-style { opacity: 0; } }
 [data-theme="light"] .settings::backdrop { background: rgba(0,0,0,.32); }
