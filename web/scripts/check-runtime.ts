@@ -70,9 +70,9 @@ try {
         },
       }],
     });
-    assert.ok(assets.includes(version), 'The settings footer must use the source build identity');
+    assert.ok(assets.includes(version), 'The main screen footer must use the source build identity');
     const html = await readFile(join(temporary, mode, 'index.html'), 'utf8');
-    assert.ok(html.includes(`<span class="build-version">${version}</span>`), 'The global footer must be present before app startup');
+    assert.ok(!html.includes('build-version'), 'The footer must belong to the main screen rather than the document');
     const initial = new Set<string>();
     function visit(name: string): void {
       if (initial.has(name)) return;
