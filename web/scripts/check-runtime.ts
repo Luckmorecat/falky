@@ -56,6 +56,7 @@ try {
     assert.ok([...modules].some((id) => id.includes('/livekit-client/')), 'LiveKit must be emitted');
     assert.ok(!initialModules.some((id) => id.endsWith('/src/ui/Settings.tsx')), 'Settings must load on demand');
     assert.ok(!initialModules.some((id) => id.includes('/livekit-client/')), 'LiveKit must load in the background');
+    assert.ok(![...modules].some((id) => id.includes('/web-vitals/')), 'Profiling instrumentation must stay outside production bundles');
     assert.ok([...modules].some((id) => id.endsWith('/src/voice/session.ts')), 'Real voice must be emitted');
     assert.ok([...modules].some((id) => id.endsWith('/src/runtime/browser.ts')), 'Real browser adapter must be emitted');
     assert.deepEqual([...modules].filter((id) => /\/(?:src\/)?mock\//.test(id)), []);

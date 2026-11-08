@@ -19,7 +19,9 @@
     "test:memory": "node --import tsx --test scripts/profile-memory.test.ts",
     "test:screenshot": "node --import tsx --test scripts/screenshot-mock.test.ts",
     "storybook": "storybook dev -p 6006 --no-open",
-    "build-storybook": "storybook build"
+    "build-storybook": "storybook build",
+    "profile:performance": "node --import tsx scripts/profile-performance.ts",
+    "test:performance": "node --import tsx --test scripts/profile-performance.test.ts"
   },
   "dependencies": {
     "@fontsource-variable/onest": "5.3.1",
@@ -43,6 +45,7 @@
     "typescript": "5.9.3",
     "vite": "8.3.6",
     "vitest": "5.1.0",
+    "web-vitals": "6.2.3",
     "ws": "8.22.1"
   }
 }

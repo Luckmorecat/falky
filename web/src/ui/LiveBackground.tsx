@@ -1,4 +1,4 @@
-import { type Ref, useEffect, useImperativeHandle, useRef, useState } from 'react';
+import { type Ref, useEffect, useImperativeHandle, useRef } from 'react';
 import { useApp } from '../app/store';
 import { createBackground } from '../fx/backgroundRenderer';
 import { createThemeWave } from '../fx/themeWave';
@@ -16,20 +16,25 @@ export interface LiveBackgroundHandle {
 /** Screen-owned canvas; participant membership never resets the theme wave. */
 export function LiveBackground({ ref }: { ref: Ref<LiveBackgroundHandle> }) {
   const canvas = useRef<HTMLCanvasElement>(null);
-  const [sources, setSources] = useState<VoiceSource[]>([]);
+  const sources = useRef<VoiceSource[]>([]);
+  const renderer = useRef<ReturnType<typeof createBackground>>(null);
   const enabled = useApp((s) => s.settings.liveBackground && !s.settings.fewerEffects);
   const wave = useRef<ReturnType<typeof createThemeWave> | null>(null);
   const layoutUntil = useRef(0);
 
   useImperativeHandle(ref, () => ({
-    setSources,
+    setSources: (next) => {
+      sources.current = next;
+      renderer.current?.setSources(next);
+    },
     invalidateLayout: () => { layoutUntil.current = layoutTime() + 500; },
   }), []);
 
   useEffect(() => {
     if (!enabled) { wave.current = null; return; }
-    const painter = createBackground(canvas.current!, sources);
+    const painter = createBackground(canvas.current!, sources.current);
     if (!painter) return;
+    renderer.current = painter;
     wave.current ??= createThemeWave(document.documentElement.dataset.theme === 'light');
     layoutUntil.current = layoutTime() + 500;
     let time = 0;
@@ -44,8 +49,8 @@ export function LiveBackground({ ref }: { ref: Ref<LiveBackgroundHandle> }) {
       const theme = wave.current!.frame(document.documentElement.dataset.theme === 'light', dt, reduced);
       painter.draw(time, 1.5, 480, reduced, theme);
     });
-    return () => { stop(); painter.dispose(); };
-  }, [enabled, sources]);
+    return () => { stop(); painter.dispose(); renderer.current = null; };
+  }, [enabled]);
 
   return <canvas ref={canvas} className="live-background" aria-hidden="true" />;
 }

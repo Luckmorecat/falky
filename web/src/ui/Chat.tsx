@@ -12,6 +12,11 @@ import { Icon } from './Icon';
 import { usePeople } from './Stage';
 import { useDrawerLayout } from './useDrawerLayout';
 
+function afterPaint(fn: () => void): () => void {
+  let frame = requestAnimationFrame(() => { frame = requestAnimationFrame(fn); });
+  return () => cancelAnimationFrame(frame);
+}
+
 const timeOf = (iso: string) => new Date(iso).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false });
 
 type FeedRow = FeedItem | { kind: 'loading'; key: 'loading' };
@@ -163,82 +168,92 @@ export function Chat({ room }: { room: Room | null }) {
 
   useLayoutEffect(() => {
     const el = feed.current;
-    if (!el || !room) return;
-    if (placedRoom.current !== room.id) {
-      placedRoom.current = room.id;
-      placed.current = false;
-    }
-    const style = getComputedStyle(el);
-    const top = Number.parseFloat(style.getPropertyValue('--feed-top')) || 28;
-    const bottomInset = Number.parseFloat(style.getPropertyValue('--feed-bottom')) || 12;
-    const height = el.clientHeight;
-    const width = el.clientWidth;
-    if (height !== frame.height || width !== frame.width || top !== frame.top || bottomInset !== frame.bottom) {
-      setFrame({ width, height, top, bottom: bottomInset });
-      return;
-    }
-    let changed = false;
-    for (const node of el.querySelectorAll<HTMLElement>('[data-row]')) {
-      const key = node.dataset.row;
-      if (!key) continue;
-      const heightOf = Math.round(node.getBoundingClientRect().height * 10) / 10;
-      if (heightOf > 0 && heights.current.get(key) !== heightOf) {
-        heights.current.set(key, heightOf);
-        changed = true;
+    if (!el || !room || (drawer && !open)) return;
+    const measure = () => {
+      if (placedRoom.current !== room.id) {
+        placedRoom.current = room.id;
+        placed.current = false;
       }
-    }
-    if (changed) {
-      setMeasured((n) => n + 1);
-      return;
-    }
-    const place = rememberedPlace(room.id) ?? { following: true, anchor: null };
-    const max = Math.max(0, laid.scrollHeight - height);
-    const next = place.following ? max : place.anchor ? scrollToAnchor(keys, laid.tops, place.anchor, max) : null;
-    setAtBottomNow((prev) => (prev === place.following ? prev : place.following));
-    placed.current = true;
-    let kept = el.scrollTop;
-    if (next !== null && Math.abs(kept - next) > 1) {
-      adjusting.current = true;
-      el.scrollTop = next;
-      adjusting.current = false;
-      kept = el.scrollTop;
-    }
-    // The row top is back. If the text inside it gained padding, move by that so the line stays.
-    const anchor = !place.following ? place.anchor : null;
-    if (anchor?.pad !== undefined) {
-      const row = el.querySelector<HTMLElement>(`[data-row="${anchor.key}"]`);
-      const text = row?.querySelector<HTMLElement>('.msg-text');
-      if (row && text) {
-        const delta = text.getBoundingClientRect().top - row.getBoundingClientRect().top - anchor.pad;
-        if (Math.abs(delta) > 1) {
-          adjusting.current = true;
-          el.scrollTop += delta;
-          adjusting.current = false;
-          kept = el.scrollTop;
-          rememberPlace(room.id, { following: false, anchor: { key: anchor.key, offset: anchor.offset - delta, pad: anchor.pad + delta } });
+      const style = getComputedStyle(el);
+      const top = Number.parseFloat(style.getPropertyValue('--feed-top')) || 28;
+      const bottomInset = Number.parseFloat(style.getPropertyValue('--feed-bottom')) || 12;
+      const height = el.clientHeight;
+      const width = el.clientWidth;
+      if (height !== frame.height || width !== frame.width || top !== frame.top || bottomInset !== frame.bottom) {
+        setFrame({ width, height, top, bottom: bottomInset });
+        return;
+      }
+      let changed = false;
+      for (const node of el.querySelectorAll<HTMLElement>('[data-row]')) {
+        const key = node.dataset.row;
+        if (!key) continue;
+        const heightOf = Math.round(node.getBoundingClientRect().height * 10) / 10;
+        if (heightOf > 0 && heights.current.get(key) !== heightOf) {
+          heights.current.set(key, heightOf);
+          changed = true;
         }
       }
-    }
-    if (Math.abs(scrollRef.current - kept) > 0.5) {
-      scrollRef.current = kept;
-      setScrollPos((prev) => (Math.abs(prev - kept) < 0.5 ? prev : kept));
-    }
-  }, [rows, frame, measured, room?.id, open, keys, laid.scrollHeight, visible.start, visible.end]);
+      if (changed) {
+        setMeasured((n) => n + 1);
+        return;
+      }
+      const place = rememberedPlace(room.id) ?? { following: true, anchor: null };
+      const max = Math.max(0, laid.scrollHeight - height);
+      const next = place.following ? max : place.anchor ? scrollToAnchor(keys, laid.tops, place.anchor, max) : null;
+      setAtBottomNow((prev) => (prev === place.following ? prev : place.following));
+      placed.current = true;
+      let kept = el.scrollTop;
+      if (next !== null && Math.abs(kept - next) > 1) {
+        adjusting.current = true;
+        el.scrollTop = next;
+        adjusting.current = false;
+        kept = el.scrollTop;
+      }
+      // The row top is back. If the text inside it gained padding, move by that so the line stays.
+      const anchor = !place.following ? place.anchor : null;
+      if (anchor?.pad !== undefined) {
+        const row = el.querySelector<HTMLElement>(`[data-row="${anchor.key}"]`);
+        const text = row?.querySelector<HTMLElement>('.msg-text');
+        if (row && text) {
+          const delta = text.getBoundingClientRect().top - row.getBoundingClientRect().top - anchor.pad;
+          if (Math.abs(delta) > 1) {
+            adjusting.current = true;
+            el.scrollTop += delta;
+            adjusting.current = false;
+            kept = el.scrollTop;
+            rememberPlace(room.id, { following: false, anchor: { key: anchor.key, offset: anchor.offset - delta, pad: anchor.pad + delta } });
+          }
+        }
+      }
+      if (Math.abs(scrollRef.current - kept) > 0.5) {
+        scrollRef.current = kept;
+        setScrollPos((prev) => (Math.abs(prev - kept) < 0.5 ? prev : kept));
+      }
+    };
+    if (open) measure();
+    else return afterPaint(measure);
+  }, [rows, frame, measured, room?.id, open, drawer, keys, laid.scrollHeight, visible.start, visible.end]);
 
   useEffect(() => {
     const el = feed.current;
-    if (!el) return;
-    const watch = new ResizeObserver(() => {
+    if (!el || (drawer && !open)) return;
+    let cancel: (() => void) | undefined;
+    const measure = () => {
       const style = getComputedStyle(el);
       const top = Number.parseFloat(style.getPropertyValue('--feed-top')) || 28;
       const bottom = Number.parseFloat(style.getPropertyValue('--feed-bottom')) || 12;
       const height = el.clientHeight;
       const width = el.clientWidth;
       setFrame((prev) => (prev.width === width && prev.height === height && prev.top === top && prev.bottom === bottom ? prev : { width, height, top, bottom }));
+    };
+    const watch = new ResizeObserver(() => {
+      cancel?.();
+      if (open) measure();
+      else cancel = afterPaint(measure);
     });
     watch.observe(el);
-    return () => watch.disconnect();
-  }, [room?.id]);
+    return () => { watch.disconnect(); cancel?.(); };
+  }, [room?.id, open, drawer]);
 
   useEffect(() => {
     if (open && drawer && matchMedia('(pointer: fine)').matches) input.current?.focus({ preventScroll: true });
@@ -279,8 +294,9 @@ export function Chat({ room }: { room: Room | null }) {
 
   const onScroll = () => {
     const el = feed.current;
-    if (!el || !room) return;
+    if (!el || !room || (drawer && !open)) return;
     const top = el.scrollTop;
+    if (Math.abs(scrollRef.current - top) <= 0.5) return;
     scrollRef.current = top;
     setScrollPos((prev) => (Math.abs(prev - top) < 0.5 ? prev : top));
     if (!adjusting.current) note(el);
