@@ -8,6 +8,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"reflect"
 	"strconv"
 	"strings"
@@ -71,7 +72,7 @@ func TestAttachmentEndpointsNeedAVisitor(t *testing.T) {
 	}
 }
 
-func attachmentRequest(t *testing.T, p publicServer, hc *http.Client, method, path, media string, body io.Reader) (int, http.Header, []byte) {
+func attachmentRequest(t *testing.T, p publicServer, hc *http.Client, method, path, media string, body io.Reader, headers ...http.Header) (int, http.Header, []byte) {
 	t.Helper()
 	req, err := http.NewRequestWithContext(t.Context(), method, p.srv.URL+path, body)
 	if err != nil {
@@ -79,6 +80,13 @@ func attachmentRequest(t *testing.T, p publicServer, hc *http.Client, method, pa
 	}
 	if media != "" {
 		req.Header.Set("Content-Type", media)
+	}
+	for _, extra := range headers {
+		for name, values := range extra {
+			for _, value := range values {
+				req.Header.Add(name, value)
+			}
+		}
 	}
 	res, err := hc.Do(req)
 	if err != nil {
@@ -162,7 +170,7 @@ func TestPrivateDraftBecomesPostedWithCommonMetadata(t *testing.T) {
 	}
 	status, headers, out := attachmentRequest(t, p, otherHTTP, "GET", draft.ContentUrl, "", nil)
 	disposition, params, err := mime.ParseMediaType(headers.Get("Content-Disposition"))
-	if status != 200 || !bytes.Equal(out, data) || disposition != "attachment" || strings.Contains(params["filename"], "/") || err != nil || headers.Get("Cache-Control") != "no-store" || headers.Get("X-Content-Type-Options") != "nosniff" || headers.Get("Content-Length") != strconv.Itoa(len(data)) {
+	if status != 200 || !bytes.Equal(out, data) || disposition != "attachment" || strings.Contains(params["filename"], "/") || err != nil || headers.Get("Cache-Control") != "private, no-cache" || headers.Get("X-Content-Type-Options") != "nosniff" || headers.Get("Content-Length") != strconv.Itoa(len(data)) {
 		t.Fatalf("content=%d %v %q", status, headers, out)
 	}
 
@@ -171,6 +179,122 @@ func TestPrivateDraftBecomesPostedWithCommonMetadata(t *testing.T) {
 	text := postedMessageForAttachments(t, b, r.ID, "text-only", api.PostMessageRequest{Body: "text"})
 	if text.Attachments == nil || len(text.Attachments) != 0 {
 		t.Fatalf("text attachments=%+v", text.Attachments)
+	}
+}
+
+func TestAttachmentContentRevalidation(t *testing.T) {
+	p := startPublic(t, 10)
+	room := p.createRoom(t, "Lounge")
+	b, hc := p.browserWithHTTP(t)
+	p.enter(t, b, "Bob")
+	other, otherHTTP := p.browserWithHTTP(t)
+	p.enter(t, other, "Alice")
+	data := []byte("immutable content")
+	draft := uploadDraft(t, p, hc, room.ID, "file.txt", data)
+	status, headers, out := attachmentRequest(t, p, hc, "GET", draft.ContentUrl, "", nil)
+	etag := headers.Get("ETag")
+	if status != 200 || !bytes.Equal(out, data) || etag != strconv.Quote(draft.Id) || headers.Get("Cache-Control") != "private, no-cache" {
+		t.Fatalf("first read=%d %v %q", status, headers, out)
+	}
+	for _, tc := range []struct {
+		name   string
+		tags   []string
+		status int
+	}{
+		{"same", []string{etag}, 304},
+		{"weak", []string{"W/" + etag}, 304},
+		{"list", []string{`"other", W/` + etag}, 304},
+		{"multiple fields", []string{`"other"`, etag}, 304},
+		{"wildcard", []string{"*"}, 304},
+		{"different", []string{`"other"`}, 200},
+		{"comma inside tag", []string{`"other,*,tag"`}, 200},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			status, headers, out := attachmentRequest(t, p, hc, "GET", draft.ContentUrl, "", nil, http.Header{"If-None-Match": tc.tags})
+			if status != tc.status || headers.Get("ETag") != etag || headers.Get("Cache-Control") != "private, no-cache" {
+				t.Fatalf("revalidation=%d %v %q", status, headers, out)
+			}
+			if status == 304 && (len(out) != 0 || headers.Get("Content-Length") != "") {
+				t.Fatalf("304 carries content: %v %q", headers, out)
+			}
+			if status == 200 && !bytes.Equal(out, data) {
+				t.Fatalf("changed validator lost bytes: %q", out)
+			}
+		})
+	}
+	conditional := http.Header{"If-None-Match": {etag}}
+	for _, tc := range []struct {
+		name   string
+		client *http.Client
+		status int
+		code   string
+	}{
+		{"no cookie", p.srv.Client(), 401, "visitor_required"},
+		{"foreign draft", otherHTTP, 404, "attachment_not_found"},
+	} {
+		status, headers, out := attachmentRequest(t, p, tc.client, "GET", draft.ContentUrl, "", nil, conditional)
+		wantError(t, tc.name, status, out, tc.status, tc.code)
+		if headers.Get("Cache-Control") != "no-store" || headers.Get("ETag") != "" {
+			t.Fatalf("cached error=%v", headers)
+		}
+	}
+	postedMessageForAttachments(t, b, room.ID, "posted", api.PostMessageRequest{AttachmentIds: []string{draft.Id}})
+	status, _, _ = attachmentRequest(t, p, otherHTTP, "GET", draft.ContentUrl, "", nil, conditional)
+	if status != 304 {
+		t.Fatalf("posted revalidation=%d", status)
+	}
+	if _, err := p.identity.Rotate(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	status, headers, out = attachmentRequest(t, p, hc, "GET", draft.ContentUrl, "", nil, conditional)
+	wantError(t, "revoked conditional read", status, out, 401, "visitor_required")
+	if headers.Get("Cache-Control") != "no-store" || headers.Get("ETag") != "" {
+		t.Fatalf("cached revocation=%v", headers)
+	}
+}
+
+func TestAttachmentRevalidationChecksAvailability(t *testing.T) {
+	for _, state := range []string{"cancelled", "expired", "missing", "evicted"} {
+		t.Run(state, func(t *testing.T) {
+			p := startPublicAttachments(t, 10, 100, []attachments.Option{attachments.WithPostedQuota(6)})
+			room := p.createRoom(t, "Lounge")
+			b, hc := p.browserWithHTTP(t)
+			visitor := p.enter(t, b, "Bob")
+			draft := uploadDraft(t, p, hc, room.ID, "file.txt", []byte("data"))
+			_, headers, _ := attachmentRequest(t, p, hc, "GET", draft.ContentUrl, "", nil)
+			switch state {
+			case "cancelled":
+				status, _, out := attachmentRequest(t, p, hc, "DELETE", "/api/attachments/"+draft.Id, "", nil)
+				if status != 204 {
+					t.Fatalf("cancel=%d %s", status, out)
+				}
+			case "expired":
+				p.clock.Advance(time.Hour + time.Second)
+			case "missing":
+				content, err := p.attachments.Open(t.Context(), visitor.Id, draft.Id)
+				if err != nil {
+					t.Fatal(err)
+				}
+				name := content.File.Name()
+				if err := content.File.Close(); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Remove(name); err != nil {
+					t.Fatal(err)
+				}
+			case "evicted":
+				postedMessageForAttachments(t, b, room.ID, "first", api.PostMessageRequest{AttachmentIds: []string{draft.Id}})
+				next := uploadDraft(t, p, hc, room.ID, "next.txt", []byte("next"))
+				postedMessageForAttachments(t, b, room.ID, "next", api.PostMessageRequest{AttachmentIds: []string{next.Id}})
+			}
+			for _, tag := range []string{headers.Get("ETag"), "*"} {
+				status, headers, out := attachmentRequest(t, p, hc, "GET", draft.ContentUrl, "", nil, http.Header{"If-None-Match": {tag}})
+				wantError(t, "unavailable conditional read", status, out, 410, "attachment_expired")
+				if headers.Get("Cache-Control") != "no-store" || headers.Get("ETag") != "" {
+					t.Fatalf("cached unavailable=%v", headers)
+				}
+			}
+		})
 	}
 }
 
@@ -423,6 +547,10 @@ func TestContentStreamsBoundAcrossHandlersAndCloseOnCompletion(t *testing.T) {
 	}
 	status, _, out := attachmentRequest(t, p, hc, "GET", draft.ContentUrl, "", nil)
 	wantError(t, "saturated content", status, out, 429, "attachment_busy")
+	status, _, out = attachmentRequest(t, p, hc, "GET", draft.ContentUrl, "", nil, http.Header{"If-None-Match": {strconv.Quote(draft.Id)}})
+	if status != 304 || len(out) != 0 {
+		t.Fatalf("revalidation while streams are busy=%d %s", status, out)
+	}
 	// Close the readers before proving that all slots and file handles return.
 	for range 8 {
 		release <- struct{}{}

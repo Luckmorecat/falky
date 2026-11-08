@@ -11,7 +11,7 @@ import { Icon } from './Icon';
 /** Opens the viewer at a picture; the element is where it grows from and goes back to. */
 export type OpenImage = (id: string, from: HTMLElement) => void;
 
-function Picture({ state, alt, onLoad }: { state: ImageState; alt: string; onLoad?: () => void }) {
+function Picture({ state, alt, onError }: { state: ImageState; alt: string; onError(): void }) {
   const [loaded, setLoaded] = useState(false);
   if (state.status === 'gone' || state.status === 'failed') {
     return (
@@ -29,16 +29,16 @@ function Picture({ state, alt, onLoad }: { state: ImageState; alt: string; onLoa
       draggable={false}
       decoding="async"
       className={loaded ? 'loaded' : ''}
-      onLoad={() => { setLoaded(true); onLoad?.(); }}
+      onLoad={() => setLoaded(true)}
+      onError={onError}
     />
   );
 }
 
 function Tile({ attachment, local, onOpen }: { attachment: Attachment; local: boolean; onOpen?: OpenImage }) {
-  const fetched = useAttachmentImage(local ? null : attachment);
-  const state: ImageState = local ? { status: 'ready', src: attachment.contentUrl } : fetched;
+  const { state, attempt, onError } = useAttachmentImage(attachment);
   const open = !local && onOpen && isAvailable(attachment) && state.status !== 'failed';
-  const content = <Picture state={state} alt={attachment.filename} />;
+  const content = <Picture key={`${attachment.contentUrl}:${attempt}`} state={state} alt={attachment.filename} onError={onError} />;
   return open ? (
     <button
       type="button"

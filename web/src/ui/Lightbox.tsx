@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type PointerEvent as Reac
 import { createPortal } from 'react-dom';
 import type { Attachment } from '../api/client';
 import { formatBytes } from '../chat/gallery';
-import { preloadImage, useAttachmentImage } from '../chat/images';
+import { useAttachmentImage } from '../chat/images';
 import { t } from '../strings';
 import { Icon } from './Icon';
 import { IconButton } from './IconButton';
@@ -71,7 +71,7 @@ export function Lightbox({ items, startId, onClose }: { items: ViewerItem[]; sta
 
   const index = Math.max(0, items.findIndex((i) => i.attachment.id === currentId));
   const item = items[index];
-  const image = useAttachmentImage(item?.attachment ?? null);
+  const { state: image, attempt, onError } = useAttachmentImage(item?.attachment ?? null);
   const count = items.length;
 
   useEffect(() => {
@@ -79,14 +79,6 @@ export function Lightbox({ items, startId, onClose }: { items: ViewerItem[]; sta
     if (el && !el.open) el.showModal();
     return () => { if (el?.open) el.close(); };
   }, []);
-
-  // Neighbours start loading so a step to them is instant.
-  useEffect(() => {
-    for (const d of [1, -1, 2]) {
-      const near = items[index + d];
-      if (near && near.attachment.availability === 'posted') preloadImage(near.attachment);
-    }
-  }, [index, items]);
 
   // Grows out of the thumbnail once the picture has its size.
   useLayoutEffect(() => {
@@ -106,9 +98,12 @@ export function Lightbox({ items, startId, onClose }: { items: ViewerItem[]; sta
       target.animate([{ transform: flip(from, to), opacity: 0.6 }, { transform: 'none', opacity: 1 }], { duration: 320, easing: 'cubic-bezier(.32,.72,0,1)' });
     };
     const el = img.current;
-    if (image.status === 'ready' && el && !el.complete) el.addEventListener('load', run, { once: true });
-    else run();
-  }, [image.status, startId]);
+    if (image.status === 'ready' && el && !el.complete) {
+      el.addEventListener('load', run, { once: true });
+      return () => el.removeEventListener('load', run);
+    }
+    run();
+  }, [image.status, attempt, startId]);
 
   const close = () => {
     if (closing) return;
@@ -315,9 +310,10 @@ export function Lightbox({ items, startId, onClose }: { items: ViewerItem[]; sta
           {image.status === 'ready' ? (
             <img
               ref={img}
-              key={attachment.id}
+              key={`${attachment.id}:${attempt}`}
               className="viewer-img"
               src={image.src}
+              onError={onError}
               alt={attachment.filename}
               width={attachment.width || undefined}
               height={attachment.height || undefined}

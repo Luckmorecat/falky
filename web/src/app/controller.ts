@@ -1,7 +1,7 @@
 import { api, ApiError, type Attachment, type LiveEvent, type Message, type Room, type Visitor, type VisitorColour } from '../api/client';
 import { LiveConnection } from '../api/live';
 import { followingLatest } from '../chat/place';
-import { forgetFailed, isImage, onImageGone, seedImage } from '../chat/images';
+import { isImage, onImageGone } from '../chat/images';
 import { countUnread, emptyChat, mergeMessages, type ComposerUpload, type PendingMessage, type RoomChat } from '../chat/timeline';
 import { type PaletteName } from '../fx/palette';
 import { resolveLanguage, setLanguage, t } from '../strings';
@@ -302,7 +302,6 @@ async function catchUp(): Promise<void> {
     setState({ rooms, chats, viewedRoomId: s.viewedRoomId ?? rooms[0]?.id ?? null });
     await Promise.all([refreshColours(), ...rooms.map(loadChat)]);
     if (epoch !== session) return;
-    forgetFailed();
     await refreshAttachments(epoch);
   } catch (err) {
     if (epoch === session) accessEnded(err);
@@ -430,9 +429,8 @@ async function send(p: PendingMessage): Promise<void> {
   try {
     const message = await api.post(p.roomId, p.requestKey, p.body, p.attachments.map((a) => a.id));
     if (epoch !== session) return;
-    // The server's copy is the same picture: show the one already in memory.
-    p.attachments.forEach((a) => seedImage(a.id, a.contentUrl));
     patchChat(p.roomId, (c) => ({ pending: c.pending.filter((x) => x.requestKey !== p.requestKey), messages: mergeMessages(c.messages, [message]) }));
+    p.attachments.forEach((a) => URL.revokeObjectURL(a.contentUrl));
     syncRead(p.roomId);
   } catch (err) {
     if (epoch !== session || accessEnded(err)) return;
