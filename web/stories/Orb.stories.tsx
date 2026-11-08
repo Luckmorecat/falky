@@ -56,10 +56,22 @@ export const MuteToggle: Story = {
 export const SpeakerVolume: Story = {
   args: { seed: 'storybook-speaker-volume', level: speaking },
   argTypes: { still: { control: false } },
-  render: (args) => <div className="sb-sample">
-    <Tile id={args.seed} name="Sam" palette={args.palette} level={args.level} adjustable />
-    <span className="sb-note">Hover or tap the orb to show volume. Scroll anywhere over the tile: up for louder, down for quieter. You can also drag the slider or use Tab and the arrow keys.</span>
-  </div>,
+  render: function SpeakerVolume(args) {
+    const [muted, setMuted] = useState(false);
+    const source = useRef({ muted, level: args.level });
+    source.current = { muted, level: args.level };
+    const level = useCallback(() => source.current.muted ? 0 : (source.current.level?.() ?? 0), []);
+    return <div className="sb-sample">
+      <Tile id={args.seed} name="Sam" palette={args.palette} level={level} muted={muted} adjustable />
+      <div className="sb-row">
+        <IconButton className={muted ? 'off' : ''} aria-label="Simulate Sam muting his microphone" aria-pressed={muted} onClick={() => setMuted((value) => !value)}>
+          <Icon name={muted ? 'micOff' : 'mic'} />
+        </IconButton>
+        <output aria-live="polite">{muted ? "Sam's microphone is off" : "Sam's microphone is on"}</output>
+      </div>
+      <span className="sb-note">Hover or tap the orb to show volume. Scroll anywhere over the tile, drag the slider, or use Tab and the arrow keys. Set volume to 0% to see “Muted for you”; raise it to clear the badge. With the slider focused, Home sets 0%. Toggle Sam’s microphone to compare both mute states together.</span>
+    </div>;
+  },
 };
 export const Palettes: Story = {
   render: ({ tileSize: _, ...args }) => <div className="sb-gallery" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, var(--sb-tile-size)), 1fr))' }}>

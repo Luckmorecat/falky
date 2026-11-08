@@ -113,6 +113,7 @@ svg.i { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-widt
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: clamp(10px, 4.5cqw, 20px); }
 .t-orb { position: relative; flex: none; width: min(78cqw, calc(100cqh - 44px)); }
 .t-orb .orb { width: 100%; transition: opacity 280ms ease; }
+.tile.locally-muted .orb:not(:has(video)) { opacity: .75; }
 .tile.dim .orb:not(:has(video)) { opacity: .62; }
 
 .tile.dim .orb canvas { filter: saturate(.22); }
@@ -122,7 +123,8 @@ svg.i { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-widt
 .grid:has(.orb.speaking) .tile:not(:has(.orb.speaking)) .t-label { opacity: .6; }
 .t-label { display: flex; gap: 8px; align-items: baseline; justify-content: center; max-width: 100%; min-width: 0; }
 .t-name { font-size: clamp(15px, 5.4cqw, 22px); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
-.t-flag { position: absolute; right: 3%; bottom: 3%; width: clamp(26px, 11cqw, 36px); height: clamp(26px, 11cqw, 36px); border-radius: var(--round); display: grid; place-items: center; background: var(--raised); z-index: 2; }
+.t-flags { position: absolute; right: 3%; bottom: 3%; display: flex; gap: 4px; z-index: 2; }
+.t-flag { width: clamp(26px, 11cqw, 36px); height: clamp(26px, 11cqw, 36px); border-radius: var(--round); display: grid; place-items: center; background: var(--raised); }
 .t-flag svg.i { width: 56%; height: 56%; }
 /* Their volume runs along the orb's right side, corner to corner, and rises out of the lower one. */
 .t-vol { position: absolute; inset: 0; z-index: 3; pointer-events: none; opacity: 0; translate: -10px 0; clip-path: inset(100% -40% -16% 0);
