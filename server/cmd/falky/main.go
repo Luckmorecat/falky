@@ -90,6 +90,9 @@ func main() {
 // Server commands log JSON lines to stdout; operator commands print their
 // result to stdout and their error to stderr.
 func run(ctx context.Context, args []string, getenv func(string) string, stdin io.Reader, stdout, stderr io.Writer) int {
+	if len(args) > 0 && args[0] == "__image-process" {
+		return imageProcess(args, stdout)
+	}
 	if len(args) == 0 {
 		_, _ = fmt.Fprint(stderr, usage)
 		return 2

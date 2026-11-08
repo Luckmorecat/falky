@@ -10,12 +10,14 @@ tool (
 
 require (
 	github.com/coder/websocket v1.8.15
+	github.com/gen2brain/vpx v0.2.1
 	github.com/livekit/protocol v1.51.1-0.20260910121219-271d9cde3897
 	github.com/livekit/server-sdk-go/v2 v2.19.0
 	github.com/oapi-codegen/runtime v1.8.0
 	github.com/oklog/ulid/v2 v2.1.1
 	github.com/prometheus/client_golang v1.25.0
 	github.com/twitchtv/twirp v8.1.3+incompatible
+	golang.org/x/image v0.45.0
 	google.golang.org/protobuf v1.36.12
 	modernc.org/sqlite v1.61.1
 )
