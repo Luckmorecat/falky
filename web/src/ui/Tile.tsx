@@ -52,6 +52,7 @@ function Camera({ id, trackId, mirror }: { id: string; trackId: string; mirror: 
 
 /** A person in the room: their orb, their name, and how they are heard. */
 export function Tile({ id, name, palette, isSelf, level, muted, deafened, adjustable, mini, cameraTrackId }: TileProps) {
+  const tile = useRef<HTMLElement>(null);
   const mirror = useApp((s) => s.settings.cameraMirror);
   const [volumeOpen, setVolumeOpen] = useState(false);
   const [volume, setVolume] = useState(() => prefs.volume(id));
@@ -61,6 +62,7 @@ export function Tile({ id, name, palette, isSelf, level, muted, deafened, adjust
 
   return (
     <article
+      ref={tile}
       data-tile={id}
       className={`tile${dim ? ' dim' : ''}${mini ? ' mini' : ''}${volumeOpen ? ' vol-open' : ''}`}
       style={paletteStyle(palette)}
@@ -78,6 +80,7 @@ export function Tile({ id, name, palette, isSelf, level, muted, deafened, adjust
           : muted ? <span className="t-flag" title={t.statusMuted}><Icon name="micOff" /></span> : null)}
         {adjustable && !mini && (
           <VolumeSlider
+            wheelTarget={tile}
             label={`${t.volume}: ${name}`}
             value={volume}
             onChange={(v) => {
