@@ -83,7 +83,7 @@ export interface paths {
         };
         /**
          * Read private attachment content.
-         * @description Authenticates and authorizes the actual room on every read. Only optimized WebP is inline; all unchanged files are attachment downloads. Responses use no-store and nosniff, a safe filename and actual Content-Length. No range or public sharing URL. At most eight content streams globally, with a 120-second write deadline and an open file closed on completion.
+         * @description Authenticates and authorizes the actual room on every read. Only optimized WebP is inline; all unchanged files are attachment downloads. Successful responses use Cache-Control private, no-cache and an ETag for the immutable stored bytes. If-None-Match returns 304 only after checking access and availability. Errors and metadata use no-store. Content uses nosniff, a safe filename and actual Content-Length. No range or public sharing URL. At most eight content streams globally, with a 120-second write deadline and an open file closed on completion.
          */
         get: operations["getAttachmentContent"];
         put?: never;
@@ -1174,7 +1174,10 @@ export interface operations {
     getAttachmentContent: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Previously received ETag(s), or an asterisk for any available representation. */
+                "If-None-Match"?: string;
+            };
             path: {
                 /** @description The opaque attachment ID. */
                 id: components["parameters"]["AttachmentId"];
@@ -1186,11 +1189,26 @@ export interface operations {
             /** @description Stored bytes, with Content-Type, Content-Length and safe Content-Disposition. */
             200: {
                 headers: {
+                    /** @description Strong validator for the immutable stored bytes. */
+                    ETag?: string;
+                    /** @description Browser-only storage with validation before reuse (private, no-cache). */
+                    "Cache-Control"?: string;
                     [name: string]: unknown;
                 };
                 content: {
                     "application/octet-stream": string;
                 };
+            };
+            /** @description Stored bytes are unchanged and still accessible; no response body. */
+            304: {
+                headers: {
+                    /** @description Current strong validator. */
+                    ETag?: string;
+                    /** @description Browser-only storage with validation before reuse (private, no-cache). */
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             401: components["responses"]["VisitorRequired"];
             /** @description Unknown or unauthorized attachment (attachment_not_found). */

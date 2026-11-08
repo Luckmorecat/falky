@@ -432,7 +432,14 @@ export async function startMockServer(options: { port?: number; scenario?: strin
       if (!stored || !visible) throw new Refused(404, 'attachment_not_found', 'No such attachment');
       if (attachmentRoute[2] && req.method === 'GET') {
         if (stored.meta.availability === 'expired' || stored.meta.availability === 'cancelled') throw new Refused(410, 'attachment_expired', 'The attachment has expired');
-        res.writeHead(200, { 'Content-Type': stored.meta.contentType, 'Content-Length': stored.data.length, 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff',
+        const etag = `"${stored.meta.id}"`;
+        const tags = req.headers['if-none-match']?.split(',').map((tag) => tag.trim());
+        if (req.headers['if-none-match']?.trim() === '*' || tags?.some((tag) => tag === etag || tag === `W/${etag}`)) {
+          res.writeHead(304, { 'Cache-Control': 'private, no-cache', ETag: etag });
+          res.end();
+          return;
+        }
+        res.writeHead(200, { 'Content-Type': stored.meta.contentType, 'Content-Length': stored.data.length, 'Cache-Control': 'private, no-cache', ETag: etag, 'X-Content-Type-Options': 'nosniff',
           'Content-Disposition': `${stored.meta.inline ? 'inline' : 'attachment'}; filename="${stored.meta.filename}"` });
         res.end(stored.data);
         return;

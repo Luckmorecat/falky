@@ -565,7 +565,11 @@ visitor and cannot recover those drafts. Posted files remain readable by newly
 admitted visitors after access-link rotation. State-changing attachment requests
 with a nonempty Origin must match the configured public origin; authenticated
 non-browser clients may omit it. No CORS or public sharing URLs are provided.
-Content uses `no-store`, `nosniff`, safe filenames and actual stored lengths.
+Content uses `private, no-cache` and a strong ETag based on the immutable attachment
+ID. Conditional reads return `304` only after visitor, room and availability checks.
+Metadata and errors retain `no-store`. Content also uses `nosniff`, safe filenames
+and actual stored lengths. The frontend uses direct content URLs for posted images;
+only local upload previews use object URLs.
 
 The OpenAPI contract describes upload, status, cancel, content and effective
 limits (`GET /api/attachments/limits`). `message.created`, history and post

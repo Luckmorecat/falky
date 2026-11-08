@@ -270,6 +270,18 @@ func (a attachmentHandlers) content(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if m.Availability != "ready" && m.Availability != "posted" {
+		a.failure(w, r, attachments.ErrExpired)
+		return
+	}
+	// Stored bytes never change under an attachment ID.
+	etag := strconv.Quote(m.ID)
+	if attachmentNotModified(r, etag) {
+		w.Header().Set("Cache-Control", "private, no-cache")
+		w.Header().Set("ETag", etag)
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
 	select {
 	case contentStreams <- struct{}{}:
 		defer func() { <-contentStreams }()
@@ -293,7 +305,8 @@ func (a attachmentHandlers) content(w http.ResponseWriter, r *http.Request) {
 	if c.Inline {
 		disposition = "inline"
 	}
-	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Cache-Control", "private, no-cache")
+	w.Header().Set("ETag", etag)
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Content-Type", c.ContentType)
 	w.Header().Set("Content-Disposition", mime.FormatMediaType(disposition, map[string]string{"filename": c.Filename}))
@@ -302,6 +315,21 @@ func (a attachmentHandlers) content(w http.ResponseWriter, r *http.Request) {
 	if _, err := io.Copy(w, c.File); err != nil {
 		a.errs.logger.DebugContext(r.Context(), "attachment content interrupted", "error", err)
 	}
+}
+
+func attachmentNotModified(r *http.Request, etag string) bool {
+	for _, value := range r.Header.Values("If-None-Match") {
+		if strings.TrimSpace(value) == "*" {
+			return true
+		}
+		for tag := range strings.SplitSeq(value, ",") {
+			tag = strings.TrimSpace(tag)
+			if tag == etag || tag == "W/"+etag {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (a attachmentHandlers) limits(w http.ResponseWriter, r *http.Request) {
