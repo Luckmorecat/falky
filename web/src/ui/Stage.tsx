@@ -101,9 +101,10 @@ export function Stage({ room, background }: { room: Room; background?: RefObject
       } }] : [];
     });
     field.setSources(sources);
-    return () => field.setSources([]);
     // Voice snapshots change with loudness; only membership/palettes rebuild the field.
   }, [background, sourcesKey, room.id]);
+
+  useEffect(() => () => background?.current?.setSources([]), [background]);
 
   // Blocks glide from where they were when someone joins or leaves.
   useLayoutEffect(() => {

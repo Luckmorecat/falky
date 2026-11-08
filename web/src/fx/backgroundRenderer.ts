@@ -121,39 +121,42 @@ void main() {
   gl_FragColor = vec4(color, 1.);
 }`;
 
-export function createBackground(canvas: HTMLCanvasElement, sources: VoiceSource[]) {
+export function createBackground(canvas: HTMLCanvasElement, initialSources: VoiceSource[]) {
   const gl = canvas.getContext('webgl', { alpha: true, antialias: false, depth: false, premultipliedAlpha: true, powerPreference: 'high-performance' });
   if (!gl) return null; // The CSS dots remain visible when WebGL isn't available.
-  // Keep the theme wave available even when a room exceeds the voice uniform budget.
-  if (Math.max(1, sources.length) * 12 + 16 > gl.getParameter(gl.MAX_VERTEX_UNIFORM_VECTORS)) sources = [];
-  const count = Math.max(1, sources.length);
-  const shaders: WebGLShader[] = [];
-  const programs: WebGLProgram[] = [];
+  const maxVoices = Math.floor(((gl.getParameter(gl.MAX_VERTEX_UNIFORM_VECTORS) as number) - 16) / 12);
   const build = (vertex: string, fragment: string) => {
     const program = gl.createProgram();
     if (!program) return null;
-    programs.push(program);
+    const shaders: WebGLShader[] = [];
     for (const [type, source] of [[gl.VERTEX_SHADER, vertex], [gl.FRAGMENT_SHADER, fragment]] as const) {
       const shader = gl.createShader(type);
-      if (!shader) return null;
+      if (!shader) {
+        shaders.forEach((entry) => gl.deleteShader(entry));
+        gl.deleteProgram(program);
+        return null;
+      }
       shaders.push(shader);
       gl.shaderSource(shader, source);
       gl.compileShader(shader);
       gl.attachShader(program, shader);
     }
     gl.linkProgram(program);
-    return gl.getProgramParameter(program, gl.LINK_STATUS) ? program : null;
+    shaders.forEach((shader) => { gl.detachShader(program, shader); gl.deleteShader(shader); });
+    if (gl.getProgramParameter(program, gl.LINK_STATUS)) return program;
+    gl.deleteProgram(program);
+    return null;
   };
-  const releasePrograms = () => {
-    shaders.forEach((shader) => gl.deleteShader(shader));
-    programs.forEach((program) => gl.deleteProgram(program));
-  };
-  const program = build(vertexSource(count), fragment);
   const surface = build(surfaceVertex, surfaceFragment);
-  if (!program || !surface) { releasePrograms(); return null; }
-  gl.useProgram(program);
-  const uniform = (name: string) => gl.getUniformLocation(program, name);
-  const uniforms = Object.fromEntries(['uSize', 'uTime', 'uDpr', 'uStrength', 'uSpread', 'uTheme', 'uThemeDirection', 'uThemeFromLight', 'uHistoryPhase', 'uActive[0]', 'uVoices[0]', 'uColorsDark[0]', 'uColorsLight[0]', 'uHistory[0]'].map((name) => [name, uniform(name)]));
+  if (!surface) return null;
+  let program: WebGLProgram | null = null;
+  let uniforms: Record<string, WebGLUniformLocation | null> = {};
+  let attribute = 0;
+  let count = 0;
+  let sources: VoiceSource[] = [];
+  let field = createVoiceField(1);
+  let colorsDark = new Float32Array(3);
+  let colorsLight = new Float32Array(3);
   const surfaceUniforms = Object.fromEntries(['uSize', 'uDpr', 'uTheme', 'uThemeFromLight'].map((name) => [name, gl.getUniformLocation(surface, name)]));
   const surfaceAttribute = gl.getAttribLocation(surface, 'aPoint');
   const surfaceBuffer = gl.createBuffer();
@@ -161,34 +164,64 @@ export function createBackground(canvas: HTMLCanvasElement, sources: VoiceSource
   if (!buffer || !surfaceBuffer) {
     gl.deleteBuffer(buffer);
     gl.deleteBuffer(surfaceBuffer);
-    releasePrograms();
+    gl.deleteProgram(surface);
     return null;
   }
   gl.bindBuffer(gl.ARRAY_BUFFER, surfaceBuffer);
   gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, -1, 1, 1, -1, 1, 1]), gl.STATIC_DRAW);
   gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
-  const attribute = gl.getAttribLocation(program, 'aPoint');
-  gl.enableVertexAttribArray(attribute);
-  gl.vertexAttribPointer(attribute, 2, gl.FLOAT, false, 0, 0);
   gl.enable(gl.BLEND);
   gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
   gl.clearColor(0, 0, 0, 0);
-  const field = createVoiceField(count);
-  const { voices, history, active } = field;
-  const colorsDark = new Float32Array(count * 3);
-  const colorsLight = new Float32Array(count * 3);
-  const sourceColors = sources.slice(0, count).map(({ palette }) => ({ dark: hexToRgb(PALETTES[palette][1]), light: hexToRgb(PALETTES[palette][0]) }));
   let width = 0;
   let height = 0;
   let points = 0;
   let geometryDirty = true;
   let measuredDpr = 0;
-  sourceColors.forEach((color, i) => { colorsDark.set(color.dark, i * 3); colorsLight.set(color.light, i * 3); });
   let drawn: { time: number; strength: number; spread: number; reduced: boolean; moving: boolean; theme: ThemeFrame } | undefined;
   const invalidate = () => { geometryDirty = true; };
   const resized = new ResizeObserver(invalidate);
   resized.observe(canvas);
-  for (const source of sources) resized.observe(source.element);
+  const setSources = (next: VoiceSource[]): boolean => {
+    // Keep the theme wave when a room exceeds the voice uniform budget.
+    if (next.length > maxVoices) next = [];
+    const nextCount = Math.max(1, next.length);
+    const changed = count !== nextCount || next.length !== sources.length
+      || next.some((source, i) => source.element !== sources[i]?.element || source.palette !== sources[i]?.palette);
+    if (count !== nextCount) {
+      const nextProgram = build(vertexSource(nextCount), fragment);
+      if (!nextProgram) return false;
+      gl.deleteProgram(program);
+      program = nextProgram;
+      count = nextCount;
+      attribute = gl.getAttribLocation(program, 'aPoint');
+      uniforms = Object.fromEntries(['uSize', 'uTime', 'uDpr', 'uStrength', 'uSpread', 'uTheme', 'uThemeDirection', 'uThemeFromLight', 'uHistoryPhase', 'uActive[0]', 'uVoices[0]', 'uColorsDark[0]', 'uColorsLight[0]', 'uHistory[0]'].map((name) => [name, gl.getUniformLocation(nextProgram, name)]));
+      field = createVoiceField(count);
+      colorsDark = new Float32Array(count * 3);
+      colorsLight = new Float32Array(count * 3);
+    }
+    if (changed) {
+      for (const source of sources) resized.unobserve(source.element);
+      for (let i = 0; i < next.length; i++) {
+        const source = next[i]!;
+        resized.observe(source.element);
+        colorsDark.set(hexToRgb(PALETTES[source.palette][1]), i * 3);
+        colorsLight.set(hexToRgb(PALETTES[source.palette][0]), i * 3);
+      }
+      field.clear();
+      geometryDirty = true;
+      drawn = undefined;
+    }
+    sources = next;
+    return true;
+  };
+  if (!setSources(initialSources)) {
+    resized.disconnect();
+    gl.deleteBuffer(buffer);
+    gl.deleteBuffer(surfaceBuffer);
+    gl.deleteProgram(surface);
+    return null;
+  }
   window.addEventListener('resize', invalidate);
   document.fonts.addEventListener('loadingdone', invalidate);
   const debugRenderer = gl.getExtension('WEBGL_debug_renderer_info');
@@ -197,26 +230,31 @@ export function createBackground(canvas: HTMLCanvasElement, sources: VoiceSource
 
   return {
     renderer,
+    setSources,
     invalidateLayout: invalidate,
     draw(time: number, strength: number, spread: number, reduced: boolean, theme: ThemeFrame) {
       if (gl.isContextLost()) { delete canvas.dataset.ready; return; }
+      const { voices, history, active } = field;
       // Tiny soft points don't benefit from a full 2x/3x screen-sized buffer.
       const dpr = Math.min(devicePixelRatio || 1, 1.5);
       const layoutChanged = geometryDirty || measuredDpr !== dpr;
       if (layoutChanged) {
         const bounds = canvas.getBoundingClientRect();
         geometryDirty = false;
+        const sizeChanged = width !== bounds.width || height !== bounds.height || measuredDpr !== dpr;
         measuredDpr = dpr;
         width = bounds.width;
         height = bounds.height;
-        canvas.width = Math.round(width * dpr);
-        canvas.height = Math.round(height * dpr);
-        const positions: number[] = [];
-        for (let y = 10; y < height; y += 20) for (let x = 10; x < width; x += 20) positions.push(x, y);
-        points = positions.length / 2;
-        gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
-        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(positions), gl.STATIC_DRAW);
-        gl.viewport(0, 0, canvas.width, canvas.height);
+        if (sizeChanged) {
+          canvas.width = Math.round(width * dpr);
+          canvas.height = Math.round(height * dpr);
+          const positions: number[] = [];
+          for (let y = 10; y < height; y += 20) for (let x = 10; x < width; x += 20) positions.push(x, y);
+          points = positions.length / 2;
+          gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+          gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(positions), gl.STATIC_DRAW);
+          gl.viewport(0, 0, canvas.width, canvas.height);
+        }
         for (let i = 0; i < Math.min(sources.length, count); i++) {
           const rect = sources[i]!.element.getBoundingClientRect();
           voices[i * 4] = rect.left + rect.width / 2 - bounds.left;
@@ -272,7 +310,8 @@ export function createBackground(canvas: HTMLCanvasElement, sources: VoiceSource
       document.fonts.removeEventListener('loadingdone', invalidate);
       gl.deleteBuffer(buffer);
       gl.deleteBuffer(surfaceBuffer);
-      releasePrograms();
+      gl.deleteProgram(program);
+      gl.deleteProgram(surface);
       canvas.width = canvas.height = 1;
     },
   };
