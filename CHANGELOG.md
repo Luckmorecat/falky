@@ -1,5 +1,42 @@
 # Changelog
 
+## [1.2.0](https://github.com/Luckmorecat/falky/compare/v1.1.0...v1.2.0) (2026-11-08)
+
+
+### Features
+
+* **chat:** distinguish your messages with alignment and tint ([5dfcb2a](https://github.com/Luckmorecat/falky/commit/5dfcb2a3e2afe8e0231b82e51655dc4791774b58))
+* **profile:** share persistent visitor colours ([d283f9a](https://github.com/Luckmorecat/falky/commit/d283f9a256f5229a836d565de5e6b6b9a08ea81d))
+* **storybook:** add interactive orb stories and size controls ([8ec59e7](https://github.com/Luckmorecat/falky/commit/8ec59e726381c78ecd745e0f318fe7ce18434cba))
+* **ui:** add a live background with colliding theme currents ([2a977d3](https://github.com/Luckmorecat/falky/commit/2a977d3ab7293d814a3e4b457e835b9abe6c3ecc))
+* **ui:** add an opt-in voice-reactive background ([845ba60](https://github.com/Luckmorecat/falky/commit/845ba60454a5fccd0934a0aedbf49d2a03416d6a))
+* **ui:** reveal keyboard shortcuts in tooltips ([d22e52a](https://github.com/Luckmorecat/falky/commit/d22e52ab12c63a6ad764360cfccd3272a701e4d0))
+* **web:** add mock memory profiling command ([397ceef](https://github.com/Luckmorecat/falky/commit/397ceefda9ca1d9eff938f5b1d064508bae56582))
+* **web:** add repeatable JSON performance profiling ([d583db4](https://github.com/Luckmorecat/falky/commit/d583db45583aede2f16de74871267ea706efb42e))
+* **web:** add wheel volume control across participant tiles ([785c50a](https://github.com/Luckmorecat/falky/commit/785c50ab1798991e346209bdb6308328b6394a77))
+* **web:** camera, one corner shape everywhere and bubbling sounds ([fc79390](https://github.com/Luckmorecat/falky/commit/fc793901e82a68248e80a876d8cda1532f57a516)), refs [#10](https://github.com/Luckmorecat/falky/issues/10) [#14](https://github.com/Luckmorecat/falky/issues/14)
+* **web:** report memory above a blank-tab baseline ([d5d5a76](https://github.com/Luckmorecat/falky/commit/d5d5a76fa05c3d47e38b1a2eeaf5ea0c65cba3cf))
+* **web:** show the loaded build version in the UI ([5607e94](https://github.com/Luckmorecat/falky/commit/5607e94c7d969ee4bf9832086414e40581f721b7))
+* **web:** show when a participant is muted for you ([18f0f54](https://github.com/Luckmorecat/falky/commit/18f0f54292eda6855148ed07566b932d651ba726))
+* **web:** turn settings into a tabbed window with favourite colours ([1ce2fd1](https://github.com/Luckmorecat/falky/commit/1ce2fd11b8a83fb0f51a53e069c4e1735a39e105))
+
+
+### Bug Fixes
+
+* **web:** preserve settings layout while closing ([b05c0bf](https://github.com/Luckmorecat/falky/commit/b05c0bfae02122481b7b5a6ef9c52b438ccee30e))
+* **web:** remember the chat reading place per room ([bed5eaa](https://github.com/Luckmorecat/falky/commit/bed5eaaf85a977b0a33a4aa0cacfa485b9587ba3))
+* **web:** remove seams from orb grain ([2cee5b4](https://github.com/Luckmorecat/falky/commit/2cee5b4bc5b3dea224d6416fcf0cc81c062c9062))
+* **web:** return 404 for missing static files ([e8de234](https://github.com/Luckmorecat/falky/commit/e8de234a21e2284aa5cc918d046fb51431e6345c))
+* **web:** show the build version only on the main screen ([93d4488](https://github.com/Luckmorecat/falky/commit/93d448860cbcfa3a1ab24eb5958e53dc7138ebc0))
+* **web:** toggle screen-share fullscreen ([b2bc4a7](https://github.com/Luckmorecat/falky/commit/b2bc4a7ad3c58cff1ef66ef142bbd26ad0d1cdc7))
+
+
+### Performance Improvements
+
+* **web:** avoid redundant background and chat startup work ([9cab2e5](https://github.com/Luckmorecat/falky/commit/9cab2e5e78382da8945705d625807c5eacd83188))
+* **web:** compress static responses with gzip and zstd ([25b2162](https://github.com/Luckmorecat/falky/commit/25b21626598b63b94fc4d38e9edbfd346225aae3))
+* **web:** defer LiveKit and settings loading ([577a4d6](https://github.com/Luckmorecat/falky/commit/577a4d6c01a45bde6810a3534a8357917154ef9c))
+
 ## [1.1.0](https://github.com/Luckmorecat/falky/compare/v1.0.0...v1.1.0) (2026-11-06)
 
 
