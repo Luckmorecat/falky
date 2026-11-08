@@ -1,5 +1,3 @@
-import '@fontsource-variable/onest/index.css';
-import '../styles.css';
 import { useEffect } from 'react';
 import { preloadVoice } from '@falky/voice';
 import { createRoot } from 'react-dom/client';

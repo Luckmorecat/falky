@@ -21,6 +21,19 @@ To add an example, create `stories/Name.stories.tsx`, import a pure production c
 
 There is no Storybook test runner, interaction-test suite, visual regression service, or CI gate. The build command produces an optional local artifact; it does not publish anything.
 
+## Build version
+
+The bottom-left label identifies the loaded frontend: `dev <7-character SHA>`
+for development, or the exact release tag (for example `v1.1.0`) for production.
+CI passes `FALKY_BUILD_REVISION` (full SHA) and `FALKY_BUILD_REF`
+(`refs/heads/master` or `refs/tags/v...`) into the web image build. Invalid or
+incomplete supplied metadata fails the build; package.json is not the release
+version. A cached tab keeps its own build's label until reloaded.
+
+Local Vite/builds snapshot Git HEAD at startup, ignoring uncommitted edits.
+Restart Vite after committing to update the label. Without Git metadata, local
+builds show `dev unknown`. Leave both metadata variables unset for local use.
+
 ## Memory profiling
 
 `pnpm run profile:memory` reuses the Playwright browser options and isolated mock

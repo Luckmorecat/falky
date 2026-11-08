@@ -8,6 +8,8 @@ RUN npm install --global "$(node -p 'require("./package.json").packageManager')"
     pnpm install --frozen-lockfile
 COPY . .
 ARG VITE_DEV_STATS=false
+ARG FALKY_BUILD_REVISION
+ARG FALKY_BUILD_REF
 RUN pnpm run build
 
 FROM caddy:2.11.7@sha256:36c24ad91a7ff7bc4c87fe22bfa8df3c4b18da0773d73fc12ee2c52b98c0bb7e

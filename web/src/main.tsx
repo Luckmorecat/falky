@@ -1,3 +1,5 @@
+import '@fontsource-variable/onest/index.css';
+import './styles.css';
 import { bootstrap } from '@falky/bootstrap';
 import { showStartupFailure } from './runtime/startup';
 

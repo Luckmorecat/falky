@@ -62,6 +62,8 @@ jobs:
           platforms: linux/amd64
           build-args: |
             VITE_DEV_STATS=${{ inputs.dev_stats }}
+            FALKY_BUILD_REVISION=${{ steps.source.outputs.revision }}
+            FALKY_BUILD_REF=${{ github.ref }}
           push: true
           tags: |
             ${{ steps.image.outputs.name }}:${{ steps.image.outputs.tag }}
