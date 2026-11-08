@@ -2,6 +2,7 @@ import { randomBytes, randomInt } from 'node:crypto';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { WebSocket, WebSocketServer } from 'ws';
+import { attachmentLimits, fixtureImage, newAttachmentId, parseMultipart, sniffImage, type StoredAttachment } from './attachments.ts';
 import { scenarios, type MockState, type Scenario, type Schema } from './protocol.ts';
 
 const palettes: Schema['PaletteName'][] = ['sky', 'apricot', 'lagoon', 'rose', 'violet', 'amber', 'moss', 'coral', 'indigo', 'plum', 'sunset', 'aurora', 'lime', 'clay', 'ocean', 'ruby'];
@@ -18,6 +19,16 @@ class Refused extends Error {
 function json(res: ServerResponse, status: number, value: unknown) {
   res.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
   res.end(JSON.stringify(value));
+}
+async function rawBody(req: IncomingMessage, limit: number): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of req as AsyncIterable<Buffer>) {
+    size += chunk.length;
+    if (size > limit) throw new Refused(413, 'attachment_too_large', 'The file is too large');
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks);
 }
 async function body(req: IncomingMessage): Promise<Record<string, unknown>> {
   if (!req.headers['content-type']?.startsWith('application/json')) throw new Refused(400, 'invalid_request', 'JSON body required');
@@ -64,6 +75,27 @@ export async function startMockServer(options: { port?: number; scenario?: strin
     return { id: visitorId, name, nameTaken: false, colour: assignColour(visitorId) };
   }
   const messages = new Map<string, Schema['Message'][]>();
+  const attachments = new Map<string, StoredAttachment>();
+  function storeAttachment(roomId: string, ownerId: string, filename: string, data: Buffer, availability: Schema['Attachment']['availability']): Schema['Attachment'] {
+    const sniffed = sniffImage(data);
+    const attachmentId = newAttachmentId();
+    const meta: Schema['Attachment'] = {
+      id: attachmentId, filename, contentType: sniffed?.contentType ?? 'application/octet-stream', size: data.length,
+      inline: !!sniffed && sniffed.contentType !== 'image/gif', width: sniffed?.width ?? 0, height: sniffed?.height ?? 0, availability,
+      contentUrl: `/api/attachments/${attachmentId}/content`,
+      ...(availability === 'ready' ? { expiresAt: new Date(Date.now() + attachmentLimits.draftTtlSeconds * 1000).toISOString() } : {}),
+    };
+    attachments.set(attachmentId, { meta, roomId, ownerId, data });
+    return meta;
+  }
+  /** Generated pictures posted by someone else, as fixtures and the message action post them. */
+  function fixtureAttachments(roomId: string, ownerId: string, count: number, seed: number): Schema['Attachment'][] {
+    const sizes = [[1600, 1200], [1080, 1440], [1400, 1400], [2400, 1000], [1200, 900], [900, 1600]];
+    return Array.from({ length: count }, (_, i) => {
+      const [w, h] = sizes[(seed + i) % sizes.length]!;
+      return storeAttachment(roomId, ownerId, `photo-${seed + i}.svg`, fixtureImage(seed + i, w!, h!), 'posted');
+    });
+  }
   const state: MockState = {
     instanceId, generation: 1, revision: 1, scenario: scenarioName(options.scenario ?? 'populated'), scenarios,
     visitor: null, voiceRoomId: null,
@@ -125,9 +157,16 @@ export async function startMockServer(options: { port?: number; scenario?: strin
     const author = historyAuthors[i % 2]!;
     messages.get(roomIds[0]!)!.push({ id: id(), roomId: roomIds[0]!, authorId: author.visitorId, authorName: author.name,
       body: i === 125 ? 'Welcome back! Try sending a message or joining voice.' : `Lounge history ${i}`,
-      attachments: [], createdAt: new Date().toISOString() });
+      attachments: i === 118 ? fixtureAttachments(roomIds[0]!, author.visitorId, 1, 1)
+        : i === 121 ? fixtureAttachments(roomIds[0]!, author.visitorId, 2, 3)
+          : i === 123 ? fixtureAttachments(roomIds[0]!, author.visitorId, 3, 7)
+            : i === 124 ? fixtureAttachments(roomIds[0]!, author.visitorId, 4, 11) : [],
+      createdAt: new Date().toISOString() });
+    // Pictures alone need no words.
+    if (i === 124) messages.get(roomIds[0]!)!.at(-1)!.body = '';
   }
   const fixtureMessages = structuredClone(messages);
+  const fixtureAttachmentIds = new Set(attachments.keys());
   const fixturePeers = structuredClone(state.peers);
   let publicOrigin = '';
   function seed(scenario: Scenario) {
@@ -140,6 +179,10 @@ export async function startMockServer(options: { port?: number; scenario?: strin
     for (const peers of Object.values(state.peers)) for (const peer of peers) peer.sharing = scenario === 'remote-share' && peer.name === 'Sam';
     messages.clear();
     for (const [roomId, history] of fixtureMessages) messages.set(roomId, scenario === 'quiet' ? [] : structuredClone(history));
+    for (const [attachmentId, stored] of attachments) {
+      if (fixtureAttachmentIds.has(attachmentId)) stored.meta.availability = 'posted';
+      else attachments.delete(attachmentId);
+    }
     for (const room of state.rooms) room.occupancy = (state.peers[room.id] ?? []).map(({ visitorId, name }) => ({ visitorId, name }));
     state.faults = { send: 'none', colourSave: 'none', colourDelayMs: 0, colourResponseDelayMs: 0, delayMs: 0, liveDisconnected: false, roomFull: null, micDenied: false, shareFailure: false, voiceReconnecting: false };
     requests.clear();
@@ -186,7 +229,8 @@ export async function startMockServer(options: { port?: number; scenario?: strin
     }
     const generation = state.generation;
     const hasBody = req.headers['transfer-encoding'] || Number(req.headers['content-length'] ?? 0) > 0;
-    const input = (req.method === 'POST' || req.method === 'PATCH' || req.method === 'PUT') && hasBody ? await body(req) : {};
+    const multipart = req.headers['content-type']?.startsWith('multipart/form-data') ?? false;
+    const input = (req.method === 'POST' || req.method === 'PATCH' || req.method === 'PUT') && hasBody && !multipart ? await body(req) : {};
     if (generation !== state.generation) throw new Refused(409, 'invalid_request', 'Mock generation changed');
     if (url.pathname === '/__mock/bootstrap' && req.method === 'POST') {
       if (input.scenario !== undefined && scenarioName(input.scenario) !== state.scenario) reset(scenarioName(input.scenario));
@@ -195,7 +239,7 @@ export async function startMockServer(options: { port?: number; scenario?: strin
     }
     if (url.pathname === '/__mock' && req.method === 'GET') return json(res, 200, {
       scenarios, endpoints: { bootstrap: 'POST /__mock/bootstrap {scenario?}', state: 'GET /__mock/state', reset: 'POST /__mock/reset {scenario?}', action: 'POST /__mock/action' },
-      actions: ['colour', 'message', 'participants', 'faults', 'name-conflict', 'revoke', 'voice-leave'],
+      actions: ['colour', 'message', 'participants', 'faults', 'name-conflict', 'revoke', 'voice-leave', 'expire-attachments'],
       faults: state.faults,
       lifecycle: 'Same-scenario bootstrap preserves state. Reset advances generation; poll state independently of /api/live. Voice leave requires the current generation.',
     });
@@ -269,13 +313,31 @@ export async function startMockServer(options: { port?: number; scenario?: strin
       } else if (input.type === 'message') {
         const history = typeof input.roomId === 'string' ? messages.get(input.roomId) : undefined;
         if (!history) throw new Refused(404, 'room_not_found', 'No such room');
-        if (typeof input.body !== 'string' || !input.body.trim() || [...input.body].length > 4000) throw new Refused(400, 'invalid_message', 'Invalid message body');
+        const images = input.images === undefined ? 0 : Number(input.images);
+        if (!Number.isInteger(images) || images < 0 || images > 4) throw new Refused(400, 'invalid_request', 'images must be 0–4');
+        const text = input.body === undefined ? '' : input.body;
+        if (typeof text !== 'string' || (!text.trim() && !images) || [...text].length > 4000) throw new Refused(400, 'invalid_message', 'Invalid message body');
         const authorName = typeof input.authorName === 'string' ? input.authorName : 'Sam';
         const author = Object.values(state.peers).flat().find((peer) => peer.name === authorName);
-        const message: Schema['Message'] = { id: id(), roomId: input.roomId as string, authorId: author?.visitorId ?? id(), authorName, body: input.body, attachments: [], createdAt: new Date().toISOString() };
+        const authorId = author?.visitorId ?? id();
+        const message: Schema['Message'] = { id: id(), roomId: input.roomId as string, authorId, authorName, body: text,
+          attachments: fixtureAttachments(input.roomId as string, authorId, images, randomInt(1000)), createdAt: new Date().toISOString() };
         assignColour(message.authorId);
         history.push(message);
         publish('message.created', message, message.roomId);
+      } else if (input.type === 'expire-attachments') {
+        if (!messages.has(input.roomId as string)) throw new Refused(404, 'room_not_found', 'No such room');
+        const expired: string[] = [];
+        for (const stored of attachments.values()) {
+          if (stored.roomId === input.roomId && stored.meta.availability === 'posted') {
+            stored.meta.availability = 'expired';
+            expired.push(stored.meta.id);
+          }
+        }
+        for (const message of messages.get(input.roomId as string)!) {
+          message.attachments = message.attachments.map((a) => attachments.get(a.id)?.meta ?? a);
+        }
+        if (expired.length) publish('attachments.expired', { attachmentIds: expired }, input.roomId as string);
       } else throw new Refused(400, 'invalid_request', 'Unknown action');
       state.revision++;
       return json(res, 200, state);
@@ -345,22 +407,69 @@ export async function startMockServer(options: { port?: number; scenario?: strin
       const jwt = (value: unknown) => Buffer.from(JSON.stringify(value)).toString('base64url');
       return json(res, 200, { url: publicOrigin.replace('http', 'ws') + '/rtc', token: `${jwt({ alg: 'none', typ: 'JWT' })}.${jwt({ sub: state.visitor.id, room: roomId, mock: true })}.mock` } satisfies Schema['VoiceCredentials']);
     }
+    if (url.pathname === '/api/attachments/limits' && req.method === 'GET') return json(res, 200, attachmentLimits);
+    const upload = /^\/api\/rooms\/([^/]+)\/attachments$/.exec(url.pathname);
+    if (upload && req.method === 'POST') {
+      if (!messages.has(upload[1]!)) throw new Refused(404, 'room_not_found', 'No such room');
+      if (!multipart) throw new Refused(400, 'invalid_request', 'Multipart body required');
+      const raw = await rawBody(req, attachmentLimits.maxFileBytes + attachmentLimits.multipartOverheadBytes);
+      const part = parseMultipart(req.headers['content-type']!, raw);
+      if (!part) throw new Refused(400, 'invalid_request', 'Expected one file part');
+      if (part.data.length > attachmentLimits.maxFileBytes) throw new Refused(413, 'attachment_too_large', 'The file is too large');
+      const owned = [...attachments.values()].filter((a) => a.ownerId === state.visitor!.id && a.meta.availability === 'ready');
+      if (owned.length >= attachmentLimits.maxPending) throw new Refused(429, 'attachment_busy', 'Too many pending drafts');
+      // Long enough to watch the progress on a fast machine.
+      await new Promise((resolve) => setTimeout(resolve, 350));
+      const sniffed = sniffImage(part.data);
+      const filename = sniffed && sniffed.contentType !== 'image/gif' && sniffed.contentType !== 'image/svg+xml' ? part.filename.replace(/\.[^.]*$/, '') + '.webp' : part.filename;
+      state.revision++;
+      return json(res, 201, storeAttachment(upload[1]!, state.visitor.id, filename, part.data, 'ready'));
+    }
+    const attachmentRoute = /^\/api\/attachments\/([0-9a-f]{32})(\/content)?$/.exec(url.pathname);
+    if (attachmentRoute) {
+      const stored = attachments.get(attachmentRoute[1]!);
+      const visible = stored && (stored.meta.availability === 'posted' || stored.meta.availability === 'expired' || stored.ownerId === state.visitor.id);
+      if (!stored || !visible) throw new Refused(404, 'attachment_not_found', 'No such attachment');
+      if (attachmentRoute[2] && req.method === 'GET') {
+        if (stored.meta.availability === 'expired' || stored.meta.availability === 'cancelled') throw new Refused(410, 'attachment_expired', 'The attachment has expired');
+        res.writeHead(200, { 'Content-Type': stored.meta.contentType, 'Content-Length': stored.data.length, 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff',
+          'Content-Disposition': `${stored.meta.inline ? 'inline' : 'attachment'}; filename="${stored.meta.filename}"` });
+        res.end(stored.data);
+        return;
+      }
+      if (!attachmentRoute[2] && req.method === 'GET') return json(res, 200, stored.meta);
+      if (!attachmentRoute[2] && req.method === 'DELETE') {
+        if (stored.ownerId !== state.visitor.id || stored.meta.availability === 'posted' || stored.meta.availability === 'expired') throw new Refused(404, 'attachment_not_found', 'No such draft');
+        stored.meta.availability = 'cancelled';
+        res.writeHead(204).end();
+        return;
+      }
+    }
     const match = /^\/api\/rooms\/([^/]+)\/messages$/.exec(url.pathname);
     if (match && req.method === 'POST') {
       const history = messages.get(match[1]!);
       if (!history) throw new Refused(404, 'room_not_found', 'No such room');
       if (typeof input.requestKey !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(input.requestKey)) throw new Refused(400, 'invalid_request', 'Invalid request key');
       if (input.body !== undefined && typeof input.body !== 'string') throw new Refused(400, 'invalid_request', 'Message body must be a string');
-      if (typeof input.body !== 'string' || !input.body.trim() || [...input.body].length > 4000) throw new Refused(400, 'invalid_message', 'Message must have 1–4000 characters and not be blank');
+      const ids = input.attachmentIds === undefined ? [] : input.attachmentIds;
+      if (!Array.isArray(ids) || ids.length > attachmentLimits.maxAttachments || ids.some((x) => typeof x !== 'string') || new Set(ids).size !== ids.length) throw new Refused(400, 'invalid_attachments', 'Invalid attachment IDs');
+      const text = input.body ?? '';
+      if (typeof text !== 'string' || (!text.trim() && !ids.length) || [...text].length > 4000) throw new Refused(400, 'invalid_message', 'Message must have text or attachments, and at most 4000 characters');
       const previous = requests.get(input.requestKey);
       if (previous) {
-        if (previous.roomId !== match[1] || previous.body !== input.body) throw new Refused(409, 'request_key_reused', 'Request key was used for another message');
+        if (previous.roomId !== match[1] || previous.body !== text || previous.attachments.map((a) => a.id).join() !== ids.join()) throw new Refused(409, 'request_key_reused', 'Request key was used for another message');
         return json(res, 200, previous);
       }
       const sendFault = state.faults.send;
       state.faults.send = 'none';
       if (sendFault === 'fail') { state.revision++; throw new Refused(503, 'internal', 'Scripted send failure; retry the message'); }
-      const message: Schema['Message'] = { id: id(), roomId: match[1]!, authorId: state.visitor.id, authorName: state.visitor.name, body: input.body, attachments: [], createdAt: new Date().toISOString() };
+      const drafts = (ids as string[]).map((x) => attachments.get(x));
+      if (drafts.some((d) => !d || d.ownerId !== state.visitor!.id || d.roomId !== match[1] || d.meta.availability !== 'ready')) throw new Refused(400, 'invalid_attachments', 'Unknown, foreign or used drafts');
+      for (const d of drafts) {
+        d!.meta.availability = 'posted';
+        delete d!.meta.expiresAt;
+      }
+      const message: Schema['Message'] = { id: id(), roomId: match[1]!, authorId: state.visitor.id, authorName: state.visitor.name, body: text, attachments: drafts.map((d) => structuredClone(d!.meta)), createdAt: new Date().toISOString() };
       history.push(message);
       requests.set(input.requestKey, message);
       publish('message.created', message, message.roomId);
