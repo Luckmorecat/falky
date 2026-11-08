@@ -57,14 +57,16 @@ export function Tile({ id, name, palette, isSelf, level, muted, deafened, adjust
   const [volumeOpen, setVolumeOpen] = useState(false);
   const [volume, setVolume] = useState(() => prefs.volume(id));
 
-  const status = deafened ? t.statusDeaf : muted ? t.statusMuted : '';
+  const locallyMuted = !isSelf && volume === 0;
+  const localStatus = `${t.statusMutedForYou} · ${t.volume} 0%`;
+  const status = [deafened ? t.statusDeaf : muted ? t.statusMuted : '', locallyMuted ? localStatus : ''].filter(Boolean).join(', ');
   const dim = muted || deafened;
 
   return (
     <article
       ref={tile}
       data-tile={id}
-      className={`tile${dim ? ' dim' : ''}${mini ? ' mini' : ''}${volumeOpen ? ' vol-open' : ''}`}
+      className={`tile${dim ? ' dim' : ''}${locallyMuted ? ' locally-muted' : ''}${mini ? ' mini' : ''}${volumeOpen ? ' vol-open' : ''}`}
       style={paletteStyle(palette)}
       aria-label={status ? `${name}, ${status}` : name}
     >
@@ -76,8 +78,11 @@ export function Tile({ id, name, palette, isSelf, level, muted, deafened, adjust
         <Orb seed={id} palette={palette} level={level}>
           {cameraTrackId && <Camera id={id} trackId={cameraTrackId} mirror={!!isSelf && mirror} />}
         </Orb>
-        {!mini && (deafened ? <span className="t-flag" title={t.statusDeaf}><Icon name="headOff" /></span>
-          : muted ? <span className="t-flag" title={t.statusMuted}><Icon name="micOff" /></span> : null)}
+        {!mini && (deafened || muted || locallyMuted) && <div className="t-flags">
+          {deafened ? <span className="t-flag" title={t.statusDeaf}><Icon name="headOff" /></span>
+            : muted ? <span className="t-flag" title={t.statusMuted}><Icon name="micOff" /></span> : null}
+          {locallyMuted && <span className="t-flag" title={localStatus}><Icon name="speakerOff" /></span>}
+        </div>}
         {adjustable && !mini && (
           <VolumeSlider
             wheelTarget={tile}
