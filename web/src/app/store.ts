@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from 'react';
 import type { Room, Visitor, VisitorColour } from '../api/client';
-import type { RoomChat } from '../chat/timeline';
+import type { ComposerUpload, RoomChat } from '../chat/timeline';
 import type { PaletteName } from '../fx/palette';
 import { idleVoice, type VoiceSnapshot } from '../voice/types';
 import { prefs, type Settings } from './prefs';
@@ -19,6 +19,10 @@ export interface AppState {
   /** The live-update connection, as far as the person needs to know. */
   live: 'off' | 'open' | 'reconnecting';
   chats: Record<string, RoomChat>;
+  /** Pictures waiting in each room's composer. */
+  uploads: Record<string, ComposerUpload[]>;
+  /** What the server takes per message, from its limits; defaults until they are read. */
+  attachmentLimits: { maxAttachments: number; maxFileBytes: number };
   /** Where the viewed room's "new messages" line goes. */
   newAfterId: string | null;
   chatOpen: boolean;
@@ -38,6 +42,8 @@ let state: AppState = {
   viewedRoomId: null,
   live: 'off',
   chats: {},
+  uploads: {},
+  attachmentLimits: { maxAttachments: 4, maxFileBytes: 25 * 1024 * 1024 },
   newAfterId: null,
   chatOpen: false,
   roomsOpen: false,

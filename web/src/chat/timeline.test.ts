@@ -61,7 +61,7 @@ describe('buildFeed', () => {
   it('separates days and shows pending messages last', () => {
     const items = buildFeed({
       messages: [msg('01', { createdAt: '2026-11-04T12:00:00.000Z' }), msg('02')],
-      pending: [{ requestKey: 'k', roomId: 'r', body: 'x', failed: false, reason: '' }],
+      pending: [{ requestKey: 'k', roomId: 'r', body: 'x', attachments: [], failed: false, reason: '' }],
     }, 'a', null, now);
     expect(kinds(items)).toEqual(['day', 'message', 'day', 'message', 'pending']);
   });
@@ -95,5 +95,7 @@ describe('canPost', () => {
     expect(canPost('x')).toBe(true);
     expect(canPost('😀'.repeat(4000))).toBe(true);
     expect(canPost('x'.repeat(4001))).toBe(false);
+    expect(canPost('', 1)).toBe(true);
+    expect(canPost('x'.repeat(4001), 1)).toBe(false);
   });
 });
