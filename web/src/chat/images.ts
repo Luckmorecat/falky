@@ -22,6 +22,7 @@ export function useAttachmentImage(a: Pick<Attachment, 'id' | 'contentUrl' | 'av
   const [failure, setFailure] = useState({ src: '', attempt: 0, retrying: false });
   const attempt = failure.src === src ? failure.attempt : 0;
   const retrying = failure.src === src && failure.retrying;
+  const hasFailed = retrying || attempt > 0;
 
   useEffect(() => {
     if (!available || !retrying || attempt >= 4) return;
@@ -31,13 +32,13 @@ export function useAttachmentImage(a: Pick<Attachment, 'id' | 'contentUrl' | 'av
 
   // Image error events have no HTTP status; metadata distinguishes expiry from a failed read.
   useEffect(() => {
-    if (!a || !available || !retrying || attempt !== 0 || src.startsWith('blob:')) return;
+    if (!a || !available || !hasFailed || src.startsWith('blob:')) return;
     let cancelled = false;
     void api.attachment(a.id).then((fresh) => {
       if (!cancelled && !isAvailable(fresh)) onGone(fresh.id);
     }).catch(() => {});
     return () => { cancelled = true; };
-  }, [a?.id, src, available, retrying, attempt]);
+  }, [a?.id, src, available, hasFailed]);
 
   const state: ImageState = !a ? { status: 'loading' }
     : !available ? { status: 'gone' }
