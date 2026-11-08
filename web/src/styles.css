@@ -281,7 +281,7 @@ input[type=range]::-moz-range-thumb { width: 18px; height: 18px; border: 0; bord
   -webkit-mask-image: linear-gradient(to bottom, transparent, #000 28px); mask-image: linear-gradient(to bottom, transparent, #000 28px); }
 .feed > * { flex: none; }
 .feed:not(:has([data-row]))::before { content: ""; margin-top: auto; }
-.feed-gap { pointer-events: none; }
+.feed-gap { pointer-events: none; transition-property: none; }
 .chat .feed, .chat .composer { opacity: .3; transition: opacity 320ms ease; }
 .chat-open .chat .feed, .chat-open .chat .composer { opacity: 1; }
 /* A new message: the start of the lines clears up for a moment; the far edge stays blurred. */
@@ -291,6 +291,9 @@ input[type=range]::-moz-range-thumb { width: 18px; height: 18px; border: 0; bord
 .new-line { display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--signal-text); padding: 8px 0 12px; }
 .new-line::after { content: ""; flex: 1; height: 1px; background: color-mix(in srgb, var(--level) 28%, transparent); }
 .msg { padding-top: 14px; }
+.msg.own { text-align: right; }
+.msg.own .msg-meta, .msg.own .msg-state { justify-content: flex-end; }
+.msg.own .msg-text { width: fit-content; max-width: 100%; margin-left: auto; padding: 6px 10px; border-radius: 24px; background: color-mix(in srgb, var(--base) 9%, transparent); }
 .msg.cont { padding-top: 3px; }
 /* `lead` stands in for the next sibling when the day or the divider above is unmounted. */
 .msg.lead, .day + .msg, .new-line + .msg { padding-top: 0; }

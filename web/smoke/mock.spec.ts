@@ -84,6 +84,34 @@ test('send, retry exactly once, catch up, reload and reset the populated fixture
   await expect(page.getByText('Retry this message once', { exact: true })).toHaveCount(0);
 });
 
+test('reduced motion opens chat history with tinted own messages without a render loop', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  const errors: string[] = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  const lounge = (await state(page)).rooms[0]!.id;
+  let request = 0;
+  for (const [authorName, body] of [
+    ['Sam', 'Ready for a quick catch-up?'],
+    ['Alex', 'Yes! I’ve got the notes ready.'],
+    ['Sam', 'Perfect. I’ll join in a minute.'],
+    ['Alex', 'Sounds good. We can pick up where we left off yesterday.'],
+    ['Alex', 'See you shortly!'],
+  ]) {
+    const response = authorName === 'Alex'
+      ? await page.request.post(`${app.url}/api/rooms/${lounge}/messages`, { data: { requestKey: `reduced-${request++}`, body } })
+      : await page.request.post(`${app.url}/__mock/action`, { data: { type: 'message', roomId: lounge, authorName, body } });
+    expect(response.ok()).toBeTruthy();
+  }
+  await page.goto(app.url);
+  await page.locator('.feed .msg').first().waitFor({ state: 'attached' });
+  await page.keyboard.press('Slash');
+  await expect(page.locator('.chat-btn')).toHaveAttribute('aria-expanded', 'true');
+  await expect(page.locator('.msg.own').last()).toHaveText('See you shortly!');
+  await expect(page.locator('.msg.own').last()).toBeVisible();
+  await expect.poll(() => page.locator('.feed').evaluate((el) => Math.abs(el.scrollHeight - el.clientHeight - el.scrollTop))).toBeLessThanOrEqual(1);
+  expect(errors).toEqual([]);
+});
+
 async function movingVideo(page: Page, label: string) {
   const video = page.getByLabel(label, { exact: true });
   await expect(video).toBeVisible();
