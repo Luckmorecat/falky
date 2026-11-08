@@ -1,5 +1,6 @@
 # Shared static-serving policy for local HTTPS and the VPS web containers.
 root * /srv/web
+encode zstd gzip
 header {
 	# Everything the page loads comes from this origin. WebSockets are
 	# named too: not every browser counts them under 'self'.
