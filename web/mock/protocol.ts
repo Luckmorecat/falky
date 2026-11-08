@@ -38,7 +38,8 @@ export interface MockState {
 /** Generation is required for asynchronous browser voice operations. */
 export type MockAction =
   | { type: 'colour'; visitorId: string; palette: Schema['PaletteName'] }
-  | { type: 'message'; roomId: string; body: string; authorName?: string }
+  | { type: 'message'; roomId: string; body?: string; authorName?: string; images?: number }
+  | { type: 'expire-attachments'; roomId: string }
   | { type: 'participants'; roomId: string; participants: MockPeer[] }
   | { type: 'faults'; faults: Partial<MockFaults> }
   | { type: 'name-conflict'; active: boolean }

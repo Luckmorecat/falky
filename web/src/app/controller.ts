@@ -1,7 +1,8 @@
-import { api, ApiError, type LiveEvent, type Message, type Room, type Visitor, type VisitorColour } from '../api/client';
+import { api, ApiError, type Attachment, type LiveEvent, type Message, type Room, type Visitor, type VisitorColour } from '../api/client';
 import { LiveConnection } from '../api/live';
 import { followingLatest } from '../chat/place';
-import { countUnread, emptyChat, mergeMessages, type PendingMessage, type RoomChat } from '../chat/timeline';
+import { forgetFailed, isImage, onImageGone, seedImage } from '../chat/images';
+import { countUnread, emptyChat, mergeMessages, type ComposerUpload, type PendingMessage, type RoomChat } from '../chat/timeline';
 import { type PaletteName } from '../fx/palette';
 import { resolveLanguage, setLanguage, t } from '../strings';
 import { VoiceSession } from '@falky/voice';
@@ -142,6 +143,7 @@ function endAccess(): void {
   session++;
   resetColourRequests();
   live.stop();
+  dropUploads();
   setState({ phase: 'revoked', live: 'off', visitor: null, rooms: [], chats: {}, colours: {}, colourSave: null });
   voice.end();
 }
@@ -171,6 +173,7 @@ export function dismissNotice(): void {
 export async function boot(): Promise<void> {
   const epoch = ++session;
   resetColourRequests();
+  dropUploads();
   setState({ visitor: null, rooms: [], chats: {}, colours: {}, colourSave: null });
   const fragment = new URLSearchParams(location.hash.slice(1));
   const secret = fragment.get('k');
@@ -217,6 +220,7 @@ async function startWith(visitor: Visitor, epoch: number): Promise<void> {
   const viewedRoomId = rooms.some((r) => r.id === remembered) ? remembered : (rooms[0]?.id ?? null);
   setState({ phase: 'ready', visitor, rooms, viewedRoomId, chats: Object.fromEntries(rooms.map((r) => [r.id, emptyChat()])), live: visitor.nameTaken ? 'off' : 'reconnecting' });
   mergeColours([visitor.colour]);
+  void readAttachmentLimits(epoch);
   await Promise.all([refreshColours(), ...rooms.map(loadChat)]);
   if (epoch === session && !visitor.nameTaken) live.start();
 }
@@ -275,6 +279,9 @@ function handleEvent(event: LiveEvent): void {
       void refreshColours();
       break;
     }
+    case 'attachments.expired':
+      if (event.roomId) expireAttachments(event.roomId, event.payload.attachmentIds);
+      break;
     case 'access.revoked':
       endAccess();
       break;
@@ -294,6 +301,9 @@ async function catchUp(): Promise<void> {
     for (const r of rooms) chats[r.id] ??= emptyChat();
     setState({ rooms, chats, viewedRoomId: s.viewedRoomId ?? rooms[0]?.id ?? null });
     await Promise.all([refreshColours(), ...rooms.map(loadChat)]);
+    if (epoch !== session) return;
+    forgetFailed();
+    await refreshAttachments(epoch);
   } catch (err) {
     if (epoch === session) accessEnded(err);
   }
@@ -391,7 +401,12 @@ export async function loadOlder(roomId: string): Promise<void> {
 }
 
 export function postMessage(roomId: string, body: string): void {
-  const pending: PendingMessage = { requestKey: crypto.randomUUID(), roomId, body, failed: false, reason: '' };
+  const ready = (getState().uploads[roomId] ?? []).filter((u) => u.status === 'ready' && u.attachment);
+  const attachments = ready.map((u) => ({ ...u.attachment!, contentUrl: u.previewUrl }));
+  const pending: PendingMessage = { requestKey: crypto.randomUUID(), roomId, body, attachments, failed: false, reason: '' };
+  // The previews now belong to the pending message; failed pictures stay for the person to see why.
+  setUploads(roomId, (list) => list.filter((u) => !ready.includes(u)));
+  ready.forEach((u) => files.delete(u.localId));
   patchChat(roomId, (c) => ({ pending: [...c.pending, pending] }));
   void send(pending);
 }
@@ -404,20 +419,195 @@ export function retryMessage(p: PendingMessage): void {
 
 export function discardMessage(p: PendingMessage): void {
   patchChat(p.roomId, (c) => ({ pending: c.pending.filter((x) => x.requestKey !== p.requestKey) }));
+  for (const a of p.attachments) {
+    URL.revokeObjectURL(a.contentUrl);
+    void api.cancelAttachment(a.id).catch(() => {});
+  }
 }
 
 async function send(p: PendingMessage): Promise<void> {
   const epoch = session;
   try {
-    const message = await api.post(p.roomId, p.requestKey, p.body);
+    const message = await api.post(p.roomId, p.requestKey, p.body, p.attachments.map((a) => a.id));
     if (epoch !== session) return;
+    // The server's copy is the same picture: show the one already in memory.
+    p.attachments.forEach((a) => seedImage(a.id, a.contentUrl));
     patchChat(p.roomId, (c) => ({ pending: c.pending.filter((x) => x.requestKey !== p.requestKey), messages: mergeMessages(c.messages, [message]) }));
     syncRead(p.roomId);
   } catch (err) {
     if (epoch !== session || accessEnded(err)) return;
     const code = err instanceof ApiError ? err.code : 'other';
-    const reason = code === 'rate_limited' ? t.errors.postRateLimited : code === 'network' ? t.errors.postNetwork : t.errors.postOther;
+    const reason = code === 'rate_limited' ? t.errors.postRateLimited
+      : code === 'network' ? t.errors.postNetwork
+        : code === 'invalid_attachments' ? t.errors.postAttachmentsGone
+          : t.errors.postOther;
     patchChat(p.roomId, (c) => ({ pending: c.pending.map((x) => (x.requestKey === p.requestKey ? { ...x, failed: true, reason } : x)) }));
+  }
+}
+
+/* ---------- Attachments ---------- */
+
+const uploading = new Map<string, AbortController>();
+
+function setUploads(roomId: string, change: (list: ComposerUpload[]) => ComposerUpload[]): void {
+  const s = getState();
+  setState({ uploads: { ...s.uploads, [roomId]: change(s.uploads[roomId] ?? []) } });
+}
+
+function patchUpload(roomId: string, localId: string, patch: Partial<ComposerUpload>): void {
+  setUploads(roomId, (list) => list.map((u) => (u.localId === localId ? { ...u, ...patch } : u)));
+}
+
+function dropUploads(): void {
+  uploading.forEach((c) => c.abort());
+  uploading.clear();
+  for (const list of Object.values(getState().uploads)) for (const u of list) URL.revokeObjectURL(u.previewUrl);
+  setState({ uploads: {} });
+}
+
+async function readAttachmentLimits(epoch: number): Promise<void> {
+  try {
+    const limits = await api.attachmentLimits();
+    if (epoch === session) setState({ attachmentLimits: { maxAttachments: limits.maxAttachments, maxFileBytes: limits.maxFileBytes } });
+  } catch {
+    // The defaults match the server's; it refuses anything beyond them anyway.
+  }
+}
+
+function uploadReason(err: unknown): string {
+  const code = err instanceof ApiError ? err.code : 'other';
+  const reasons: Record<string, string> = {
+    attachment_too_large: t.errors.attachmentTooLarge,
+    invalid_image: t.errors.invalidImage,
+    image_dimensions: t.errors.imageDimensions,
+    rate_limited: t.errors.uploadBusy,
+    attachment_busy: t.errors.uploadBusy,
+    attachment_capacity: t.errors.uploadUnavailable,
+    attachment_processing: t.errors.uploadUnavailable,
+    attachment_unavailable: t.errors.uploadUnavailable,
+    upload_timeout: t.errors.uploadTimeout,
+    network: t.errors.postNetwork,
+  };
+  return reasons[code] ?? t.errors.uploadOther;
+}
+
+async function upload(u: ComposerUpload, file: File): Promise<void> {
+  const epoch = session;
+  const control = new AbortController();
+  uploading.set(u.localId, control);
+  let last = 0;
+  try {
+    const attachment = await api.upload(u.roomId, file, (sent) => {
+      // A render per percent is plenty.
+      if (sent - last >= 0.01 || sent === 1) {
+        last = sent;
+        patchUpload(u.roomId, u.localId, { progress: sent });
+      }
+    }, control.signal);
+    if (epoch !== session) return;
+    if (!(getState().uploads[u.roomId] ?? []).some((x) => x.localId === u.localId)) {
+      // Removed while it was on its way: the server should not keep it.
+      void api.cancelAttachment(attachment.id).catch(() => {});
+      return;
+    }
+    patchUpload(u.roomId, u.localId, { status: 'ready', progress: 1, attachment });
+  } catch (err) {
+    if (epoch !== session || (err instanceof ApiError && err.code === 'aborted') || accessEnded(err)) return;
+    patchUpload(u.roomId, u.localId, { status: 'failed', reason: uploadReason(err) });
+  } finally {
+    uploading.delete(u.localId);
+  }
+}
+
+const files = new Map<string, File>();
+
+/**
+ * Takes pictures for a room's next message: from the picker, a paste or a
+ * drop. Only images; anything past the per-message number is turned away with
+ * a notice rather than silently.
+ */
+export function addFiles(roomId: string, picked: Iterable<File>): void {
+  const { attachmentLimits: limits, uploads } = getState();
+  const list = [...picked];
+  const images = list.filter((f) => f.type.startsWith('image/'));
+  const room = limits.maxAttachments - (uploads[roomId]?.length ?? 0);
+  const taken = images.slice(0, Math.max(0, room));
+  if (images.length < list.length) showNotice(t.onlyImages);
+  else if (taken.length < images.length) showNotice(t.tooManyImages(limits.maxAttachments));
+  for (const file of taken) {
+    const u: ComposerUpload = {
+      localId: crypto.randomUUID(), roomId, name: file.name || 'image', size: file.size,
+      previewUrl: URL.createObjectURL(file), status: 'uploading', progress: 0, reason: '',
+    };
+    if (file.size > limits.maxFileBytes) {
+      u.status = 'failed';
+      u.reason = t.errors.attachmentTooLarge;
+    }
+    setUploads(roomId, (l) => [...l, u]);
+    files.set(u.localId, file);
+    if (u.status === 'uploading') void upload(u, file);
+  }
+}
+
+export function removeUpload(roomId: string, localId: string): void {
+  const u = getState().uploads[roomId]?.find((x) => x.localId === localId);
+  if (!u) return;
+  uploading.get(localId)?.abort();
+  files.delete(localId);
+  URL.revokeObjectURL(u.previewUrl);
+  setUploads(roomId, (list) => list.filter((x) => x.localId !== localId));
+  if (u.attachment) void api.cancelAttachment(u.attachment.id).catch(() => {});
+}
+
+export function retryUpload(roomId: string, localId: string): void {
+  const u = getState().uploads[roomId]?.find((x) => x.localId === localId);
+  const file = files.get(localId);
+  if (!u || !file || u.status !== 'failed' || file.size > getState().attachmentLimits.maxFileBytes) return;
+  const next = { ...u, status: 'uploading' as const, progress: 0, reason: '' };
+  patchUpload(roomId, localId, next);
+  void upload(next, file);
+}
+
+function patchAttachments(roomId: string, change: (a: Attachment) => Attachment): void {
+  patchChat(roomId, (c) => {
+    let touched = false;
+    const messages = c.messages.map((m) => {
+      if (!m.attachments.length) return m;
+      let changed = false;
+      const attachments = m.attachments.map((a) => {
+        const next = change(a);
+        if (next !== a) changed = true;
+        return next;
+      });
+      if (!changed) return m;
+      touched = true;
+      return { ...m, attachments };
+    });
+    return touched ? { messages } : {};
+  });
+}
+
+function expireAttachments(roomId: string, ids: string[]): void {
+  const gone = new Set(ids);
+  patchAttachments(roomId, (a) => (gone.has(a.id) && a.availability !== 'expired' ? { ...a, availability: 'expired' } : a));
+}
+
+onImageGone((id) => {
+  for (const roomId of Object.keys(getState().chats)) expireAttachments(roomId, [id]);
+});
+
+/** Expiry events are not replayed: after a reconnect, ask after every picture still shown as there. */
+async function refreshAttachments(epoch: number): Promise<void> {
+  const shown = Object.entries(getState().chats).flatMap(([roomId, c]) => c.messages.flatMap((m) =>
+    m.attachments.filter((a) => a.availability === 'posted' && isImage(a)).map((a) => ({ roomId, id: a.id })))).slice(-120);
+  for (let i = 0; i < shown.length; i += 4) {
+    const batch = shown.slice(i, i + 4);
+    const fresh = await Promise.all(batch.map(({ id }) => api.attachment(id).catch(() => null)));
+    if (epoch !== session) return;
+    batch.forEach(({ roomId }, j) => {
+      const next = fresh[j];
+      if (next && next.availability !== 'posted') expireAttachments(roomId, [next.id]);
+    });
   }
 }
 
@@ -426,7 +616,7 @@ function notifyOfMessage(m: Message): void {
   if (!s.settings.notifications || m.authorId === s.visitor?.id || document.visibilityState === 'visible') return;
   if (notificationPermission() !== 'granted') return;
   const room = s.rooms.find((r) => r.id === m.roomId)?.name ?? '';
-  notify(`${m.authorName} · ${room}`, { body: m.body.slice(0, 160), tag: m.roomId }, () => {
+  notify(`${m.authorName} · ${room}`, { body: (m.body.trim() ? m.body : t.imagesSummary(m.attachments.length)).slice(0, 160), tag: m.roomId }, () => {
     window.focus();
     viewRoom(m.roomId);
     setChatOpen(true);

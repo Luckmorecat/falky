@@ -1,4 +1,4 @@
-import type { Message } from '../api/client';
+import type { Attachment, Message } from '../api/client';
 import { t } from '../strings';
 
 /** A message on its way to the server, shown until the server has it. */
@@ -6,8 +6,26 @@ export interface PendingMessage {
   requestKey: string;
   roomId: string;
   body: string;
+  /** Drafts already on the server, in order; shown from the person's own copies while sending. */
+  attachments: Attachment[];
   failed: boolean;
   /** Why it failed, for the person; empty while sending. */
+  reason: string;
+}
+
+/** A picture in the composer: on its way up, ready to go with the message, or refused. */
+export interface ComposerUpload {
+  localId: string;
+  roomId: string;
+  name: string;
+  size: number;
+  /** The person's own copy, shown at once and kept for the sent message. */
+  previewUrl: string;
+  status: 'uploading' | 'ready' | 'failed';
+  /** 0..1 of the bytes sent. */
+  progress: number;
+  attachment?: Attachment;
+  /** Why it failed, for the person. */
   reason: string;
 }
 
@@ -117,4 +135,5 @@ export function splitLinks(text: string): TextPart[] {
 /** A body the server would accept; it counts characters, not UTF-16 units. */
 export const MESSAGE_MAX = 4000;
 export const messageLength = (s: string): number => [...s].length;
-export const canPost = (s: string): boolean => s.trim().length > 0 && messageLength(s) <= MESSAGE_MAX;
+/** Text, pictures or both; pictures alone need no words. */
+export const canPost = (s: string, attachments = 0): boolean => (s.trim().length > 0 || attachments > 0) && messageLength(s) <= MESSAGE_MAX;
