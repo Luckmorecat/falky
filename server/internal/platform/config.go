@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -22,7 +23,9 @@ type Config struct {
 	// connections. It must not be reachable from outside the deployment.
 	InternalAddr string
 	// DBPath is the SQLite database file.
-	DBPath string
+	DBPath                string
+	AttachmentRoot        string
+	AttachmentPostedBytes int64
 	// SnapshotDir is the directory the snapshots of the database go to.
 	SnapshotDir string
 	// AdminSocket is the path of the Unix socket the operator commands use to
@@ -48,13 +51,15 @@ type Config struct {
 
 // Environment variables read by LoadConfig.
 const (
-	EnvPublicAddr   = "FALKY_PUBLIC_ADDR"
-	EnvInternalAddr = "FALKY_INTERNAL_ADDR"
-	EnvDBPath       = "FALKY_DB_PATH"
-	EnvSnapshotDir  = "FALKY_SNAPSHOT_DIR"
-	EnvAdminSocket  = "FALKY_ADMIN_SOCKET"
-	EnvPublicOrigin = "FALKY_PUBLIC_ORIGIN"
-	EnvLogLevel     = "FALKY_LOG_LEVEL"
+	EnvPublicAddr            = "FALKY_PUBLIC_ADDR"
+	EnvInternalAddr          = "FALKY_INTERNAL_ADDR"
+	EnvDBPath                = "FALKY_DB_PATH"
+	EnvAttachmentRoot        = "FALKY_ATTACHMENT_ROOT"
+	EnvAttachmentPostedBytes = "FALKY_ATTACHMENT_POSTED_BYTES"
+	EnvSnapshotDir           = "FALKY_SNAPSHOT_DIR"
+	EnvAdminSocket           = "FALKY_ADMIN_SOCKET"
+	EnvPublicOrigin          = "FALKY_PUBLIC_ORIGIN"
+	EnvLogLevel              = "FALKY_LOG_LEVEL"
 
 	EnvLiveKitURL       = "FALKY_LIVEKIT_URL"
 	EnvLiveKitAPIURL    = "FALKY_LIVEKIT_API_URL"
@@ -78,14 +83,23 @@ const defaultVoiceRoomCap = 8
 // the API key and secret have no default.
 func LoadConfig(getenv func(string) string) (Config, error) {
 	cfg := Config{
-		PublicAddr:       valueOr(getenv(EnvPublicAddr), "127.0.0.1:8080"),
-		InternalAddr:     valueOr(getenv(EnvInternalAddr), "127.0.0.1:9090"),
-		DBPath:           valueOr(getenv(EnvDBPath), "falky.db"),
-		SnapshotDir:      valueOr(getenv(EnvSnapshotDir), "snapshots"),
-		AdminSocket:      valueOr(getenv(EnvAdminSocket), "falky-admin.sock"),
-		LiveKitAPIKey:    getenv(EnvLiveKitAPIKey),
-		LiveKitAPISecret: getenv(EnvLiveKitAPISecret),
-		VoiceRoomCap:     defaultVoiceRoomCap,
+		PublicAddr:            valueOr(getenv(EnvPublicAddr), "127.0.0.1:8080"),
+		InternalAddr:          valueOr(getenv(EnvInternalAddr), "127.0.0.1:9090"),
+		DBPath:                valueOr(getenv(EnvDBPath), "falky.db"),
+		SnapshotDir:           valueOr(getenv(EnvSnapshotDir), "snapshots"),
+		AdminSocket:           valueOr(getenv(EnvAdminSocket), "falky-admin.sock"),
+		LiveKitAPIKey:         getenv(EnvLiveKitAPIKey),
+		LiveKitAPISecret:      getenv(EnvLiveKitAPISecret),
+		VoiceRoomCap:          defaultVoiceRoomCap,
+		AttachmentPostedBytes: 5_000_000_000,
+	}
+	cfg.AttachmentRoot = valueOr(getenv(EnvAttachmentRoot), filepath.Join(filepath.Dir(cfg.DBPath), "attachments"))
+	if v := getenv(EnvAttachmentPostedBytes); v != "" {
+		quota, err := strconv.ParseInt(v, 10, 64)
+		if err != nil || quota <= 0 {
+			return Config{}, fmt.Errorf("%s must be a positive whole number of bytes", EnvAttachmentPostedBytes)
+		}
+		cfg.AttachmentPostedBytes = quota
 	}
 	if err := cfg.LogLevel.UnmarshalText([]byte(valueOr(getenv(EnvLogLevel), "info"))); err != nil {
 		return Config{}, fmt.Errorf("%s: %w", EnvLogLevel, err)

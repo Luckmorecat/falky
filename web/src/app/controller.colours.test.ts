@@ -59,7 +59,7 @@ it('merges simultaneous saves by accepted revision, with the newest request owni
 
 it('recovers every loaded historical author on live open without new messages, batches lookup and ignores stale snapshots and rename metadata', async () => {
   const authors = Array.from({ length: 125 }, (_, i) => `offline-${i}`);
-  const messages = authors.map((authorId, i) => ({ id: String(i).padStart(4, '0'), roomId: 'room', authorId, authorName: authorId, body: 'History', createdAt: '2026-11-08T00:00:00Z' }));
+  const messages = authors.map((authorId, i) => ({ id: String(i).padStart(4, '0'), roomId: 'room', authorId, authorName: authorId, body: 'History', attachments: [], createdAt: '2026-11-08T00:00:00Z' }));
   seam.api.rooms.mockResolvedValue([{ id: 'room', name: 'Lounge', occupancy: [] }]);
   seam.api.messages.mockImplementation(async (_id, q) => q.before ? [...messages.slice(0, 25)].reverse() : q.after ? [] : [...messages.slice(25)].reverse());
   seam.api.colours.mockImplementation(async (ids: string[]) => ids.map((id) => colour('rose', 1, id)));

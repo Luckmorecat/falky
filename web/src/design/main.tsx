@@ -101,7 +101,7 @@ const messages: ChatMessage[] = [
   ['Софія', 2, 38, 'Я буду після восьмої'],
   ['Софія', 2, 37, 'Тільки мікрофон ще не налаштувала'],
   ['Олена', 0, 12, 'Глянула нові орби, живі якісь'],
-].map(([name, i, ago, body], n) => ({ id: `m${n}`, roomId: 'lounge', authorId: person(i as number).id, authorName: name as string, body: body as string, createdAt: minutesAgo(ago as number) }));
+].map(([name, i, ago, body], n) => ({ id: `m${n}`, roomId: 'lounge', authorId: person(i as number).id, authorName: name as string, body: body as string, attachments: [], createdAt: minutesAgo(ago as number) }));
 
 const SCENES = {
   orbs: 'Орби',
@@ -144,7 +144,7 @@ function fakeIncoming(): void {
   const id = s.viewedRoomId;
   const chat = id ? s.chats[id] : undefined;
   if (!id || !chat) return;
-  const message: ChatMessage = { id: `n${++incoming}`, roomId: id, authorId: person(1).id, authorName: person(1).name, body: 'Заходьте, вже чекаємо', createdAt: new Date().toISOString() };
+  const message: ChatMessage = { id: `n${++incoming}`, roomId: id, authorId: person(1).id, authorName: person(1).name, body: 'Заходьте, вже чекаємо', attachments: [], createdAt: new Date().toISOString() };
   setState({ chats: { ...s.chats, [id]: { ...chat, messages: [...chat.messages, message], unread: chat.unread + 1 } } });
 }
 

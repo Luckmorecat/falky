@@ -5,6 +5,7 @@ import (
 	"errors"
 
 	"github.com/kisshot/falky/server/internal/api"
+	"github.com/kisshot/falky/server/internal/attachments"
 	"github.com/kisshot/falky/server/internal/chat"
 	"github.com/kisshot/falky/server/internal/rooms"
 )
@@ -44,8 +45,14 @@ func (s *server) PostMessage(ctx context.Context, req api.PostMessageRequestObje
 	if err != nil {
 		return nil, err
 	}
-	m, created, err := s.chat.Post(ctx, visitor, req.Id, req.Body.RequestKey, req.Body.Body)
+	m, created, err := s.chat.Post(ctx, visitor, req.Id, req.Body.RequestKey, req.Body.Body, req.Body.AttachmentIds...)
 	switch {
+	case errors.Is(err, attachments.ErrInvalidAttachments):
+		_, body, _ := attachmentError(err)
+		return api.PostMessage400JSONResponse(body), nil
+	case errors.Is(err, attachments.ErrQuota), errors.Is(err, attachments.ErrCleanupPending), errors.Is(err, attachments.ErrClosed):
+		_, body, _ := attachmentError(err)
+		return api.PostMessage503JSONResponse(body), nil
 	case errors.Is(err, chat.ErrInvalidBody):
 		return api.PostMessage400JSONResponse{Code: "invalid_message", Message: err.Error()}, nil
 	case errors.Is(err, chat.ErrInvalidRequestKey):
@@ -66,12 +73,17 @@ func (s *server) PostMessage(ctx context.Context, req api.PostMessageRequestObje
 var roomNotFound = api.RoomNotFoundJSONResponse{Code: "room_not_found", Message: "no such room"}
 
 func messageBody(m chat.Message) api.Message {
+	attached := make([]api.Attachment, 0, len(m.Attachments))
+	for _, metadata := range m.Attachments {
+		attached = append(attached, attachmentBody(metadata))
+	}
 	return api.Message{
-		Id:         m.ID,
-		RoomId:     m.RoomID,
-		AuthorId:   m.AuthorID,
-		AuthorName: m.AuthorName,
-		Body:       m.Body,
-		CreatedAt:  m.CreatedAt,
+		Attachments: attached,
+		Id:          m.ID,
+		RoomId:      m.RoomID,
+		AuthorId:    m.AuthorID,
+		AuthorName:  m.AuthorName,
+		Body:        m.Body,
+		CreatedAt:   m.CreatedAt,
 	}
 }

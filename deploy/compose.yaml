@@ -55,6 +55,8 @@ services:
     restart: unless-stopped
     environment:
       FALKY_PUBLIC_ORIGIN: https://${FALKY_DOMAIN:?set FALKY_DOMAIN in deploy/.env}
+      FALKY_ATTACHMENT_ROOT: ${FALKY_ATTACHMENT_ROOT:-/data/attachments}
+      FALKY_ATTACHMENT_POSTED_BYTES: ${FALKY_ATTACHMENT_POSTED_BYTES:-5000000000}
       FALKY_LIVEKIT_API_URL: http://livekit:7880
       FALKY_LIVEKIT_API_KEY: ${FALKY_LIVEKIT_API_KEY:?set FALKY_LIVEKIT_API_KEY in deploy/.env}
       FALKY_LIVEKIT_API_SECRET: ${FALKY_LIVEKIT_API_SECRET:?set FALKY_LIVEKIT_API_SECRET in deploy/.env}

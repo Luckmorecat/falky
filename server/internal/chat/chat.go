@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io/fs"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/oklog/ulid/v2"
 
+	"github.com/kisshot/falky/server/internal/attachments"
 	"github.com/kisshot/falky/server/internal/identity"
 	"github.com/kisshot/falky/server/internal/platform"
 )
@@ -34,7 +36,7 @@ func Migrations() fs.FS {
 	return sub
 }
 
-// Message is a piece of text a visitor posted in a room's chat.
+// Message is text and ordered attachments a visitor posted in a room's chat.
 type Message struct {
 	// ID is a ULID. IDs sort in the order their messages were committed.
 	ID     string
@@ -44,8 +46,9 @@ type Message struct {
 	AuthorID   string
 	AuthorName string
 	// Body is the text as posted.
-	Body      string
-	CreatedAt time.Time
+	Body        string
+	CreatedAt   time.Time
+	Attachments []attachments.Metadata
 }
 
 // maxBodyLength is the longest message body, in characters.
@@ -87,10 +90,11 @@ var (
 
 // Service posts and reads messages.
 type Service struct {
-	db        *platform.DB
-	now       func() time.Time
-	postLimit *platform.Limiter
-	publish   func(Message)
+	db          *platform.DB
+	now         func() time.Time
+	postLimit   *platform.Limiter
+	attachments *attachments.Store
+	publish     func(Message)
 	// publishing holds each Post from its write until it has published, so
 	// messages are published in the order they are committed.
 	publishing sync.Mutex
@@ -118,6 +122,11 @@ func WithPublisher(publish func(Message)) Option {
 	return func(s *Service) { s.publish = publish }
 }
 
+// WithAttachments joins ordered drafts and quota changes to the message transaction.
+func WithAttachments(store *attachments.Store) Option {
+	return func(s *Service) { s.attachments = store }
+}
+
 // New returns the service over db.
 func New(db *platform.DB, opts ...Option) *Service {
 	s := &Service{db: db, now: time.Now, publish: func(Message) {}}
@@ -132,27 +141,48 @@ func New(db *platform.DB, opts ...Option) *Service {
 // roomID must name a room.
 //
 // requestKey makes retrying safe: when author already posted body in the
-// room under requestKey, Post returns that message and creates nothing. It
+// room with the same ordered attachment IDs under requestKey, Post returns
+// that message and creates nothing, including after attachment expiry. It
 // fails with ErrRequestKeyReused when author used requestKey for a different body or
 // room, an ErrInvalidBody, ErrInvalidRequestKey, or ErrRateLimited when a new
 // message would exceed the post limit; a retry is never limited.
-func (s *Service) Post(ctx context.Context, author identity.Visitor, roomID, requestKey, body string) (Message, bool, error) {
+func (s *Service) Post(ctx context.Context, author identity.Visitor, roomID, requestKey, body string, attachmentIDs ...string) (Message, bool, error) {
 	if !requestKeyPattern.MatchString(requestKey) {
 		return Message{}, false, ErrInvalidRequestKey
 	}
-	if err := checkBody(body); err != nil {
+	if err := checkBodyWithAttachments(body, len(attachmentIDs)); err != nil {
 		return Message{}, false, err
 	}
+	if len(attachmentIDs) > attachments.MaxAttachments || (len(attachmentIDs) > 0 && s.attachments == nil) {
+		return Message{}, false, attachments.ErrInvalidAttachments
+	}
 	var m Message
+	var expiries []attachments.Expiry
 	created := false
 	s.publishing.Lock()
 	defer s.publishing.Unlock()
+	if s.attachments != nil {
+		unlock := s.attachments.LockPost()
+		defer unlock()
+	}
 	err := s.db.Write(ctx, func(tx *sql.Tx) error {
 		existing, err := scanMessage(tx.QueryRowContext(ctx,
 			selectMessages+" WHERE author_id = ? AND request_key = ?", author.ID, requestKey))
 		switch {
 		case err == nil:
-			if existing.RoomID != roomID || existing.Body != body {
+			existing.Attachments = []attachments.Metadata{}
+			if s.attachments != nil {
+				linked, err := s.attachments.ForMessages(ctx, tx, []string{existing.ID})
+				if err != nil {
+					return err
+				}
+				existing.Attachments = append(existing.Attachments, linked[existing.ID]...)
+			}
+			persistedIDs := make([]string, len(existing.Attachments))
+			for i, a := range existing.Attachments {
+				persistedIDs[i] = a.ID
+			}
+			if existing.RoomID != roomID || existing.Body != body || !slices.Equal(persistedIDs, attachmentIDs) {
 				return ErrRequestKeyReused
 			}
 			m = existing
@@ -174,12 +204,19 @@ func (s *Service) Post(ctx context.Context, author identity.Visitor, roomID, req
 		if err != nil {
 			return err
 		}
-		m = Message{ID: id, RoomID: roomID, AuthorID: author.ID, AuthorName: author.Name, Body: body, CreatedAt: now}
+		m = Message{ID: id, RoomID: roomID, AuthorID: author.ID, AuthorName: author.Name, Body: body, CreatedAt: now, Attachments: []attachments.Metadata{}}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO messages
 			(id, room_id, author_id, author_name, body, request_key, created_at)
 			VALUES (?, ?, ?, ?, ?, ?, ?)`,
 			m.ID, m.RoomID, m.AuthorID, m.AuthorName, m.Body, requestKey, now.Format(timeLayout)); err != nil {
 			return err
+		}
+		if s.attachments != nil {
+			var err error
+			m.Attachments, expiries, err = s.attachments.Consume(ctx, tx, author.ID, roomID, m.ID, attachmentIDs)
+			if err != nil {
+				return err
+			}
 		}
 		created = true
 		return nil
@@ -191,13 +228,22 @@ func (s *Service) Post(ctx context.Context, author identity.Visitor, roomID, req
 		return Message{}, false, fmt.Errorf("post message: %w", err)
 	}
 	if created {
+		if s.attachments != nil {
+			s.attachments.Committed(expiries)
+		}
 		s.publish(m)
 	}
 	return m, created, nil
 }
 
-// checkBody checks the message rules: 1 to 4000 characters, not only white
-// space.
+func checkBodyWithAttachments(body string, count int) error {
+	if count > 0 && strings.TrimSpace(body) == "" && utf8.ValidString(body) && utf8.RuneCountInString(body) <= maxBodyLength {
+		return nil
+	}
+	return checkBody(body)
+}
+
+// checkBody checks the text-only message rules without changing the original text.
 func checkBody(body string) error {
 	switch {
 	case !utf8.ValidString(body):
@@ -274,12 +320,35 @@ func (s *Service) History(ctx context.Context, roomID string, page Page) ([]Mess
 		}
 	}
 	query := selectMessages + " WHERE room_id = ?" + where + " ORDER BY id " + order + " LIMIT ?"
-	rows, err := s.db.Read().QueryContext(ctx, query, append(args, page.Limit)...)
+	// One read snapshot keeps messages and their attachment states coherent,
+	// and rows close before querying links on this same connection.
+	tx, err := s.db.Read().BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return nil, fmt.Errorf("read history: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	rows, err := tx.QueryContext(ctx, query, append(args, page.Limit)...)
 	if err != nil {
 		return nil, fmt.Errorf("read history: %w", err)
 	}
 	messages, err := scanMessages(rows)
 	if err != nil {
+		return nil, fmt.Errorf("read history: %w", err)
+	}
+	if s.attachments != nil {
+		ids := make([]string, len(messages))
+		for i, m := range messages {
+			ids[i] = m.ID
+		}
+		linked, err := s.attachments.ForMessages(ctx, tx, ids)
+		if err != nil {
+			return nil, fmt.Errorf("read history: %w", err)
+		}
+		for i := range messages {
+			messages[i].Attachments = append(messages[i].Attachments, linked[messages[i].ID]...)
+		}
+	}
+	if err = tx.Commit(); err != nil {
 		return nil, fmt.Errorf("read history: %w", err)
 	}
 	return messages, nil
@@ -302,6 +371,7 @@ func scanMessage(row scanner) (Message, error) {
 		return Message{}, fmt.Errorf("message %s: created_at: %w", m.ID, err)
 	}
 	m.CreatedAt = t
+	m.Attachments = []attachments.Metadata{}
 	return m, nil
 }
 

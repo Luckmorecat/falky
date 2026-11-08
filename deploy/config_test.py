@@ -72,6 +72,14 @@ class IsolationTests(unittest.TestCase):
         self.assertTrue(any(m["target"] == "/etc/caddy/Caddyfile" and m["read_only"] for m in mounts))
         self.assertFalse(any(m["target"] == "/etc/caddy/web.caddy" for m in mounts))
 
+    def test_attachment_defaults_use_the_existing_data_mount(self):
+        for production in (False, True):
+            config = render("falky", "localhost", 7881, 7882, production=production)
+            server = config["services"]["falky"]
+            self.assertEqual(server["environment"]["FALKY_ATTACHMENT_ROOT"], "/data/attachments")
+            self.assertEqual(server["environment"]["FALKY_ATTACHMENT_POSTED_BYTES"], "5000000000")
+            self.assertEqual({m["target"] for m in server["volumes"]}, {"/data", "/snapshots"})
+
     def test_livekit_compose_identity_changes_only_with_its_configuration(self):
         environment = os.environ | {
             'FALKY_PROJECT_NAME':'falky', 'FALKY_DOMAIN':'test.invalid',

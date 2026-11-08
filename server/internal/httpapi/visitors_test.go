@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/kisshot/falky/server/internal/api"
+	"github.com/kisshot/falky/server/internal/attachments"
 	"github.com/kisshot/falky/server/internal/chat"
 	"github.com/kisshot/falky/server/internal/identity"
 	"github.com/kisshot/falky/server/internal/platform"
@@ -28,14 +29,15 @@ import (
 // database, voice over an in-memory LiveKit, and the internal listener
 // beside it.
 type publicServer struct {
-	srv      *httptest.Server
-	internal *httptest.Server
-	secret   string
-	identity *identity.Service
-	rooms    *rooms.Service
-	voice    *voice.Service
-	livekit  *voicetest.LiveKit
-	events   Events
+	srv         *httptest.Server
+	internal    *httptest.Server
+	secret      string
+	identity    *identity.Service
+	rooms       *rooms.Service
+	voice       *voice.Service
+	livekit     *voicetest.LiveKit
+	events      Events
+	attachments *attachments.Store
 	// clock is the time identity reads, which the test moves by hand.
 	clock *clock
 	// logs holds what the server logged.
@@ -98,7 +100,12 @@ func startPublic(t *testing.T, enterBurst int) publicServer {
 // messages per visitor with no refill during the test.
 func startPublicLimited(t *testing.T, enterBurst, postBurst int, identityOptions ...identity.Option) publicServer {
 	t.Helper()
-	ms, err := platform.LoadMigrations(identity.Migrations(), rooms.Migrations(), chat.Migrations())
+	return startPublicAttachments(t, enterBurst, postBurst, nil, identityOptions...)
+}
+
+func startPublicAttachments(t *testing.T, enterBurst, postBurst int, attachmentOptions []attachments.Option, identityOptions ...identity.Option) publicServer {
+	t.Helper()
+	ms, err := platform.LoadMigrations(identity.Migrations(), rooms.Migrations(), chat.Migrations(), attachments.Migrations())
 	if err != nil {
 		t.Fatalf("LoadMigrations: %v", err)
 	}
@@ -131,19 +138,30 @@ func startPublicLimited(t *testing.T, enterBurst, postBurst int, identityOptions
 	start := time.Now()
 	hub := realtime.New(realtime.WithConnectedFunc(ident.ColourConnected))
 	events := Events{Hub: hub, Logger: logger}
+	store, err := attachments.New(db, filepath.Join(t.TempDir(), "attachments"), append([]attachments.Option{attachments.WithClock(clk.Now), attachments.WithExpiryPublisher(events.AttachmentsExpired)}, attachmentOptions...)...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := store.Close(context.Background()); err != nil {
+			t.Error(err)
+		}
+	})
 	rs := rooms.New(db, rooms.WithPublisher(events.RoomChanged), rooms.WithNameCheck(ident.NameTaken))
 	lk := voicetest.New()
 	vs := voice.New(lk, ident, rs, voice.Config{
 		URL: testLiveKitURL, APIKey: testLiveKitKey, APISecret: testLiveKitSecret, RoomCap: testRoomCap,
 	}, voice.WithPublisher(events.OccupancyChanged))
 	h := New(Deps{
-		Logger:   logger,
-		Health:   platform.NewHealth(logger),
-		Metrics:  platform.NewMetrics().Handler(),
-		Identity: ident,
-		Rooms:    rs,
-		Voice:    vs,
+		Logger:      logger,
+		Health:      platform.NewHealth(logger),
+		Metrics:     platform.NewMetrics().Handler(),
+		Identity:    ident,
+		Attachments: store,
+		Rooms:       rs,
+		Voice:       vs,
 		Chat: chat.New(db,
+			chat.WithAttachments(store),
 			chat.WithPostLimit(platform.NewLimiter(postBurst, time.Hour, func() time.Time { return start })),
 			chat.WithPublisher(events.MessageCreated)),
 		EnterLimit:   platform.NewLimiter(enterBurst, time.Hour, func() time.Time { return start }),
@@ -163,7 +181,7 @@ func startPublicLimited(t *testing.T, enterBurst, postBurst int, identityOptions
 	})
 	return publicServer{
 		srv: srv, internal: internal, secret: strings.TrimPrefix(link, testOrigin+"/#k="),
-		identity: ident, rooms: rs, voice: vs, livekit: lk, events: events, clock: clk, logs: logs,
+		identity: ident, rooms: rs, attachments: store, voice: vs, livekit: lk, events: events, clock: clk, logs: logs,
 	}
 }
 

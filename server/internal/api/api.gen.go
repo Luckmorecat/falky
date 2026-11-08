@@ -35,6 +35,30 @@ func (e AccessRevokedReason) Valid() bool {
 	}
 }
 
+// Defines values for AttachmentAvailability.
+const (
+	AttachmentAvailabilityCancelled AttachmentAvailability = "cancelled"
+	AttachmentAvailabilityExpired   AttachmentAvailability = "expired"
+	AttachmentAvailabilityPosted    AttachmentAvailability = "posted"
+	AttachmentAvailabilityReady     AttachmentAvailability = "ready"
+)
+
+// Valid indicates whether the value is a known member of the AttachmentAvailability enum.
+func (e AttachmentAvailability) Valid() bool {
+	switch e {
+	case AttachmentAvailabilityCancelled:
+		return true
+	case AttachmentAvailabilityExpired:
+		return true
+	case AttachmentAvailabilityPosted:
+		return true
+	case AttachmentAvailabilityReady:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for EventV.
 const (
 	EventVN1 EventV = 1
@@ -53,6 +77,7 @@ func (e EventV) Valid() bool {
 // Defines values for EventType.
 const (
 	EventTypeAccessRevoked        EventType = "access.revoked"
+	EventTypeAttachmentsExpired   EventType = "attachments.expired"
 	EventTypeMessageCreated       EventType = "message.created"
 	EventTypeOccupancyChanged     EventType = "occupancy.changed"
 	EventTypeRoomChanged          EventType = "room.changed"
@@ -63,6 +88,8 @@ const (
 func (e EventType) Valid() bool {
 	switch e {
 	case EventTypeAccessRevoked:
+		return true
+	case EventTypeAttachmentsExpired:
 		return true
 	case EventTypeMessageCreated:
 		return true
@@ -171,6 +198,175 @@ type AccessRevoked struct {
 // Example: link_replaced
 type AccessRevokedReason string
 
+// Attachment Private metadata. Availability is ready (owned draft), posted, expired, or cancelled. Metadata survives expiry; private drafts retain expiresAt through expiry or cancellation. Posted records omit it. Content URL always requires the current visitor cookie.
+type Attachment struct {
+	// Availability Current availability.
+	//
+	// Example: posted
+	Availability AttachmentAvailability `json:"availability"`
+
+	// ContentType Actual stored media type, detected by the server.
+	//
+	// Example: image/webp
+	ContentType string `json:"contentType"`
+
+	// ContentUrl Authenticated content path, returning 410 when unavailable.
+	//
+	// Example: /api/attachments/0123456789abcdef0123456789abcdef/content
+	ContentUrl string `json:"contentUrl"`
+
+	// ExpiresAt Successful-upload draft deadline; absent after posting.
+	//
+	// Example: 2026-11-08T12:00:00Z
+	ExpiresAt *time.Time `json:"expiresAt,omitempty"`
+
+	// Filename Safe original basename; optimized images use .webp.
+	//
+	// Example: photo.webp
+	Filename string `json:"filename"`
+
+	// Height Optimized height; zero for unchanged files.
+	//
+	// Example: 480
+	Height int `json:"height"`
+
+	// Id Opaque attachment ID.
+	//
+	// Example: 0123456789abcdef0123456789abcdef
+	Id string `json:"id"`
+
+	// Inline True only for optimized supported still images.
+	//
+	// Example: true
+	Inline bool `json:"inline"`
+
+	// Size Actual stored bytes.
+	//
+	// Example: 12345
+	Size int64 `json:"size"`
+
+	// Width Optimized width; zero for unchanged files.
+	//
+	// Example: 640
+	Width int `json:"width"`
+}
+
+// AttachmentAvailability Current availability.
+//
+// Example: posted
+type AttachmentAvailability string
+
+// AttachmentLimits Effective resource ceilings. Durations are seconds; bytes exclude database, snapshots and conversion scratch from posted quota.
+type AttachmentLimits struct {
+	// ContentTimeoutSeconds contentTimeoutSeconds effective ceiling.
+	//
+	// Example: 120
+	ContentTimeoutSeconds int64 `json:"contentTimeoutSeconds"`
+
+	// DraftTtlSeconds draftTtlSeconds effective ceiling.
+	//
+	// Example: 3600
+	DraftTtlSeconds int64 `json:"draftTtlSeconds"`
+
+	// MaxAttachments maxAttachments effective ceiling.
+	//
+	// Example: 4
+	MaxAttachments int64 `json:"maxAttachments"`
+
+	// MaxContentStreams maxContentStreams effective ceiling.
+	//
+	// Example: 8
+	MaxContentStreams int64 `json:"maxContentStreams"`
+
+	// MaxConversions maxConversions effective ceiling.
+	//
+	// Example: 1
+	MaxConversions int64 `json:"maxConversions"`
+
+	// MaxDimension maxDimension effective ceiling.
+	//
+	// Example: 2560
+	MaxDimension int64 `json:"maxDimension"`
+
+	// MaxEdge maxEdge effective ceiling.
+	//
+	// Example: 16384
+	MaxEdge int64 `json:"maxEdge"`
+
+	// MaxFileBytes maxFileBytes effective ceiling.
+	//
+	// Example: 26214400
+	MaxFileBytes int64 `json:"maxFileBytes"`
+
+	// MaxOutputBytes maxOutputBytes effective ceiling.
+	//
+	// Example: 33554432
+	MaxOutputBytes int64 `json:"maxOutputBytes"`
+
+	// MaxPending maxPending effective ceiling.
+	//
+	// Example: 4
+	MaxPending int64 `json:"maxPending"`
+
+	// MaxPixels maxPixels effective ceiling.
+	//
+	// Example: 24000000
+	MaxPixels int64 `json:"maxPixels"`
+
+	// MaxUploadStreams maxUploadStreams effective ceiling.
+	//
+	// Example: 4
+	MaxUploadStreams int64 `json:"maxUploadStreams"`
+
+	// MultipartHeaderBytes multipartHeaderBytes effective ceiling.
+	//
+	// Example: 8192
+	MultipartHeaderBytes int64 `json:"multipartHeaderBytes"`
+
+	// MultipartOverheadBytes multipartOverheadBytes effective ceiling.
+	//
+	// Example: 16384
+	MultipartOverheadBytes int64 `json:"multipartOverheadBytes"`
+
+	// PostedBytes postedBytes effective ceiling.
+	//
+	// Example: 5000000000
+	PostedBytes int64 `json:"postedBytes"`
+
+	// ProcessTimeoutSeconds processTimeoutSeconds effective ceiling.
+	//
+	// Example: 30
+	ProcessTimeoutSeconds int64 `json:"processTimeoutSeconds"`
+
+	// StagingBytes stagingBytes effective ceiling.
+	//
+	// Example: 268435456
+	StagingBytes int64 `json:"stagingBytes"`
+
+	// UploadBurst uploadBurst effective ceiling.
+	//
+	// Example: 4
+	UploadBurst int64 `json:"uploadBurst"`
+
+	// UploadRefillSeconds uploadRefillSeconds effective ceiling.
+	//
+	// Example: 15
+	UploadRefillSeconds int64 `json:"uploadRefillSeconds"`
+
+	// UploadTimeoutSeconds uploadTimeoutSeconds effective ceiling.
+	//
+	// Example: 60
+	UploadTimeoutSeconds int64 `json:"uploadTimeoutSeconds"`
+}
+
+// AttachmentsExpired Committed posted attachment expirations in the envelope room. Events are not replayed; refresh old visible IDs after reconnect.
+type AttachmentsExpired struct {
+	// AttachmentIds Expired posted IDs; never private draft IDs.
+	//
+	// Example: ["0123456789abcdef0123456789abcdef"]
+	AttachmentIds []string `json:"attachmentIds"`
+}
+
 // ColourRequest An explicit palette choice for the cookie owner.
 type ColourRequest struct {
 	// Palette One of the shared sixteen visitor palettes.
@@ -194,7 +390,7 @@ type EnterRequest struct {
 
 // Error The body of every error response.
 type Error struct {
-	// Code Stable, machine-readable error code: `not_found` (no such route), `invalid_request` (the request does not match the contract), `internal` (the server failed), `visitor_required` (no valid visitor cookie), `invalid_link` (wrong access link secret), `invalid_name` (a name breaks the name rules), `name_taken` (another visitor holds the name), `rate_limited` (too many requests), `room_not_found` (no such room), `invalid_message` (a message body breaks the message rules), `request_key_reused` (a request key was already used for another message), `origin_forbidden` (a live-update connection from a foreign origin), `room_full` (a room's voice admits no more participants) or `voice_unavailable` (the server cannot reach LiveKit).
+	// Code Stable, machine-readable error code: `not_found` (no such route), `invalid_request` (the request does not match the contract), `internal` (the server failed), `visitor_required` (no valid visitor cookie), `invalid_link` (wrong access link secret), `invalid_name` (a name breaks the name rules), `name_taken` (another visitor holds the name), `rate_limited` (too many requests), `room_not_found` (no such room), `invalid_message` (a message body breaks the message rules), `request_key_reused` (a request key was already used for another message), `origin_forbidden` (a request from a forbidden origin), `room_full` (a room's voice admits no more participants) or `voice_unavailable` (the server cannot reach LiveKit). Attachment operations also use `attachment_not_found`, `attachment_expired`, `invalid_attachments`, `attachment_too_large`, `invalid_image`, `image_dimensions`, `attachment_busy`, `attachment_capacity`, `attachment_processing`, `attachment_unavailable` and `upload_timeout`; each operation documents their status and meaning.
 	//
 	// Example: not_found
 	Code string `json:"code"`
@@ -205,9 +401,9 @@ type Error struct {
 	Message string `json:"message"`
 }
 
-// Event A live update, as sent over `GET /api/live`. `type` says what happened and which schema `payload` has: `message.created` carries a `Message`, `room.changed` a `RoomChange`, `occupancy.changed` an `OccupancyChange`, `visitor.colour.changed` a `VisitorColour`, `access.revoked` an `AccessRevoked`. Clients ignore event types they do not know.
+// Event A live update, as sent over `GET /api/live`. `type` says what happened and which schema `payload` has: `message.created` carries a `Message`, `room.changed` a `RoomChange`, `occupancy.changed` an `OccupancyChange`, `visitor.colour.changed` a `VisitorColour`, `access.revoked` an `AccessRevoked`, `attachments.expired` an `AttachmentsExpired`. Clients ignore event types they do not know.
 //
-// Example: {"eventId":"01JBX8C4P0G7J9M1Q4S6V8X0ZA","payload":{"authorId":"01JBX6Z8Q3M5W2K7R9T4V1C0DE","authorName":"Bob","body":"Anyone up for a game?","createdAt":"2026-11-04T18:30:05.123Z","id":"01JBX8C4N2F6H8K0P3R5T7W9YZ","roomId":"01JBX7A2K9D4F6H8M0P3R5T7VW"},"roomId":"01JBX7A2K9D4F6H8M0P3R5T7VW","timestamp":"2026-11-04T18:30:05.140Z","type":"message.created","v":1}
+// Example: {"eventId":"01JBX8C4P0G7J9M1Q4S6V8X0ZA","payload":{"attachments":[],"authorId":"01JBX6Z8Q3M5W2K7R9T4V1C0DE","authorName":"Bob","body":"Anyone up for a game?","createdAt":"2026-11-04T18:30:05.123Z","id":"01JBX8C4N2F6H8K0P3R5T7W9YZ","roomId":"01JBX7A2K9D4F6H8M0P3R5T7VW"},"roomId":"01JBX7A2K9D4F6H8M0P3R5T7VW","timestamp":"2026-11-04T18:30:05.140Z","type":"message.created","v":1}
 type Event struct {
 	// EventId The event's ID, a ULID, unique to this event.
 	//
@@ -227,7 +423,7 @@ type Event struct {
 	// Example: 2026-11-04T18:30:05.140Z
 	Timestamp time.Time `json:"timestamp"`
 
-	// Type What an event reports: `message.created`, a message was posted (its payload is the `Message`); `room.changed`, a room was created or renamed (its payload is the `RoomChange`); `occupancy.changed`, someone joined or left a room's voice, or a participant's new name reached it (its payload is the `OccupancyChange`); `access.revoked`, the visitor's access ended (its payload is the `AccessRevoked`), and the server closes the connection next; `visitor.colour.changed`, an explicit saved colour change (its payload is the `VisitorColour`) to all visitors.
+	// Type What an event reports: `message.created`, a message was posted (its payload is the `Message`); `room.changed`, a room was created or renamed (its payload is the `RoomChange`); `occupancy.changed`, someone joined or left a room's voice, or a participant's new name reached it (its payload is the `OccupancyChange`); `access.revoked`, the visitor's access ended (its payload is the `AccessRevoked`), and the server closes the connection next; `visitor.colour.changed`, an explicit saved colour change (its payload is the `VisitorColour`) to all visitors; `attachments.expired`, posted files expired in this room (its payload is `AttachmentsExpired`). Private drafts are never broadcast.
 	//
 	// Example: message.created
 	Type EventType `json:"type"`
@@ -248,7 +444,7 @@ type Event_Payload struct {
 // Example: 1
 type EventV int
 
-// EventType What an event reports: `message.created`, a message was posted (its payload is the `Message`); `room.changed`, a room was created or renamed (its payload is the `RoomChange`); `occupancy.changed`, someone joined or left a room's voice, or a participant's new name reached it (its payload is the `OccupancyChange`); `access.revoked`, the visitor's access ended (its payload is the `AccessRevoked`), and the server closes the connection next; `visitor.colour.changed`, an explicit saved colour change (its payload is the `VisitorColour`) to all visitors.
+// EventType What an event reports: `message.created`, a message was posted (its payload is the `Message`); `room.changed`, a room was created or renamed (its payload is the `RoomChange`); `occupancy.changed`, someone joined or left a room's voice, or a participant's new name reached it (its payload is the `OccupancyChange`); `access.revoked`, the visitor's access ended (its payload is the `AccessRevoked`), and the server closes the connection next; `visitor.colour.changed`, an explicit saved colour change (its payload is the `VisitorColour`) to all visitors; `attachments.expired`, posted files expired in this room (its payload is `AttachmentsExpired`). Private drafts are never broadcast.
 //
 // Example: message.created
 type EventType string
@@ -300,8 +496,13 @@ type LiveKitEvent struct {
 	} `json:"room,omitempty"`
 }
 
-// Message A piece of text a visitor posted in a room's chat, under the name they had when posting.
+// Message Text, attachments, or both a visitor posted in a room's chat, under the name they had when posting.
 type Message struct {
+	// Attachments Ordered attachment metadata; always an array, empty for text-only messages.
+	//
+	// Example: []
+	Attachments []Attachment `json:"attachments"`
+
 	// AuthorId The visitor ID of the author.
 	//
 	// Example: 01JBX6Z8Q3M5W2K7R9T4V1C0DE
@@ -337,7 +538,7 @@ type Message struct {
 type MessageList struct {
 	// Messages The messages, in the order the request asked for.
 	//
-	// Example: [{"authorId":"01JBX6Z8Q3M5W2K7R9T4V1C0DE","authorName":"Bob","body":"Anyone up for a game?","createdAt":"2026-11-04T18:30:05.123Z","id":"01JBX8C4N2F6H8K0P3R5T7W9YZ","roomId":"01JBX7A2K9D4F6H8M0P3R5T7VW"}]
+	// Example: [{"attachments":[],"authorId":"01JBX6Z8Q3M5W2K7R9T4V1C0DE","authorName":"Bob","body":"Anyone up for a game?","createdAt":"2026-11-04T18:30:05.123Z","id":"01JBX8C4N2F6H8K0P3R5T7W9YZ","roomId":"01JBX7A2K9D4F6H8M0P3R5T7VW"}]
 	Messages []Message `json:"messages"`
 }
 
@@ -379,10 +580,15 @@ type Participant struct {
 
 // PostMessageRequest A message to post and the key that makes retrying it safe.
 type PostMessageRequest struct {
-	// Body The text: 1 to 4000 characters, not only white space. It is kept as sent, untrimmed.
+	// AttachmentIds Ordered owned ready drafts in this room; omitted means no attachments.
+	//
+	// Example: ["0123456789abcdef0123456789abcdef"]
+	AttachmentIds []string `json:"attachmentIds,omitempty"`
+
+	// Body Optional text, at most 4000 characters, kept untrimmed. At least non-whitespace text or one attachment is required.
 	//
 	// Example: Anyone up for a game?
-	Body string `json:"body"`
+	Body string `json:"body,omitempty"`
 
 	// RequestKey Chosen by the client, new for each message and reused only to retry the same post, for example a random UUID: 1 to 64 letters, digits, `-` or `_`. Keys are per visitor.
 	//
@@ -504,6 +710,9 @@ type VoiceCredentials struct {
 	// Example: wss://falky.example
 	Url string `json:"url"`
 }
+
+// AttachmentId Example: 0123456789abcdef0123456789abcdef
+type AttachmentId = string
 
 // RoomId Example: 01JBX7A2K9D4F6H8M0P3R5T7VW
 type RoomId = string
@@ -677,6 +886,32 @@ func (t *Event_Payload) MergeVisitorColour(v VisitorColour) error {
 	return err
 }
 
+// AsAttachmentsExpired returns the union data inside the Event_Payload as a AttachmentsExpired
+func (t Event_Payload) AsAttachmentsExpired() (AttachmentsExpired, error) {
+	var body AttachmentsExpired
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromAttachmentsExpired overwrites any union data inside the Event_Payload as the provided AttachmentsExpired
+func (t *Event_Payload) FromAttachmentsExpired(v AttachmentsExpired) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeAttachmentsExpired performs a merge with any union data inside the Event_Payload, using the provided AttachmentsExpired
+func (t *Event_Payload) MergeAttachmentsExpired(v AttachmentsExpired) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
 func (t Event_Payload) MarshalJSON() ([]byte, error) {
 	b, err := t.union.MarshalJSON()
 	return b, err
@@ -838,7 +1073,7 @@ type ClientInterface interface {
 
 	// PostMessageWithBody Post a message in a room's chat.
 	//
-	// Posts a message under the visitor's current name. Posting is idempotent by request key: posting again with the same key and body, say after a lost response, returns the message posted first and creates nothing. New messages are limited per visitor; such a repeat is not.
+	// Posts a message under the visitor's current name. Posting is idempotent by request key: posting again with the same key, body and ordered attachment IDs, say after a lost response, returns the message posted first and creates nothing. New messages are limited per visitor; such a repeat is not.
 	//
 	// Takes any type of body and a specified content type.
 	//
@@ -847,7 +1082,7 @@ type ClientInterface interface {
 
 	// PostMessage Post a message in a room's chat.
 	//
-	// Posts a message under the visitor's current name. Posting is idempotent by request key: posting again with the same key and body, say after a lost response, returns the message posted first and creates nothing. New messages are limited per visitor; such a repeat is not.
+	// Posts a message under the visitor's current name. Posting is idempotent by request key: posting again with the same key, body and ordered attachment IDs, say after a lost response, returns the message posted first and creates nothing. New messages are limited per visitor; such a repeat is not.
 	//
 	// Takes a body of the `application/json` content type.
 	//
@@ -1065,7 +1300,7 @@ func (c *Client) ListMessages(ctx context.Context, id RoomId, params *ListMessag
 
 // PostMessageWithBody Post a message in a room's chat.
 //
-// Posts a message under the visitor's current name. Posting is idempotent by request key: posting again with the same key and body, say after a lost response, returns the message posted first and creates nothing. New messages are limited per visitor; such a repeat is not.
+// Posts a message under the visitor's current name. Posting is idempotent by request key: posting again with the same key, body and ordered attachment IDs, say after a lost response, returns the message posted first and creates nothing. New messages are limited per visitor; such a repeat is not.
 //
 // Takes any type of body and a specified content type.
 //
@@ -1084,7 +1319,7 @@ func (c *Client) PostMessageWithBody(ctx context.Context, id RoomId, contentType
 
 // PostMessage Post a message in a room's chat.
 //
-// Posts a message under the visitor's current name. Posting is idempotent by request key: posting again with the same key and body, say after a lost response, returns the message posted first and creates nothing. New messages are limited per visitor; such a repeat is not.
+// Posts a message under the visitor's current name. Posting is idempotent by request key: posting again with the same key, body and ordered attachment IDs, say after a lost response, returns the message posted first and creates nothing. New messages are limited per visitor; such a repeat is not.
 //
 // Takes a body of the `application/json` content type.
 //
@@ -1747,7 +1982,7 @@ type ClientWithResponsesInterface interface {
 
 	// PostMessageWithBodyWithResponse Post a message in a room's chat.
 	//
-	// Posts a message under the visitor's current name. Posting is idempotent by request key: posting again with the same key and body, say after a lost response, returns the message posted first and creates nothing. New messages are limited per visitor; such a repeat is not.
+	// Posts a message under the visitor's current name. Posting is idempotent by request key: posting again with the same key, body and ordered attachment IDs, say after a lost response, returns the message posted first and creates nothing. New messages are limited per visitor; such a repeat is not.
 	//
 	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
 	//
@@ -1756,7 +1991,7 @@ type ClientWithResponsesInterface interface {
 
 	// PostMessageWithResponse Post a message in a room's chat.
 	//
-	// Posts a message under the visitor's current name. Posting is idempotent by request key: posting again with the same key and body, say after a lost response, returns the message posted first and creates nothing. New messages are limited per visitor; such a repeat is not.
+	// Posts a message under the visitor's current name. Posting is idempotent by request key: posting again with the same key, body and ordered attachment IDs, say after a lost response, returns the message posted first and creates nothing. New messages are limited per visitor; such a repeat is not.
 	//
 	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
 	//
@@ -2223,6 +2458,8 @@ type PostMessageResponse struct {
 	JSON409 *Error
 	// JSON429 the response for an HTTP 429 `application/json` response
 	JSON429 *Error
+	// JSON503 the response for an HTTP 503 `application/json` response
+	JSON503 *Error
 	// JSONDefault the response for an HTTP default `application/json` response
 	JSONDefault *Error
 }
@@ -2260,6 +2497,11 @@ func (r PostMessageResponse) GetJSON409() *Error {
 // GetJSON429 returns the response for an HTTP 429 `application/json` response
 func (r PostMessageResponse) GetJSON429() *Error {
 	return r.JSON429
+}
+
+// GetJSON503 returns the response for an HTTP 503 `application/json` response
+func (r PostMessageResponse) GetJSON503() *Error {
+	return r.JSON503
 }
 
 // GetJSONDefault returns the response for an HTTP default `application/json` response
@@ -2674,7 +2916,7 @@ func (c *ClientWithResponses) ListMessagesWithResponse(ctx context.Context, id R
 
 // PostMessageWithBodyWithResponse Post a message in a room's chat.
 //
-// Posts a message under the visitor's current name. Posting is idempotent by request key: posting again with the same key and body, say after a lost response, returns the message posted first and creates nothing. New messages are limited per visitor; such a repeat is not.
+// Posts a message under the visitor's current name. Posting is idempotent by request key: posting again with the same key, body and ordered attachment IDs, say after a lost response, returns the message posted first and creates nothing. New messages are limited per visitor; such a repeat is not.
 //
 // Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
 //
@@ -2689,7 +2931,7 @@ func (c *ClientWithResponses) PostMessageWithBodyWithResponse(ctx context.Contex
 
 // PostMessageWithResponse Post a message in a room's chat.
 //
-// Posts a message under the visitor's current name. Posting is idempotent by request key: posting again with the same key and body, say after a lost response, returns the message posted first and creates nothing. New messages are limited per visitor; such a repeat is not.
+// Posts a message under the visitor's current name. Posting is idempotent by request key: posting again with the same key, body and ordered attachment IDs, say after a lost response, returns the message posted first and creates nothing. New messages are limited per visitor; such a repeat is not.
 //
 // Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
 //
@@ -3152,6 +3394,13 @@ func ParsePostMessageResponse(rsp *http.Response) (*PostMessageResponse, error) 
 			return nil, err
 		}
 		response.JSON429 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON503 = &dest
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && true:
 		var dest Error
@@ -4309,6 +4558,20 @@ func (response PostMessage429JSONResponse) VisitPostMessageResponse(w http.Respo
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(429)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type PostMessage503JSONResponse Error
+
+func (response PostMessage503JSONResponse) VisitPostMessageResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(503)
 	_, err := buf.WriteTo(w)
 	return err
 }

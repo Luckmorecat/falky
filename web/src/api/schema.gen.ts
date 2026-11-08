@@ -4,6 +4,96 @@
  */
 
 export interface paths {
+    "/api/rooms/{id}/attachments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The room's ID. */
+                id: components["parameters"]["RoomId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Upload one private draft into an existing room.
+         * @description Authenticates, checks Origin and authorizes the room before reading multipart headers or payload. Send exactly one file part named file; no fields or extra parts. Maximum input 25 MiB, total multipart overhead 16 KiB, initial headers 8 KiB, at most 8 headers and a 255-byte filename. Boundary at most 70 bytes. The actual read deadline is 60 seconds. Nonempty Origin must match this server; authenticated non-browser clients may omit it. No CORS is enabled. Success is a private one-hour draft. Upload rate is independent of message posting; burst 4, one refill per 15 seconds.
+         */
+        post: operations["uploadAttachment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/attachments/limits": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read effective attachment limits. */
+        get: operations["getAttachmentLimits"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/attachments/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The opaque attachment ID. */
+                id: components["parameters"]["AttachmentId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * Read current attachment status.
+         * @description Drafts are owner-only; unknown and foreign draft IDs both return 404. Posted metadata and tombstones are readable by visitors authorized for the actual room. Events are not replayed: after reconnect, refresh each previously visible attachment through this endpoint even when no new messages arrived.
+         */
+        get: operations["getAttachment"];
+        put?: never;
+        post?: never;
+        /**
+         * Cancel an owned private draft.
+         * @description Repeatable for owned draft tombstones. Cannot delete posted content. Nonempty Origin must match this server; absent Origin is allowed for non-browser clients.
+         */
+        delete: operations["cancelAttachment"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/attachments/{id}/content": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The opaque attachment ID. */
+                id: components["parameters"]["AttachmentId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * Read private attachment content.
+         * @description Authenticates and authorizes the actual room on every read. Only optimized WebP is inline; all unchanged files are attachment downloads. Responses use no-store and nosniff, a safe filename and actual Content-Length. No range or public sharing URL. At most eight content streams globally, with a 120-second write deadline and an open file closed on completion.
+         */
+        get: operations["getAttachmentContent"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/enter": {
         parameters: {
             query?: never;
@@ -126,7 +216,7 @@ export interface paths {
         put?: never;
         /**
          * Post a message in a room's chat.
-         * @description Posts a message under the visitor's current name. Posting is idempotent by request key: posting again with the same key and body, say after a lost response, returns the message posted first and creates nothing. New messages are limited per visitor; such a repeat is not.
+         * @description Posts a message under the visitor's current name. Posting is idempotent by request key: posting again with the same key, body and ordered attachment IDs, say after a lost response, returns the message posted first and creates nothing. New messages are limited per visitor; such a repeat is not.
          */
         post: operations["postMessage"];
         delete?: never;
@@ -171,7 +261,7 @@ export interface paths {
         };
         /**
          * Open the live-update WebSocket.
-         * @description Upgrades to a WebSocket over which the server sends live updates, each an `Event` as one JSON text message. The connection carries events from the server only: messages from the client are ignored, though one over 32 KiB closes the connection with close code 1009. The upgrade's `Origin` must be the server's public origin. The server pings every 20 seconds and closes a connection that does not answer within 10 seconds. Each connection has a bounded queue of events waiting to be sent; a client that lets it fill up is disconnected with close code 4000. When the access link is replaced, every connection is sent `access.revoked` and closed with close code 4001; reconnecting then answers 401 until the visitor enters again through the new link. When the server shuts down it closes connections with close code 1001. Events are not replayed: after any disconnection a client reconnects first and then catches up through the other operations, reading each room's messages with `after` set to the last message ID it saw and the room list again. Events that arrive while it catches up may repeat what it reads; it keeps one message per message ID.
+         * @description Upgrades to a WebSocket over which the server sends live updates, each an `Event` as one JSON text message. The connection carries events from the server only: messages from the client are ignored, though one over 32 KiB closes the connection with close code 1009. The upgrade's `Origin` must be the server's public origin. The server pings every 20 seconds and closes a connection that does not answer within 10 seconds. Each connection has a bounded queue of events waiting to be sent; a client that lets it fill up is disconnected with close code 4000. When the access link is replaced, every connection is sent `access.revoked` and closed with close code 4001; reconnecting then answers 401 until the visitor enters again through the new link. When the server shuts down it closes connections with close code 1001. Events are not replayed: after any disconnection a client reconnects first and then catches up through the other operations, reading each room's messages with `after` set to the last message ID it saw and the room list again. Events that arrive while it catches up may repeat what it reads; it keeps one message per message ID. It also refreshes every previously visible attachment through GET /api/attachments/{id}: catching up only new messages cannot recover missed attachments.expired events.
          *
          *     A visitor is connected while they have at least one of these connections open, and a connected visitor holds their name: no one else can enter under it or rename to it.
          */
@@ -248,10 +338,199 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** @description Private metadata. Availability is ready (owned draft), posted, expired, or cancelled. Metadata survives expiry; private drafts retain expiresAt through expiry or cancellation. Posted records omit it. Content URL always requires the current visitor cookie. */
+        Attachment: {
+            /**
+             * @description Opaque attachment ID.
+             * @example 0123456789abcdef0123456789abcdef
+             */
+            id: string;
+            /**
+             * @description Safe original basename; optimized images use .webp.
+             * @example photo.webp
+             */
+            filename: string;
+            /**
+             * @description Actual stored media type, detected by the server.
+             * @example image/webp
+             */
+            contentType: string;
+            /**
+             * Format: int64
+             * @description Actual stored bytes.
+             * @example 12345
+             */
+            size: number;
+            /**
+             * @description True only for optimized supported still images.
+             * @example true
+             */
+            inline: boolean;
+            /**
+             * @description Optimized width; zero for unchanged files.
+             * @example 640
+             */
+            width: number;
+            /**
+             * @description Optimized height; zero for unchanged files.
+             * @example 480
+             */
+            height: number;
+            /**
+             * @description Current availability.
+             * @example posted
+             * @enum {string}
+             */
+            availability: "ready" | "posted" | "expired" | "cancelled";
+            /**
+             * Format: date-time
+             * @description Successful-upload draft deadline; absent after posting.
+             * @example 2026-11-08T12:00:00Z
+             */
+            expiresAt?: string;
+            /**
+             * @description Authenticated content path, returning 410 when unavailable.
+             * @example /api/attachments/0123456789abcdef0123456789abcdef/content
+             */
+            contentUrl: string;
+        };
+        /** @description Committed posted attachment expirations in the envelope room. Events are not replayed; refresh old visible IDs after reconnect. */
+        AttachmentsExpired: {
+            /**
+             * @description Expired posted IDs; never private draft IDs.
+             * @example [
+             *       "0123456789abcdef0123456789abcdef"
+             *     ]
+             */
+            attachmentIds: string[];
+        };
+        /** @description Effective resource ceilings. Durations are seconds; bytes exclude database, snapshots and conversion scratch from posted quota. */
+        AttachmentLimits: {
+            /**
+             * Format: int64
+             * @description maxFileBytes effective ceiling.
+             * @example 26214400
+             */
+            maxFileBytes: number;
+            /**
+             * Format: int64
+             * @description maxOutputBytes effective ceiling.
+             * @example 33554432
+             */
+            maxOutputBytes: number;
+            /**
+             * Format: int64
+             * @description stagingBytes effective ceiling.
+             * @example 268435456
+             */
+            stagingBytes: number;
+            /**
+             * Format: int64
+             * @description postedBytes effective ceiling.
+             * @example 5000000000
+             */
+            postedBytes: number;
+            /**
+             * Format: int64
+             * @description maxAttachments effective ceiling.
+             * @example 4
+             */
+            maxAttachments: number;
+            /**
+             * Format: int64
+             * @description maxPending effective ceiling.
+             * @example 4
+             */
+            maxPending: number;
+            /**
+             * Format: int64
+             * @description maxUploadStreams effective ceiling.
+             * @example 4
+             */
+            maxUploadStreams: number;
+            /**
+             * Format: int64
+             * @description maxPixels effective ceiling.
+             * @example 24000000
+             */
+            maxPixels: number;
+            /**
+             * Format: int64
+             * @description maxEdge effective ceiling.
+             * @example 16384
+             */
+            maxEdge: number;
+            /**
+             * Format: int64
+             * @description maxDimension effective ceiling.
+             * @example 2560
+             */
+            maxDimension: number;
+            /**
+             * Format: int64
+             * @description draftTtlSeconds effective ceiling.
+             * @example 3600
+             */
+            draftTtlSeconds: number;
+            /**
+             * Format: int64
+             * @description processTimeoutSeconds effective ceiling.
+             * @example 30
+             */
+            processTimeoutSeconds: number;
+            /**
+             * Format: int64
+             * @description uploadTimeoutSeconds effective ceiling.
+             * @example 60
+             */
+            uploadTimeoutSeconds: number;
+            /**
+             * Format: int64
+             * @description uploadBurst effective ceiling.
+             * @example 4
+             */
+            uploadBurst: number;
+            /**
+             * Format: int64
+             * @description uploadRefillSeconds effective ceiling.
+             * @example 15
+             */
+            uploadRefillSeconds: number;
+            /**
+             * Format: int64
+             * @description multipartOverheadBytes effective ceiling.
+             * @example 16384
+             */
+            multipartOverheadBytes: number;
+            /**
+             * Format: int64
+             * @description multipartHeaderBytes effective ceiling.
+             * @example 8192
+             */
+            multipartHeaderBytes: number;
+            /**
+             * Format: int64
+             * @description maxContentStreams effective ceiling.
+             * @example 8
+             */
+            maxContentStreams: number;
+            /**
+             * Format: int64
+             * @description contentTimeoutSeconds effective ceiling.
+             * @example 120
+             */
+            contentTimeoutSeconds: number;
+            /**
+             * Format: int64
+             * @description maxConversions effective ceiling.
+             * @example 1
+             */
+            maxConversions: number;
+        };
         /** @description The body of every error response. */
         Error: {
             /**
-             * @description Stable, machine-readable error code: `not_found` (no such route), `invalid_request` (the request does not match the contract), `internal` (the server failed), `visitor_required` (no valid visitor cookie), `invalid_link` (wrong access link secret), `invalid_name` (a name breaks the name rules), `name_taken` (another visitor holds the name), `rate_limited` (too many requests), `room_not_found` (no such room), `invalid_message` (a message body breaks the message rules), `request_key_reused` (a request key was already used for another message), `origin_forbidden` (a live-update connection from a foreign origin), `room_full` (a room's voice admits no more participants) or `voice_unavailable` (the server cannot reach LiveKit).
+             * @description Stable, machine-readable error code: `not_found` (no such route), `invalid_request` (the request does not match the contract), `internal` (the server failed), `visitor_required` (no valid visitor cookie), `invalid_link` (wrong access link secret), `invalid_name` (a name breaks the name rules), `name_taken` (another visitor holds the name), `rate_limited` (too many requests), `room_not_found` (no such room), `invalid_message` (a message body breaks the message rules), `request_key_reused` (a request key was already used for another message), `origin_forbidden` (a request from a forbidden origin), `room_full` (a room's voice admits no more participants) or `voice_unavailable` (the server cannot reach LiveKit). Attachment operations also use `attachment_not_found`, `attachment_expired`, `invalid_attachments`, `attachment_too_large`, `invalid_image`, `image_dimensions`, `attachment_busy`, `attachment_capacity`, `attachment_processing`, `attachment_unavailable` and `upload_timeout`; each operation documents their status and meaning.
              * @example not_found
              */
             code: string;
@@ -440,7 +719,7 @@ export interface components {
              */
             token: string;
         };
-        /** @description A piece of text a visitor posted in a room's chat, under the name they had when posting. */
+        /** @description Text, attachments, or both a visitor posted in a room's chat, under the name they had when posting. */
         Message: {
             /**
              * @description The message's ID, a ULID. IDs sort in the order messages were posted, and serve as history cursors.
@@ -473,6 +752,11 @@ export interface components {
              * @example 2026-11-04T18:30:05.123Z
              */
             createdAt: string;
+            /**
+             * @description Ordered attachment metadata; always an array, empty for text-only messages.
+             * @example []
+             */
+            attachments: components["schemas"]["Attachment"][];
         };
         /** @description A page of a room's chat. */
         MessageList: {
@@ -485,7 +769,8 @@ export interface components {
              *         "authorId": "01JBX6Z8Q3M5W2K7R9T4V1C0DE",
              *         "authorName": "Bob",
              *         "body": "Anyone up for a game?",
-             *         "createdAt": "2026-11-04T18:30:05.123Z"
+             *         "createdAt": "2026-11-04T18:30:05.123Z",
+             *         "attachments": []
              *       }
              *     ]
              */
@@ -499,13 +784,20 @@ export interface components {
              */
             requestKey: string;
             /**
-             * @description The text: 1 to 4000 characters, not only white space. It is kept as sent, untrimmed.
+             * @description Optional text, at most 4000 characters, kept untrimmed. At least non-whitespace text or one attachment is required.
              * @example Anyone up for a game?
              */
-            body: string;
+            body?: string;
+            /**
+             * @description Ordered owned ready drafts in this room; omitted means no attachments.
+             * @example [
+             *       "0123456789abcdef0123456789abcdef"
+             *     ]
+             */
+            attachmentIds?: string[];
         };
         /**
-         * @description A live update, as sent over `GET /api/live`. `type` says what happened and which schema `payload` has: `message.created` carries a `Message`, `room.changed` a `RoomChange`, `occupancy.changed` an `OccupancyChange`, `visitor.colour.changed` a `VisitorColour`, `access.revoked` an `AccessRevoked`. Clients ignore event types they do not know.
+         * @description A live update, as sent over `GET /api/live`. `type` says what happened and which schema `payload` has: `message.created` carries a `Message`, `room.changed` a `RoomChange`, `occupancy.changed` an `OccupancyChange`, `visitor.colour.changed` a `VisitorColour`, `access.revoked` an `AccessRevoked`, `attachments.expired` an `AttachmentsExpired`. Clients ignore event types they do not know.
          * @example {
          *       "v": 1,
          *       "type": "message.created",
@@ -517,7 +809,8 @@ export interface components {
          *         "authorId": "01JBX6Z8Q3M5W2K7R9T4V1C0DE",
          *         "authorName": "Bob",
          *         "body": "Anyone up for a game?",
-         *         "createdAt": "2026-11-04T18:30:05.123Z"
+         *         "createdAt": "2026-11-04T18:30:05.123Z",
+         *         "attachments": []
          *       },
          *       "timestamp": "2026-11-04T18:30:05.140Z"
          *     }
@@ -541,7 +834,7 @@ export interface components {
              */
             roomId?: string;
             /** @description What happened, in the schema `type` names. */
-            payload: components["schemas"]["Message"] | components["schemas"]["RoomChange"] | components["schemas"]["OccupancyChange"] | components["schemas"]["AccessRevoked"] | components["schemas"]["VisitorColour"];
+            payload: components["schemas"]["Message"] | components["schemas"]["RoomChange"] | components["schemas"]["OccupancyChange"] | components["schemas"]["AccessRevoked"] | components["schemas"]["VisitorColour"] | components["schemas"]["AttachmentsExpired"];
             /**
              * Format: date-time
              * @description When the server published the event, in UTC.
@@ -550,11 +843,11 @@ export interface components {
             timestamp: string;
         };
         /**
-         * @description What an event reports: `message.created`, a message was posted (its payload is the `Message`); `room.changed`, a room was created or renamed (its payload is the `RoomChange`); `occupancy.changed`, someone joined or left a room's voice, or a participant's new name reached it (its payload is the `OccupancyChange`); `access.revoked`, the visitor's access ended (its payload is the `AccessRevoked`), and the server closes the connection next; `visitor.colour.changed`, an explicit saved colour change (its payload is the `VisitorColour`) to all visitors.
+         * @description What an event reports: `message.created`, a message was posted (its payload is the `Message`); `room.changed`, a room was created or renamed (its payload is the `RoomChange`); `occupancy.changed`, someone joined or left a room's voice, or a participant's new name reached it (its payload is the `OccupancyChange`); `access.revoked`, the visitor's access ended (its payload is the `AccessRevoked`), and the server closes the connection next; `visitor.colour.changed`, an explicit saved colour change (its payload is the `VisitorColour`) to all visitors; `attachments.expired`, posted files expired in this room (its payload is `AttachmentsExpired`). Private drafts are never broadcast.
          * @example message.created
          * @enum {string}
          */
-        EventType: "message.created" | "room.changed" | "occupancy.changed" | "access.revoked" | "visitor.colour.changed";
+        EventType: "message.created" | "room.changed" | "occupancy.changed" | "access.revoked" | "visitor.colour.changed" | "attachments.expired";
         /** @description A room as it is after being created or renamed. */
         RoomChange: {
             /**
@@ -673,6 +966,8 @@ export interface components {
         };
     };
     parameters: {
+        /** @description The opaque attachment ID. */
+        AttachmentId: string;
         /** @description The room's ID. */
         RoomId: string;
     };
@@ -682,6 +977,252 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    uploadAttachment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The room's ID. */
+                id: components["parameters"]["RoomId"];
+            };
+            cookie?: never;
+        };
+        /** @description One streamed file; the client media type is ignored. */
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "file": "file bytes"
+                 *     }
+                 */
+                "multipart/form-data": {
+                    /**
+                     * Format: binary
+                     * @description One arbitrary file, at most 26,214,400 bytes.
+                     * @example file bytes
+                     */
+                    file: string;
+                };
+            };
+        };
+        responses: {
+            /** @description The ready private draft. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Attachment"];
+                };
+            };
+            /** @description Malformed multipart or supported image (invalid_request, invalid_image, image_dimensions). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            401: components["responses"]["VisitorRequired"];
+            /** @description Foreign Origin (origin_forbidden). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            404: components["responses"]["RoomNotFound"];
+            /** @description Upload deadline elapsed (upload_timeout). */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description File or multipart envelope exceeds its limit (attachment_too_large). */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Upload rate, pending drafts or global streams exhausted (rate_limited, attachment_busy). */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Bounded staging, cleanup, processing or shutdown capacity unavailable (attachment_capacity, attachment_processing, attachment_unavailable). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getAttachmentLimits: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Effective limits; byte quantities use bytes and durations use seconds. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AttachmentLimits"];
+                };
+            };
+            401: components["responses"]["VisitorRequired"];
+            default: components["responses"]["Error"];
+        };
+    };
+    getAttachment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The opaque attachment ID. */
+                id: components["parameters"]["AttachmentId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Current metadata, including expired or cancelled availability. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Attachment"];
+                };
+            };
+            401: components["responses"]["VisitorRequired"];
+            /** @description Unknown or unauthorized attachment (attachment_not_found). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    cancelAttachment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The opaque attachment ID. */
+                id: components["parameters"]["AttachmentId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The draft is cancelled. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["VisitorRequired"];
+            /** @description Foreign Origin (origin_forbidden). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Unknown, foreign or posted ID (attachment_not_found). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getAttachmentContent: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The opaque attachment ID. */
+                id: components["parameters"]["AttachmentId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Stored bytes, with Content-Type, Content-Length and safe Content-Disposition. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": string;
+                };
+            };
+            401: components["responses"]["VisitorRequired"];
+            /** @description Unknown or unauthorized attachment (attachment_not_found). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Expired or cancelled content (attachment_expired). */
+            410: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Global content streams exhausted (attachment_busy). */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
     enter: {
         parameters: {
             query?: never;
@@ -934,7 +1475,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description The visitor already posted this request key with this body in this room; the body is that message. */
+            /** @description The visitor already posted this request key with this body and ordered attachments in this room; the body is that message. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -952,7 +1493,7 @@ export interface operations {
                     "application/json": components["schemas"]["Message"];
                 };
             };
-            /** @description The message body breaks the message rules (`invalid_message`): empty or only white space, or longer than 4000 characters. A missing body counts as empty. A request key that breaks its rules, or a body that is not JSON of the request's shape, is `invalid_request`. */
+            /** @description The message body breaks the message rules (`invalid_message`): longer than 4000 characters, or empty/white space without attachments. Duplicate, foreign, expired, cancelled or consumed drafts are invalid_attachments. A missing body counts as empty. A request key that breaks its rules, or a body that is not JSON of the request's shape, is `invalid_request`. */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -963,7 +1504,7 @@ export interface operations {
             };
             401: components["responses"]["VisitorRequired"];
             404: components["responses"]["RoomNotFound"];
-            /** @description The visitor already used this request key for a different body or in another room (`request_key_reused`). */
+            /** @description The visitor already used this request key for a different body, ordered attachment IDs or in another room (`request_key_reused`). */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -974,6 +1515,15 @@ export interface operations {
             };
             /** @description Too many messages from this visitor (`rate_limited`); try again later. */
             429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Attachment quota or cleanup capacity is unavailable (attachment_capacity). */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };

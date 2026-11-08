@@ -516,6 +516,74 @@ SSH access and private settings need separate backup. Dozzle remains a standalon
 container bound to localhost:8080 with `dozzle_data` and the Docker socket;
 netcup-infra does not recreate it or expose it through Caddy.
 
+## Chat attachments
+
+Attachments live beside the database, under `/data/attachments` in the shipped
+image. Both Compose stacks retain them through ordinary container restarts and
+upgrades in the existing `falky_data` volume. `FALKY_ATTACHMENT_ROOT` changes the
+root; keep it on the durable data mount. Outside containers the default is an
+`attachments` directory beside `FALKY_DB_PATH`. The store owns only its private
+`objects` subdirectory (0700 directories, 0600 files).
+
+`FALKY_ATTACHMENT_POSTED_BYTES` sets the positive global posted-file quota,
+default 5,000,000,000 bytes across every room. A successful new message expires
+the oldest posted files by message publication order until its attachments fit.
+Text and attachment metadata remain in history. Uploading, invalid sends and
+matching retries do not evict files. A message whose files cannot fit by
+themselves is rejected. Failed physical cleanup retains accounting and blocks
+new attachment posts until cleanup succeeds; text-only sends and retries remain
+available. Cleanup failures appear in the server log.
+
+The posted quota excludes the database, snapshots, 256 MiB staging allowance,
+and one bounded 32 MiB conversion output scratch file. Uploads reserve 25 MiB
+before reading and charge the final stored size on success. Four upload streams
+are admitted globally, with at most four pending drafts per visitor. Upload rate
+is separate from message rate: burst four, one refill per 15 seconds. Drafts
+expire one hour after successful upload. Uploads have an actual 60-second body
+read deadline as well as a store deadline. The multipart envelope allows one file,
+16 KiB overhead, 8 KiB initial headers, eight headers and a 255-byte filename.
+Content reads admit eight global streams and have a 120-second write deadline;
+their file handles close on completion or disconnect. An open reader can retain
+unlinked expired content until it closes, bounded by eight files of at most
+32 MiB each outside active posted accounting. The four-upload HTTP admission
+limit also covers incomplete multipart headers before storage admission.
+
+Validated static JPEG, PNG and WebP become metadata-free WebP quality 80,
+orientation normalized, alpha retained, longest side at most 2560 without
+upscaling. Input is at most 25 MiB, 24,000,000 decoded pixels and 16,384 pixels
+per axis. There is one global conversion child with a hard 30-second timeout
+and kill/wait/reap ownership. The child uses a 256 MiB Go soft GC target, which
+is **not** a hard memory ceiling. Provision at least 1 GiB conversion headroom
+in addition to normal server/database and upload overhead. The production image
+remains a static, nonroot binary with no external conversion service. GIF,
+animated WebP, SVG, HTML and other unsupported formats retain their exact bytes
+and metadata and are always download-only; only optimized images display inline.
+
+All attachment routes require the current visitor cookie and room authorization.
+Drafts are private to the uploading visitor/browser. Re-entering creates another
+visitor and cannot recover those drafts. Posted files remain readable by newly
+admitted visitors after access-link rotation. State-changing attachment requests
+with a nonempty Origin must match the configured public origin; authenticated
+non-browser clients may omit it. No CORS or public sharing URLs are provided.
+Content uses `no-store`, `nosniff`, safe filenames and actual stored lengths.
+
+The OpenAPI contract describes upload, status, cancel, content and effective
+limits (`GET /api/attachments/limits`). `message.created`, history and post
+responses carry the same ordered attachment metadata. `attachments.expired`
+notifies only the affected room about posted files; private drafts never enter
+live events. Events are not replayed. After reconnect, clients must refresh
+previously visible attachment IDs with `GET /api/attachments/{id}`, even when
+history catch-up returns no new messages. Expired content answers 410 while
+metadata and message text remain available.
+
+Database snapshots and managed backup bundles contain **metadata only, never
+attachment payloads**. Ordinary same-volume restart preserves files. Restoring
+only the database into an empty data volume loses file content: startup recovery
+marks missing posted files as expired tombstones and missing drafts as
+unpostable. It also reclaims abandoned incoming files, owned orphans and durable
+cleanup work before serving; periodic recovery retries once a minute. The
+snapshot and backup inventory deliberately does not archive the data mount.
+
 ## Local snapshots and restore
 
 The source-build stack from *Deploy* uses `docker compose` in `deploy/`.

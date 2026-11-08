@@ -18,11 +18,207 @@ tags:
     description: Entering through the access link, and the current visitor.
   - name: rooms
     description: The rooms visitors talk in by voice and chat.
+  - name: attachments
+    description: Private room attachments, limits, status and content.
   - name: live
     description: Live updates the server pushes over a WebSocket.
   - name: voice
     description: Who is in each room's voice, as LiveKit reports it, on the internal listener.
 paths:
+  /api/rooms/{id}/attachments:
+    parameters:
+    - $ref: '#/components/parameters/RoomId'
+    post:
+      operationId: uploadAttachment
+      tags:
+      - attachments
+      summary: Upload one private draft into an existing room.
+      description: Authenticates, checks Origin and authorizes the room before reading multipart headers
+        or payload. Send exactly one file part named file; no fields or extra parts. Maximum input 25 MiB,
+        total multipart overhead 16 KiB, initial headers 8 KiB, at most 8 headers and a 255-byte filename.
+        Boundary at most 70 bytes. The actual read deadline is 60 seconds. Nonempty Origin must match this
+        server; authenticated non-browser clients may omit it. No CORS is enabled. Success is a private
+        one-hour draft. Upload rate is independent of message posting; burst 4, one refill per 15 seconds.
+      requestBody:
+        required: true
+        description: One streamed file; the client media type is ignored.
+        content:
+          multipart/form-data:
+            example: {file: "file bytes"}
+            schema:
+              type: object
+              required:
+              - file
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: One arbitrary file, at most 26,214,400 bytes.
+                  example: file bytes
+      responses:
+        '201':
+          description: The ready private draft.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Attachment'
+        '400':
+          description: Malformed multipart or supported image (invalid_request, invalid_image, image_dimensions).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          $ref: '#/components/responses/VisitorRequired'
+        '403':
+          description: Foreign Origin (origin_forbidden).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          $ref: '#/components/responses/RoomNotFound'
+        '408':
+          description: Upload deadline elapsed (upload_timeout).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '413':
+          description: File or multipart envelope exceeds its limit (attachment_too_large).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '429':
+          description: Upload rate, pending drafts or global streams exhausted (rate_limited, attachment_busy).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: Bounded staging, cleanup, processing or shutdown capacity unavailable (attachment_capacity,
+            attachment_processing, attachment_unavailable).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        default:
+          $ref: '#/components/responses/Error'
+  /api/attachments/limits:
+    get:
+      operationId: getAttachmentLimits
+      tags:
+      - attachments
+      summary: Read effective attachment limits.
+      responses:
+        '200':
+          description: Effective limits; byte quantities use bytes and durations use seconds.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AttachmentLimits'
+        '401':
+          $ref: '#/components/responses/VisitorRequired'
+        default:
+          $ref: '#/components/responses/Error'
+  /api/attachments/{id}:
+    parameters:
+      - $ref: '#/components/parameters/AttachmentId'
+    get:
+      operationId: getAttachment
+      tags:
+      - attachments
+      summary: Read current attachment status.
+      description: 'Drafts are owner-only; unknown and foreign draft IDs both return 404. Posted metadata
+        and tombstones are readable by visitors authorized for the actual room. Events are not replayed:
+        after reconnect, refresh each previously visible attachment through this endpoint even when no new
+        messages arrived.'
+      responses:
+        '200':
+          description: Current metadata, including expired or cancelled availability.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Attachment'
+        '401':
+          $ref: '#/components/responses/VisitorRequired'
+        '404':
+          description: Unknown or unauthorized attachment (attachment_not_found).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        default:
+          $ref: '#/components/responses/Error'
+    delete:
+      operationId: cancelAttachment
+      tags:
+      - attachments
+      summary: Cancel an owned private draft.
+      description: Repeatable for owned draft tombstones. Cannot delete posted content. Nonempty Origin
+        must match this server; absent Origin is allowed for non-browser clients.
+      responses:
+        '204':
+          description: The draft is cancelled.
+        '401':
+          $ref: '#/components/responses/VisitorRequired'
+        '403':
+          description: Foreign Origin (origin_forbidden).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Unknown, foreign or posted ID (attachment_not_found).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        default:
+          $ref: '#/components/responses/Error'
+  /api/attachments/{id}/content:
+    parameters:
+      - $ref: '#/components/parameters/AttachmentId'
+    get:
+      operationId: getAttachmentContent
+      tags:
+      - attachments
+      summary: Read private attachment content.
+      description: Authenticates and authorizes the actual room on every read. Only optimized WebP is inline;
+        all unchanged files are attachment downloads. Responses use no-store and nosniff, a safe filename
+        and actual Content-Length. No range or public sharing URL. At most eight content streams globally,
+        with a 120-second write deadline and an open file closed on completion.
+      responses:
+        '200':
+          description: Stored bytes, with Content-Type, Content-Length and safe Content-Disposition.
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '401':
+          $ref: '#/components/responses/VisitorRequired'
+        '404':
+          description: Unknown or unauthorized attachment (attachment_not_found).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '410':
+          description: Expired or cancelled content (attachment_expired).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '429':
+          description: Global content streams exhausted (attachment_busy).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        default:
+          $ref: '#/components/responses/Error'
   /api/enter:
     post:
       operationId: enter
@@ -286,7 +482,7 @@ paths:
       summary: Post a message in a room's chat.
       description: >-
         Posts a message under the visitor's current name. Posting is
-        idempotent by request key: posting again with the same key and body,
+        idempotent by request key: posting again with the same key, body and ordered attachment IDs,
         say after a lost response, returns the message posted first and
         creates nothing. New messages are limited per visitor;
         such a repeat is not.
@@ -300,7 +496,7 @@ paths:
       responses:
         "200":
           description: >-
-            The visitor already posted this request key with this body in this
+            The visitor already posted this request key with this body and ordered attachments in this
             room; the body is that message.
           content:
             application/json:
@@ -314,8 +510,8 @@ paths:
                 $ref: "#/components/schemas/Message"
         "400":
           description: >-
-            The message body breaks the message rules (`invalid_message`): empty
-            or only white space, or longer than 4000 characters. A missing body
+            The message body breaks the message rules (`invalid_message`): longer than 4000 characters, or empty/white space without attachments.
+            Duplicate, foreign, expired, cancelled or consumed drafts are invalid_attachments. A missing body
             counts as empty. A request key
             that breaks its rules, or a body that is not JSON of the request's
             shape, is `invalid_request`.
@@ -329,8 +525,14 @@ paths:
           $ref: "#/components/responses/RoomNotFound"
         "409":
           description: >-
-            The visitor already used this request key for a different body or
+            The visitor already used this request key for a different body, ordered attachment IDs or
             in another room (`request_key_reused`).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "503":
+          description: Attachment quota or cleanup capacity is unavailable (attachment_capacity).
           content:
             application/json:
               schema:
@@ -430,7 +632,9 @@ paths:
         reconnects first and then catches up through the other operations,
         reading each room's messages with `after` set to the last message ID
         it saw and the room list again. Events that arrive while it catches up
-        may repeat what it reads; it keeps one message per message ID.
+        may repeat what it reads; it keeps one message per message ID. It also
+        refreshes every previously visible attachment through GET /api/attachments/{id}:
+        catching up only new messages cannot recover missed attachments.expired events.
 
 
         A visitor is connected while they have at least one of these
@@ -562,6 +766,14 @@ paths:
           $ref: "#/components/responses/Error"
 components:
   parameters:
+    AttachmentId:
+      name: id
+      in: path
+      required: true
+      description: The opaque attachment ID.
+      schema:
+        type: string
+        example: 0123456789abcdef0123456789abcdef
     RoomId:
       name: id
       in: path
@@ -625,6 +837,210 @@ components:
           schema:
             $ref: "#/components/schemas/Error"
   schemas:
+    Attachment:
+      type: object
+      description: Private metadata. Availability is ready (owned draft), posted, expired, or cancelled. Metadata
+        survives expiry; private drafts retain expiresAt through expiry or cancellation. Posted
+        records omit it. Content URL always requires the current visitor cookie.
+      required:
+      - id
+      - filename
+      - contentType
+      - size
+      - inline
+      - width
+      - height
+      - availability
+      - contentUrl
+      properties:
+        id:
+          type: string
+          description: Opaque attachment ID.
+          example: 0123456789abcdef0123456789abcdef
+        filename:
+          type: string
+          description: Safe original basename; optimized images use .webp.
+          example: photo.webp
+        contentType:
+          type: string
+          description: Actual stored media type, detected by the server.
+          example: image/webp
+        size:
+          type: integer
+          format: int64
+          description: Actual stored bytes.
+          example: 12345
+        inline:
+          type: boolean
+          description: True only for optimized supported still images.
+          example: true
+        width:
+          type: integer
+          description: Optimized width; zero for unchanged files.
+          example: 640
+        height:
+          type: integer
+          description: Optimized height; zero for unchanged files.
+          example: 480
+        availability:
+          type: string
+          enum:
+          - ready
+          - posted
+          - expired
+          - cancelled
+          description: Current availability.
+          example: posted
+        expiresAt:
+          x-go-type-skip-optional-pointer: false
+          type: string
+          format: date-time
+          description: Successful-upload draft deadline; absent after posting.
+          example: '2026-11-08T12:00:00Z'
+        contentUrl:
+          type: string
+          description: Authenticated content path, returning 410 when unavailable.
+          example: /api/attachments/0123456789abcdef0123456789abcdef/content
+    AttachmentsExpired:
+      type: object
+      description: Committed posted attachment expirations in the envelope room. Events are not replayed;
+        refresh old visible IDs after reconnect.
+      required:
+      - attachmentIds
+      properties:
+        attachmentIds:
+          type: array
+          description: Expired posted IDs; never private draft IDs.
+          items:
+            type: string
+          example:
+          - 0123456789abcdef0123456789abcdef
+    AttachmentLimits:
+      type: object
+      description: Effective resource ceilings. Durations are seconds; bytes exclude database, snapshots and
+        conversion scratch from posted quota.
+      required:
+      - maxFileBytes
+      - maxOutputBytes
+      - stagingBytes
+      - postedBytes
+      - maxAttachments
+      - maxPending
+      - maxUploadStreams
+      - maxPixels
+      - maxEdge
+      - maxDimension
+      - draftTtlSeconds
+      - processTimeoutSeconds
+      - uploadTimeoutSeconds
+      - uploadBurst
+      - uploadRefillSeconds
+      - multipartOverheadBytes
+      - multipartHeaderBytes
+      - maxContentStreams
+      - contentTimeoutSeconds
+      - maxConversions
+      properties:
+        maxFileBytes:
+          type: integer
+          format: int64
+          description: maxFileBytes effective ceiling.
+          example: 26214400
+        maxOutputBytes:
+          type: integer
+          format: int64
+          description: maxOutputBytes effective ceiling.
+          example: 33554432
+        stagingBytes:
+          type: integer
+          format: int64
+          description: stagingBytes effective ceiling.
+          example: 268435456
+        postedBytes:
+          type: integer
+          format: int64
+          description: postedBytes effective ceiling.
+          example: 5000000000
+        maxAttachments:
+          type: integer
+          format: int64
+          description: maxAttachments effective ceiling.
+          example: 4
+        maxPending:
+          type: integer
+          format: int64
+          description: maxPending effective ceiling.
+          example: 4
+        maxUploadStreams:
+          type: integer
+          format: int64
+          description: maxUploadStreams effective ceiling.
+          example: 4
+        maxPixels:
+          type: integer
+          format: int64
+          description: maxPixels effective ceiling.
+          example: 24000000
+        maxEdge:
+          type: integer
+          format: int64
+          description: maxEdge effective ceiling.
+          example: 16384
+        maxDimension:
+          type: integer
+          format: int64
+          description: maxDimension effective ceiling.
+          example: 2560
+        draftTtlSeconds:
+          type: integer
+          format: int64
+          description: draftTtlSeconds effective ceiling.
+          example: 3600
+        processTimeoutSeconds:
+          type: integer
+          format: int64
+          description: processTimeoutSeconds effective ceiling.
+          example: 30
+        uploadTimeoutSeconds:
+          type: integer
+          format: int64
+          description: uploadTimeoutSeconds effective ceiling.
+          example: 60
+        uploadBurst:
+          type: integer
+          format: int64
+          description: uploadBurst effective ceiling.
+          example: 4
+        uploadRefillSeconds:
+          type: integer
+          format: int64
+          description: uploadRefillSeconds effective ceiling.
+          example: 15
+        multipartOverheadBytes:
+          type: integer
+          format: int64
+          description: multipartOverheadBytes effective ceiling.
+          example: 16384
+        multipartHeaderBytes:
+          type: integer
+          format: int64
+          description: multipartHeaderBytes effective ceiling.
+          example: 8192
+        maxContentStreams:
+          type: integer
+          format: int64
+          description: maxContentStreams effective ceiling.
+          example: 8
+        contentTimeoutSeconds:
+          type: integer
+          format: int64
+          description: contentTimeoutSeconds effective ceiling.
+          example: 120
+        maxConversions:
+          type: integer
+          format: int64
+          description: maxConversions effective ceiling.
+          example: 1
     Error:
       type: object
       description: The body of every error response.
@@ -642,9 +1058,12 @@ components:
             requests), `room_not_found` (no such room), `invalid_message` (a
             message body breaks the message rules), `request_key_reused`
             (a request key was already used for another message),
-            `origin_forbidden` (a live-update connection from a foreign
-            origin), `room_full` (a room's voice admits no more participants)
-            or `voice_unavailable` (the server cannot reach LiveKit).
+            `origin_forbidden` (a request from a forbidden origin), `room_full` (a room's voice admits no more participants)
+            or `voice_unavailable` (the server cannot reach LiveKit). Attachment operations
+            also use `attachment_not_found`, `attachment_expired`, `invalid_attachments`,
+            `attachment_too_large`, `invalid_image`, `image_dimensions`, `attachment_busy`,
+            `attachment_capacity`, `attachment_processing`, `attachment_unavailable` and
+            `upload_timeout`; each operation documents their status and meaning.
           example: not_found
         message:
           type: string
@@ -855,9 +1274,9 @@ components:
     Message:
       type: object
       description: >-
-        A piece of text a visitor posted in a room's chat, under the name they
+        Text, attachments, or both a visitor posted in a room's chat, under the name they
         had when posting.
-      required: [id, roomId, authorId, authorName, body, createdAt]
+      required: [id, roomId, authorId, authorName, body, createdAt, attachments]
       properties:
         id:
           type: string
@@ -886,6 +1305,12 @@ components:
           format: date-time
           description: When the message was posted, in UTC.
           example: "2026-11-04T18:30:05.123Z"
+        attachments:
+          type: array
+          description: Ordered attachment metadata; always an array, empty for text-only messages.
+          items:
+            $ref: "#/components/schemas/Attachment"
+          example: []
     MessageList:
       type: object
       description: A page of a room's chat.
@@ -903,10 +1328,11 @@ components:
               authorName: Bob
               body: Anyone up for a game?
               createdAt: "2026-11-04T18:30:05.123Z"
+              attachments: []
     PostMessageRequest:
       type: object
       description: A message to post and the key that makes retrying it safe.
-      required: [requestKey, body]
+      required: [requestKey]
       properties:
         requestKey:
           type: string
@@ -919,9 +1345,17 @@ components:
         body:
           type: string
           description: >-
-            The text: 1 to 4000 characters, not only white space. It is kept as
-            sent, untrimmed.
+            Optional text, at most 4000 characters, kept untrimmed. At least
+            non-whitespace text or one attachment is required.
           example: Anyone up for a game?
+        attachmentIds:
+          type: array
+          maxItems: 4
+          uniqueItems: true
+          description: Ordered owned ready drafts in this room; omitted means no attachments.
+          items:
+            type: string
+          example: [0123456789abcdef0123456789abcdef]
     Event:
       # Sent over the WebSocket, which no operation can reference.
       x-lint-ignore: oas3-unused-component
@@ -931,7 +1365,8 @@ components:
         and which schema `payload` has: `message.created` carries a `Message`,
         `room.changed` a `RoomChange`, `occupancy.changed` an
         `OccupancyChange`, `visitor.colour.changed` a `VisitorColour`,
-        `access.revoked` an `AccessRevoked`. Clients ignore
+        `access.revoked` an `AccessRevoked`, `attachments.expired` an
+        `AttachmentsExpired`. Clients ignore
         event types they do not know.
       required: [v, type, eventId, payload, timestamp]
       properties:
@@ -961,6 +1396,7 @@ components:
             - $ref: "#/components/schemas/OccupancyChange"
             - $ref: "#/components/schemas/AccessRevoked"
             - $ref: "#/components/schemas/VisitorColour"
+            - $ref: "#/components/schemas/AttachmentsExpired"
         timestamp:
           type: string
           format: date-time
@@ -978,6 +1414,7 @@ components:
           authorName: Bob
           body: Anyone up for a game?
           createdAt: "2026-11-04T18:30:05.123Z"
+          attachments: []
         timestamp: "2026-11-04T18:30:05.140Z"
     EventType:
       type: string
@@ -989,8 +1426,10 @@ components:
         reached it (its payload is the `OccupancyChange`); `access.revoked`,
         the visitor's access ended (its payload is the `AccessRevoked`), and
         the server closes the connection next; `visitor.colour.changed`, an explicit
-        saved colour change (its payload is the `VisitorColour`) to all visitors.
-      enum: [message.created, room.changed, occupancy.changed, access.revoked, visitor.colour.changed]
+        saved colour change (its payload is the `VisitorColour`) to all visitors;
+        `attachments.expired`, posted files expired in this room (its payload is
+        `AttachmentsExpired`). Private drafts are never broadcast.
+      enum: [message.created, room.changed, occupancy.changed, access.revoked, visitor.colour.changed, attachments.expired]
       example: message.created
     RoomChange:
       type: object

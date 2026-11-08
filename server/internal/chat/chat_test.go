@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"slices"
 	"strings"
@@ -96,7 +97,7 @@ func TestPostingCreatesAMessageUnderTheAuthorsName(t *testing.T) {
 		m.AuthorName != "Bob" || m.Body != "  hello  " || m.CreatedAt.Before(before) || m.CreatedAt.After(time.Now()) {
 		t.Errorf("Post = %+v, want a ULID, the room, Bob and the body as sent, created now", m)
 	}
-	if got := f.history(t, f.lounge, chat.Page{Limit: 10}); len(got) != 1 || got[0] != m {
+	if got := f.history(t, f.lounge, chat.Page{Limit: 10}); len(got) != 1 || !reflect.DeepEqual(got[0], m) {
 		t.Errorf("History = %+v, want only %+v", got, m)
 	}
 }
@@ -106,7 +107,7 @@ func TestRepeatingARequestKeyReturnsTheOriginalMessage(t *testing.T) {
 	original := f.post(t, bob, f.lounge, "k1", "hello")
 
 	again, created, err := f.chat.Post(t.Context(), bob, f.lounge.ID, "k1", "hello")
-	if err != nil || created || again != original {
+	if err != nil || created || !reflect.DeepEqual(again, original) {
 		t.Errorf("Post with the same key and body = %+v, created %v, %v; want %+v, not created", again, created, err, original)
 	}
 	for name, p := range map[string]struct{ room, body string }{
@@ -296,7 +297,7 @@ func TestPostingPublishesCommittedNewMessagesOnly(t *testing.T) {
 		}))
 
 	m := f.post(t, bob, f.lounge, "k1", "hello")
-	if !slices.Equal(published, []chat.Message{m}) {
+	if !reflect.DeepEqual(published, []chat.Message{m}) {
 		t.Fatalf("published after Post = %+v, want the new message %+v", published, m)
 	}
 	if !slices.Equal(historyThen, []string{m.ID}) {
@@ -358,7 +359,7 @@ func TestMessagesArePublishedInTheOrderTheyAreCommitted(t *testing.T) {
 	defer mu.Unlock()
 	committed := ids(f.history(t, f.lounge, chat.Page{Limit: chat.MaxLimit}))
 	slices.Reverse(committed) // the history lists the newest first
-	if len(published) != 2 || published[0] != first || !slices.Equal(published, committed) {
+	if len(published) != 2 || !reflect.DeepEqual(published[0], first) || !reflect.DeepEqual(published, committed) {
 		t.Errorf("published %v, want the commit order %v with %s first", published, committed, first)
 	}
 }

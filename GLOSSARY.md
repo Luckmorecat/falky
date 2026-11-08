@@ -27,8 +27,12 @@ A named place where visitors talk by voice and chat. Every room has both.
 _Avoid_: Channel, voice channel, server, lobby
 
 **Message**:
-A piece of text a visitor posts in a room's chat, shown under the name they had when posting.
+Text, attachments, or both that a visitor posts in a room's chat, shown under the name they had when posting.
 _Avoid_: Post, chat line
+
+**Attachment**:
+A file a visitor shares with a message. Before posting, it is a private draft belonging to that visitor.
+_Avoid_: Upload, media
 
 ## Voice
 

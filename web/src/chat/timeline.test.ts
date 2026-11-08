@@ -8,6 +8,7 @@ const msg = (id: string, over: Partial<Message> = {}): Message => ({
   authorId: 'a',
   authorName: 'Bob',
   body: 'hi',
+  attachments: [],
   createdAt: '2026-11-05T12:00:00.000Z',
   ...over,
 });
