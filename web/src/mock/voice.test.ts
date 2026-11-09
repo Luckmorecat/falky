@@ -14,10 +14,10 @@ beforeEach(async () => {
   localStorage.clear();
   state = {
     instanceId: crypto.randomUUID(), generation: 1, revision: 1, scenario: 'populated', scenarios: ['populated'],
-    visitor: { id: 'self', name: 'Alex', nameTaken: false, colour: { visitorId: 'self', palette: 'sky', revision: 1 } }, voiceRoomId: null, voiceGrants: {},
+    visitor: { id: 'self', name: 'Alex', nameTaken: false, colour: { visitorId: 'self', palette: 'sky', revision: 1 } }, voiceConnections: {},
     rooms: [{ id: 'lounge', name: 'Lounge', occupancy: [] }, { id: 'games', name: 'Games', occupancy: [] }],
     peers: { lounge: [{ connectionId: 'sam.connection', visitorId: 'sam', name: 'Sam', muted: false, deafened: false, sharing: false }] },
-    faults: { send: 'none', colourSave: 'none', colourDelayMs: 0, colourResponseDelayMs: 0, delayMs: 0, liveDisconnected: false, roomFull: null, micDenied: false, shareFailure: false, voiceReconnecting: false, leaveUnavailable: false },
+    faults: { send: 'none', colourSave: 'none', colourDelayMs: 0, colourResponseDelayMs: 0, delayMs: 0, liveDisconnected: false, roomFull: null, micDenied: false, shareFailure: false, voiceReconnecting: false },
     accessLink: '/#k=mock',
   };
   let issued = 0;
@@ -26,23 +26,15 @@ beforeEach(async () => {
     if (url.endsWith('/voice')) {
       const roomId = url.split('/').at(-2)!;
       if (state.faults.roomFull === roomId) return Response.json({ code: 'room_full', message: 'Full' }, { status: 409 });
-      state.voiceRoomId = roomId;
       const grantId = issued++ === 0 ? 'self.old' : `self.next${issued}`;
-      state.voiceGrants[grantId] = roomId;
+      state.voiceConnections[grantId] = roomId;
       state.revision++;
       return Response.json({ url: 'ws://localhost/rtc', token: 'mock', grantId });
-    }
-    if (url === '/api/voice/leave') {
-      delete state.voiceGrants[JSON.parse(init!.body as string).grantId];
-      state.voiceRoomId = Object.values(state.voiceGrants).at(-1) ?? null; state.revision++;
-      return Response.json({ revoked: true });
     }
     if (url === '/__mock/action') {
       const body = JSON.parse(init!.body as string);
       if (body.generation !== state.generation) return Response.json({}, { status: 409 });
-      if (body.grantId) delete state.voiceGrants[body.grantId];
-      else state.voiceGrants = {};
-      state.voiceRoomId = Object.values(state.voiceGrants).at(-1) ?? null;
+      delete state.voiceConnections[body.connectionId];
       state.revision++;
     }
     return Response.json(state);
@@ -78,7 +70,7 @@ it('joins through HTTP and restores mute state across deafen, including join-mut
   expect(session.level('self.old')).toBeGreaterThanOrEqual(0);
   await session.leave();
   expect(session.snapshot.status).toBe('idle');
-  expect(state.voiceRoomId).toBeNull();
+  expect(state.voiceConnections).toEqual({});
 });
 
 it('keeps denied microphones listen-only and exposes reconnecting and recovery through the same snapshot', async () => {
@@ -107,8 +99,7 @@ it('retains the old room after a full-room move and ends when server occupancy i
   await session.join('games');
   expect(session.snapshot).toMatchObject({ status: 'connected', roomId: 'lounge', joiningRoomId: null });
   expect(problems).toEqual(['room_full']);
-  state.voiceRoomId = null;
-  state.voiceGrants = {};
+  state.voiceConnections = {};
   state.revision++;
   await refreshMockState();
   expect(session.snapshot).toMatchObject({ status: 'idle', people: [] });
@@ -160,7 +151,7 @@ it('releases a late successful join after leaving without restoring the voice UI
   finish();
   await joining;
   expect(session.snapshot.status).toBe('idle');
-  expect(state.voiceRoomId).toBeNull();
+  expect(state.voiceConnections).toEqual({});
 });
 
 it('also releases when leave interrupts state synchronization after successful HTTP join', async () => {
@@ -179,10 +170,10 @@ it('also releases when leave interrupts state synchronization after successful H
   finish();
   await joining;
   expect(session.snapshot.status).toBe('idle');
-  expect(state.voiceRoomId).toBeNull();
+  expect(state.voiceConnections).toEqual({});
 });
 
-it('retires both captured grants when Leave interrupts a room switch after HTTP admission', async () => {
+it('disconnects both captured connections when Leave interrupts a room switch after HTTP admission', async () => {
   await session.join('lounge');
   const fetchHTTP = fetch;
   let finish!: () => void;
@@ -196,7 +187,7 @@ it('retires both captured grants when Leave interrupts a room switch after HTTP 
   const moving = session.join('games');
   await started;
   await session.leave();
-  expect(state.voiceGrants).toEqual({});
+  expect(state.voiceConnections).toEqual({});
   finish(); await moving;
   expect(session.snapshot.status).toBe('idle');
 });

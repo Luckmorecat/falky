@@ -249,7 +249,7 @@ func TestVoiceMigrationUpgradesExistingGrantsWithoutSessionCascade(t *testing.T)
 	}
 }
 
-func TestCleanupContinuesAfterIndividualFailureAndLateLeaveCannotHitReplacement(t *testing.T) {
+func TestCleanupContinuesAfterIndividualFailureAndLateRevokedCleanupCannotHitReplacement(t *testing.T) {
 	lk := &retryLiveKit{LiveKit: voicetest.New()}
 	acc := newAccess(bob, alice)
 	s := voice.New(lk, acc, acc, voice.Config{APIKey: testKey, APISecret: testSecret, RoomCap: 8})
@@ -275,7 +275,7 @@ func TestCleanupContinuesAfterIndividualFailureAndLateLeaveCannotHitReplacement(
 		t.Fatal(err)
 	}
 	participant := lk.AddParticipant(roomA, replacement.GrantID)
-	if err := s.Leave(t.Context(), session, old.GrantID); err != nil {
+	if err := s.CleanupGrants(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.ReceiveWebhook(signed(t, voicetest.Joined(voice.Participant{Room: roomA, Identity: old.GrantID, SID: "late"}), testKey, testSecret)); err != nil {
@@ -308,9 +308,13 @@ func TestFailedOldCleanupDoesNotGateIndependentCredentials(t *testing.T) {
 				t.Fatal(err)
 			}
 			lk.failedTransport = first.GrantID
-			if err := s.Leave(t.Context(), session, first.GrantID); err != nil {
+			if err := s.FenceSessions(t.Context(), func(candidate identity.Session) bool { return candidate.ID == session.ID }); err != nil {
 				t.Fatal(err)
 			}
+			if err := s.CleanupGrants(t.Context()); err == nil {
+				t.Fatal("expected security cleanup failure")
+			}
+			session.ID = "replacement-browser"
 			for range 2 {
 				creds, err := s.JoinSession(t.Context(), session, roomA)
 				if err != nil || creds.Token == "" || creds.GrantID == first.GrantID {

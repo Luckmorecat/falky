@@ -148,11 +148,12 @@ test('voice moves retain the old room on failure and scripted peers, rename, lea
   const [lounge, games] = bootstrap.rooms;
   const visitorId = bootstrap.visitor.id;
   const roomState = async () => (await (await call('/api/rooms')).json()).rooms as { id: string; occupancy: { visitorId: string; name: string }[] }[];
-  assert.equal((await call(`/api/rooms/${lounge.id}/voice`, {})).status, 200);
+  const joined = await (await call(`/api/rooms/${lounge.id}/voice`, {})).json();
+  assert.ok(joined.grantId);
   assert.ok((await roomState())[0]!.occupancy.some((peer) => peer.visitorId === visitorId));
   await call('/__mock/action', { type: 'faults', faults: { roomFull: games.id } });
   assert.equal((await call(`/api/rooms/${games.id}/voice`, {})).status, 409);
-  assert.equal((await (await call('/__mock/state')).json()).voiceRoomId, lounge.id);
+  assert.deepEqual(Object.values((await (await call('/__mock/state')).json()).voiceConnections), [lounge.id]);
   assert.ok((await roomState())[0]!.occupancy.some((peer) => peer.visitorId === visitorId));
   await call('/__mock/action', { type: 'faults', faults: { roomFull: lounge.id } });
   assert.equal((await call(`/api/rooms/${lounge.id}/voice`, {})).status, 409);
@@ -160,9 +161,9 @@ test('voice moves retain the old room on failure and scripted peers, rename, lea
   assert.equal((await roomState())[0]!.occupancy.find((peer) => peer.visitorId === visitorId)?.name, 'Voice Name');
   await call('/__mock/action', { type: 'participants', roomId: lounge.id, participants: [{ connectionId: 'casey.connection', visitorId: '01JBX6Z8Q3M5W2K7R9T4V1C0DE', name: 'Casey', muted: false, deafened: false, sharing: true }] });
   assert.deepEqual((await roomState())[0]!.occupancy.map((peer) => peer.name), ['Casey', 'Voice Name']);
-  await call('/__mock/action', { type: 'voice-leave', generation: bootstrap.generation });
+  await call('/__mock/action', { type: 'voice-disconnect', generation: bootstrap.generation, connectionId: joined.grantId });
   assert.deepEqual((await roomState())[0]!.occupancy.map((peer) => peer.name), ['Casey']);
-  assert.equal((await call('/__mock/action', { type: 'voice-leave', generation: 0 })).status, 409);
+  assert.equal((await call('/__mock/action', { type: 'voice-disconnect', generation: 0, connectionId: joined.grantId })).status, 409);
   await call('/__mock/action', { type: 'name-conflict', active: true });
   assert.equal((await (await call('/api/me')).json()).nameTaken, true);
   assert.equal((await call(`/api/rooms/${games.id}/voice`, {})).status, 409);
@@ -182,7 +183,7 @@ test('voice moves retain the old room on failure and scripted peers, rename, lea
   assert.equal(await closed, 4001);
   assert.equal((await call('/api/me')).status, 401);
   const state = await (await call('/__mock/state')).json();
-  assert.equal(state.voiceRoomId, null);
+  assert.deepEqual(state.voiceConnections, {});
   assert.ok(state.rooms.every((room: { occupancy: { visitorId: string }[] }) => room.occupancy.every((peer) => peer.visitorId !== visitorId)));
   await call('/__mock/reset', {});
   await call('/__mock/bootstrap', {});
@@ -316,7 +317,7 @@ test('colour saves broadcast to both tabs, fail without changing state and delay
   } finally { tabs.forEach((ws) => ws.terminate()); }
 });
 
-test('independent grants list same-person connections and exact Leave preserves the others', async () => {
+test('independent connections list the same person and exact mock disconnect preserves the others', async () => {
   const { call, bootstrap } = await client('same-person');
   const roomId = bootstrap.rooms[0].id;
   const first = await (await call(`/api/rooms/${roomId}/voice`, {})).json();
@@ -324,6 +325,8 @@ test('independent grants list same-person connections and exact Leave preserves 
   assert.notEqual(first.grantId, second.grantId);
   const occupants = async () => (await (await call('/api/rooms')).json()).rooms[0].occupancy;
   assert.deepEqual((await occupants()).map((p: { visitorId: string }) => p.visitorId), [bootstrap.visitor.id, bootstrap.visitor.id, bootstrap.visitor.id, bootstrap.visitor.id]);
-  await call('/api/voice/leave', { grantId: first.grantId });
+  assert.equal((await call('/api/voice/leave', { grantId: first.grantId })).status, 404);
+  assert.equal((await call('/__mock/action', { type: 'voice-disconnect', generation: bootstrap.generation })).status, 400);
+  await call('/__mock/action', { type: 'voice-disconnect', generation: bootstrap.generation, connectionId: first.grantId });
   assert.deepEqual((await occupants()).map((p: { connectionId: string }) => p.connectionId), [bootstrap.peers[roomId][0].connectionId, bootstrap.peers[roomId][1].connectionId, second.grantId]);
 });

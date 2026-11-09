@@ -31,11 +31,17 @@ or revoked grant is never reconstructed from a token alone. Every explicit Join
 creates a fresh independent transport without replacing any other grant, including
 grants in the same session or room. This lets one person use separate audio and
 screen-sharing connections without transferring ownership between browsers.
-Exact-grant Leave ends only that connection; logout ends all grants of that exact
-session, while recovery and disablement end all affected account sessions.
+Leave disconnects only this app instance's local media; its valid original grant
+can reconnect while JWT, session and room access remain valid. Logout revokes all
+grants of that exact session; recovery and disablement revoke all affected account
+sessions.
 Profiles remain owned by the lasting identity; media, participant presentation
-and playback volume belong to each connection. The browser explicitly retires
-its previous grant when switching rooms and any abandoned new setup grant.
+and playback volume belong to each connection. After successful room admission,
+the browser disconnects its previous local room without revoking permission.
+Canceled or failed setup discards credentials and tears down captured local media;
+unused grants keep their existing access lifetime. This accepts valid-token
+reconnects in exchange for removing Leave revocation, browser retries and pending
+notices. Security and access lifecycle changes retain durable revocation.
 The deprecated `confirmTransfer` request field is accepted and ignored for older
 clients.
 The first deployment of durable grants (`0010`) requires one explicit rejoin

@@ -577,22 +577,22 @@ at the next maintenance pass, normally within 30 seconds; requests and reconnect
 reject expired sessions immediately. Shutdown cancels and joins jobs before
 closing their dependencies.
 
-Explicit browser Leave stops local media immediately and saves its exact grant
-in browser storage until `POST /api/voice/leave` acknowledges durable revocation.
-The pending notice can remain while offline or after logout/expiry: 401 alone
-does not confirm revocation. Reload/reachability retries the old target without
-blocking or revoking a newer Join. Once acknowledged, failed external cleanup is
-the backend's maintenance responsibility. Ordinary SDK Leave, reload and temporary
-network disconnection preserve valid permission.
+Explicit browser Leave immediately stops this app instance's microphone, camera
+and screen tracks and disconnects its SDK room, including while offline. It sends
+no backend revocation request and keeps no retry queue or pending notice. Older
+pending-Leave browser storage is ignored. Local disconnect, reload and temporary
+network disconnection preserve grant authorization: an original valid JWT can
+reconnect its exact connection while its JWT, session and room access remain valid.
+Logout, recovery, disablement, guest-link rotation and access expiry still fence
+their affected grants and use durable server cleanup.
 
 When switching rooms, the browser keeps its previous connection if the new Join
-is refused, including a full room. After successful admission it durably queues
-the captured previous exact grant for Leave and tears down that room, without
-waiting for external cleanup before connecting the new room. A canceled Join
-that returns credentials late, or canceled/failed media setup, durably queues the
-exact abandoned new grant. A stale completion cannot target a newer operation's
-grant, and pending cleanup cannot block an independent Join. Other app instances'
-connections remain authorized.
+is refused, including a full room. After successful admission it disconnects only
+its previous local media before setting up the new room; both grants remain
+authorized. Canceled/late Join credentials are discarded, and failed or obsolete
+SDK setup tears down its captured room and tracks without affecting a newer local
+connection. Unused grants retain their existing session/access lifetime; there is
+no added idle timeout. Other app instances' connections stay independent.
 
 ### Accounts, invitations and recovery
 

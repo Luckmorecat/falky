@@ -66,12 +66,8 @@ function Screen() {
 }
 
 function App() {
-  const phase = useApp((s) => s.phase);
-  const pendingLeave = useApp((s) => s.voice.pendingLeave);
   useApp((s) => s.settings.language);
-  return <><Screen />{phase !== 'ready' && pendingLeave > 0 && (
-    <div className="float-top pending-leave-outside"><div className="banner pending-leave" role="status">{t.voiceLeavePending}</div></div>
-  )}</>;
+  return <Screen />;
 }
 
 // A new access link pasted into this tab changes only the fragment.

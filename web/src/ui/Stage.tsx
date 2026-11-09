@@ -53,7 +53,7 @@ function useWindowSize(): { w: number; h: number } {
 /** The width of --chat in styles.css. */
 const CHAT_WIDTH = 340;
 
-export function Stage({ room, background, reservedHeight = 0 }: { room: Room; background?: RefObject<LiveBackgroundHandle | null>; reservedHeight?: number }) {
+export function Stage({ room, background }: { room: Room; background?: RefObject<LiveBackgroundHandle | null> }) {
   const people = usePeople(room);
   const { w, h } = useWindowSize();
   const narrow = useDrawerLayout();
@@ -66,7 +66,7 @@ export function Stage({ room, background, reservedHeight = 0 }: { room: Room; ba
   // shared screen, which wants all the room it can get, stands left of it.
   const width = narrow ? w - 24 : w - 2 * (CHAT_WIDTH + 24);
   const shareRoom = narrow ? w - 24 : w - CHAT_WIDTH - 48;
-  const height = h - (narrow ? 96 : 112) - (narrow ? 104 : 128) - 16 - reservedHeight;
+  const height = h - (narrow ? 96 : 112) - (narrow ? 104 : 128) - 16;
   const gap = people.length > 4 ? 12 : 16;
   const miniSize = narrow ? 76 : 104;
   const fit = fitBlocks(people.length, width, height, gap, 460);

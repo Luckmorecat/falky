@@ -20,7 +20,6 @@ export interface VoicePerson {
 }
 
 export interface VoiceSnapshot {
-  pendingLeave: number;
   status: 'idle' | 'joining' | 'connected' | 'reconnecting';
   /** The room whose voice this is. While moving, still the previous one. */
   roomId: string | null;
@@ -40,7 +39,7 @@ export interface VoiceSnapshot {
 }
 
 export const idleVoice: VoiceSnapshot = {
-  pendingLeave: 0, status: 'idle', roomId: null, joiningRoomId: null, joinedAt: 0, people: [], speakers: [],
+  status: 'idle', roomId: null, joiningRoomId: null, joinedAt: 0, people: [], speakers: [],
   muted: false, deafened: false, listenOnly: false, sharing: false, camera: false, quality: 'unknown',
 };
 

@@ -162,44 +162,31 @@ func TestTheLiveKitSecretIsNeitherAnsweredNorLogged(t *testing.T) {
 	}
 }
 
-func TestExplicitLeaveIsDurableAcknowledgedAndCannotRevokeReplacement(t *testing.T) {
-	p := startPublic(t, 10)
-	room := p.createRoom(t, "Voice")
-	client, browser := p.browserWithHTTP(t)
-	p.enter(t, client, "Bob")
-	old := joinedVoice(t, client, room.ID)
-	current := joinedVoice(t, client, room.ID)
-	if old.GrantId == current.GrantId || current.GrantId == "" {
-		t.Fatal("explicit joins must allocate distinct grants")
-	}
-	accountRequest(t, p, browser, "POST", "/api/voice/leave", map[string]any{"grantId": old.GrantId}, "", 200)
-	p = restartVoice(t, p)
-	checkVoiceValidation(t, p, current.Token, 200)
-	p.livekit.Fail(errors.New("media removal unavailable"))
-	accountRequest(t, p, browser, "POST", "/api/voice/leave", map[string]any{"grantId": current.GrantId}, "", 200)
-	p.livekit.Fail(nil)
-	p = restartVoice(t, p)
-	checkVoiceValidation(t, p, current.Token, 403)
-	accountRequest(t, p, browser, "POST", "/api/voice/leave", map[string]any{"grantId": current.GrantId}, "", 200)
-}
-
-func TestLeaveRequiresCurrentExactSessionAndAccountOrigin(t *testing.T) {
+func TestLogoutDurablyRevokesOnlyItsSessionDespiteFailedMediaCleanup(t *testing.T) {
 	p := startPublic(t, 100)
 	room := p.createRoom(t, "Voice")
 	first, firstHTTP := p.browserWithHTTP(t)
 	key := passkeytest.New(t)
 	enrollAccount(t, p, firstHTTP, "Account", key)
-	creds := joinedVoice(t, first, room.ID)
-	_, secondHTTP := loginAccountBrowser(t, p, key)
-	accountRequest(t, p, secondHTTP, "POST", "/api/voice/leave", map[string]any{"grantId": creds.GrantId}, testOrigin, 403)
-	accountRequest(t, p, firstHTTP, "POST", "/api/voice/leave", map[string]any{"grantId": creds.GrantId}, "", 403)
-	accountRequest(t, p, firstHTTP, "POST", "/api/voice/leave", map[string]any{"grantId": creds.GrantId}, testOrigin, 200)
-	// A logged-out cookie cannot acknowledge even an already revoked target.
-	accountRequest(t, p, firstHTTP, "POST", "/api/accounts/logout", map[string]any{}, testOrigin, 200)
-	accountRequest(t, p, firstHTTP, "POST", "/api/voice/leave", map[string]any{"grantId": creds.GrantId}, testOrigin, 401)
+	second, _ := loginAccountBrowser(t, p, key)
+	old := joinedVoice(t, first, room.ID)
+	other := joinedVoice(t, second, room.ID)
+	p.livekit.Fail(errors.New("media removal unavailable"))
+	accountRequest(t, p, firstHTTP, "POST", "/api/accounts/logout", map[string]any{}, testOrigin, 500)
+	p.livekit.Fail(nil)
+	p = restartVoice(t, p)
+	checkVoiceValidation(t, p, old.Token, 403)
+	checkVoiceValidation(t, p, other.Token, 200)
 }
 
-func TestIndependentAccountConnectionsSurviveOtherJoinsLeaveLogoutAndRestart(t *testing.T) {
+func TestVoiceLeaveEndpointIsAbsent(t *testing.T) {
+	p := startPublic(t, 100)
+	_, browser := p.browserWithHTTP(t)
+	enrollAccount(t, p, browser, "Account", passkeytest.New(t))
+	accountRequest(t, p, browser, "POST", "/api/voice/leave", map[string]any{"grantId": "obsolete"}, testOrigin, 404)
+}
+
+func TestIndependentAccountConnectionsSurviveOtherJoinsLogoutAndRestart(t *testing.T) {
 	p := startPublic(t, 100)
 	lounge, games := p.createRoom(t, "Lounge"), p.createRoom(t, "Games")
 	first, firstHTTP := p.browserWithHTTP(t)
@@ -214,16 +201,11 @@ func TestIndependentAccountConnectionsSurviveOtherJoinsLeaveLogoutAndRestart(t *
 	for _, creds := range []api.VoiceCredentials{one, two, three, four} {
 		checkVoiceValidation(t, p, creds.Token, 200)
 	}
-	accountRequest(t, p, firstHTTP, "POST", "/api/voice/leave", map[string]any{"grantId": one.GrantId}, testOrigin, 200)
-	checkVoiceValidation(t, p, one.Token, 403)
-	for _, creds := range []api.VoiceCredentials{two, three, four} {
-		checkVoiceValidation(t, p, creds.Token, 200)
-	}
 	accountRequest(t, p, firstHTTP, "POST", "/api/accounts/logout", map[string]any{}, testOrigin, 200)
 	for _, creds := range []api.VoiceCredentials{one, two, three} {
 		checkVoiceValidation(t, p, creds.Token, 403)
 	}
 	checkVoiceValidation(t, p, four.Token, 200)
-	accountRequest(t, p, secondHTTP, "POST", "/api/voice/leave", map[string]any{"grantId": four.GrantId}, testOrigin, 200)
+	accountRequest(t, p, secondHTTP, "POST", "/api/accounts/logout", map[string]any{}, testOrigin, 200)
 	checkVoiceValidation(t, p, four.Token, 403)
 }

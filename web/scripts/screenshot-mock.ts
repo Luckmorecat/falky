@@ -7,7 +7,7 @@ import { chromiumOptions } from '../smoke/browser';
 import { launchMock } from '../smoke/launcher';
 import { setLanguage, t } from '../src/strings';
 
-const presets = ['room', 'chat', 'unread', 'pending-leave', 'voice', 'screen-share', 'settings', 'profile', 'entry'] as const;
+const presets = ['room', 'chat', 'unread', 'voice', 'screen-share', 'settings', 'profile', 'entry'] as const;
 const { values } = parseArgs({ options: {
   preset: { type: 'string' }, scenario: { type: 'string' }, output: { type: 'string' },
   viewport: { type: 'string', default: '1440x1000' }, theme: { type: 'string', default: 'dark' },
@@ -102,14 +102,9 @@ Existing browser: PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/path/to/chromium`);
         await page.keyboard.press('Slash');
         await expect(page.locator('.chat-btn')).toHaveAttribute('aria-expanded', 'true');
       }
-      if (preset === 'voice' || preset === 'screen-share' || preset === 'pending-leave') {
+      if (preset === 'voice' || preset === 'screen-share') {
         await page.getByRole('button', { name: t.join, exact: true }).click();
         await expect(page.getByRole('toolbar')).toBeVisible();
-      }
-      if (preset === 'pending-leave') {
-        await page.request.post(`${app.url}/__mock/action`, { data: { type: 'faults', faults: { leaveUnavailable: true } } });
-        await page.getByRole('button', { name: t.leaveVoice, exact: true }).click();
-        await expect(page.getByText(t.voiceLeavePending, { exact: true })).toBeVisible();
       }
       if (preset === 'screen-share') {
         if (scenario !== 'remote-share' && scenario !== 'same-person') await page.getByRole('button', { name: t.shareOn, exact: true }).click();

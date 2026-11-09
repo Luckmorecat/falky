@@ -52,34 +52,3 @@ func (s *server) JoinVoice(ctx context.Context, req api.JoinVoiceRequestObject) 
 	}
 	return api.JoinVoice200JSONResponse{Url: creds.URL, Token: creds.Token, GrantId: creds.GrantID}, nil
 }
-
-func (s *server) LeaveVoice(ctx context.Context, req api.LeaveVoiceRequestObject) (api.LeaveVoiceResponseObject, error) {
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-	if currentSession(ctx).Kind == identity.Account {
-		r, _ := accountHTTP(ctx)
-		if r.Header.Get("Origin") != s.publicOrigin {
-			return api.LeaveVoice403JSONResponse{Code: "origin_forbidden", Message: "account voice requires this server's exact origin"}, nil
-		}
-	}
-	s.lifecycle.Lock()
-	defer s.lifecycle.Unlock()
-	session, err := s.identity.ValidateSession(ctx, currentSession(ctx))
-	if errors.Is(err, identity.ErrNoVisitor) {
-		return api.LeaveVoice401JSONResponse{VisitorRequiredJSONResponse: visitorRequired}, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	if req.Body == nil || req.Body.GrantId == "" {
-		return api.LeaveVoice400JSONResponse{Code: "bad_request", Message: "missing voice grant"}, nil
-	}
-	err = s.voice.Leave(ctx, session, req.Body.GrantId)
-	if errors.Is(err, identity.ErrNoVisitor) {
-		return api.LeaveVoice403JSONResponse{Code: "grant_forbidden", Message: "voice grant belongs to another session"}, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	return api.LeaveVoice200JSONResponse{Revoked: true}, nil
-}

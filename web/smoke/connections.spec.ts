@@ -67,32 +67,32 @@ test('playback volume changes only one connection and a new connection starts at
   await expect(second).toHaveValue('1');
 });
 
-test('room switching retires the local captured grant while same-person remote connections stay', async ({ page }) => {
+test('room switching disconnects the local captured connection while same-person remote connections stay', async ({ page }) => {
   const oldGrant = await join(page);
   const games = fixture.rooms[1]!;
   await page.getByRole('button', { name: 'Rooms: Lounge', exact: true }).hover();
   await page.locator('.room-list .room', { hasText: 'Games' }).click();
   const newGrant = await join(page, 'Move here');
   expect(newGrant).not.toBe(oldGrant);
-  await expect.poll(async () => (await state(page)).voiceGrants).toEqual({ [newGrant]: games.id });
+  await expect.poll(async () => (await state(page)).voiceConnections).toEqual({ [newGrant]: games.id });
   expect((await state(page)).rooms[0]!.occupancy.map((p) => p.connectionId)).toEqual(fixture.peers[fixture.rooms[0]!.id]!.map((p) => p.connectionId));
 });
 
-test('two app instances in one session keep their own grant through another instance switch and Leave', async ({ page, context }) => {
+test('two app instances in one session keep their own media through another instance switch and Leave', async ({ page, context }) => {
   const firstGrant = await join(page);
   const other = await context.newPage();
   try {
     await other.goto(`${app.url}/?scenario=same-person`);
     const secondGrant = await join(other);
     await expect(page.getByRole('toolbar')).toBeVisible();
-    await expect.poll(async () => Object.keys((await state(page)).voiceGrants).sort()).toEqual([firstGrant, secondGrant].sort());
+    await expect.poll(async () => Object.keys((await state(page)).voiceConnections).sort()).toEqual([firstGrant, secondGrant].sort());
     await page.getByRole('button', { name: 'Rooms: Lounge', exact: true }).hover();
     await page.locator('.room-list .room', { hasText: 'Games' }).click();
     const thirdGrant = await join(page, 'Move here');
-    await expect.poll(async () => Object.keys((await state(page)).voiceGrants).sort()).toEqual([secondGrant, thirdGrant].sort());
+    await expect.poll(async () => Object.keys((await state(page)).voiceConnections).sort()).toEqual([secondGrant, thirdGrant].sort());
     await expect(other.getByRole('toolbar')).toBeVisible();
     await page.getByRole('button', { name: 'Leave voice', exact: true }).click();
-    await expect.poll(async () => Object.keys((await state(page)).voiceGrants)).toEqual([secondGrant]);
+    await expect.poll(async () => Object.keys((await state(page)).voiceConnections)).toEqual([secondGrant]);
     await expect(other.getByRole('toolbar')).toBeVisible();
     await expect(other.locator('.stage .tile')).toHaveCount(3);
     await other.getByRole('button', { name: 'Leave voice', exact: true }).click();

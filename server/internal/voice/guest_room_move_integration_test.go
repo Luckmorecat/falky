@@ -102,13 +102,12 @@ func TestGuardedLiveKitGuestJoinsKeepOrdinaryAndRestoredConnections(t *testing.T
 				default:
 				}
 			}
-			if err := f.voice.Leave(t.Context(), session, current.GrantID); err != nil {
-				t.Fatal(err)
-			}
-			refusedAtGuard(t, f, current.Token)
+			inSecond.room.Disconnect()
 			waitForParticipants(t, liveKitClient(), second.ID)
 			waitForParticipants(t, liveKitClient(), f.room, old.GrantID, sameRoom.GrantID)
 			waitForParticipants(t, liveKitClient(), third.ID, newest.GrantID)
+			connect(t, current)
+			waitForParticipants(t, liveKitClient(), second.ID, current.GrantID)
 		})
 	}
 }

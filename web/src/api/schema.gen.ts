@@ -539,33 +539,13 @@ export interface paths {
         put?: never;
         /**
          * Join a room's voice.
-         * @description Returns the LiveKit URL and a token to connect to the room's voice with a LiveKit SDK. Every explicit Join authorizes a fresh independent connection, including repeated joins from the same session. Other tabs and devices remain connected, in the same room or different rooms. Capacity counts connections, including other connections of this identity. Account requests require this server's exact configured Origin header.
+         * @description Returns the LiveKit URL and a token to connect to the room's voice with a LiveKit SDK. Every explicit Join authorizes a fresh independent connection, including repeated joins from the same session. Other tabs and devices remain connected, in the same room or different rooms. Local Leave, room switching and discarded setup credentials do not revoke grants; valid credentials may reconnect their original connection while their token, session and room access remain valid. Capacity counts connections, including other connections of this identity. Account requests require this server's exact configured Origin header.
          *
-         *     Both guests and accounts receive a fresh immutable transport identity on every explicit Join, even for the same room and session. Its prefix before the dot is the permanent identity ID. Occupancy exposes both connectionId (the transport identity) and visitorId (the permanent identity). All credentials use guarded public signalling. Valid original and LiveKit refreshed JWTs reconnect after restart only through their exact persisted active grant and current browser session, expiry, kind, generation, room and name authorization. Unknown pre-upgrade grants fail closed and require one explicit rejoin; browser sessions and their deadlines survive migration. Temporary disconnection, page exit and SDK Leave preserve the grant. Explicit Leave uses the returned grantId and affects only that connection. The token may publish the microphone, a camera, a screen share and the screen share's audio, subscribe to the other participants, and update the participant's own attributes, but not send data messages. It expires 10 minutes after it is issued, so connect right away; once connected, LiveKit renews it.
+         *     Both guests and accounts receive a fresh immutable transport identity on every explicit Join, even for the same room and session. Its prefix before the dot is the permanent identity ID. Occupancy exposes both connectionId (the transport identity) and visitorId (the permanent identity). All credentials use guarded public signalling. Valid original and LiveKit refreshed JWTs reconnect after restart only through their exact persisted active grant and current browser session, expiry, kind, generation, room and name authorization. Unknown pre-upgrade grants fail closed and require one explicit rejoin; browser sessions and their deadlines survive migration. Temporary disconnection, page exit and SDK Leave preserve the grant. The token may publish the microphone, a camera, a screen share and the screen share's audio, subscribe to the other participants, and update the participant's own attributes, but not send data messages. It expires 10 minutes after it is issued, so connect right away; once connected, LiveKit renews it.
          *
          *     Muted is the state of the microphone track. Deafened is the participant attribute `deafened`: a client sets it to `"true"` while it plays no one's audio, and also mutes its microphone, then sets it to `"false"` again; an absent attribute means not deafened. The other participants see it through the SDK, for example with `room.localParticipant.setAttributes({ deafened: 'true' })` in `livekit-client`.
          */
         post: operations["joinVoice"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/voice/leave": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Durably revoke an exact voice grant.
-         * @description Requires a current browser session. Accounts require the exact configured Origin. Targets only grantId owned by this exact session, kind, identity and generation; it never targets a later replacement. A missing or already cleaned grant succeeds idempotently. A present grant owned by another session returns 403 grant_forbidden. HTTP 200 acknowledges durable revocation, even when LiveKit removal is still pending: the backend retries cleanup. Any non-200 response or lost acknowledgement requires retaining the exact pending leave. A 401 after expiry, logout or session replacement does not acknowledge durable revocation; retain unresolved intent without blocking new joins. Stop local media immediately before making this request.
-         */
-        post: operations["leaveVoice"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1258,7 +1238,7 @@ export interface components {
         /** @description What a client connects to a room's voice with. */
         VoiceCredentials: {
             /**
-             * @description Immutable exact grant target for Leave; also the LiveKit transport identity.
+             * @description Immutable identifier of this independent connection and its LiveKit transport identity.
              * @example 01JBX6Z8Q3M5W2K7R9T4V1C0DE.01JBX8C4N2F6H8K0P3R5T7W9YZ
              */
             grantId: string;
@@ -2792,64 +2772,6 @@ export interface operations {
             };
             /** @description The server cannot reach LiveKit (`voice_unavailable`); try again later. Existing connections are unchanged. */
             503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Error"];
-                };
-            };
-            default: components["responses"]["Error"];
-        };
-    };
-    leaveVoice: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** @description Exact immutable grant to revoke. */
-        requestBody: {
-            content: {
-                "application/json": {
-                    /**
-                     * @description The immutable grantId returned by Join.
-                     * @example 01JBX6Z8Q3M5W2K7R9T4V1C0DE.01JBX8C4N2F6H8K0P3R5T7W9YZ
-                     */
-                    grantId: string;
-                };
-            };
-        };
-        responses: {
-            /** @description Durable revocation acknowledged; media cleanup may still be pending. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        /**
-                         * @description Durable permission has been revoked or the grant was already absent.
-                         * @example true
-                         * @enum {boolean}
-                         */
-                        revoked: true;
-                    };
-                };
-            };
-            /** @description Missing or empty grantId (bad_request). */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Error"];
-                };
-            };
-            401: components["responses"]["VisitorRequired"];
-            /** @description Wrong exact account Origin (origin_forbidden) or another session's grant (grant_forbidden). */
-            403: {
                 headers: {
                     [name: string]: unknown;
                 };

@@ -203,21 +203,6 @@ func (e PaletteName) Valid() bool {
 	}
 }
 
-// Defines values for LeaveVoice200JSONResponseBodyRevoked.
-const (
-	LeaveVoice200JSONResponseBodyRevokedTrue LeaveVoice200JSONResponseBodyRevoked = true
-)
-
-// Valid indicates whether the value is a known member of the LeaveVoice200JSONResponseBodyRevoked enum.
-func (e LeaveVoice200JSONResponseBodyRevoked) Valid() bool {
-	switch e {
-	case LeaveVoice200JSONResponseBodyRevokedTrue:
-		return true
-	default:
-		return false
-	}
-}
-
 // AccessRevoked Why guest-link access ended. The old guest cookie is refused; reentry through the current guest link creates a new guest identity. This event is not sent for account logout, recovery, disablement or session expiry; those close only the affected sessions with code 4001.
 type AccessRevoked struct {
 	// Reason `link_replaced`: the guest access link was replaced, ending old guest sessions while preserving account sessions.
@@ -891,7 +876,7 @@ type VisitorColourLookup struct {
 
 // VoiceCredentials What a client connects to a room's voice with.
 type VoiceCredentials struct {
-	// GrantId Immutable exact grant target for Leave; also the LiveKit transport identity.
+	// GrantId Immutable identifier of this independent connection and its LiveKit transport identity.
 	//
 	// Example: 01JBX6Z8Q3M5W2K7R9T4V1C0DE.01JBX8C4N2F6H8K0P3R5T7W9YZ
 	GrantId string `json:"grantId"`
@@ -943,17 +928,6 @@ type JoinVoiceJSONBody struct {
 	// Deprecated: this property has been marked as deprecated upstream, but no `x-deprecated-reason` was set
 	ConfirmTransfer bool `json:"confirmTransfer,omitempty"`
 }
-
-// LeaveVoiceJSONBody defines parameters for LeaveVoice.
-type LeaveVoiceJSONBody struct {
-	// GrantId The immutable grantId returned by Join.
-	//
-	// Example: 01JBX6Z8Q3M5W2K7R9T4V1C0DE.01JBX8C4N2F6H8K0P3R5T7W9YZ
-	GrantId string `json:"grantId"`
-}
-
-// LeaveVoice200JSONResponseBodyRevoked defines parameters for LeaveVoice.
-type LeaveVoice200JSONResponseBodyRevoked bool
 
 // BeginAuthenticationJSONRequestBody defines body for BeginAuthentication for application/json ContentType.
 type BeginAuthenticationJSONRequestBody = AccountEmpty
@@ -1008,9 +982,6 @@ type JoinVoiceJSONRequestBody JoinVoiceJSONBody
 
 // LookupVisitorColoursJSONRequestBody defines body for LookupVisitorColours for application/json ContentType.
 type LookupVisitorColoursJSONRequestBody = VisitorColourLookup
-
-// LeaveVoiceJSONRequestBody defines body for LeaveVoice for application/json ContentType.
-type LeaveVoiceJSONRequestBody LeaveVoiceJSONBody
 
 // AsMessage returns the union data inside the Event_Payload as a Message
 func (t Event_Payload) AsMessage() (Message, error) {
@@ -1584,9 +1555,9 @@ type ClientInterface interface {
 
 	// JoinVoiceWithBody Join a room's voice.
 	//
-	// Returns the LiveKit URL and a token to connect to the room's voice with a LiveKit SDK. Every explicit Join authorizes a fresh independent connection, including repeated joins from the same session. Other tabs and devices remain connected, in the same room or different rooms. Capacity counts connections, including other connections of this identity. Account requests require this server's exact configured Origin header.
+	// Returns the LiveKit URL and a token to connect to the room's voice with a LiveKit SDK. Every explicit Join authorizes a fresh independent connection, including repeated joins from the same session. Other tabs and devices remain connected, in the same room or different rooms. Local Leave, room switching and discarded setup credentials do not revoke grants; valid credentials may reconnect their original connection while their token, session and room access remain valid. Capacity counts connections, including other connections of this identity. Account requests require this server's exact configured Origin header.
 	//
-	// Both guests and accounts receive a fresh immutable transport identity on every explicit Join, even for the same room and session. Its prefix before the dot is the permanent identity ID. Occupancy exposes both connectionId (the transport identity) and visitorId (the permanent identity). All credentials use guarded public signalling. Valid original and LiveKit refreshed JWTs reconnect after restart only through their exact persisted active grant and current browser session, expiry, kind, generation, room and name authorization. Unknown pre-upgrade grants fail closed and require one explicit rejoin; browser sessions and their deadlines survive migration. Temporary disconnection, page exit and SDK Leave preserve the grant. Explicit Leave uses the returned grantId and affects only that connection. The token may publish the microphone, a camera, a screen share and the screen share's audio, subscribe to the other participants, and update the participant's own attributes, but not send data messages. It expires 10 minutes after it is issued, so connect right away; once connected, LiveKit renews it.
+	// Both guests and accounts receive a fresh immutable transport identity on every explicit Join, even for the same room and session. Its prefix before the dot is the permanent identity ID. Occupancy exposes both connectionId (the transport identity) and visitorId (the permanent identity). All credentials use guarded public signalling. Valid original and LiveKit refreshed JWTs reconnect after restart only through their exact persisted active grant and current browser session, expiry, kind, generation, room and name authorization. Unknown pre-upgrade grants fail closed and require one explicit rejoin; browser sessions and their deadlines survive migration. Temporary disconnection, page exit and SDK Leave preserve the grant. The token may publish the microphone, a camera, a screen share and the screen share's audio, subscribe to the other participants, and update the participant's own attributes, but not send data messages. It expires 10 minutes after it is issued, so connect right away; once connected, LiveKit renews it.
 	//
 	// Muted is the state of the microphone track. Deafened is the participant attribute `deafened`: a client sets it to `"true"` while it plays no one's audio, and also mutes its microphone, then sets it to `"false"` again; an absent attribute means not deafened. The other participants see it through the SDK, for example with `room.localParticipant.setAttributes({ deafened: 'true' })` in `livekit-client`.
 	//
@@ -1597,9 +1568,9 @@ type ClientInterface interface {
 
 	// JoinVoice Join a room's voice.
 	//
-	// Returns the LiveKit URL and a token to connect to the room's voice with a LiveKit SDK. Every explicit Join authorizes a fresh independent connection, including repeated joins from the same session. Other tabs and devices remain connected, in the same room or different rooms. Capacity counts connections, including other connections of this identity. Account requests require this server's exact configured Origin header.
+	// Returns the LiveKit URL and a token to connect to the room's voice with a LiveKit SDK. Every explicit Join authorizes a fresh independent connection, including repeated joins from the same session. Other tabs and devices remain connected, in the same room or different rooms. Local Leave, room switching and discarded setup credentials do not revoke grants; valid credentials may reconnect their original connection while their token, session and room access remain valid. Capacity counts connections, including other connections of this identity. Account requests require this server's exact configured Origin header.
 	//
-	// Both guests and accounts receive a fresh immutable transport identity on every explicit Join, even for the same room and session. Its prefix before the dot is the permanent identity ID. Occupancy exposes both connectionId (the transport identity) and visitorId (the permanent identity). All credentials use guarded public signalling. Valid original and LiveKit refreshed JWTs reconnect after restart only through their exact persisted active grant and current browser session, expiry, kind, generation, room and name authorization. Unknown pre-upgrade grants fail closed and require one explicit rejoin; browser sessions and their deadlines survive migration. Temporary disconnection, page exit and SDK Leave preserve the grant. Explicit Leave uses the returned grantId and affects only that connection. The token may publish the microphone, a camera, a screen share and the screen share's audio, subscribe to the other participants, and update the participant's own attributes, but not send data messages. It expires 10 minutes after it is issued, so connect right away; once connected, LiveKit renews it.
+	// Both guests and accounts receive a fresh immutable transport identity on every explicit Join, even for the same room and session. Its prefix before the dot is the permanent identity ID. Occupancy exposes both connectionId (the transport identity) and visitorId (the permanent identity). All credentials use guarded public signalling. Valid original and LiveKit refreshed JWTs reconnect after restart only through their exact persisted active grant and current browser session, expiry, kind, generation, room and name authorization. Unknown pre-upgrade grants fail closed and require one explicit rejoin; browser sessions and their deadlines survive migration. Temporary disconnection, page exit and SDK Leave preserve the grant. The token may publish the microphone, a camera, a screen share and the screen share's audio, subscribe to the other participants, and update the participant's own attributes, but not send data messages. It expires 10 minutes after it is issued, so connect right away; once connected, LiveKit renews it.
 	//
 	// Muted is the state of the microphone track. Deafened is the participant attribute `deafened`: a client sets it to `"true"` while it plays no one's audio, and also mutes its microphone, then sets it to `"false"` again; an absent attribute means not deafened. The other participants see it through the SDK, for example with `room.localParticipant.setAttributes({ deafened: 'true' })` in `livekit-client`.
 	//
@@ -1625,24 +1596,6 @@ type ClientInterface interface {
 	//
 	// Corresponds with POST /api/visitor-colours (the `LookupVisitorColours` operationId).
 	LookupVisitorColours(ctx context.Context, body LookupVisitorColoursJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
-
-	// LeaveVoiceWithBody Durably revoke an exact voice grant.
-	//
-	// Requires a current browser session. Accounts require the exact configured Origin. Targets only grantId owned by this exact session, kind, identity and generation; it never targets a later replacement. A missing or already cleaned grant succeeds idempotently. A present grant owned by another session returns 403 grant_forbidden. HTTP 200 acknowledges durable revocation, even when LiveKit removal is still pending: the backend retries cleanup. Any non-200 response or lost acknowledgement requires retaining the exact pending leave. A 401 after expiry, logout or session replacement does not acknowledge durable revocation; retain unresolved intent without blocking new joins. Stop local media immediately before making this request.
-	//
-	// Takes any type of body and a specified content type.
-	//
-	// Corresponds with POST /api/voice/leave (the `LeaveVoice` operationId).
-	LeaveVoiceWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
-
-	// LeaveVoice Durably revoke an exact voice grant.
-	//
-	// Requires a current browser session. Accounts require the exact configured Origin. Targets only grantId owned by this exact session, kind, identity and generation; it never targets a later replacement. A missing or already cleaned grant succeeds idempotently. A present grant owned by another session returns 403 grant_forbidden. HTTP 200 acknowledges durable revocation, even when LiveKit removal is still pending: the backend retries cleanup. Any non-200 response or lost acknowledgement requires retaining the exact pending leave. A 401 after expiry, logout or session replacement does not acknowledge durable revocation; retain unresolved intent without blocking new joins. Stop local media immediately before making this request.
-	//
-	// Takes a body of the `application/json` content type.
-	//
-	// Corresponds with POST /api/voice/leave (the `LeaveVoice` operationId).
-	LeaveVoice(ctx context.Context, body LeaveVoiceJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// GetLiveness Report that the process is running.
 	//
@@ -2371,9 +2324,9 @@ func (c *Client) PostMessage(ctx context.Context, id RoomId, body PostMessageJSO
 
 // JoinVoiceWithBody Join a room's voice.
 //
-// Returns the LiveKit URL and a token to connect to the room's voice with a LiveKit SDK. Every explicit Join authorizes a fresh independent connection, including repeated joins from the same session. Other tabs and devices remain connected, in the same room or different rooms. Capacity counts connections, including other connections of this identity. Account requests require this server's exact configured Origin header.
+// Returns the LiveKit URL and a token to connect to the room's voice with a LiveKit SDK. Every explicit Join authorizes a fresh independent connection, including repeated joins from the same session. Other tabs and devices remain connected, in the same room or different rooms. Local Leave, room switching and discarded setup credentials do not revoke grants; valid credentials may reconnect their original connection while their token, session and room access remain valid. Capacity counts connections, including other connections of this identity. Account requests require this server's exact configured Origin header.
 //
-// Both guests and accounts receive a fresh immutable transport identity on every explicit Join, even for the same room and session. Its prefix before the dot is the permanent identity ID. Occupancy exposes both connectionId (the transport identity) and visitorId (the permanent identity). All credentials use guarded public signalling. Valid original and LiveKit refreshed JWTs reconnect after restart only through their exact persisted active grant and current browser session, expiry, kind, generation, room and name authorization. Unknown pre-upgrade grants fail closed and require one explicit rejoin; browser sessions and their deadlines survive migration. Temporary disconnection, page exit and SDK Leave preserve the grant. Explicit Leave uses the returned grantId and affects only that connection. The token may publish the microphone, a camera, a screen share and the screen share's audio, subscribe to the other participants, and update the participant's own attributes, but not send data messages. It expires 10 minutes after it is issued, so connect right away; once connected, LiveKit renews it.
+// Both guests and accounts receive a fresh immutable transport identity on every explicit Join, even for the same room and session. Its prefix before the dot is the permanent identity ID. Occupancy exposes both connectionId (the transport identity) and visitorId (the permanent identity). All credentials use guarded public signalling. Valid original and LiveKit refreshed JWTs reconnect after restart only through their exact persisted active grant and current browser session, expiry, kind, generation, room and name authorization. Unknown pre-upgrade grants fail closed and require one explicit rejoin; browser sessions and their deadlines survive migration. Temporary disconnection, page exit and SDK Leave preserve the grant. The token may publish the microphone, a camera, a screen share and the screen share's audio, subscribe to the other participants, and update the participant's own attributes, but not send data messages. It expires 10 minutes after it is issued, so connect right away; once connected, LiveKit renews it.
 //
 // Muted is the state of the microphone track. Deafened is the participant attribute `deafened`: a client sets it to `"true"` while it plays no one's audio, and also mutes its microphone, then sets it to `"false"` again; an absent attribute means not deafened. The other participants see it through the SDK, for example with `room.localParticipant.setAttributes({ deafened: 'true' })` in `livekit-client`.
 //
@@ -2394,9 +2347,9 @@ func (c *Client) JoinVoiceWithBody(ctx context.Context, id RoomId, contentType s
 
 // JoinVoice Join a room's voice.
 //
-// Returns the LiveKit URL and a token to connect to the room's voice with a LiveKit SDK. Every explicit Join authorizes a fresh independent connection, including repeated joins from the same session. Other tabs and devices remain connected, in the same room or different rooms. Capacity counts connections, including other connections of this identity. Account requests require this server's exact configured Origin header.
+// Returns the LiveKit URL and a token to connect to the room's voice with a LiveKit SDK. Every explicit Join authorizes a fresh independent connection, including repeated joins from the same session. Other tabs and devices remain connected, in the same room or different rooms. Local Leave, room switching and discarded setup credentials do not revoke grants; valid credentials may reconnect their original connection while their token, session and room access remain valid. Capacity counts connections, including other connections of this identity. Account requests require this server's exact configured Origin header.
 //
-// Both guests and accounts receive a fresh immutable transport identity on every explicit Join, even for the same room and session. Its prefix before the dot is the permanent identity ID. Occupancy exposes both connectionId (the transport identity) and visitorId (the permanent identity). All credentials use guarded public signalling. Valid original and LiveKit refreshed JWTs reconnect after restart only through their exact persisted active grant and current browser session, expiry, kind, generation, room and name authorization. Unknown pre-upgrade grants fail closed and require one explicit rejoin; browser sessions and their deadlines survive migration. Temporary disconnection, page exit and SDK Leave preserve the grant. Explicit Leave uses the returned grantId and affects only that connection. The token may publish the microphone, a camera, a screen share and the screen share's audio, subscribe to the other participants, and update the participant's own attributes, but not send data messages. It expires 10 minutes after it is issued, so connect right away; once connected, LiveKit renews it.
+// Both guests and accounts receive a fresh immutable transport identity on every explicit Join, even for the same room and session. Its prefix before the dot is the permanent identity ID. Occupancy exposes both connectionId (the transport identity) and visitorId (the permanent identity). All credentials use guarded public signalling. Valid original and LiveKit refreshed JWTs reconnect after restart only through their exact persisted active grant and current browser session, expiry, kind, generation, room and name authorization. Unknown pre-upgrade grants fail closed and require one explicit rejoin; browser sessions and their deadlines survive migration. Temporary disconnection, page exit and SDK Leave preserve the grant. The token may publish the microphone, a camera, a screen share and the screen share's audio, subscribe to the other participants, and update the participant's own attributes, but not send data messages. It expires 10 minutes after it is issued, so connect right away; once connected, LiveKit renews it.
 //
 // Muted is the state of the microphone track. Deafened is the participant attribute `deafened`: a client sets it to `"true"` while it plays no one's audio, and also mutes its microphone, then sets it to `"false"` again; an absent attribute means not deafened. The other participants see it through the SDK, for example with `room.localParticipant.setAttributes({ deafened: 'true' })` in `livekit-client`.
 //
@@ -2443,44 +2396,6 @@ func (c *Client) LookupVisitorColoursWithBody(ctx context.Context, contentType s
 // Corresponds with POST /api/visitor-colours (the `LookupVisitorColours` operationId).
 func (c *Client) LookupVisitorColours(ctx context.Context, body LookupVisitorColoursJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewLookupVisitorColoursRequest(c.Server, body)
-	if err != nil {
-		return nil, err
-	}
-	req = req.WithContext(ctx)
-	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
-		return nil, err
-	}
-	return c.Client.Do(req)
-}
-
-// LeaveVoiceWithBody Durably revoke an exact voice grant.
-//
-// Requires a current browser session. Accounts require the exact configured Origin. Targets only grantId owned by this exact session, kind, identity and generation; it never targets a later replacement. A missing or already cleaned grant succeeds idempotently. A present grant owned by another session returns 403 grant_forbidden. HTTP 200 acknowledges durable revocation, even when LiveKit removal is still pending: the backend retries cleanup. Any non-200 response or lost acknowledgement requires retaining the exact pending leave. A 401 after expiry, logout or session replacement does not acknowledge durable revocation; retain unresolved intent without blocking new joins. Stop local media immediately before making this request.
-//
-// Takes any type of body and a specified content type.
-//
-// Corresponds with POST /api/voice/leave (the `LeaveVoice` operationId).
-func (c *Client) LeaveVoiceWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewLeaveVoiceRequestWithBody(c.Server, contentType, body)
-	if err != nil {
-		return nil, err
-	}
-	req = req.WithContext(ctx)
-	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
-		return nil, err
-	}
-	return c.Client.Do(req)
-}
-
-// LeaveVoice Durably revoke an exact voice grant.
-//
-// Requires a current browser session. Accounts require the exact configured Origin. Targets only grantId owned by this exact session, kind, identity and generation; it never targets a later replacement. A missing or already cleaned grant succeeds idempotently. A present grant owned by another session returns 403 grant_forbidden. HTTP 200 acknowledges durable revocation, even when LiveKit removal is still pending: the backend retries cleanup. Any non-200 response or lost acknowledgement requires retaining the exact pending leave. A 401 after expiry, logout or session replacement does not acknowledge durable revocation; retain unresolved intent without blocking new joins. Stop local media immediately before making this request.
-//
-// Takes a body of the `application/json` content type.
-//
-// Corresponds with POST /api/voice/leave (the `LeaveVoice` operationId).
-func (c *Client) LeaveVoice(ctx context.Context, body LeaveVoiceJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewLeaveVoiceRequest(c.Server, body)
 	if err != nil {
 		return nil, err
 	}
@@ -3478,46 +3393,6 @@ func NewLookupVisitorColoursRequestWithBody(server string, contentType string, b
 	return req, nil
 }
 
-// NewLeaveVoiceRequest calls the generic LeaveVoice builder with application/json body
-func NewLeaveVoiceRequest(server string, body LeaveVoiceJSONRequestBody) (*http.Request, error) {
-	var bodyReader io.Reader
-	buf, err := json.Marshal(body)
-	if err != nil {
-		return nil, err
-	}
-	bodyReader = bytes.NewReader(buf)
-	return NewLeaveVoiceRequestWithBody(server, "application/json", bodyReader)
-}
-
-// NewLeaveVoiceRequestWithBody constructs an http.Request for the LeaveVoice method, with any body, and a specified content type
-func NewLeaveVoiceRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
-	var err error
-
-	serverURL, err := url.Parse(server)
-	if err != nil {
-		return nil, err
-	}
-
-	operationPath := fmt.Sprintf("/api/voice/leave")
-	if operationPath[0] == '/' {
-		operationPath = "." + operationPath
-	}
-
-	queryURL, err := serverURL.Parse(operationPath)
-	if err != nil {
-		return nil, err
-	}
-
-	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
-	if err != nil {
-		return nil, err
-	}
-
-	req.Header.Add("Content-Type", contentType)
-
-	return req, nil
-}
-
 // NewGetLivenessRequest constructs an http.Request for the GetLiveness method
 func NewGetLivenessRequest(server string) (*http.Request, error) {
 	var err error
@@ -3960,9 +3835,9 @@ type ClientWithResponsesInterface interface {
 
 	// JoinVoiceWithBodyWithResponse Join a room's voice.
 	//
-	// Returns the LiveKit URL and a token to connect to the room's voice with a LiveKit SDK. Every explicit Join authorizes a fresh independent connection, including repeated joins from the same session. Other tabs and devices remain connected, in the same room or different rooms. Capacity counts connections, including other connections of this identity. Account requests require this server's exact configured Origin header.
+	// Returns the LiveKit URL and a token to connect to the room's voice with a LiveKit SDK. Every explicit Join authorizes a fresh independent connection, including repeated joins from the same session. Other tabs and devices remain connected, in the same room or different rooms. Local Leave, room switching and discarded setup credentials do not revoke grants; valid credentials may reconnect their original connection while their token, session and room access remain valid. Capacity counts connections, including other connections of this identity. Account requests require this server's exact configured Origin header.
 	//
-	// Both guests and accounts receive a fresh immutable transport identity on every explicit Join, even for the same room and session. Its prefix before the dot is the permanent identity ID. Occupancy exposes both connectionId (the transport identity) and visitorId (the permanent identity). All credentials use guarded public signalling. Valid original and LiveKit refreshed JWTs reconnect after restart only through their exact persisted active grant and current browser session, expiry, kind, generation, room and name authorization. Unknown pre-upgrade grants fail closed and require one explicit rejoin; browser sessions and their deadlines survive migration. Temporary disconnection, page exit and SDK Leave preserve the grant. Explicit Leave uses the returned grantId and affects only that connection. The token may publish the microphone, a camera, a screen share and the screen share's audio, subscribe to the other participants, and update the participant's own attributes, but not send data messages. It expires 10 minutes after it is issued, so connect right away; once connected, LiveKit renews it.
+	// Both guests and accounts receive a fresh immutable transport identity on every explicit Join, even for the same room and session. Its prefix before the dot is the permanent identity ID. Occupancy exposes both connectionId (the transport identity) and visitorId (the permanent identity). All credentials use guarded public signalling. Valid original and LiveKit refreshed JWTs reconnect after restart only through their exact persisted active grant and current browser session, expiry, kind, generation, room and name authorization. Unknown pre-upgrade grants fail closed and require one explicit rejoin; browser sessions and their deadlines survive migration. Temporary disconnection, page exit and SDK Leave preserve the grant. The token may publish the microphone, a camera, a screen share and the screen share's audio, subscribe to the other participants, and update the participant's own attributes, but not send data messages. It expires 10 minutes after it is issued, so connect right away; once connected, LiveKit renews it.
 	//
 	// Muted is the state of the microphone track. Deafened is the participant attribute `deafened`: a client sets it to `"true"` while it plays no one's audio, and also mutes its microphone, then sets it to `"false"` again; an absent attribute means not deafened. The other participants see it through the SDK, for example with `room.localParticipant.setAttributes({ deafened: 'true' })` in `livekit-client`.
 	//
@@ -3973,9 +3848,9 @@ type ClientWithResponsesInterface interface {
 
 	// JoinVoiceWithResponse Join a room's voice.
 	//
-	// Returns the LiveKit URL and a token to connect to the room's voice with a LiveKit SDK. Every explicit Join authorizes a fresh independent connection, including repeated joins from the same session. Other tabs and devices remain connected, in the same room or different rooms. Capacity counts connections, including other connections of this identity. Account requests require this server's exact configured Origin header.
+	// Returns the LiveKit URL and a token to connect to the room's voice with a LiveKit SDK. Every explicit Join authorizes a fresh independent connection, including repeated joins from the same session. Other tabs and devices remain connected, in the same room or different rooms. Local Leave, room switching and discarded setup credentials do not revoke grants; valid credentials may reconnect their original connection while their token, session and room access remain valid. Capacity counts connections, including other connections of this identity. Account requests require this server's exact configured Origin header.
 	//
-	// Both guests and accounts receive a fresh immutable transport identity on every explicit Join, even for the same room and session. Its prefix before the dot is the permanent identity ID. Occupancy exposes both connectionId (the transport identity) and visitorId (the permanent identity). All credentials use guarded public signalling. Valid original and LiveKit refreshed JWTs reconnect after restart only through their exact persisted active grant and current browser session, expiry, kind, generation, room and name authorization. Unknown pre-upgrade grants fail closed and require one explicit rejoin; browser sessions and their deadlines survive migration. Temporary disconnection, page exit and SDK Leave preserve the grant. Explicit Leave uses the returned grantId and affects only that connection. The token may publish the microphone, a camera, a screen share and the screen share's audio, subscribe to the other participants, and update the participant's own attributes, but not send data messages. It expires 10 minutes after it is issued, so connect right away; once connected, LiveKit renews it.
+	// Both guests and accounts receive a fresh immutable transport identity on every explicit Join, even for the same room and session. Its prefix before the dot is the permanent identity ID. Occupancy exposes both connectionId (the transport identity) and visitorId (the permanent identity). All credentials use guarded public signalling. Valid original and LiveKit refreshed JWTs reconnect after restart only through their exact persisted active grant and current browser session, expiry, kind, generation, room and name authorization. Unknown pre-upgrade grants fail closed and require one explicit rejoin; browser sessions and their deadlines survive migration. Temporary disconnection, page exit and SDK Leave preserve the grant. The token may publish the microphone, a camera, a screen share and the screen share's audio, subscribe to the other participants, and update the participant's own attributes, but not send data messages. It expires 10 minutes after it is issued, so connect right away; once connected, LiveKit renews it.
 	//
 	// Muted is the state of the microphone track. Deafened is the participant attribute `deafened`: a client sets it to `"true"` while it plays no one's audio, and also mutes its microphone, then sets it to `"false"` again; an absent attribute means not deafened. The other participants see it through the SDK, for example with `room.localParticipant.setAttributes({ deafened: 'true' })` in `livekit-client`.
 	//
@@ -4001,24 +3876,6 @@ type ClientWithResponsesInterface interface {
 	//
 	// Corresponds with POST /api/visitor-colours (the `LookupVisitorColours` operationId).
 	LookupVisitorColoursWithResponse(ctx context.Context, body LookupVisitorColoursJSONRequestBody, reqEditors ...RequestEditorFn) (*LookupVisitorColoursResponse, error)
-
-	// LeaveVoiceWithBodyWithResponse Durably revoke an exact voice grant.
-	//
-	// Requires a current browser session. Accounts require the exact configured Origin. Targets only grantId owned by this exact session, kind, identity and generation; it never targets a later replacement. A missing or already cleaned grant succeeds idempotently. A present grant owned by another session returns 403 grant_forbidden. HTTP 200 acknowledges durable revocation, even when LiveKit removal is still pending: the backend retries cleanup. Any non-200 response or lost acknowledgement requires retaining the exact pending leave. A 401 after expiry, logout or session replacement does not acknowledge durable revocation; retain unresolved intent without blocking new joins. Stop local media immediately before making this request.
-	//
-	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
-	//
-	// Corresponds with POST /api/voice/leave (the `LeaveVoice` operationId).
-	LeaveVoiceWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*LeaveVoiceResponse, error)
-
-	// LeaveVoiceWithResponse Durably revoke an exact voice grant.
-	//
-	// Requires a current browser session. Accounts require the exact configured Origin. Targets only grantId owned by this exact session, kind, identity and generation; it never targets a later replacement. A missing or already cleaned grant succeeds idempotently. A present grant owned by another session returns 403 grant_forbidden. HTTP 200 acknowledges durable revocation, even when LiveKit removal is still pending: the backend retries cleanup. Any non-200 response or lost acknowledgement requires retaining the exact pending leave. A 401 after expiry, logout or session replacement does not acknowledge durable revocation; retain unresolved intent without blocking new joins. Stop local media immediately before making this request.
-	//
-	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
-	//
-	// Corresponds with POST /api/voice/leave (the `LeaveVoice` operationId).
-	LeaveVoiceWithResponse(ctx context.Context, body LeaveVoiceJSONRequestBody, reqEditors ...RequestEditorFn) (*LeaveVoiceResponse, error)
 
 	// GetLivenessWithResponse Report that the process is running.
 	//
@@ -5478,85 +5335,6 @@ func (r LookupVisitorColoursResponse) ContentType() string {
 	return ""
 }
 
-type LeaveVoiceResponse struct {
-	Body         []byte
-	HTTPResponse *http.Response
-	// JSON200 the response for an HTTP 200 `application/json` response
-	JSON200 *struct {
-		// Revoked Durable permission has been revoked or the grant was already absent.
-		//
-		// Example: true
-		Revoked LeaveVoice200JSONResponseBodyRevoked `json:"revoked"`
-	}
-	// JSON400 the response for an HTTP 400 `application/json` response
-	JSON400 *Error
-	// JSON401 the response for an HTTP 401 `application/json` response
-	JSON401 *VisitorRequired
-	// JSON403 the response for an HTTP 403 `application/json` response
-	JSON403 *Error
-	// JSONDefault the response for an HTTP default `application/json` response
-	JSONDefault *Error
-}
-
-// GetJSON200 returns the response for an HTTP 200 `application/json` response
-func (r LeaveVoiceResponse) GetJSON200() *struct {
-	// Revoked Durable permission has been revoked or the grant was already absent.
-	//
-	// Example: true
-	Revoked LeaveVoice200JSONResponseBodyRevoked `json:"revoked"`
-} {
-	return r.JSON200
-}
-
-// GetJSON400 returns the response for an HTTP 400 `application/json` response
-func (r LeaveVoiceResponse) GetJSON400() *Error {
-	return r.JSON400
-}
-
-// GetJSON401 returns the response for an HTTP 401 `application/json` response
-func (r LeaveVoiceResponse) GetJSON401() *VisitorRequired {
-	return r.JSON401
-}
-
-// GetJSON403 returns the response for an HTTP 403 `application/json` response
-func (r LeaveVoiceResponse) GetJSON403() *Error {
-	return r.JSON403
-}
-
-// GetJSONDefault returns the response for an HTTP default `application/json` response
-func (r LeaveVoiceResponse) GetJSONDefault() *Error {
-	return r.JSONDefault
-}
-
-// GetBody returns the raw response body bytes
-func (r LeaveVoiceResponse) GetBody() []byte {
-	return r.Body
-}
-
-// Status returns HTTPResponse.Status
-func (r LeaveVoiceResponse) Status() string {
-	if r.HTTPResponse != nil {
-		return r.HTTPResponse.Status
-	}
-	return http.StatusText(0)
-}
-
-// StatusCode returns HTTPResponse.StatusCode
-func (r LeaveVoiceResponse) StatusCode() int {
-	if r.HTTPResponse != nil {
-		return r.HTTPResponse.StatusCode
-	}
-	return 0
-}
-
-// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
-func (r LeaveVoiceResponse) ContentType() string {
-	if r.HTTPResponse != nil {
-		return r.HTTPResponse.Header.Get("Content-Type")
-	}
-	return ""
-}
-
 type GetLivenessResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
@@ -6232,9 +6010,9 @@ func (c *ClientWithResponses) PostMessageWithResponse(ctx context.Context, id Ro
 
 // JoinVoiceWithBodyWithResponse Join a room's voice.
 //
-// Returns the LiveKit URL and a token to connect to the room's voice with a LiveKit SDK. Every explicit Join authorizes a fresh independent connection, including repeated joins from the same session. Other tabs and devices remain connected, in the same room or different rooms. Capacity counts connections, including other connections of this identity. Account requests require this server's exact configured Origin header.
+// Returns the LiveKit URL and a token to connect to the room's voice with a LiveKit SDK. Every explicit Join authorizes a fresh independent connection, including repeated joins from the same session. Other tabs and devices remain connected, in the same room or different rooms. Local Leave, room switching and discarded setup credentials do not revoke grants; valid credentials may reconnect their original connection while their token, session and room access remain valid. Capacity counts connections, including other connections of this identity. Account requests require this server's exact configured Origin header.
 //
-// Both guests and accounts receive a fresh immutable transport identity on every explicit Join, even for the same room and session. Its prefix before the dot is the permanent identity ID. Occupancy exposes both connectionId (the transport identity) and visitorId (the permanent identity). All credentials use guarded public signalling. Valid original and LiveKit refreshed JWTs reconnect after restart only through their exact persisted active grant and current browser session, expiry, kind, generation, room and name authorization. Unknown pre-upgrade grants fail closed and require one explicit rejoin; browser sessions and their deadlines survive migration. Temporary disconnection, page exit and SDK Leave preserve the grant. Explicit Leave uses the returned grantId and affects only that connection. The token may publish the microphone, a camera, a screen share and the screen share's audio, subscribe to the other participants, and update the participant's own attributes, but not send data messages. It expires 10 minutes after it is issued, so connect right away; once connected, LiveKit renews it.
+// Both guests and accounts receive a fresh immutable transport identity on every explicit Join, even for the same room and session. Its prefix before the dot is the permanent identity ID. Occupancy exposes both connectionId (the transport identity) and visitorId (the permanent identity). All credentials use guarded public signalling. Valid original and LiveKit refreshed JWTs reconnect after restart only through their exact persisted active grant and current browser session, expiry, kind, generation, room and name authorization. Unknown pre-upgrade grants fail closed and require one explicit rejoin; browser sessions and their deadlines survive migration. Temporary disconnection, page exit and SDK Leave preserve the grant. The token may publish the microphone, a camera, a screen share and the screen share's audio, subscribe to the other participants, and update the participant's own attributes, but not send data messages. It expires 10 minutes after it is issued, so connect right away; once connected, LiveKit renews it.
 //
 // Muted is the state of the microphone track. Deafened is the participant attribute `deafened`: a client sets it to `"true"` while it plays no one's audio, and also mutes its microphone, then sets it to `"false"` again; an absent attribute means not deafened. The other participants see it through the SDK, for example with `room.localParticipant.setAttributes({ deafened: 'true' })` in `livekit-client`.
 //
@@ -6251,9 +6029,9 @@ func (c *ClientWithResponses) JoinVoiceWithBodyWithResponse(ctx context.Context,
 
 // JoinVoiceWithResponse Join a room's voice.
 //
-// Returns the LiveKit URL and a token to connect to the room's voice with a LiveKit SDK. Every explicit Join authorizes a fresh independent connection, including repeated joins from the same session. Other tabs and devices remain connected, in the same room or different rooms. Capacity counts connections, including other connections of this identity. Account requests require this server's exact configured Origin header.
+// Returns the LiveKit URL and a token to connect to the room's voice with a LiveKit SDK. Every explicit Join authorizes a fresh independent connection, including repeated joins from the same session. Other tabs and devices remain connected, in the same room or different rooms. Local Leave, room switching and discarded setup credentials do not revoke grants; valid credentials may reconnect their original connection while their token, session and room access remain valid. Capacity counts connections, including other connections of this identity. Account requests require this server's exact configured Origin header.
 //
-// Both guests and accounts receive a fresh immutable transport identity on every explicit Join, even for the same room and session. Its prefix before the dot is the permanent identity ID. Occupancy exposes both connectionId (the transport identity) and visitorId (the permanent identity). All credentials use guarded public signalling. Valid original and LiveKit refreshed JWTs reconnect after restart only through their exact persisted active grant and current browser session, expiry, kind, generation, room and name authorization. Unknown pre-upgrade grants fail closed and require one explicit rejoin; browser sessions and their deadlines survive migration. Temporary disconnection, page exit and SDK Leave preserve the grant. Explicit Leave uses the returned grantId and affects only that connection. The token may publish the microphone, a camera, a screen share and the screen share's audio, subscribe to the other participants, and update the participant's own attributes, but not send data messages. It expires 10 minutes after it is issued, so connect right away; once connected, LiveKit renews it.
+// Both guests and accounts receive a fresh immutable transport identity on every explicit Join, even for the same room and session. Its prefix before the dot is the permanent identity ID. Occupancy exposes both connectionId (the transport identity) and visitorId (the permanent identity). All credentials use guarded public signalling. Valid original and LiveKit refreshed JWTs reconnect after restart only through their exact persisted active grant and current browser session, expiry, kind, generation, room and name authorization. Unknown pre-upgrade grants fail closed and require one explicit rejoin; browser sessions and their deadlines survive migration. Temporary disconnection, page exit and SDK Leave preserve the grant. The token may publish the microphone, a camera, a screen share and the screen share's audio, subscribe to the other participants, and update the participant's own attributes, but not send data messages. It expires 10 minutes after it is issued, so connect right away; once connected, LiveKit renews it.
 //
 // Muted is the state of the microphone track. Deafened is the participant attribute `deafened`: a client sets it to `"true"` while it plays no one's audio, and also mutes its microphone, then sets it to `"false"` again; an absent attribute means not deafened. The other participants see it through the SDK, for example with `room.localParticipant.setAttributes({ deafened: 'true' })` in `livekit-client`.
 //
@@ -6296,36 +6074,6 @@ func (c *ClientWithResponses) LookupVisitorColoursWithResponse(ctx context.Conte
 		return nil, err
 	}
 	return ParseLookupVisitorColoursResponse(rsp)
-}
-
-// LeaveVoiceWithBodyWithResponse Durably revoke an exact voice grant.
-//
-// Requires a current browser session. Accounts require the exact configured Origin. Targets only grantId owned by this exact session, kind, identity and generation; it never targets a later replacement. A missing or already cleaned grant succeeds idempotently. A present grant owned by another session returns 403 grant_forbidden. HTTP 200 acknowledges durable revocation, even when LiveKit removal is still pending: the backend retries cleanup. Any non-200 response or lost acknowledgement requires retaining the exact pending leave. A 401 after expiry, logout or session replacement does not acknowledge durable revocation; retain unresolved intent without blocking new joins. Stop local media immediately before making this request.
-//
-// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
-//
-// Corresponds with POST /api/voice/leave (the `LeaveVoice` operationId).
-func (c *ClientWithResponses) LeaveVoiceWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*LeaveVoiceResponse, error) {
-	rsp, err := c.LeaveVoiceWithBody(ctx, contentType, body, reqEditors...)
-	if err != nil {
-		return nil, err
-	}
-	return ParseLeaveVoiceResponse(rsp)
-}
-
-// LeaveVoiceWithResponse Durably revoke an exact voice grant.
-//
-// Requires a current browser session. Accounts require the exact configured Origin. Targets only grantId owned by this exact session, kind, identity and generation; it never targets a later replacement. A missing or already cleaned grant succeeds idempotently. A present grant owned by another session returns 403 grant_forbidden. HTTP 200 acknowledges durable revocation, even when LiveKit removal is still pending: the backend retries cleanup. Any non-200 response or lost acknowledgement requires retaining the exact pending leave. A 401 after expiry, logout or session replacement does not acknowledge durable revocation; retain unresolved intent without blocking new joins. Stop local media immediately before making this request.
-//
-// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
-//
-// Corresponds with POST /api/voice/leave (the `LeaveVoice` operationId).
-func (c *ClientWithResponses) LeaveVoiceWithResponse(ctx context.Context, body LeaveVoiceJSONRequestBody, reqEditors ...RequestEditorFn) (*LeaveVoiceResponse, error) {
-	rsp, err := c.LeaveVoice(ctx, body, reqEditors...)
-	if err != nil {
-		return nil, err
-	}
-	return ParseLeaveVoiceResponse(rsp)
 }
 
 // GetLivenessWithResponse Report that the process is running.
@@ -7515,65 +7263,6 @@ func ParseLookupVisitorColoursResponse(rsp *http.Response) (*LookupVisitorColour
 	return response, nil
 }
 
-// ParseLeaveVoiceResponse parses an HTTP response from a LeaveVoiceWithResponse call
-func ParseLeaveVoiceResponse(rsp *http.Response) (*LeaveVoiceResponse, error) {
-	bodyBytes, err := io.ReadAll(rsp.Body)
-	defer func() { _ = rsp.Body.Close() }()
-	if err != nil {
-		return nil, err
-	}
-
-	response := &LeaveVoiceResponse{
-		Body:         bodyBytes,
-		HTTPResponse: rsp,
-	}
-
-	switch {
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
-		var dest struct {
-			// Revoked Durable permission has been revoked or the grant was already absent.
-			//
-			// Example: true
-			Revoked LeaveVoice200JSONResponseBodyRevoked `json:"revoked"`
-		}
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON200 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
-		var dest Error
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON400 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
-		var dest VisitorRequired
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON401 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
-		var dest Error
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON403 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && true:
-		var dest Error
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSONDefault = &dest
-
-	}
-
-	return response, nil
-}
-
 // ParseGetLivenessResponse parses an HTTP response from a GetLivenessWithResponse call
 func ParseGetLivenessResponse(rsp *http.Response) (*GetLivenessResponse, error) {
 	bodyBytes, err := io.ReadAll(rsp.Body)
@@ -7721,9 +7410,6 @@ type ServerInterface interface {
 	// LookupVisitorColours Read current colours for explicit visitor IDs.
 	// (POST /api/visitor-colours)
 	LookupVisitorColours(w http.ResponseWriter, r *http.Request)
-	// LeaveVoice Durably revoke an exact voice grant.
-	// (POST /api/voice/leave)
-	LeaveVoice(w http.ResponseWriter, r *http.Request)
 	// GetLiveness Report that the process is running.
 	// (GET /health/live)
 	GetLiveness(w http.ResponseWriter, r *http.Request)
@@ -8167,20 +7853,6 @@ func (siw *ServerInterfaceWrapper) LookupVisitorColours(w http.ResponseWriter, r
 	handler.ServeHTTP(w, r)
 }
 
-// LeaveVoice operation middleware
-func (siw *ServerInterfaceWrapper) LeaveVoice(w http.ResponseWriter, r *http.Request) {
-
-	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.LeaveVoice(w, r)
-	}))
-
-	for _, middleware := range siw.HandlerMiddlewares {
-		handler = middleware(handler)
-	}
-
-	handler.ServeHTTP(w, r)
-}
-
 // GetLiveness operation middleware
 func (siw *ServerInterfaceWrapper) GetLiveness(w http.ResponseWriter, r *http.Request) {
 
@@ -8353,7 +8025,6 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/rooms/{id}/messages", wrapper.ListMessages)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/rooms/{id}/messages", wrapper.PostMessage)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/rooms/{id}/voice", wrapper.JoinVoice)
-	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/voice/leave", wrapper.LeaveVoice)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/health/live", wrapper.GetLiveness)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/health/ready", wrapper.GetReadiness)
 
@@ -9801,92 +9472,6 @@ func (response LookupVisitorColoursdefaultJSONResponse) VisitLookupVisitorColour
 	return err
 }
 
-type LeaveVoiceRequestObject struct {
-	Body *LeaveVoiceJSONRequestBody
-}
-
-type LeaveVoiceResponseObject interface {
-	VisitLeaveVoiceResponse(w http.ResponseWriter) error
-}
-
-type LeaveVoice200JSONResponse struct {
-	// Revoked Durable permission has been revoked or the grant was already absent.
-	//
-	// Example: true
-	Revoked LeaveVoice200JSONResponseBodyRevoked `json:"revoked"`
-}
-
-func (response LeaveVoice200JSONResponse) VisitLeaveVoiceResponse(w http.ResponseWriter) error {
-
-	var buf bytes.Buffer
-	if err := json.NewEncoder(&buf).Encode(response); err != nil {
-		return err
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(200)
-	_, err := buf.WriteTo(w)
-	return err
-}
-
-type LeaveVoice400JSONResponse Error
-
-func (response LeaveVoice400JSONResponse) VisitLeaveVoiceResponse(w http.ResponseWriter) error {
-
-	var buf bytes.Buffer
-	if err := json.NewEncoder(&buf).Encode(response); err != nil {
-		return err
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(400)
-	_, err := buf.WriteTo(w)
-	return err
-}
-
-type LeaveVoice401JSONResponse struct{ VisitorRequiredJSONResponse }
-
-func (response LeaveVoice401JSONResponse) VisitLeaveVoiceResponse(w http.ResponseWriter) error {
-
-	var buf bytes.Buffer
-	if err := json.NewEncoder(&buf).Encode(response); err != nil {
-		return err
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(401)
-	_, err := buf.WriteTo(w)
-	return err
-}
-
-type LeaveVoice403JSONResponse Error
-
-func (response LeaveVoice403JSONResponse) VisitLeaveVoiceResponse(w http.ResponseWriter) error {
-
-	var buf bytes.Buffer
-	if err := json.NewEncoder(&buf).Encode(response); err != nil {
-		return err
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(403)
-	_, err := buf.WriteTo(w)
-	return err
-}
-
-type LeaveVoicedefaultJSONResponse struct {
-	Body       Error
-	StatusCode int
-}
-
-func (response LeaveVoicedefaultJSONResponse) VisitLeaveVoiceResponse(w http.ResponseWriter) error {
-
-	var buf bytes.Buffer
-	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
-		return err
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(response.StatusCode)
-	_, err := buf.WriteTo(w)
-	return err
-}
-
 type GetLivenessRequestObject struct {
 }
 
@@ -10051,9 +9636,6 @@ type StrictServerInterface interface {
 	// LookupVisitorColours Read current colours for explicit visitor IDs.
 	// (POST /api/visitor-colours)
 	LookupVisitorColours(ctx context.Context, request LookupVisitorColoursRequestObject) (LookupVisitorColoursResponseObject, error)
-	// LeaveVoice Durably revoke an exact voice grant.
-	// (POST /api/voice/leave)
-	LeaveVoice(ctx context.Context, request LeaveVoiceRequestObject) (LeaveVoiceResponseObject, error)
 	// GetLiveness Report that the process is running.
 	// (GET /health/live)
 	GetLiveness(ctx context.Context, request GetLivenessRequestObject) (GetLivenessResponseObject, error)
@@ -10808,37 +10390,6 @@ func (sh *strictHandler) LookupVisitorColours(w http.ResponseWriter, r *http.Req
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(LookupVisitorColoursResponseObject); ok {
 		if err := validResponse.VisitLookupVisitorColoursResponse(w); err != nil {
-			sh.options.ResponseErrorHandlerFunc(w, r, err)
-		}
-	} else if response != nil {
-		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
-	}
-}
-
-// LeaveVoice operation middleware
-func (sh *strictHandler) LeaveVoice(w http.ResponseWriter, r *http.Request) {
-	var request LeaveVoiceRequestObject
-
-	var body LeaveVoiceJSONRequestBody
-	if err := runtime.BindJSONBody(r, &body); err != nil {
-		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
-		return
-	}
-	request.Body = &body
-
-	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
-		return sh.ssi.LeaveVoice(ctx, request.(LeaveVoiceRequestObject))
-	}
-	for _, middleware := range sh.middlewares {
-		handler = middleware(handler, "LeaveVoice")
-	}
-
-	response, err := handler(r.Context(), w, r, request)
-
-	if err != nil {
-		sh.options.ResponseErrorHandlerFunc(w, r, err)
-	} else if validResponse, ok := response.(LeaveVoiceResponseObject); ok {
-		if err := validResponse.VisitLeaveVoiceResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

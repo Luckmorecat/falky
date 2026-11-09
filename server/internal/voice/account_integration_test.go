@@ -136,7 +136,7 @@ func refusedAtGuard(t *testing.T, f guardedVoice, token string) {
 	}
 }
 
-func TestGuardedLiveKitIndependentMediaLeaveLogoutRecoveryAndDisable(t *testing.T) {
+func TestGuardedLiveKitIndependentMediaDisconnectReconnectLogoutRecoveryAndDisable(t *testing.T) {
 	f := newGuardedVoice(t)
 	account, key := f.enroll(t)
 	second := f.login(t, key)
@@ -212,16 +212,11 @@ func TestGuardedLiveKitIndependentMediaLeaveLogoutRecoveryAndDisable(t *testing.
 			t.Fatalf("connection/person binding = %v", o)
 		}
 	}
-	if err := f.voice.Leave(t.Context(), account.Session, one.GrantID); err != nil {
-		t.Fatal(err)
-	}
-	select {
-	case <-firstClient.disconnected:
-	case <-time.After(2 * time.Second):
-		t.Fatal("exact Leave did not close its media")
-	}
-	refusedAtGuard(t, f, one.Token)
+	firstClient.room.Disconnect()
 	waitForParticipants(t, liveKitClient(), f.room, two.GrantID, three.GrantID)
+	// A local SDK disconnect leaves the original exact grant authorized.
+	reconnected := connect(t, one)
+	waitForParticipants(t, liveKitClient(), f.room, one.GrantID, two.GrantID, three.GrantID)
 	f.gate.Lock()
 	effects, err := f.ident.Logout(t.Context(), account.Token)
 	if err == nil {
@@ -231,11 +226,14 @@ func TestGuardedLiveKitIndependentMediaLeaveLogoutRecoveryAndDisable(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	select {
-	case <-secondClient.disconnected:
-	case <-time.After(2 * time.Second):
-		t.Fatal("logout did not close same-session media")
+	for _, client := range []voiceClient{reconnected, secondClient} {
+		select {
+		case <-client.disconnected:
+		case <-time.After(2 * time.Second):
+			t.Fatal("logout did not close every same-session media connection")
+		}
 	}
+	refusedAtGuard(t, f, one.Token)
 	refusedAtGuard(t, f, two.Token)
 	waitForParticipants(t, liveKitClient(), f.room, three.GrantID)
 	select {
@@ -348,7 +346,13 @@ func TestGuardedLiveKitAcceptsRefreshedTokenOnlyForCurrentImmutableGrant(t *test
 	if res.Code != http.StatusOK {
 		t.Fatalf("independent Join invalidated refreshed token: %d", res.Code)
 	}
-	if err := f.voice.Leave(t.Context(), account.Session, creds.GrantID); err != nil {
+	f.gate.Lock()
+	effects, err := f.ident.Logout(t.Context(), account.Token)
+	if err == nil {
+		err = f.gate.Apply(t.Context(), effects)
+	}
+	f.gate.Unlock()
+	if err != nil {
 		t.Fatal(err)
 	}
 	refusedAtGuard(t, f, refreshed)

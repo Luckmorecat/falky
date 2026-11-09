@@ -1140,6 +1140,9 @@ paths:
         with a LiveKit SDK. Every explicit Join authorizes a fresh independent
         connection, including repeated joins from the same session. Other tabs
         and devices remain connected, in the same room or different rooms.
+        Local Leave, room switching and discarded setup credentials do not revoke
+        grants; valid credentials may reconnect their original connection while
+        their token, session and room access remain valid.
         Capacity counts connections, including other connections of this identity.
         Account requests require this server's exact configured Origin header.
 
@@ -1154,7 +1157,6 @@ paths:
         and name authorization. Unknown pre-upgrade grants fail closed and require
         one explicit rejoin; browser sessions and their deadlines survive migration.
         Temporary disconnection, page exit and SDK Leave preserve the grant.
-        Explicit Leave uses the returned grantId and affects only that connection.
         The token may
         publish the microphone, a camera, a screen share and the screen share's
         audio, subscribe to the other participants, and update the
@@ -1200,68 +1202,6 @@ paths:
           description: >-
             The server cannot reach LiveKit (`voice_unavailable`); try again
             later. Existing connections are unchanged.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-        default:
-          $ref: "#/components/responses/Error"
-  /api/voice/leave:
-    post:
-      operationId: leaveVoice
-      tags: [voice]
-      summary: Durably revoke an exact voice grant.
-      description: >-
-        Requires a current browser session. Accounts require the exact configured
-        Origin. Targets only grantId owned by this exact session, kind, identity
-        and generation; it never targets a later replacement. A missing or already
-        cleaned grant succeeds idempotently. A present grant owned by another
-        session returns 403 grant_forbidden. HTTP 200 acknowledges durable
-        revocation, even when LiveKit removal is still pending: the backend retries
-        cleanup. Any non-200 response or lost acknowledgement requires retaining
-        the exact pending leave. A 401 after expiry, logout or session replacement
-        does not acknowledge durable revocation; retain unresolved intent without
-        blocking new joins. Stop local media immediately before making this request.
-      requestBody:
-        description: Exact immutable grant to revoke.
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              example: {grantId: 01JBX6Z8Q3M5W2K7R9T4V1C0DE.01JBX8C4N2F6H8K0P3R5T7W9YZ}
-              required: [grantId]
-              properties:
-                grantId:
-                  example: 01JBX6Z8Q3M5W2K7R9T4V1C0DE.01JBX8C4N2F6H8K0P3R5T7W9YZ
-                  type: string
-                  minLength: 1
-                  description: The immutable grantId returned by Join.
-      responses:
-        "200":
-          description: Durable revocation acknowledged; media cleanup may still be pending.
-          content:
-            application/json:
-              schema:
-                type: object
-                example: {revoked: true}
-                required: [revoked]
-                properties:
-                  revoked:
-                    example: true
-                    type: boolean
-                    enum: [true]
-                    description: Durable permission has been revoked or the grant was already absent.
-        "400":
-          description: Missing or empty grantId (bad_request).
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-        "401":
-          $ref: "#/components/responses/VisitorRequired"
-        "403":
-          description: Wrong exact account Origin (origin_forbidden) or another session's grant (grant_forbidden).
           content:
             application/json:
               schema:
@@ -2169,7 +2109,7 @@ components:
       properties:
         grantId:
           type: string
-          description: Immutable exact grant target for Leave; also the LiveKit transport identity.
+          description: Immutable identifier of this independent connection and its LiveKit transport identity.
           example: 01JBX6Z8Q3M5W2K7R9T4V1C0DE.01JBX8C4N2F6H8K0P3R5T7W9YZ
         url:
           type: string

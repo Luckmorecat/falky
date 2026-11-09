@@ -239,7 +239,12 @@ func TestCancelledVoiceOperationsPreserveExactGrantAndReusableGates(t *testing.T
 		{"cleanup", f.voice.CleanupGrants},
 		{"refresh", f.voice.Refresh},
 		{"remove all", f.voice.RemoveAll},
-		{"leave", func(ctx context.Context) error { return f.voice.Leave(ctx, f.session, f.creds.GrantID) }},
+		{"fence sessions", func(ctx context.Context) error {
+			return f.voice.FenceSessions(ctx, func(identity.Session) bool { return true })
+		}},
+		{"revoke", func(ctx context.Context) error {
+			return f.voice.Revoke(ctx, func(identity.Session) bool { return true })
+		}},
 		{"join", func(ctx context.Context) error {
 			_, err := f.voice.JoinSession(ctx, f.session, f.room)
 			return err

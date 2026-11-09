@@ -95,14 +95,6 @@ function uploadAttachment(roomId: string, file: File, onProgress: (sent: number)
   });
 }
 
-async function leaveVoice(grantId: string): Promise<{ revoked: boolean }> {
-  const request = new AbortController();
-  const timeout = setTimeout(() => request.abort(), 10_000);
-  try {
-    return await call('POST', '/api/voice/leave', { grantId }, request.signal);
-  } finally { clearTimeout(timeout); }
-}
-
 export const api = {
   enter: (secret: string, name: string) => call<Visitor>('POST', '/api/enter', { secret, name }),
   me: () => call<Visitor>('GET', '/api/me'),
@@ -126,5 +118,4 @@ export const api = {
   cancelAttachment: (id: string) => call<void>('DELETE', `/api/attachments/${encodeURIComponent(id)}`),
   upload: uploadAttachment,
   joinVoice: (roomId: string) => call<VoiceCredentials>('POST', `/api/rooms/${encodeURIComponent(roomId)}/voice`),
-  leaveVoice,
 };

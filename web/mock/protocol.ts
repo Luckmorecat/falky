@@ -23,7 +23,6 @@ export interface MockFaults {
   micDenied: boolean;
   shareFailure: boolean;
   voiceReconnecting: boolean;
-  leaveUnavailable: boolean;
 }
 export interface MockState {
   instanceId: string;
@@ -32,8 +31,8 @@ export interface MockState {
   scenario: Scenario;
   scenarios: readonly Scenario[];
   visitor: Schema['Visitor'] | null;
-  voiceRoomId: string | null;
-  voiceGrants: Record<string, string>;
+  /** Connected mock media, independent of production grant authorization. */
+  voiceConnections: Record<string, string>;
   rooms: Schema['Room'][];
   peers: Record<string, MockPeer[]>;
   faults: MockFaults;
@@ -48,4 +47,4 @@ export type MockAction =
   | { type: 'faults'; faults: Partial<MockFaults> }
   | { type: 'name-conflict'; active: boolean }
   | { type: 'revoke' }
-  | { type: 'voice-leave'; generation: number; grantId?: string };
+  | { type: 'voice-disconnect'; generation: number; connectionId: string };

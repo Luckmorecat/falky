@@ -116,30 +116,6 @@ func (s *Service) FenceSessions(ctx context.Context, matches func(identity.Sessi
 	return err
 }
 
-// Leave acknowledges durable revocation, even if immediate media cleanup fails.
-// A missing target is already complete; a target owned by another browser is
-// refused. It never substitutes another connection of the identity.
-func (s *Service) Leave(ctx context.Context, session identity.Session, transport string) error {
-	g, err := s.grant(ctx, transport)
-	if err != nil {
-		return err
-	}
-	if g == nil {
-		return nil
-	}
-	if g.session.ID != session.ID || g.session.Kind != session.Kind || g.session.Generation != session.Generation || g.session.Visitor.ID != session.Visitor.ID {
-		return identity.ErrNoVisitor
-	}
-	if err := s.fence(ctx, g); err != nil {
-		return err
-	}
-	s.closeGrant(ctx, g)
-	if err := s.removeGrant(ctx, g); err != nil {
-		s.logger.WarnContext(ctx, "voice leave cleanup pending", "grant", transport, "error", err)
-	}
-	return nil
-}
-
 // ValidateGrants is maintenance's local phase. The lifecycle gate must be held.
 // It validates even absent participants, durably fences invalid grants, and
 // closes local signaling before returning. It makes no LiveKit calls.

@@ -68,7 +68,7 @@ type Rooms interface {
 
 // Credentials are what a client connects to a room's voice with.
 type Credentials struct {
-	// GrantID is the immutable transport to target with an explicit Leave.
+	// GrantID is the immutable connection identifier and LiveKit participant identity.
 	GrantID string
 	// URL is where the client reaches LiveKit.
 	URL string

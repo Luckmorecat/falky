@@ -96,12 +96,11 @@ export async function startMockServer(options: { port?: number; scenario?: strin
       return storeAttachment(roomId, ownerId, `photo-${seed + i}.svg`, fixtureImage(seed + i, w!, h!), 'posted');
     });
   }
-  let voiceGrantId: string | null = null;
   const state: MockState = {
     instanceId, generation: 1, revision: 1, scenario: scenarioName(options.scenario ?? 'populated'), scenarios,
-    visitor: null, voiceRoomId: null, voiceGrants: {},
+    visitor: null, voiceConnections: {},
     rooms: roomIds.map((roomId, i) => ({ id: roomId, name: ['Lounge', 'Games', 'Quiet'][i]!, occupancy: [] })),
-    peers: {}, faults: { send: 'none', colourSave: 'none', colourDelayMs: 0, colourResponseDelayMs: 0, delayMs: 0, liveDisconnected: false, roomFull: null, micDenied: false, shareFailure: false, voiceReconnecting: false, leaveUnavailable: false },
+    peers: {}, faults: { send: 'none', colourSave: 'none', colourDelayMs: 0, colourResponseDelayMs: 0, delayMs: 0, liveDisconnected: false, roomFull: null, micDenied: false, shareFailure: false, voiceReconnecting: false },
     accessLink: '/#k=mock-access-link',
   };
   if (state.scenario === 'entry') state.visitor = null;
@@ -133,7 +132,7 @@ export async function startMockServer(options: { port?: number; scenario?: strin
   function occupancy() {
     for (const room of state.rooms) {
       const next = (state.peers[room.id] ?? []).map(({ connectionId, visitorId, name }) => ({ connectionId, visitorId, name }));
-      if (state.visitor) for (const [connectionId, roomId] of Object.entries(state.voiceGrants)) {
+      if (state.visitor) for (const [connectionId, roomId] of Object.entries(state.voiceConnections)) {
         if (roomId === room.id) next.push({ connectionId, visitorId: state.visitor.id, name: state.visitor.name });
       }
       if (JSON.stringify(next) !== JSON.stringify(room.occupancy)) {
@@ -179,9 +178,7 @@ export async function startMockServer(options: { port?: number; scenario?: strin
     colours.clear();
     for (const history of fixtureMessages.values()) for (const message of history) assignColour(message.authorId);
     state.visitor = scenario === 'entry' ? null : visitor('Alex');
-    state.voiceRoomId = null;
-    state.voiceGrants = {};
-    voiceGrantId = null;
+    state.voiceConnections = {};
     state.peers = scenario === 'quiet' ? {} : structuredClone(fixturePeers);
     for (const peers of Object.values(state.peers)) for (const peer of peers) peer.sharing = scenario === 'remote-share' && peer.name === 'Sam';
     if (scenario === 'same-person' && state.visitor) {
@@ -198,7 +195,7 @@ export async function startMockServer(options: { port?: number; scenario?: strin
       else attachments.delete(attachmentId);
     }
     for (const room of state.rooms) room.occupancy = (state.peers[room.id] ?? []).map(({ connectionId, visitorId, name }) => ({ connectionId, visitorId, name }));
-    state.faults = { send: 'none', colourSave: 'none', colourDelayMs: 0, colourResponseDelayMs: 0, delayMs: 0, liveDisconnected: false, roomFull: null, micDenied: false, shareFailure: false, voiceReconnecting: false, leaveUnavailable: false };
+    state.faults = { send: 'none', colourSave: 'none', colourDelayMs: 0, colourResponseDelayMs: 0, delayMs: 0, liveDisconnected: false, roomFull: null, micDenied: false, shareFailure: false, voiceReconnecting: false };
     requests.clear();
     conflictName = null;
     accessSecret = 'mock-access-link';
@@ -253,9 +250,9 @@ export async function startMockServer(options: { port?: number; scenario?: strin
     }
     if (url.pathname === '/__mock' && req.method === 'GET') return json(res, 200, {
       scenarios, endpoints: { bootstrap: 'POST /__mock/bootstrap {scenario?}', state: 'GET /__mock/state', reset: 'POST /__mock/reset {scenario?}', action: 'POST /__mock/action' },
-      actions: ['colour', 'message', 'participants', 'faults', 'name-conflict', 'revoke', 'voice-leave', 'expire-attachments'],
+      actions: ['colour', 'message', 'participants', 'faults', 'name-conflict', 'revoke', 'voice-disconnect', 'expire-attachments'],
       faults: state.faults,
-      lifecycle: 'Same-scenario bootstrap preserves state. Reset advances generation; poll state independently of /api/live. Voice leave requires the current generation.',
+      lifecycle: 'Same-scenario bootstrap preserves state. Reset advances generation; poll state independently of /api/live. Mock media disconnect releases exact connected presence in the current generation; it does not model durable authorization.',
     });
     if (url.pathname === '/__mock/state' && req.method === 'GET') return json(res, 200, state);
     if (url.pathname === '/__mock/reset' && req.method === 'POST') {
@@ -272,20 +269,19 @@ export async function startMockServer(options: { port?: number; scenario?: strin
           else if (key === 'colourSave' && ['none', 'fail'].includes(String(value))) state.faults.colourSave = value as MockState['faults']['colourSave'];
           else if (key === 'send' && ['none', 'fail', 'lost-response'].includes(String(value))) state.faults.send = value as MockState['faults']['send'];
           else if (key === 'roomFull' && (value === null || state.rooms.some((room) => room.id === value))) state.faults.roomFull = value as string | null;
-          else if (['liveDisconnected', 'micDenied', 'shareFailure', 'voiceReconnecting', 'leaveUnavailable'].includes(key) && typeof value === 'boolean') {
-            state.faults[key as 'micDenied' | 'shareFailure' | 'voiceReconnecting' | 'liveDisconnected' | 'leaveUnavailable'] = value;
+          else if (['liveDisconnected', 'micDenied', 'shareFailure', 'voiceReconnecting'].includes(key) && typeof value === 'boolean') {
+            state.faults[key as 'micDenied' | 'shareFailure' | 'voiceReconnecting' | 'liveDisconnected'] = value;
           } else throw new Refused(400, 'invalid_request', 'Invalid fault value');
         }
         if (state.faults.liveDisconnected) for (const socket of sockets.clients) socket.close(4000, 'Scripted disconnect');
       } else if (input.type === 'colour') {
         if (typeof input.visitorId !== 'string' || !colours.has(input.visitorId)) throw new Refused(404, 'not_found', 'Unknown visitor');
         changeColour(input.visitorId, input.palette);
-      } else if (input.type === 'voice-leave') {
-        if (input.generation !== state.generation) throw new Refused(409, 'invalid_request', 'Mock generation changed');
-        if (typeof input.grantId === 'string') delete state.voiceGrants[input.grantId];
-        else state.voiceGrants = {};
-        if (!input.grantId || input.grantId === voiceGrantId) { state.voiceRoomId = null; voiceGrantId = null; }
-        occupancy();
+      } else if (input.type === 'voice-disconnect') {
+        if (input.generation !== state.generation) throw new Refused(409, 'stale_generation', 'Mock was reset');
+        if (typeof input.connectionId !== 'string' || !input.connectionId) throw new Refused(400, 'bad_request', 'Missing connection');
+        delete state.voiceConnections[input.connectionId];
+        occupancy(); state.revision++;
       } else if (input.type === 'participants') {
         if (!state.rooms.some((room) => room.id === input.roomId)) throw new Refused(404, 'room_not_found', 'No such room');
         if (!Array.isArray(input.participants)) throw new Refused(400, 'invalid_request', 'Expected participants array');
@@ -311,8 +307,7 @@ export async function startMockServer(options: { port?: number; scenario?: strin
           conflictName = input.active ? state.visitor.name.toLowerCase() : null;
           state.visitor.nameTaken = input.active;
           if (input.active) {
-            state.voiceRoomId = null;
-            state.voiceGrants = {};
+            state.voiceConnections = {};
             occupancy();
             for (const socket of sockets.clients) socket.close(4000, 'Name taken');
           }
@@ -321,8 +316,7 @@ export async function startMockServer(options: { port?: number; scenario?: strin
         publish('access.revoked', { reason: 'link_replaced' });
         for (const socket of sockets.clients) socket.close(4001, 'Access revoked');
         state.visitor = null;
-        state.voiceRoomId = null;
-        state.voiceGrants = {};
+        state.voiceConnections = {};
         token = randomBytes(24).toString('hex');
         accessSecret = `mock-access-${state.generation}-${state.revision}`;
         state.accessLink = `${publicOrigin}/#k=${accessSecret}`;
@@ -371,8 +365,7 @@ export async function startMockServer(options: { port?: number; scenario?: strin
     if (url.pathname === '/api/enter' && req.method === 'POST') {
       if (input.secret !== accessSecret) throw new Refused(403, 'invalid_link', 'The access link is invalid');
       const chosen = name(input.name);
-      state.voiceRoomId = null;
-      state.voiceGrants = {};
+      state.voiceConnections = {};
       for (const socket of sockets.clients) socket.close(4000, 'Visitor entered again');
       state.visitor = visitor(chosen);
       occupancy();
@@ -416,28 +409,19 @@ export async function startMockServer(options: { port?: number; scenario?: strin
       return json(res, 200, state.visitor);
     }
     if (url.pathname === '/api/rooms' && req.method === 'GET') return json(res, 200, { rooms: state.rooms } satisfies Schema['RoomList']);
-    if (url.pathname === '/api/voice/leave' && req.method === 'POST') {
-      if (state.faults.leaveUnavailable) throw new Refused(503, 'voice_unavailable', 'Leave cannot reach the server');
-      if (typeof input.grantId !== 'string' || !input.grantId) throw new Refused(400, 'bad_request', 'Missing grant');
-      delete state.voiceGrants[input.grantId];
-      if (input.grantId === voiceGrantId) { state.voiceRoomId = null; voiceGrantId = null; }
-      occupancy(); state.revision++;
-      return json(res, 200, { revoked: true });
-    }
     const voice = /^\/api\/rooms\/([^/]+)\/voice$/.exec(url.pathname);
     if (voice && req.method === 'POST') {
       const roomId = voice[1]!;
       if (!state.rooms.some((room) => room.id === roomId)) throw new Refused(404, 'room_not_found', 'No such room');
       if (state.visitor.nameTaken) throw new Refused(409, 'name_taken', 'Rename before joining voice');
       if (state.faults.roomFull === roomId) throw new Refused(409, 'room_full', 'The room is full');
-      state.voiceRoomId = roomId;
-      voiceGrantId = state.visitor.id + '.' + id();
-      state.voiceGrants[voiceGrantId] = roomId;
+      const grantId = state.visitor.id + '.' + id();
+      state.voiceConnections[grantId] = roomId;
       occupancy();
       state.revision++;
       // Syntactically JWT-shaped; consumed only by the dev-only voice adapter.
       const jwt = (value: unknown) => Buffer.from(JSON.stringify(value)).toString('base64url');
-      return json(res, 200, { grantId: voiceGrantId, url: publicOrigin.replace('http', 'ws') + '/rtc', token: `${jwt({ alg: 'none', typ: 'JWT' })}.${jwt({ sub: voiceGrantId, room: roomId, mock: true })}.mock` } satisfies Schema['VoiceCredentials']);
+      return json(res, 200, { grantId: grantId, url: publicOrigin.replace('http', 'ws') + '/rtc', token: `${jwt({ alg: 'none', typ: 'JWT' })}.${jwt({ sub: grantId, room: roomId, mock: true })}.mock` } satisfies Schema['VoiceCredentials']);
     }
     if (url.pathname === '/api/attachments/limits' && req.method === 'GET') return json(res, 200, attachmentLimits);
     const upload = /^\/api\/rooms\/([^/]+)\/attachments$/.exec(url.pathname);

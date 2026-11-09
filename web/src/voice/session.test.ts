@@ -11,6 +11,7 @@ function deferred() {
 
 let download: ReturnType<typeof deferred>;
 let host: VoiceHost;
+const rooms: { disconnect: ReturnType<typeof vi.fn> }[] = [];
 const resume = vi.fn(async () => {});
 const startAudio = vi.fn(async () => {});
 const connect = vi.fn(async () => {});
@@ -18,18 +19,19 @@ const fetchVoice = vi.fn(async (_url: string, _init?: RequestInit) => Response.j
 const loadSDK = vi.fn();
 const remotes = new Map();
 const speakers: { identity: string }[] = [];
-const localTracks = new Map();
+let localTracks = new Map();
 const disconnect = vi.fn();
 const constructRoom = vi.fn();
 const enableMicrophone = vi.fn(async () => {});
 const enableShare = vi.fn(async () => {});
+const enableCamera = vi.fn(async () => {});
 
 beforeEach(() => {
   localStorage.clear();
   vi.resetModules();
   vi.clearAllMocks();
   fetchVoice.mockImplementation(async () => Response.json({ url: 'ws://localhost/rtc', token: 'test', grantId: 'self.old' }));
-  remotes.clear(); speakers.length = 0; localTracks.clear();
+  remotes.clear(); speakers.length = 0; localTracks = new Map(); rooms.length = 0;
   download = deferred();
   vi.doMock('livekit-client', async () => {
     loadSDK();
@@ -39,15 +41,15 @@ beforeEach(() => {
       Track: { Source: { Camera: 'camera', ScreenShare: 'screen', Microphone: 'mic' } },
       RoomEvent: {},
       Room: class {
-        constructor() { constructRoom(); }
-        localParticipant = { identity: 'self.nonce', setScreenShareEnabled: enableShare, setMicrophoneEnabled: enableMicrophone, trackPublications: localTracks, attributes: {}, isMicrophoneEnabled: false, getTrackPublication(source: string) { return localTracks.get(source); } };
+        constructor() { constructRoom(); rooms.push(this); }
+        localParticipant = { identity: 'self.nonce', setCameraEnabled: enableCamera, setScreenShareEnabled: enableShare, setMicrophoneEnabled: enableMicrophone, trackPublications: localTracks, attributes: {}, isMicrophoneEnabled: false, getTrackPublication(source: string) { return this.trackPublications.get(source); } };
         remoteParticipants = remotes;
         activeSpeakers = speakers;
         connect = connect;
         startAudio = startAudio;
         on() { return this; }
         removeAllListeners() {}
-        disconnect = disconnect;
+        disconnect = vi.fn(() => disconnect());
       },
     };
   });
@@ -124,7 +126,7 @@ it('reports a failed SDK download through the existing voice error without leavi
   expect(session.snapshot).toEqual(idleVoice);
 });
 
-it('persists a late Join grant after explicit Leave without connecting it', async () => {
+it('discards a late Join after explicit Leave without sending another request', async () => {
   const { VoiceSession } = await import('./session');
   let respond!: (value: Response) => void;
   const received = new Promise<Response>((resolve) => { respond = resolve; });
@@ -134,12 +136,11 @@ it('persists a late Join grant after explicit Leave without connecting it', asyn
   download.resolve();
   await vi.waitFor(() => expect(fetchVoice).toHaveBeenCalledOnce());
   await session.leave();
-  fetchVoice.mockRejectedValueOnce(new Error('Offline'));
   respond(Response.json({ url: 'ws://localhost/rtc', token: 'test', grantId: 'self.late' }));
   await joining;
   expect(connect).not.toHaveBeenCalled();
-  expect(session.snapshot).toMatchObject({ status: 'idle', pendingLeave: 1 });
-  expect(fetchVoice.mock.calls.at(-1)).toEqual(['/api/voice/leave', expect.objectContaining({ body: JSON.stringify({ grantId: 'self.late' }) })]);
+  expect(session.snapshot).toEqual(idleVoice);
+  expect(fetchVoice).toHaveBeenCalledOnce();
   session.end();
 });
 
@@ -177,13 +178,12 @@ it('routes same-person remote media, speakers, meters and volume by exact connec
   expect(host.volumeOf).toHaveBeenCalledWith('self.mac');
   expect(volume).toHaveBeenCalledWith(0.4, 'mic');
   const stop = vi.fn(); localTracks.set('mic', { track: { stop } });
-  fetchVoice.mockRejectedValueOnce(new Error('Offline'));
   const leaving = session.leave();
   expect(stop).toHaveBeenCalledOnce();
   expect(disconnect).toHaveBeenCalledOnce();
-  expect(session.snapshot).toMatchObject({ status: 'idle', pendingLeave: 1 });
+  expect(session.snapshot).toMatchObject({ status: 'idle' });
   await leaving;
-  // A later SDK/access shutdown is not explicit durable Leave.
+  expect(fetchVoice).toHaveBeenCalledOnce();
   const requests = fetchVoice.mock.calls.length;
   session.end();
   expect(fetchVoice.mock.calls).toHaveLength(requests);
@@ -202,7 +202,7 @@ it('does not restore voice after Leave interrupts audio startup', async () => {
   expect(session.snapshot.status).toBe('idle');
 });
 
-it('durably retires an abandoned late Join even after access ends', async () => {
+it('discards an abandoned late Join after access ends', async () => {
   let respond!: (value: Response) => void;
   fetchVoice.mockImplementationOnce(() => new Promise<Response>((resolve) => { respond = resolve; }));
   const { VoiceSession } = await import('./session');
@@ -210,10 +210,9 @@ it('durably retires an abandoned late Join even after access ends', async () => 
   const joining = session.join('lounge'); download.resolve();
   await vi.waitFor(() => expect(fetchVoice).toHaveBeenCalledOnce());
   session.end();
-  fetchVoice.mockResolvedValueOnce(Response.json({ revoked: true }));
   respond(Response.json({ url: 'ws://localhost/rtc', token: 'test', grantId: 'self.ended' }));
   await joining;
-  expect(fetchVoice.mock.calls.at(-1)).toEqual(['/api/voice/leave', expect.objectContaining({ body: JSON.stringify({ grantId: 'self.ended' }) })]);
+  expect(fetchVoice.mock.calls.every(([url]) => url.startsWith('/api/rooms/'))).toBe(true);
   expect(connect).not.toHaveBeenCalled();
   expect(session.snapshot).toEqual(idleVoice);
 });
@@ -269,7 +268,7 @@ it('stops a screen share accepted in the picker after explicit Leave', async () 
   expect(session.snapshot.status).toBe('idle');
 });
 
-it('retires only the captured old grant after a successful new admission and preserves it on refusal', async () => {
+it('disconnects the old local room only after successful admission and preserves it on refusal', async () => {
   const { VoiceSession } = await import('./session');
   const session = new VoiceSession(host);
   const first = session.join('lounge'); download.resolve(); await first;
@@ -278,53 +277,51 @@ it('retires only the captured old grant after a successful new admission and pre
   expect(session.snapshot).toMatchObject({ status: 'connected', roomId: 'lounge' });
   expect(disconnect).not.toHaveBeenCalled();
   fetchVoice.mockResolvedValueOnce(Response.json({ url: 'ws://localhost/rtc', token: 'new', grantId: 'self.new' }));
-  fetchVoice.mockResolvedValueOnce(Response.json({ revoked: true }));
   await session.join('games');
   expect(session.snapshot).toMatchObject({ status: 'connected', roomId: 'games' });
-  expect(fetchVoice.mock.calls.filter(([url]) => url === '/api/voice/leave')).toEqual([
-    ['/api/voice/leave', expect.objectContaining({ body: JSON.stringify({ grantId: 'self.old' }) })],
-  ]);
+  expect(fetchVoice.mock.calls.every(([url]) => url.startsWith('/api/rooms/'))).toBe(true);
   session.end();
 });
 
-it('durably retires failed media admission without clearing a newer connection', async () => {
+it('discards failed media admission without HTTP cleanup and permits a newer connection', async () => {
   connect.mockRejectedValueOnce(new Error('Unavailable'));
   fetchVoice.mockResolvedValueOnce(Response.json({ url: 'ws://localhost/rtc', token: 'bad', grantId: 'self.failed' }));
-  fetchVoice.mockRejectedValueOnce(new Error('Offline'));
   const { VoiceSession } = await import('./session');
   const session = new VoiceSession(host);
   const joining = session.join('lounge'); download.resolve(); await joining;
-  expect(session.snapshot).toMatchObject({ status: 'idle', pendingLeave: 1 });
+  expect(session.snapshot).toMatchObject({ status: 'idle' });
   expect(host.onProblem).toHaveBeenCalledWith('media_failed');
   await session.join('games');
-  expect(session.snapshot).toMatchObject({ status: 'connected', roomId: 'games', pendingLeave: 1 });
-  expect(fetchVoice.mock.calls.filter(([url]) => url === '/api/voice/leave')).toEqual([
-    ['/api/voice/leave', expect.objectContaining({ body: JSON.stringify({ grantId: 'self.failed' }) })],
-  ]);
+  expect(session.snapshot).toMatchObject({ status: 'connected', roomId: 'games' });
+  expect(fetchVoice.mock.calls.every(([url]) => url.startsWith('/api/rooms/'))).toBe(true);
   session.end();
 });
 
-it('retires canceled RTC setup credentials when a newer operation already connected', async () => {
+it.each(['resolve', 'reject'] as const)('disconnects captured obsolete RTC setup after a newer connection when old setup %ss', async (completion) => {
   const admitting = deferred();
   connect.mockImplementationOnce(() => admitting.promise);
   const { VoiceSession } = await import('./session');
   const session = new VoiceSession(host);
   const first = session.join('lounge'); download.resolve();
   await vi.waitFor(() => expect(connect).toHaveBeenCalledOnce());
-  fetchVoice.mockResolvedValueOnce(Response.json({ revoked: true }));
+  const oldStop = vi.fn(); localTracks.set('mic', { track: { stop: oldStop } });
   session.end();
+  const currentStop = vi.fn(); localTracks = new Map([['mic', { track: { stop: currentStop } }]]);
   fetchVoice.mockResolvedValueOnce(Response.json({ url: 'ws://localhost/rtc', token: 'new', grantId: 'self.new' }));
   await session.join('games');
-  fetchVoice.mockResolvedValueOnce(Response.json({ revoked: true }));
-  admitting.resolve(); await first;
+  if (completion === 'resolve') admitting.resolve(); else admitting.reject(new Error('Canceled RTC setup'));
+  await first;
   expect(session.snapshot).toMatchObject({ status: 'connected', roomId: 'games' });
-  const leaves = fetchVoice.mock.calls.filter(([url]) => url === '/api/voice/leave');
-  expect(leaves.length).toBeGreaterThan(0);
-  for (const [, options] of leaves) expect(options).toMatchObject({ body: JSON.stringify({ grantId: 'self.old' }) });
+  expect(rooms[0]!.disconnect).toHaveBeenCalledTimes(2);
+  expect(rooms[1]!.disconnect).not.toHaveBeenCalled();
+  expect(oldStop).toHaveBeenCalledTimes(2);
+  expect(currentStop).not.toHaveBeenCalled();
+  expect(host.onProblem).not.toHaveBeenCalled();
+  expect(fetchVoice).toHaveBeenCalledTimes(2);
   session.end();
 });
 
-it('retires an old late HTTP admission after a canceled Join without touching a newer Join', async () => {
+it('discards a late HTTP admission without touching a newer Join', async () => {
   let respond!: (value: Response) => void;
   fetchVoice.mockImplementationOnce(() => new Promise<Response>((resolve) => { respond = resolve; }));
   const { VoiceSession } = await import('./session');
@@ -334,24 +331,43 @@ it('retires an old late HTTP admission after a canceled Join without touching a 
   await session.leave();
   fetchVoice.mockResolvedValueOnce(Response.json({ url: 'ws://localhost/rtc', token: 'new', grantId: 'self.new' }));
   await session.join('games');
-  fetchVoice.mockRejectedValueOnce(new Error('Offline'));
   respond(Response.json({ url: 'ws://localhost/rtc', token: 'late', grantId: 'self.abandoned' }));
   await first;
-  expect(session.snapshot).toMatchObject({ status: 'connected', roomId: 'games', pendingLeave: 1 });
-  expect(fetchVoice.mock.calls.at(-1)).toEqual(['/api/voice/leave', expect.objectContaining({ body: JSON.stringify({ grantId: 'self.abandoned' }) })]);
+  expect(session.snapshot).toMatchObject({ status: 'connected', roomId: 'games' });
+  expect(fetchVoice.mock.calls.every(([url]) => url.startsWith('/api/rooms/'))).toBe(true);
   session.end();
 });
 
-it('retires credentials when media initialization itself fails', async () => {
+it('discards credentials when media initialization itself fails', async () => {
   constructRoom.mockImplementationOnce(() => { throw new Error('Unsupported media'); });
   fetchVoice.mockResolvedValueOnce(Response.json({ url: 'ws://localhost/rtc', token: 'bad', grantId: 'self.unsupported' }));
-  fetchVoice.mockRejectedValueOnce(new Error('Offline'));
   const { VoiceSession } = await import('./session');
   const session = new VoiceSession(host);
   const joining = session.join('lounge'); download.resolve();
   await joining;
-  expect(session.snapshot).toMatchObject({ status: 'idle', pendingLeave: 1 });
+  expect(session.snapshot).toMatchObject({ status: 'idle' });
   expect(host.onProblem).toHaveBeenCalledWith('media_failed');
-  expect(fetchVoice.mock.calls.at(-1)).toEqual(['/api/voice/leave', expect.objectContaining({ body: JSON.stringify({ grantId: 'self.unsupported' }) })]);
+  expect(fetchVoice.mock.calls.every(([url]) => url.startsWith('/api/rooms/'))).toBe(true);
+  session.end();
+});
+
+it('stops a late camera on its captured old room while a replacement keeps its media', async () => {
+  const ready = deferred();
+  const oldTracks = localTracks;
+  const oldStop = vi.fn();
+  enableCamera.mockImplementationOnce(async () => { await ready.promise; oldTracks.set('camera', { track: { stop: oldStop } }); });
+  const { VoiceSession } = await import('./session');
+  const session = new VoiceSession(host);
+  const joining = session.join('lounge'); download.resolve(); await joining;
+  const camera = session.toggleCamera();
+  await session.leave();
+  const currentStop = vi.fn(); localTracks = new Map([['mic', { track: { stop: currentStop } }]]);
+  await session.join('games');
+  ready.resolve(); await camera;
+  expect(oldStop).toHaveBeenCalledOnce();
+  expect(currentStop).not.toHaveBeenCalled();
+  expect(rooms[1]!.disconnect).not.toHaveBeenCalled();
+  expect(session.snapshot).toMatchObject({ status: 'connected', roomId: 'games' });
+  expect(fetchVoice).toHaveBeenCalledTimes(2);
   session.end();
 });

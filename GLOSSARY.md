@@ -59,7 +59,7 @@ _Avoid_: Upload, media
 ## Voice
 
 **Voice grant**:
-A session's permission for one independent voice connection in one room. A session can hold several grants for the same or different rooms.
+A session's permission for one independent voice connection in one room. A session can hold several grants for the same or different rooms, which remain authorized after local disconnection until their access expires or is revoked.
 
 **Participant**:
 One connection of an identity currently in a room's voice. The same identity can have several participants in the same or different rooms.

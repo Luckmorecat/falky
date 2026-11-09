@@ -1,4 +1,3 @@
-import { PendingLeaves } from '../voice/pendingLeaves';
 import { api, ApiError } from '../api/client';
 import { idleVoice, type VoiceHost, type VoiceSnapshot, type VoiceClient, type ShareTrack } from '../voice/types';
 import { SyntheticShare } from './share';
@@ -10,8 +9,6 @@ export async function preloadVoice(): Promise<void> {}
 /** Simulates media only. Joining and room moves still use the public HTTP API. */
 export class VoiceSession implements VoiceClient {
   private grantId: string | null = null;
-  private admittingGrant: string | null = null;
-  private readonly leaves: PendingLeaves;
   private tracks = new Map<string, SyntheticShare>();
   private cameras = new Map<string, SyntheticShare>();
   private snap: VoiceSnapshot = idleVoice;
@@ -22,7 +19,6 @@ export class VoiceSession implements VoiceClient {
   private readonly pagehide = () => this.end();
 
   constructor(private readonly host: VoiceHost) {
-    this.leaves = new PendingLeaves(() => this.set({ pendingLeave: this.leaves.count }));
     this.unsubscribe = subscribeMockState(() => this.refresh());
     window.addEventListener('pagehide', this.pagehide);
   }
@@ -38,33 +34,33 @@ export class VoiceSession implements VoiceClient {
     const startMuted = previous.status === 'idle' ? this.host.joinMuted() : previous.muted && !previous.listenOnly;
     this.set({ status: 'joining', joiningRoomId: roomId });
     const previousGrant = this.grantId;
+    const previousGeneration = this.generation;
     let issuedGrant: string | null = null;
     try {
       const creds = await api.joinVoice(roomId);
       issuedGrant = creds.grantId;
       if (operation === this.operation) {
         this.grantId = creds.grantId;
-        this.admittingGrant = creds.grantId;
+        this.generation = generation;
       }
       if (operation !== this.operation) {
-        await this.leaves.add(creds.grantId);
+        await this.release(generation, creds.grantId);
         return;
       }
-      if (previousGrant) void this.leaves.add(previousGrant);
+      if (previousGrant && previousGeneration !== null) await this.release(previousGeneration, previousGrant);
       const state = await refreshMockState();
       if (operation !== this.operation) {
-        await this.leaves.add(creds.grantId);
+        await this.release(generation, creds.grantId);
         return;
       }
-      if (state.instanceId !== initial.instanceId || state.generation !== generation) { void this.leaves.add(creds.grantId); this.close(); return; }
-      this.admittingGrant = null;
+      if (state.instanceId !== initial.instanceId || state.generation !== generation) { await this.release(generation, creds.grantId); await this.close(); return; }
       this.generation = generation;
       this.set({ status: 'connected', roomId, joiningRoomId: null, joinedAt: performance.now(), muted: startMuted || previous.deafened, deafened: previous.deafened, listenOnly: false, sharing: false });
       if (!startMuted && !previous.deafened) this.enableMic();
       this.host.onSound('join');
       this.refresh();
     } catch (error) {
-      if (issuedGrant) void this.leaves.add(issuedGrant);
+      if (issuedGrant) await this.release(generation, issuedGrant);
       if (operation !== this.operation) return;
       if (issuedGrant) {
         this.close();
@@ -72,8 +68,7 @@ export class VoiceSession implements VoiceClient {
         return;
       }
       this.grantId = previousGrant;
-      this.admittingGrant = null;
-      this.snap = { ...previous, pendingLeave: this.leaves.count };
+      this.snap = previous;
       this.host.onChange(this.snap);
       const code = error instanceof ApiError ? error.code : 'network';
       this.host.onProblem(code === 'room_full' || code === 'voice_unavailable' || code === 'name_taken' || code === 'visitor_required' ? code : 'join_failed');
@@ -82,18 +77,10 @@ export class VoiceSession implements VoiceClient {
 
   async leave(): Promise<void> {
     if (this.snap.status !== 'idle') this.host.onSound('leave');
-    const pending = this.grantId ? this.leaves.add(this.grantId) : Promise.resolve();
-    this.close();
-    await pending;
+    await this.close();
   }
-  end(): void {
-    const generation = this.generation;
-    const grantId = this.grantId;
-    if (this.admittingGrant) void this.leaves.add(this.admittingGrant);
-    this.close();
-    if (generation !== null && grantId) void this.release(generation, grantId);
-  }
-  dispose(): void { this.end(); this.unsubscribe(); this.leaves.dispose(); window.removeEventListener('pagehide', this.pagehide); }
+  end(): void { void this.close(); }
+  dispose(): void { this.end(); this.unsubscribe(); window.removeEventListener('pagehide', this.pagehide); }
 
   async toggleMute(): Promise<void> {
     if (!this.snap.roomId) return;
@@ -148,11 +135,11 @@ export class VoiceSession implements VoiceClient {
   private refresh(): void {
     const state = mockState();
     if (!state || !this.snap.roomId || this.snap.status === 'joining') return;
-    if (state.generation !== this.generation || !state.visitor || state.voiceGrants[this.grantId ?? ''] !== this.snap.roomId) { this.close(); return; }
+    if (state.generation !== this.generation || !state.visitor || state.voiceConnections[this.grantId ?? ''] !== this.snap.roomId) { this.close(); return; }
     const self = state.visitor;
     const people = [
       { id: this.grantId!, visitorId: self.id, name: self.name, local: true, muted: this.snap.muted, deafened: this.snap.deafened, sharing: this.snap.sharing, shareTrackId: '', camera: this.snap.camera, cameraTrackId: '' },
-      ...[...(state.peers[this.snap.roomId] ?? []), ...Object.entries(state.voiceGrants).filter(([connectionId, roomId]) => connectionId !== this.grantId && roomId === this.snap.roomId).map(([connectionId]) => ({ connectionId, visitorId: self.id, name: self.name, muted: false, deafened: false, sharing: false, camera: false }))].map((p) => ({ id: p.connectionId, visitorId: p.visitorId, name: p.name, local: false, muted: p.muted, deafened: p.deafened, sharing: p.sharing, shareTrackId: '', camera: p.camera ?? false, cameraTrackId: '' })),
+      ...[...(state.peers[this.snap.roomId] ?? []), ...Object.entries(state.voiceConnections).filter(([connectionId, roomId]) => connectionId !== this.grantId && roomId === this.snap.roomId).map(([connectionId]) => ({ connectionId, visitorId: self.id, name: self.name, muted: false, deafened: false, sharing: false, camera: false }))].map((p) => ({ id: p.connectionId, visitorId: p.visitorId, name: p.name, local: false, muted: p.muted, deafened: p.deafened, sharing: p.sharing, shareTrackId: '', camera: p.camera ?? false, cameraTrackId: '' })),
     ];
     const sharing = new Set(people.filter((p) => p.sharing).map((p) => p.id));
     for (const [id, track] of this.tracks) {
@@ -179,18 +166,19 @@ export class VoiceSession implements VoiceClient {
     this.set({ speakers: people.filter((p) => this.level(p.id) > 0.1).map((p) => p.id) });
   }
   private async release(generation: number, grantId: string): Promise<void> {
-    await mockAction({ type: 'voice-leave', generation, grantId }).catch(() => {});
+    await mockAction({ type: 'voice-disconnect', generation, connectionId: grantId }).catch(() => {});
   }
-  private close(): void {
+  private close(): Promise<void> {
+    const pending = this.generation !== null && this.grantId ? this.release(this.generation, this.grantId) : Promise.resolve();
     this.operation++;
     this.generation = null;
     this.grantId = null;
-    this.admittingGrant = null;
     for (const track of this.tracks.values()) track.stop();
     this.tracks.clear();
     this.stopCamera();
-    this.snap = { ...idleVoice, pendingLeave: this.leaves.count };
+    this.snap = { ...idleVoice };
     this.host.onChange(this.snap);
+    return pending;
   }
   private stopCamera(): void {
     for (const track of this.cameras.values()) track.stop();

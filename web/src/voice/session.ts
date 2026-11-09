@@ -10,7 +10,6 @@ import type {
   VideoTrack,
 } from 'livekit-client';
 import { api, ApiError } from '../api/client';
-import { PendingLeaves } from './pendingLeaves';
 import { cameraOptions } from './camera';
 import { loudness } from './meter';
 import { shareOptions } from './share';
@@ -49,9 +48,6 @@ const isDeafened = (p: LkParticipant) => p.attributes.deafened === 'true';
 /** One visitor's connection to one room's voice at a time, over LiveKit. */
 export class VoiceSession implements VoiceClient {
   private room: Room | null = null;
-  private grantId: string | null = null;
-  private admittingGrant: string | null = null;
-  private readonly leaves: PendingLeaves;
   private snap: VoiceSnapshot = idleVoice;
   private audio: AudioContext | null = null;
   private meters = new Map<string, Meter>();
@@ -67,7 +63,6 @@ export class VoiceSession implements VoiceClient {
   private boosts = new WeakMap<RemoteAudioTrack, GainNode>();
 
   constructor(private readonly host: VoiceHost) {
-    this.leaves = new PendingLeaves(() => this.set({ pendingLeave: this.leaves.count }));
     this.sinkHost = document.createElement('div');
     this.sinkHost.hidden = true;
     document.body.append(this.sinkHost);
@@ -77,7 +72,7 @@ export class VoiceSession implements VoiceClient {
     return this.snap;
   }
 
-  /** Admits a new connection, then retires this app instance's previous grant. */
+  /** Admits a new connection before disconnecting this app instance's previous room. */
   async join(roomId: string): Promise<void> {
     if (this.snap.status === 'joining') return;
     // In the click's gesture, so that browsers let it start.
@@ -111,18 +106,11 @@ export class VoiceSession implements VoiceClient {
       else this.host.onProblem('join_failed');
       return;
     }
-    if (operation !== this.operation) {
-      await this.leaves.add(creds.grantId);
-      return;
-    }
-    const previousGrant = this.grantId;
-    this.grantId = creds.grantId;
-    this.admittingGrant = creds.grantId;
-    if (previousGrant) void this.leaves.add(previousGrant);
+    if (operation !== this.operation) return;
     this.moving = false;
     this.teardownRoom();
 
-    let room: Room;
+    let room: Room | null = null;
     try {
       const speakerId = this.host.speakerId();
       room = new sdk.Room({
@@ -137,17 +125,15 @@ export class VoiceSession implements VoiceClient {
       this.bind(room);
       await room.connect(creds.url, creds.token);
     } catch {
-      void this.leaves.add(creds.grantId);
       if (operation === this.operation) {
         this.close();
         this.host.onProblem('media_failed');
-      }
+      } else if (room) this.disconnectRoom(room);
       return;
     }
-    if (this.room !== room) { void this.leaves.add(creds.grantId); return; }
+    if (this.room !== room) { this.disconnectRoom(room); return; }
     await room.startAudio().catch(() => {});
-    if (this.room !== room) { void this.leaves.add(creds.grantId); return; }
-    this.admittingGrant = null;
+    if (this.room !== room) { this.disconnectRoom(room); return; }
     this.knownShares.clear();
     this.set({ status: 'connected', roomId, joiningRoomId: null, joinedAt: performance.now(), deafened, listenOnly: false });
     this.host.onSound('join');
@@ -164,15 +150,11 @@ export class VoiceSession implements VoiceClient {
   async leave(): Promise<void> {
     if (this.snap.status === 'idle') return;
     this.host.onSound('leave');
-    const grantId = this.grantId;
-    const pending = grantId ? this.leaves.add(grantId) : Promise.resolve();
     this.close();
-    await pending;
   }
 
   /** Ends voice without a sound: the access ended. */
   end(): void {
-    if (this.admittingGrant) void this.leaves.add(this.admittingGrant);
     this.close();
   }
 
@@ -490,21 +472,21 @@ export class VoiceSession implements VoiceClient {
     for (const meter of this.meters.values()) meter.source.disconnect();
     this.meters.clear();
     this.sinkHost.replaceChildren();
-    if (room) {
-      this.stopTracks(room);
-      room.removeAllListeners();
-      void room.disconnect();
-    }
+    if (room) this.disconnectRoom(room);
+  }
+
+  private disconnectRoom(room: Room): void {
+    this.stopTracks(room);
+    room.removeAllListeners();
+    void room.disconnect();
   }
 
   private close(): void {
     this.operation++;
     this.moving = false;
-    this.grantId = null;
-    this.admittingGrant = null;
     this.teardownRoom();
     this.knownShares.clear();
-    this.snap = { ...idleVoice, pendingLeave: this.leaves.count };
+    this.snap = { ...idleVoice };
     this.host.onChange(this.snap);
   }
 

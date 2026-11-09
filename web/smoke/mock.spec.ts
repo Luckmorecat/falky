@@ -523,39 +523,31 @@ test('chat keeps each room reading place, pages without jumping, and virtualizes
 });
 
 
-test('pending exact Leave survives reload and recovery cannot revoke a newer Join', async ({ page }) => {
+test('offline Leave disconnects immediately and ignores obsolete pending storage after reload', async ({ page, context }) => {
+  const requests: string[] = [];
+  page.on('request', (request) => { if (request.url().includes('/api/voice/leave')) requests.push(request.url()); });
   await page.goto(app.url);
   await english(page);
-  const firstJoin = page.waitForResponse((response) => /\/api\/rooms\/[^/]+\/voice$/.test(response.url()));
-  await page.getByRole('button', { name: 'Join', exact: true }).click();
-  const oldGrant = (await (await firstJoin).json()).grantId;
-  await expect(page.getByRole('toolbar')).toBeVisible();
-  await action(page, { type: 'faults', faults: { leaveUnavailable: true } });
-  await page.getByRole('button', { name: 'Leave voice', exact: true }).click();
-  const pending = page.getByText('Waiting for the server to confirm your earlier exit from voice.', { exact: true });
-  await expect(pending).toBeVisible();
-  await expect(page.getByRole('toolbar')).toHaveCount(0);
-  await page.setViewportSize({ width: 390, height: 844 });
-  await expect.poll(async () => {
-    const notice = await pending.boundingBox();
-    const subtitle = await page.locator('.clock').boundingBox();
-    const firstTile = await page.locator('.stage .tile').first().boundingBox();
-    return !!notice && !!subtitle && !!firstTile && notice.y >= subtitle.y + subtitle.height && firstTile.y >= notice.y + notice.height;
-  }).toBe(true);
+  const initial = await state(page);
+  await page.evaluate(({ instanceId }) => {
+    localStorage.setItem(`falky.mock.${instanceId}.pendingLeave.self.obsolete`, 'pending');
+    localStorage.setItem('falky.pendingLeave.self.production-obsolete', 'pending');
+  }, initial);
   await page.reload();
-  await expect(pending).toBeVisible();
-  const nextJoin = page.waitForResponse((response) => /\/api\/rooms\/[^/]+\/voice$/.test(response.url()));
+  await expect(page.getByRole('button', { name: 'Join', exact: true })).toBeVisible();
+  await page.evaluate(() => { dispatchEvent(new Event('online')); dispatchEvent(new Event('focus')); });
   await page.getByRole('button', { name: 'Join', exact: true }).click();
-  const newGrant = (await (await nextJoin).json()).grantId;
-  expect(newGrant).not.toBe(oldGrant);
   await expect(page.getByRole('toolbar')).toBeVisible();
-  await expect(pending).toBeVisible();
-  await action(page, { type: 'faults', faults: { leaveUnavailable: false } });
-  await page.evaluate(() => dispatchEvent(new Event('online')));
-  await expect(pending).toHaveCount(0);
-  await expect(page.getByRole('toolbar')).toBeVisible();
-  expect((await state(page)).voiceRoomId).not.toBeNull();
-  await page.getByRole('button', { name: 'Leave voice', exact: true }).click();
-  await expect(pending).toHaveCount(0);
-  await expect.poll(async () => (await state(page)).voiceRoomId).toBeNull();
+  try {
+    await context.setOffline(true);
+    await page.getByRole('button', { name: 'Leave voice', exact: true }).click();
+    await expect(page.getByRole('toolbar')).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Join', exact: true })).toBeVisible();
+    await expect(page.locator('.pending-leave')).toHaveCount(0);
+    await expect(page.getByText('Waiting for the server to confirm your earlier exit from voice.', { exact: true })).toHaveCount(0);
+  } finally { await context.setOffline(false); }
+  await page.reload();
+  await expect(page.getByRole('button', { name: 'Join', exact: true })).toBeVisible();
+  await expect(page.locator('.pending-leave')).toHaveCount(0);
+  expect(requests).toEqual([]);
 });
