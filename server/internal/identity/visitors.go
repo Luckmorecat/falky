@@ -2,7 +2,6 @@ package identity
 
 import (
 	"context"
-	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
 	"database/sql"
@@ -12,7 +11,7 @@ import (
 	"github.com/oklog/ulid/v2"
 )
 
-// Visitor is a person who entered through the access link.
+// Visitor is the stable identity shared by guests and accounts.
 type Visitor struct {
 	// ID is a ULID; it never changes.
 	ID     string
@@ -37,16 +36,15 @@ func (s *Service) Enter(ctx context.Context, secret, name string) (Visitor, stri
 	name, nameErr := CleanName(name)
 	key := NameKey(name)
 	v := Visitor{ID: ulid.Make().String(), Name: name}
-	token := rand.Text()
+	var token string
 
 	s.reservations.mu.Lock()
 	defer s.reservations.mu.Unlock()
 	now := s.now()
 	err := s.db.Write(ctx, func(tx *sql.Tx) error {
 		var current string
-		var generation int64
-		if err := tx.QueryRowContext(ctx, "SELECT link_secret, generation FROM access WHERE id = 1").
-			Scan(&current, &generation); err != nil {
+		if err := tx.QueryRowContext(ctx, "SELECT link_secret FROM access WHERE id = 1").
+			Scan(&current); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				return ErrNoLink
 			}
@@ -60,10 +58,13 @@ func (s *Service) Enter(ctx context.Context, secret, name string) (Visitor, stri
 		if nameErr != nil {
 			return nameErr
 		}
+		if err := s.reservedName(ctx, tx, key, v.ID); err != nil {
+			return err
+		}
 		if s.reservations.takenBy(key, v.ID, now) {
 			return ErrNameTaken
 		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO visitors (id, name, created_at)
+		if _, err := tx.ExecContext(ctx, `INSERT INTO identities (id, name, created_at)
 			VALUES (?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`, v.ID, v.Name); err != nil {
 			return err
 		}
@@ -72,8 +73,7 @@ func (s *Service) Enter(ctx context.Context, secret, name string) (Visitor, stri
 		if err != nil {
 			return err
 		}
-		_, err = tx.ExecContext(ctx, `INSERT INTO visitor_tokens (token_hash, visitor_id, generation, created_at)
-			VALUES (?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`, hashToken(token), v.ID, generation)
+		_, token, err = s.issueSession(ctx, tx, v.ID, Guest, nil)
 		return err
 	})
 	if err != nil {
@@ -86,48 +86,25 @@ func (s *Service) Enter(ctx context.Context, secret, name string) (Visitor, stri
 	return v, token, nil
 }
 
-// Resolve returns the visitor whose cookie holds token. A token issued under
-// an earlier link generation, or an unknown one, fails with ErrNoVisitor.
+// Resolve returns the current identity for a valid guest or account cookie.
 func (s *Service) Resolve(ctx context.Context, token string) (Visitor, error) {
-	if token == "" {
-		return Visitor{}, ErrNoVisitor
-	}
-	var v Visitor
-	err := s.db.Read().QueryRowContext(ctx, `SELECT v.id, v.name, c.palette, c.revision
-		FROM visitor_tokens t
-		JOIN visitors v ON v.id = t.visitor_id
- JOIN visitor_colours c ON c.visitor_id = v.id
-		JOIN access a ON a.id = 1 AND a.generation = t.generation
-		WHERE t.token_hash = ?`, hashToken(token)).Scan(&v.ID, &v.Name, &v.Colour.Palette, &v.Colour.Revision)
-	if errors.Is(err, sql.ErrNoRows) {
-		return Visitor{}, ErrNoVisitor
-	}
-	if err != nil {
-		return Visitor{}, fmt.Errorf("resolve visitor: %w", err)
-	}
-	v.Colour.VisitorID = v.ID
-	return v, nil
+	session, err := s.ResolveSession(ctx, token)
+	return session.Visitor, err
 }
 
-// Visitor returns the visitor visitorID, under their current name, while they
-// have current access: while they hold a token issued under the current link
-// generation. It fails with ErrNoVisitor otherwise.
+// Visitor looks up an identity with current access. Admission for a specific
+// live or voice connection must use ValidateSession instead.
 func (s *Service) Visitor(ctx context.Context, visitorID string) (Visitor, error) {
-	var v Visitor
-	err := s.db.Read().QueryRowContext(ctx, `SELECT v.id, v.name, c.palette, c.revision
-		FROM visitors v JOIN visitor_colours c ON c.visitor_id = v.id
-		WHERE v.id = ? AND EXISTS (SELECT 1
-			FROM visitor_tokens t
-			JOIN access a ON a.id = 1 AND a.generation = t.generation
-			WHERE t.visitor_id = v.id)`, visitorID).Scan(&v.ID, &v.Name, &v.Colour.Palette, &v.Colour.Revision)
+	var sessionID string
+	err := s.db.Read().QueryRowContext(ctx, "SELECT t.id "+currentSessions+" AND t.identity_id=? LIMIT 1", s.now().Unix(), visitorID).Scan(&sessionID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Visitor{}, ErrNoVisitor
 	}
 	if err != nil {
-		return Visitor{}, fmt.Errorf("look up visitor: %w", err)
+		return Visitor{}, fmt.Errorf("look up identity: %w", err)
 	}
-	v.Colour.VisitorID = v.ID
-	return v, nil
+	session, err := s.sessionByID(ctx, s.db.Read(), sessionID)
+	return session.Visitor, err
 }
 
 // Rename changes the name of the visitor visitorID to name, and moves the
@@ -135,19 +112,40 @@ func (s *Service) Visitor(ctx context.Context, visitorID string) (Visitor, error
 // ErrNameTaken, or ErrNoVisitor for an unknown visitor. The visitor's own
 // name is free to them unless another visitor holds it.
 func (s *Service) Rename(ctx context.Context, visitorID, name string) (Visitor, error) {
+	v, _, err := s.RenameWithEffects(ctx, visitorID, name)
+	return v, err
+}
+
+// RenameWithEffects includes guests displaced by an account's durable claim.
+func (s *Service) RenameWithEffects(ctx context.Context, visitorID, name string) (Visitor, Effects, error) {
 	name, err := CleanName(name)
 	if err != nil {
-		return Visitor{}, err
+		return Visitor{}, Effects{}, err
 	}
 	key := NameKey(name)
 
 	s.reservations.mu.Lock()
 	defer s.reservations.mu.Unlock()
-	if s.reservations.takenBy(key, visitorID, s.now()) {
-		return Visitor{}, ErrNameTaken
-	}
+	var effects Effects
 	err = s.db.Write(ctx, func(tx *sql.Tx) error {
-		res, err := tx.ExecContext(ctx, "UPDATE visitors SET name = ? WHERE id = ?", name, visitorID)
+		if err := s.reservedName(ctx, tx, key, visitorID); err != nil {
+			return err
+		}
+		var isAccount bool
+		if err := tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM accounts WHERE identity_id=?)", visitorID).Scan(&isAccount); err != nil {
+			return err
+		}
+		if isAccount {
+			if err := s.claimName(ctx, tx, visitorID, name, &effects); err != nil {
+				return err
+			}
+			_, err := tx.ExecContext(ctx, "UPDATE accounts SET name_key=? WHERE identity_id=?", key, visitorID)
+			return err
+		}
+		if s.reservations.takenBy(key, visitorID, s.now()) {
+			return ErrNameTaken
+		}
+		res, err := tx.ExecContext(ctx, "UPDATE identities SET name = ? WHERE id = ?", name, visitorID)
 		if err != nil {
 			return err
 		}
@@ -158,19 +156,20 @@ func (s *Service) Rename(ctx context.Context, visitorID, name string) (Visitor, 
 		return err
 	})
 	if errors.Is(err, ErrNoVisitor) {
-		return Visitor{}, err
+		return Visitor{}, Effects{}, err
 	}
 	if err != nil {
-		return Visitor{}, fmt.Errorf("rename visitor: %w", err)
+		return Visitor{}, Effects{}, fmt.Errorf("rename visitor: %w", err)
 	}
+	s.applyNameEffects(effects)
 	s.reservations.move(key, visitorID)
 	var colour Colour
-	err = s.db.Read().QueryRowContext(ctx, "SELECT palette, revision FROM visitor_colours WHERE visitor_id = ?", visitorID).Scan(&colour.Palette, &colour.Revision)
+	err = s.db.Read().QueryRowContext(ctx, "SELECT palette, revision FROM profiles WHERE identity_id = ?", visitorID).Scan(&colour.Palette, &colour.Revision)
 	if err != nil {
-		return Visitor{}, fmt.Errorf("renamed visitor colour: %w", err)
+		return Visitor{}, Effects{}, fmt.Errorf("renamed visitor colour: %w", err)
 	}
 	colour.VisitorID = visitorID
-	return Visitor{ID: visitorID, Name: name, Colour: colour}, nil
+	return Visitor{ID: visitorID, Name: name, Colour: colour}, effects, nil
 }
 
 // Connect counts a live-update connection of the visitor visitorID, who is
@@ -190,7 +189,7 @@ func (s *Service) Connect(ctx context.Context, visitorID string) (disconnect fun
 	defer s.reservations.mu.Unlock()
 	// Rename writes names while holding the lock, so this one is current.
 	var name string
-	err = s.db.Read().QueryRowContext(ctx, "SELECT name FROM visitors WHERE id = ?", visitorID).Scan(&name)
+	err = s.db.Read().QueryRowContext(ctx, "SELECT name FROM identities WHERE id = ?", visitorID).Scan(&name)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNoVisitor
 	}
@@ -198,6 +197,9 @@ func (s *Service) Connect(ctx context.Context, visitorID string) (disconnect fun
 		return nil, fmt.Errorf("connect visitor: %w", err)
 	}
 	key := NameKey(name)
+	if err := s.reservedName(ctx, s.db.Read(), key, visitorID); err != nil {
+		return nil, err
+	}
 	if s.reservations.takenByConnected(key, visitorID) {
 		return nil, ErrNameTaken
 	}

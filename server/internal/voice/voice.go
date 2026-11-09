@@ -16,6 +16,7 @@ import (
 
 	"github.com/livekit/protocol/auth"
 	"github.com/livekit/protocol/livekit"
+	"github.com/oklog/ulid/v2"
 
 	"github.com/kisshot/falky/server/internal/identity"
 	"github.com/kisshot/falky/server/internal/rooms"
@@ -81,6 +82,8 @@ var ErrRoomFull = errors.New("the room's voice is full")
 // says how.
 var ErrUnavailable = errors.New("voice is unavailable")
 
+var ErrTransferRequired = errors.New("confirm transfer of voice from the other session")
+
 // Config is how the Service issues tokens.
 type Config struct {
 	// URL is where clients reach LiveKit.
@@ -107,7 +110,13 @@ type Service struct {
 	// until it has published, so changes apply and publish one at a time.
 	publishing sync.Mutex
 
-	mu sync.Mutex
+	mu         sync.Mutex
+	joining    sync.Mutex
+	grants     map[string]*voiceGrant
+	current    map[string]string
+	admission  sync.Locker
+	validate   func(context.Context, identity.Session) (identity.Session, error)
+	guardedURL string
 	// issued holds, by visitor ID, the room ID of the last token issued to
 	// the visitor since the server started.
 	issued map[string]string
@@ -144,6 +153,8 @@ func New(lk LiveKit, visitors Visitors, rs Rooms, cfg Config, opts ...Option) *S
 		logger:   slog.New(slog.DiscardHandler),
 		issued:   make(map[string]string),
 		view:     make(map[string]map[string]identity.Visitor),
+		grants:   make(map[string]*voiceGrant),
+		current:  make(map[string]string),
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -160,38 +171,91 @@ func New(lk LiveKit, visitors Visitors, rs Rooms, cfg Config, opts ...Option) *S
 // takes no place), or with an ErrUnavailable. The caller checks that the room
 // exists and that the visitor may join it.
 func (s *Service) Join(ctx context.Context, visitor identity.Visitor, roomID string) (Credentials, error) {
+	return s.join(ctx, identity.Session{Visitor: visitor, Kind: identity.Guest}, roomID, false, false)
+}
+
+// JoinSession binds voice to the exact browser session. Its caller holds the
+// lifecycle gate through session validation and issuance.
+func (s *Service) JoinSession(ctx context.Context, session identity.Session, roomID string, confirm bool) (Credentials, error) {
+	return s.join(ctx, session, roomID, confirm, true)
+}
+
+func (s *Service) join(ctx context.Context, session identity.Session, roomID string, confirm, bound bool) (Credentials, error) {
+	s.joining.Lock()
+	defer s.joining.Unlock()
+	visitor := session.Visitor
+	s.mu.Lock()
+	old := s.grants[s.current[visitor.ID]]
+	s.mu.Unlock()
+	sameBinding := old != nil && !old.revoked && old.room == roomID &&
+		old.session.ID == session.ID && old.session.Kind == session.Kind &&
+		old.session.Generation == session.Generation && old.session.Visitor.ID == visitor.ID
+	if old != nil && !old.revoked && session.Kind == identity.Account && old.session.ID != session.ID && !confirm {
+		return Credentials{}, ErrTransferRequired
+	}
+	transport := visitor.ID
+	if session.Kind == identity.Account {
+		if sameBinding {
+			transport = old.transport
+		} else {
+			transport += "." + ulid.Make().String()
+		}
+	}
 	participants, err := s.livekit.Participants(ctx)
 	if err != nil {
 		return Credentials{}, fmt.Errorf("%w: list participants: %w", ErrUnavailable, err)
 	}
 	others := 0
-	var elsewhere []string
+	var elsewhere []Participant
 	for _, p := range participants {
 		switch {
-		case p.Identity != visitor.ID:
+		case s.logicalIdentity(p.Identity) != visitor.ID:
 			if p.Room == roomID {
 				others++
 			}
-		case p.Room != roomID:
-			elsewhere = append(elsewhere, p.Room)
+		case p.Room != roomID || p.Identity != transport:
+			elsewhere = append(elsewhere, p)
 		}
 	}
 	if others >= s.cfg.RoomCap {
 		return Credentials{}, ErrRoomFull
 	}
-	for _, room := range elsewhere {
-		if err := s.livekit.RemoveParticipant(ctx, room, visitor.ID); err != nil {
-			return Credentials{}, fmt.Errorf("%w: remove from room %s: %w", ErrUnavailable, room, err)
+	replacing := old != nil && (!sameBinding || old.transport != transport || !bound)
+	if replacing {
+		s.fence(old)
+		defer s.closeGrant(ctx, old)
+	}
+	for _, p := range elsewhere {
+		if err := s.livekit.RemoveParticipant(ctx, p.Room, p.Identity); err != nil {
+			return Credentials{}, fmt.Errorf("%w: remove from room %s: %w", ErrUnavailable, p.Room, err)
 		}
 	}
-	token, err := s.token(visitor, roomID)
+	if replacing {
+		s.retire(old)
+	}
+	token, err := s.token(identity.Visitor{ID: transport, Name: visitor.Name, Colour: visitor.Colour}, roomID)
 	if err != nil {
 		return Credentials{}, err
 	}
 	s.mu.Lock()
 	s.issued[visitor.ID] = roomID
+	if bound {
+		g := &voiceGrant{session: session, transport: transport, room: roomID, sockets: make(map[*signalConnection]struct{})}
+		if sameBinding && old.transport == transport {
+			g = old
+		}
+		if g.expiry == nil && !session.ExpiresAt.IsZero() {
+			s.expireAt(g)
+		}
+		s.grants[transport] = g
+		s.current[visitor.ID] = transport
+	}
 	s.mu.Unlock()
-	return Credentials{URL: s.cfg.URL, Token: token}, nil
+	connectionURL := s.cfg.URL
+	if session.Kind == identity.Account && s.guardedURL != "" {
+		connectionURL = s.guardedURL
+	}
+	return Credentials{URL: connectionURL, Token: token}, nil
 }
 
 // token mints the token visitor joins the voice of the room roomID with: the

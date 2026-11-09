@@ -5,7 +5,7 @@ the operator commands, snapshots and restoring them, logs, and what else to
 keep safe.
 
 The stack is `deploy/compose.yaml` (Compose project `falky`). Caddy serves
-HTTPS and proxies the API and LiveKit's signalling, LiveKit carries voice and
+HTTPS and proxies the API and guarded RTC signalling to Falky, LiveKit carries voice and
 screen share, and the server (service `falky`) keeps the rooms, chat and
 visitors. Run every `docker compose` command below in `deploy/`, where Compose
 finds `compose.yaml` and `.env` without flags.
@@ -75,6 +75,26 @@ The external networks are `falky_default` and `falky-dev_default` (override with
 `FALKY_NETWORK` only when coordinating host routing). The app publishes only
 LiveKit media ports. The edge reaches `<project>-api:8080`, `<project>-voice:7880`
 and `<project>-web:80` directly, keeping one trusted proxy hop.
+
+The production package assigns both `-api` and the **unique** `-voice` alias to
+Falky. `FALKY_SIGNALLING_ADDR=:7880` enables its private RTC-only listener;
+the default is empty (disabled), useful on a bare development host where
+LiveKit already binds loopback 7880. Falky's upstream remains the independent
+service name `http://livekit:7880`, never the `-voice` alias. Local Caddy routes
+`/rtc` and `/rtc/*` through Falky8080. Public URLs, services, networks, volumes
+and published media ports remain the same. Keep raw LiveKit signalling/API
+private: exposing it to clients bypasses admission.
+
+The first separately authorized rollout of this package must remove the old
+LiveKit `-voice` alias as it gives it to Falky. Do not allow old and new alias
+owners to coexist; drain/block RTC through that transition. This Compose change
+requires a one-time LiveKit container recreation and interrupts voice. Subsequent
+unchanged LiveKit packages retain the normal no-recreation behavior. These are
+future rollout instructions, not evidence that any instance has been deployed.
+Ordinary release health checks database, direct LiveKit API and public web/API;
+it alone does not prove RTC guard routing. The package's configuration/listener
+tests separately cover unique aliases for both projects, unchanged edge targets,
+startup failures and management-path refusal.
 
 [Private netcup-infra](https://github.com/Luckmorecat/netcup-infra) owns the edge,
 networks, host setup and backup timers. Falky owns its runtime package and app
@@ -473,15 +493,25 @@ and edge, and make immutable registry images available before recovery. A bare
 database snapshot alone does not contain the application's recovery history or
 runtime package.
 
-### Rotate access fully
+### Rotate guest access
 
-`link rotate` immediately refuses old visitor cookies, closes live updates and
-ends voice. Someone retaining a previously issued voice token could attempt
-rejoining until the server removes them again. For a leaked link, rotate the
-LiveKit pair too so held voice tokens are rejected immediately:
+`link rotate` immediately refuses old guest cookies and guarded RTC admission,
+closes guest live updates and ends guest voice. Accounts, reserved account names
+and their sessions/live/voice remain. Distribute the new shared guest link only
+to intended guests:
 
 ```sh
 ./compose.sh exec falky /falky link rotate
+```
+
+An account is excluded with `account disable`, below. Rotation cannot exclude
+an account, and disabling an account cannot prevent its holder using a valid
+shared link to enter as a new guest. Preserve the raw LiveKit private-network
+boundary; bypassing Falky's RTC guard defeats immediate token fencing.
+
+To replace a compromised LiveKit signing pair as well, generate new values:
+
+```sh
 openssl rand -hex 6                  # append to "falky" for the new API key
 openssl rand -hex 32                 # new API secret; keep this output private
 ```
@@ -495,8 +525,99 @@ Edit this instance's `.env` and private saved copy with the new
 ./compose.sh exec falky /falky link show
 ```
 
-Both the server and LiveKit restart, briefly interrupting sessions. Distribute
-the new link. Never copy credentials or a database from production to development.
+Both the server and LiveKit restart, briefly interrupting voice. Account browsers
+must obtain fresh voice credentials after a backend restart because account voice grants
+are process-local and fail closed; account sessions persist. Never copy
+credentials or a database from production to development.
+
+Guests can reuse valid original or LiveKit-refreshed voice JWTs after a backend
+restart while their unique persisted guest session and guest-link generation
+remain current. Logout, guest-link rotation or account upgrade refuse that
+restoration; room/name checks and newer room choices still apply.
+
+### Accounts, invitations and recovery
+
+These commands use the existing owner-only Unix admin socket in the running
+server (`FALKY_ADMIN_SOCKET`, default `falky-admin.sock`, container-configured).
+They do not expose a public administration API. Use the selected instance's
+`./compose.sh`; in local Compose use `docker compose exec` instead:
+
+```sh
+./compose.sh exec falky /falky invitation create
+./compose.sh exec falky /falky invitation list
+./compose.sh exec falky /falky invitation revoke INVITATION_ID
+./compose.sh exec falky /falky account list
+./compose.sh exec falky /falky account disable ACCOUNT_ID
+./compose.sh exec falky /falky account recover ACCOUNT_ID
+```
+
+Creation prints one single-use seven-day `/#invite=<bearer>` link. It is not
+restricted by email and is separate from the reusable guest link. Listing shows
+non-secret references, times and revoked/redeemed status, never bearer links;
+use its reference to revoke. An invitation suffices for a first arrival without
+a guest cookie. If a valid guest cookie is present, verified enrollment upgrades
+that same identity and preserves messages, drafts and colour. Signing into an
+existing account switches identity without merging guest ownership.
+
+The private account list provides IDs/names/disabled status for operator work;
+there is no public roster. Accounts reserve names while offline or disabled.
+An account claiming a guest name moves affected guests to generated alternatives
+and refreshes their connected clients. Names at the time of message publication
+remain unchanged in history.
+
+Keep `FALKY_PUBLIC_ORIGIN` and its hostname stable: passkeys bind to that RP
+hostname and exact origin. Accounts use discoverable passkeys with required user
+verification, never email/password/OAuth. Multiple individually labeled passkeys
+are supported. Management and code regeneration require a verified passkey proof
+in the same session within five minutes; last-key removal is refused. Removing
+one passkey blocks future sign-in/proof with that key, but normal existing
+sessions remain usable; recovery/disable ends the old sessions. Account cookies expire server-side
+after 90 days absolute; logout ends only that browser's session.
+
+Enrollment and recovery return ten high-entropy single-use recovery codes,
+plaintext only in the successful response; only their hashes are stored. Keep
+them privately with `session.visitor.id`, the permanent account ID, rather than
+the changeable name: code recovery requires both ID and code. Authorized regeneration invalidates
+the previous set. Codes authorize replacement-passkey enrollment, not ordinary
+access. An operator should issue `account recover` only after out-of-band human
+identity verification. It prints a `/#recover=<bearer>&account=<id>` link valid
+for 30 minutes. Issuing it alone changes no access. Failed/cancelled enrollment
+does not consume the code/link or lock out the existing owner.
+
+Successful recovery verifies and installs a replacement passkey, invalidates
+**all** old passkeys, sessions, recovery codes and outstanding recovery grants
+and account-bound ceremonies, then returns a fresh session and codes. Old live
+updates and voice end; the recovered identity, reserved name and history remain.
+Disablement immediately ends that account's sessions/live/voice and rejects
+authentication/recovery while retaining the identity and name. It leaves the
+shared guest link untouched. A successful HTTP/CLI mutation awaits required
+voice removal; a postcommit enforcement error means persistent identity state
+already changed. Inspect logs and LiveKit connectivity; do not assume the
+transaction was rolled back or media removal succeeded.
+
+The current frontend provides the legacy guest flow; these backend invitation
+and recovery links do not add account UI. Client integration must implement the
+[account/WebAuthn API](../api/openapi.yaml), including five-minute context-bound
+ceremonies, same-origin mutations, recovery-code storage and explicit confirmed
+voice transfer at `POST /api/rooms/{id}/voice`. Account transport IDs map to the
+permanent prefix before their dot; public occupancy already uses permanent IDs.
+
+The additive `0007_accounts.sql` migration retains existing IDs, guest history
+and ownership. `0008_identity_profiles.sql` renames the lasting identity table to
+`identities`, appearance to `profiles` and identity-reference columns to
+`identity_id`, preserving data and updating foreign keys. `0009_sessions.sql`
+combines guest tokens and account sessions into `sessions`, preserving cookie
+hashes and existing account-session IDs. Guest sessions receive independent IDs
+and an absolute expiry 400 days after original issuance; account deadlines remain
+90 days from sign-in. Already expired guest tokens remain expired. A guest
+registration ceremony begun before this migration must be restarted because its
+old derived session ID is no longer valid. `serve` or `falky migrate` applies these
+through the normal application migration sources. No reset is required. A runtime
+from before these changes expects the old tables; rolling back to it requires a
+pre-upgrade database snapshot. Snapshot before an upgrade; an older
+binary cannot restore the newer migration set. A deliberate reset would lose
+accounts, credentials, reservations, sessions and history: never delete a live
+database for this feature.
 
 ### Logs and host state
 
@@ -560,8 +681,9 @@ animated WebP, SVG, HTML and other unsupported formats retain their exact bytes
 and metadata and are always download-only; only optimized images display inline.
 
 All attachment routes require the current visitor cookie and room authorization.
-Drafts are private to the uploading visitor/browser. Re-entering creates another
-visitor and cannot recover those drafts. Posted files remain readable by newly
+Drafts are private to the owning identity. Guest re-entry creates another
+visitor and cannot recover those drafts; guest upgrade preserves them, and
+account browsers share their account's ownership. Posted files remain readable by newly
 admitted visitors after access-link rotation. State-changing attachment requests
 with a nonempty Origin must match the configured public origin; authenticated
 non-browser clients may omit it. No CORS or public sharing URLs are provided.

@@ -29,8 +29,7 @@ func (p publicServer) adminClient(t *testing.T) *admin.Client {
 	}
 	srv := &http.Server{
 		Handler: admin.Handler(admin.Deps{
-			Logger: p.events.Logger, Identity: p.identity, Rooms: p.rooms, Voice: p.voice,
-			AccessRevoked: p.events.AccessRevoked,
+			Logger: p.events.Logger, Identity: p.identity, Rooms: p.rooms, Lifecycle: p.lifecycle,
 		}),
 		ReadHeaderTimeout: time.Second,
 	}
@@ -81,7 +80,7 @@ func TestRotatingTheLinkEndsEveryAccessOfTheOldOneWithinTwoSeconds(t *testing.T)
 			t.Errorf("read after access.revoked = %v, want close status %d", err, realtime.StatusRevoked)
 		}
 	}
-	if got := p.livekit.Removed(); !slices.Equal(got, inVoice) {
+	if got := p.livekit.Removed(); len(got) != len(inVoice) || !slices.Contains(got, inVoice[0]) || !slices.Contains(got, inVoice[1]) {
 		t.Errorf("removed from voice %+v, want %+v", got, inVoice)
 	}
 	if elapsed := time.Since(start); elapsed > 2*time.Second {

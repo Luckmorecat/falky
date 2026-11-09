@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/kisshot/falky/server/internal/api"
 	"github.com/kisshot/falky/server/internal/attachments"
@@ -24,7 +25,8 @@ type Handlers struct {
 	Public http.Handler
 	// Internal serves health checks, metrics and LiveKit's webhooks; it is
 	// never exposed.
-	Internal http.Handler
+	Internal   http.Handler
+	Signalling http.Handler
 }
 
 // maxRequestBody bounds the body of a public request, so that no one can make
@@ -37,12 +39,15 @@ type Deps struct {
 	Health      *platform.Health
 	Metrics     http.Handler
 	Identity    *identity.Service
+	Lifecycle   *Lifecycle
+	AuthLimit   *platform.Limiter
 	Rooms       *rooms.Service
 	Chat        *chat.Service
 	Attachments *attachments.Store
 	// Shutdown wakes blocked upload readers before the application waits for Store.Close.
-	Shutdown context.Context
-	Voice    *voice.Service
+	Shutdown      context.Context
+	Voice         *voice.Service
+	LiveKitAPIURL string
 	// EnterLimit limits entering per client IP. Posting is limited by Chat,
 	// which knows whether it only repeats a stored message.
 	EnterLimit *platform.Limiter
@@ -58,15 +63,29 @@ type Deps struct {
 // is routed on one mux; each listener forwards only its own path prefixes to
 // it, so an operation is reachable on exactly one listener.
 func New(deps Deps) Handlers {
+	if deps.Lifecycle == nil {
+		deps.Lifecycle = &Lifecycle{}
+	}
+	if deps.Lifecycle.Enforce == nil {
+		deps.Lifecycle.Enforce = Enforcer(Events{Hub: deps.Live, Logger: deps.Logger}, deps.Voice)
+	}
+	if deps.Voice != nil && deps.Identity != nil {
+		deps.Voice.ConfigureAdmission(deps.Lifecycle, deps.Identity.ValidateSession, deps.PublicOrigin)
+	}
+	if deps.AuthLimit == nil {
+		deps.AuthLimit = platform.NewLimiter(20, 3*time.Second, time.Now)
+	}
 	s := &server{
-		logger:     deps.Logger,
-		health:     deps.Health,
-		identity:   deps.Identity,
-		rooms:      deps.Rooms,
-		chat:       deps.Chat,
-		voice:      deps.Voice,
-		enterLimit: deps.EnterLimit,
-		events:     Events{Hub: deps.Live, Logger: deps.Logger},
+		lifecycle:    deps.Lifecycle,
+		logger:       deps.Logger,
+		health:       deps.Health,
+		identity:     deps.Identity,
+		rooms:        deps.Rooms,
+		chat:         deps.Chat,
+		voice:        deps.Voice,
+		enterLimit:   deps.EnterLimit,
+		publicOrigin: deps.PublicOrigin,
+		events:       Events{Hub: deps.Live, Logger: deps.Logger},
 	}
 	errs := errorWriter{logger: deps.Logger}
 	resolve := visitorResolver{identity: deps.Identity, errs: errs}
@@ -90,8 +109,14 @@ func New(deps Deps) Handlers {
 	public.HandleFunc("GET /api/attachments/{id}/content", attachmentRoute(a.content))
 	public.Handle("GET /api/live", live{
 		origin: deps.PublicOrigin, resolve: resolve, identity: deps.Identity, rooms: deps.Rooms, hub: deps.Live,
-		logger: deps.Logger,
+		logger: deps.Logger, lifecycle: deps.Lifecycle,
 	})
+	var signalling http.Handler = http.HandlerFunc(notFound)
+	if deps.Voice != nil {
+		signalling = deps.Voice.Signalling(deps.LiveKitAPIURL)
+	}
+	public.Handle("/rtc", signalling)
+	public.Handle("/rtc/", signalling)
 	public.Handle("/api/", http.MaxBytesHandler(operations, maxRequestBody))
 	public.Handle("/", http.MaxBytesHandler(http.HandlerFunc(notFound), maxRequestBody))
 
@@ -102,18 +127,20 @@ func New(deps Deps) Handlers {
 		http.MaxBytesHandler(liveKitWebhook{voice: deps.Voice, logger: deps.Logger}, maxWebhookBody))
 	internal.HandleFunc("/", notFound)
 
-	return Handlers{Public: public, Internal: internal}
+	return Handlers{Public: accountProtection(public, deps.PublicOrigin, deps.AuthLimit), Internal: internal, Signalling: signalling}
 }
 
 type server struct {
-	events     Events
-	logger     *slog.Logger
-	health     *platform.Health
-	identity   *identity.Service
-	rooms      *rooms.Service
-	chat       *chat.Service
-	voice      *voice.Service
-	enterLimit *platform.Limiter
+	lifecycle    *Lifecycle
+	events       Events
+	logger       *slog.Logger
+	health       *platform.Health
+	identity     *identity.Service
+	rooms        *rooms.Service
+	chat         *chat.Service
+	voice        *voice.Service
+	enterLimit   *platform.Limiter
+	publicOrigin string
 }
 
 var _ api.StrictServerInterface = (*server)(nil)

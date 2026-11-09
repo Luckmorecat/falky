@@ -24,7 +24,7 @@
 	# requests clients make to /rtc/validate after a failed connection.
 	@rtc path /rtc /rtc/*
 	handle @rtc {
-		reverse_proxy livekit:7880
+		reverse_proxy falky:8080
 	}
 
 	# The web client, built into this image (web/Dockerfile). Paths the API

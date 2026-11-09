@@ -49,9 +49,15 @@ class IsolationTests(unittest.TestCase):
             self.assertEqual(config["networks"]["default"]["name"], config["name"] + "_default")
             self.assertEqual(services["livekit"]["labels"]["win.lunari.falky.livekit-config"], "c" * 64)
             self.assertEqual(services["livekit"]["volumes"][0]["source"], "/srv/" + config["name"] + "/.deploy/livekit.yaml")
-            for service, alias in (("caddy", "web"), ("falky", "api"), ("livekit", "voice")):
-                self.assertEqual(services[service]["networks"]["default"]["aliases"],
-                                 [config["name"] + "-" + alias])
+            self.assertEqual(services["caddy"]["networks"]["default"]["aliases"], [config["name"] + "-web"])
+            self.assertEqual(services["falky"]["networks"]["default"]["aliases"],
+                             [config["name"] + "-api", config["name"] + "-voice"])
+            self.assertFalse((services["livekit"].get("networks", {}).get("default") or {}).get("aliases"))
+            self.assertEqual(services["falky"]["environment"]["FALKY_SIGNALLING_ADDR"], ":7880")
+            self.assertEqual(services["falky"]["environment"]["FALKY_LIVEKIT_API_URL"], "http://livekit:7880")
+            for name, service in services.items():
+                if name != "falky":
+                    self.assertNotIn(config["name"] + "-voice", (service.get("networks", {}).get("default") or {}).get("aliases", []))
             self.assertEqual(services["falky"]["environment"]["FALKY_PUBLIC_ORIGIN"], "https://" + domain)
             livekit = services["livekit"]
             self.assertEqual({(p["target"], int(p["published"]), p["protocol"]) for p in livekit["ports"]},

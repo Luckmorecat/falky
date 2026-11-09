@@ -35,6 +35,24 @@ func (e AccessRevokedReason) Valid() bool {
 	}
 }
 
+// Defines values for AccountSessionKind.
+const (
+	AccountSessionKindAccount AccountSessionKind = "account"
+	AccountSessionKindGuest   AccountSessionKind = "guest"
+)
+
+// Valid indicates whether the value is a known member of the AccountSessionKind enum.
+func (e AccountSessionKind) Valid() bool {
+	switch e {
+	case AccountSessionKindAccount:
+		return true
+	case AccountSessionKindGuest:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for AttachmentAvailability.
 const (
 	AttachmentAvailabilityCancelled AttachmentAvailability = "cancelled"
@@ -185,18 +203,131 @@ func (e PaletteName) Valid() bool {
 	}
 }
 
-// AccessRevoked Why the visitor's access ended. Their cookie is refused from now on; they enter again through the current access link, as a new visitor.
+// AccessRevoked Why guest-link access ended. The old guest cookie is refused; reentry through the current guest link creates a new guest identity. This event is not sent for account logout, recovery, disablement or session expiry; those close only the affected sessions with code 4001.
 type AccessRevoked struct {
-	// Reason `link_replaced`: the access link was replaced, which ends every visitor's access.
+	// Reason `link_replaced`: the guest access link was replaced, ending old guest sessions while preserving account sessions.
 	//
 	// Example: link_replaced
 	Reason AccessRevokedReason `json:"reason"`
 }
 
-// AccessRevokedReason `link_replaced`: the access link was replaced, which ends every visitor's access.
+// AccessRevokedReason `link_replaced`: the guest access link was replaced, ending old guest sessions while preserving account sessions.
 //
 // Example: link_replaced
 type AccessRevokedReason string
+
+// AccountCeremony A short-lived ceremony with standard WebAuthn options.
+//
+// Example: {"expiresAt":"2026-11-09T12:05:00Z","id":"ceremony-id","options":{"publicKey":{}}}
+type AccountCeremony struct {
+	// ExpiresAt Absolute ceremony expiry.
+	//
+	// Example: 2026-11-09T12:05:00Z
+	ExpiresAt time.Time `json:"expiresAt"`
+
+	// Id Opaque ceremony ID.
+	//
+	// Example: ceremony-id
+	Id string `json:"id"`
+
+	// Options Standard WebAuthn publicKey creation or assertion envelope. UV and resident keys are required.
+	//
+	// Example: {"publicKey":{}}
+	Options map[string]interface{} `json:"options"`
+}
+
+// AccountEmpty An empty operation input or successful result.
+//
+// Example: {}
+type AccountEmpty = map[string]interface{}
+
+// AccountEnrollment A new session and any freshly generated recovery codes.
+//
+// Example: {"recoveryCodes":["private-code"],"session":{"expiresAt":"2027-02-07T12:00:00Z","kind":"account","visitor":{"colour":{"palette":"sky","revision":1,"visitorId":"account-id"},"id":"account-id","name":"Alice","nameTaken":false}}}
+type AccountEnrollment struct {
+	// RecoveryCodes Fresh registration/recovery codes only; empty on sign-in.
+	//
+	// Example: ["private-code"]
+	RecoveryCodes []string `json:"recoveryCodes"`
+
+	// Session Identity kind and absolute session lifetime.
+	//
+	// Example: {"expiresAt":"2027-02-07T12:00:00Z","kind":"account","visitor":{"colour":{"palette":"sky","revision":1,"visitorId":"account-id"},"id":"account-id","name":"Alice","nameTaken":false}}
+	Session AccountSession `json:"session"`
+}
+
+// AccountFinish A browser credential completing the bound ceremony.
+//
+// Example: {"ceremonyId":"opaque-value","credential":{},"label":"opaque-value"}
+type AccountFinish struct {
+	// CeremonyId Opaque five-minute one-use ceremony ID.
+	//
+	// Example: opaque-value
+	CeremonyId string `json:"ceremonyId"`
+
+	// Credential Standard browser WebAuthn JSON, with base64url binary fields.
+	//
+	// Example: {}
+	Credential map[string]interface{} `json:"credential"`
+
+	// Label Optional passkey label; defaults to Passkey.
+	//
+	// Example: opaque-value
+	Label string `json:"label,omitempty"`
+}
+
+// AccountPasskey An individually identifiable credential belonging to the owner.
+//
+// Example: {"createdAt":"2026-11-09T12:00:00Z","id":"base64url-id","label":"Laptop"}
+type AccountPasskey struct {
+	// CreatedAt Credential enrollment time.
+	//
+	// Example: 2026-11-09T12:00:00Z
+	CreatedAt time.Time `json:"createdAt"`
+
+	// Id Base64url credential ID.
+	//
+	// Example: base64url-id
+	Id string `json:"id"`
+
+	// Label Owner-supplied label.
+	//
+	// Example: Laptop
+	Label string `json:"label"`
+}
+
+// AccountPasskeys The authenticated account’s passkeys.
+//
+// Example: {"passkeys":[]}
+type AccountPasskeys struct {
+	// Passkeys This account’s credentials only.
+	//
+	// Example: []
+	Passkeys []AccountPasskey `json:"passkeys"`
+}
+
+// AccountSession Identity kind and absolute session lifetime.
+//
+// Example: {"expiresAt":"2027-02-07T12:00:00Z","kind":"account","visitor":{"colour":{"palette":"sky","revision":1,"visitorId":"account-id"},"id":"account-id","name":"Alice","nameTaken":false}}
+type AccountSession struct {
+	// ExpiresAt Absolute server-side expiry for guest and account sessions; ordinary activity does not extend it.
+	//
+	// Example: 2027-02-07T12:00:00Z
+	ExpiresAt *time.Time `json:"expiresAt,omitempty"`
+
+	// Kind Current identity kind.
+	//
+	// Example: account
+	Kind AccountSessionKind `json:"kind"`
+
+	// Visitor A guest or passkey account with one permanent identity, retained through guest upgrade and recovery.
+	Visitor Visitor `json:"visitor"`
+}
+
+// AccountSessionKind Current identity kind.
+//
+// Example: account
+type AccountSessionKind string
 
 // Attachment Private metadata. Availability is ready (owned draft), posted, expired, or cancelled. Metadata survives expiry; private drafts retain expiresAt through expiry or cancellation. Posted records omit it. Content URL always requires the current visitor cookie.
 type Attachment struct {
@@ -423,7 +554,7 @@ type Event struct {
 	// Example: 2026-11-04T18:30:05.140Z
 	Timestamp time.Time `json:"timestamp"`
 
-	// Type What an event reports: `message.created`, a message was posted (its payload is the `Message`); `room.changed`, a room was created or renamed (its payload is the `RoomChange`); `occupancy.changed`, someone joined or left a room's voice, or a participant's new name reached it (its payload is the `OccupancyChange`); `access.revoked`, the visitor's access ended (its payload is the `AccessRevoked`), and the server closes the connection next; `visitor.colour.changed`, an explicit saved colour change (its payload is the `VisitorColour`) to all visitors; `attachments.expired`, posted files expired in this room (its payload is `AttachmentsExpired`). Private drafts are never broadcast.
+	// Type What an event reports: `message.created`, a message was posted (its payload is the `Message`); `room.changed`, a room was created or renamed (its payload is the `RoomChange`); `occupancy.changed`, someone joined or left a room's voice, or a participant's new name reached it (its payload is the `OccupancyChange`); `access.revoked`, the guest link was replaced (its payload is the `AccessRevoked`), and the server closes the connection next; `visitor.colour.changed`, an explicit saved colour change (its payload is the `VisitorColour`) to all visitors; `attachments.expired`, posted files expired in this room (its payload is `AttachmentsExpired`). Private drafts are never broadcast.
 	//
 	// Example: message.created
 	Type EventType `json:"type"`
@@ -444,7 +575,7 @@ type Event_Payload struct {
 // Example: 1
 type EventV int
 
-// EventType What an event reports: `message.created`, a message was posted (its payload is the `Message`); `room.changed`, a room was created or renamed (its payload is the `RoomChange`); `occupancy.changed`, someone joined or left a room's voice, or a participant's new name reached it (its payload is the `OccupancyChange`); `access.revoked`, the visitor's access ended (its payload is the `AccessRevoked`), and the server closes the connection next; `visitor.colour.changed`, an explicit saved colour change (its payload is the `VisitorColour`) to all visitors; `attachments.expired`, posted files expired in this room (its payload is `AttachmentsExpired`). Private drafts are never broadcast.
+// EventType What an event reports: `message.created`, a message was posted (its payload is the `Message`); `room.changed`, a room was created or renamed (its payload is the `RoomChange`); `occupancy.changed`, someone joined or left a room's voice, or a participant's new name reached it (its payload is the `OccupancyChange`); `access.revoked`, the guest link was replaced (its payload is the `AccessRevoked`), and the server closes the connection next; `visitor.colour.changed`, an explicit saved colour change (its payload is the `VisitorColour`) to all visitors; `attachments.expired`, posted files expired in this room (its payload is `AttachmentsExpired`). Private drafts are never broadcast.
 //
 // Example: message.created
 type EventType string
@@ -596,6 +727,46 @@ type PostMessageRequest struct {
 	RequestKey string `json:"requestKey"`
 }
 
+// RecoveryBegin Proof authorizing replacement enrollment for one account.
+//
+// Example: {"accountId":"opaque-value","proof":"opaque-value"}
+type RecoveryBegin struct {
+	// AccountId Permanent account identity ID.
+	//
+	// Example: opaque-value
+	AccountId string `json:"accountId"`
+
+	// Proof One recovery code or thirty-minute operator recovery bearer.
+	//
+	// Example: opaque-value
+	Proof string `json:"proof"`
+}
+
+// RecoveryCodes New private codes shown once after successful generation.
+//
+// Example: {"recoveryCodes":["private-code"]}
+type RecoveryCodes struct {
+	// RecoveryCodes Ten new high-entropy single-use codes. Store privately; plaintext is never retrievable.
+	//
+	// Example: ["private-code"]
+	RecoveryCodes []string `json:"recoveryCodes"`
+}
+
+// RegistrationBegin Invitation bearer and chosen reserved account name.
+//
+// Example: {"invitation":"opaque-value","name":"opaque-value"}
+type RegistrationBegin struct {
+	// Invitation Single-use seven-day operator invitation bearer.
+	//
+	// Example: opaque-value
+	Invitation string `json:"invitation"`
+
+	// Name Chosen reserved account name.
+	//
+	// Example: opaque-value
+	Name string `json:"name"`
+}
+
 // RenameRequest The name the visitor changes to.
 type RenameRequest struct {
 	// Name A visitor's name: 1 to 32 characters once leading and trailing white space is trimmed, with no control characters (the bidirectional controls included). Names are compared trimmed and case-insensitively, so `" Bob "` and `bob` are the same name. The server checks these rules and answers `invalid_name`.
@@ -643,7 +814,7 @@ type RoomList struct {
 	Rooms []Room `json:"rooms"`
 }
 
-// Visitor A person who entered through the access link.
+// Visitor A guest or passkey account with one permanent identity, retained through guest upgrade and recovery.
 type Visitor struct {
 	// Colour One persistent assignment. Revisions increase per visitor on every accepted save and survive restart. Equal revisions always identify the same palette. Clients merge by revision because events and responses may arrive out of order.
 	Colour VisitorColour `json:"colour"`
@@ -658,7 +829,7 @@ type Visitor struct {
 	// Example: Bob
 	Name string `json:"name"`
 
-	// NameTaken Whether another connected visitor holds this name: one took it while this visitor was not connected. Another visitor's reservation from entering does not count. Live updates and voice stay closed to this visitor until they rename; reading and posting messages stay open.
+	// NameTaken Whether another connected guest holds this guest's name. Temporary guest entry reservations do not count. Live updates and voice stay closed to that guest until they rename; reading and posting remain available. Account names are reserved offline and report false. Account name claims give displaced guests replacement names and refresh their clients instead of setting an account's nameTaken.
 	//
 	// Example: false
 	NameTaken bool `json:"nameTaken"`
@@ -741,6 +912,48 @@ type ListMessagesParams struct {
 	Limit *int `form:"limit,omitempty" json:"limit,omitempty"`
 }
 
+// JoinVoiceJSONBody defines parameters for JoinVoice.
+type JoinVoiceJSONBody struct {
+	// ConfirmTransfer Explicitly transfer account voice from another browser session.
+	ConfirmTransfer bool `json:"confirmTransfer,omitempty"`
+}
+
+// BeginAuthenticationJSONRequestBody defines body for BeginAuthentication for application/json ContentType.
+type BeginAuthenticationJSONRequestBody = AccountEmpty
+
+// FinishAuthenticationJSONRequestBody defines body for FinishAuthentication for application/json ContentType.
+type FinishAuthenticationJSONRequestBody = AccountFinish
+
+// LogoutJSONRequestBody defines body for Logout for application/json ContentType.
+type LogoutJSONRequestBody = AccountEmpty
+
+// BeginAddPasskeyJSONRequestBody defines body for BeginAddPasskey for application/json ContentType.
+type BeginAddPasskeyJSONRequestBody = AccountEmpty
+
+// FinishAddPasskeyJSONRequestBody defines body for FinishAddPasskey for application/json ContentType.
+type FinishAddPasskeyJSONRequestBody = AccountFinish
+
+// BeginReauthenticationJSONRequestBody defines body for BeginReauthentication for application/json ContentType.
+type BeginReauthenticationJSONRequestBody = AccountEmpty
+
+// FinishReauthenticationJSONRequestBody defines body for FinishReauthentication for application/json ContentType.
+type FinishReauthenticationJSONRequestBody = AccountFinish
+
+// RegenerateRecoveryCodesJSONRequestBody defines body for RegenerateRecoveryCodes for application/json ContentType.
+type RegenerateRecoveryCodesJSONRequestBody = AccountEmpty
+
+// BeginRecoveryJSONRequestBody defines body for BeginRecovery for application/json ContentType.
+type BeginRecoveryJSONRequestBody = RecoveryBegin
+
+// FinishRecoveryJSONRequestBody defines body for FinishRecovery for application/json ContentType.
+type FinishRecoveryJSONRequestBody = AccountFinish
+
+// BeginRegistrationJSONRequestBody defines body for BeginRegistration for application/json ContentType.
+type BeginRegistrationJSONRequestBody = RegistrationBegin
+
+// FinishRegistrationJSONRequestBody defines body for FinishRegistration for application/json ContentType.
+type FinishRegistrationJSONRequestBody = AccountFinish
+
 // EnterJSONRequestBody defines body for Enter for application/json ContentType.
 type EnterJSONRequestBody = EnterRequest
 
@@ -752,6 +965,9 @@ type SetMyColourJSONRequestBody = ColourRequest
 
 // PostMessageJSONRequestBody defines body for PostMessage for application/json ContentType.
 type PostMessageJSONRequestBody = PostMessageRequest
+
+// JoinVoiceJSONRequestBody defines body for JoinVoice for application/json ContentType.
+type JoinVoiceJSONRequestBody JoinVoiceJSONBody
 
 // LookupVisitorColoursJSONRequestBody defines body for LookupVisitorColours for application/json ContentType.
 type LookupVisitorColoursJSONRequestBody = VisitorColourLookup
@@ -996,9 +1212,246 @@ func WithRequestEditorFn(fn RequestEditorFn) ClientOption {
 // The interface specification for the client above.
 type ClientInterface interface {
 
+	// BeginAuthenticationWithBody Begin discoverable passkey sign-in.
+	//
+	// Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
+	//
+	// Takes any type of body and a specified content type.
+	//
+	// Corresponds with POST /api/accounts/authentication/begin (the `BeginAuthentication` operationId).
+	BeginAuthenticationWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// BeginAuthentication Begin discoverable passkey sign-in.
+	//
+	// Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
+	//
+	// Takes a body of the `application/json` content type.
+	//
+	// Corresponds with POST /api/accounts/authentication/begin (the `BeginAuthentication` operationId).
+	BeginAuthentication(ctx context.Context, body BeginAuthenticationJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// FinishAuthenticationWithBody Complete discoverable passkey sign-in.
+	//
+	// Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
+	//
+	// Takes any type of body and a specified content type.
+	//
+	// Corresponds with POST /api/accounts/authentication/finish (the `FinishAuthentication` operationId).
+	FinishAuthenticationWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// FinishAuthentication Complete discoverable passkey sign-in.
+	//
+	// Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
+	//
+	// Takes a body of the `application/json` content type.
+	//
+	// Corresponds with POST /api/accounts/authentication/finish (the `FinishAuthentication` operationId).
+	FinishAuthentication(ctx context.Context, body FinishAuthenticationJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// LogoutWithBody Revoke the current browser session.
+	//
+	// Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
+	//
+	// Takes any type of body and a specified content type.
+	//
+	// Corresponds with POST /api/accounts/logout (the `Logout` operationId).
+	LogoutWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// Logout Revoke the current browser session.
+	//
+	// Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
+	//
+	// Takes a body of the `application/json` content type.
+	//
+	// Corresponds with POST /api/accounts/logout (the `Logout` operationId).
+	Logout(ctx context.Context, body LogoutJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// ListPasskeys List the owner’s passkeys.
+	//
+	// Owner-only current session cookie; credential deletion also requires recent verified passkey proof and refuses the last credential. Mutations require exact configured Origin. Responses prohibit caching.
+	//
+	// Corresponds with GET /api/accounts/passkeys (the `ListPasskeys` operationId).
+	ListPasskeys(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// BeginAddPasskeyWithBody Begin enrollment of another passkey.
+	//
+	// Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
+	//
+	// Takes any type of body and a specified content type.
+	//
+	// Corresponds with POST /api/accounts/passkeys/begin (the `BeginAddPasskey` operationId).
+	BeginAddPasskeyWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// BeginAddPasskey Begin enrollment of another passkey.
+	//
+	// Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
+	//
+	// Takes a body of the `application/json` content type.
+	//
+	// Corresponds with POST /api/accounts/passkeys/begin (the `BeginAddPasskey` operationId).
+	BeginAddPasskey(ctx context.Context, body BeginAddPasskeyJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// FinishAddPasskeyWithBody Complete enrollment of another passkey.
+	//
+	// Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
+	//
+	// Takes any type of body and a specified content type.
+	//
+	// Corresponds with POST /api/accounts/passkeys/finish (the `FinishAddPasskey` operationId).
+	FinishAddPasskeyWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// FinishAddPasskey Complete enrollment of another passkey.
+	//
+	// Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
+	//
+	// Takes a body of the `application/json` content type.
+	//
+	// Corresponds with POST /api/accounts/passkeys/finish (the `FinishAddPasskey` operationId).
+	FinishAddPasskey(ctx context.Context, body FinishAddPasskeyJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// RemovePasskey Remove an owned passkey, retaining at least one.
+	//
+	// Owner-only current session cookie; credential deletion also requires recent verified passkey proof and refuses the last credential. Mutations require exact configured Origin. Responses prohibit caching.
+	//
+	// Corresponds with DELETE /api/accounts/passkeys/{credentialId} (the `RemovePasskey` operationId).
+	RemovePasskey(ctx context.Context, credentialId string, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// BeginReauthenticationWithBody Begin recent proof for this session.
+	//
+	// Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
+	//
+	// Takes any type of body and a specified content type.
+	//
+	// Corresponds with POST /api/accounts/reauthentication/begin (the `BeginReauthentication` operationId).
+	BeginReauthenticationWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// BeginReauthentication Begin recent proof for this session.
+	//
+	// Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
+	//
+	// Takes a body of the `application/json` content type.
+	//
+	// Corresponds with POST /api/accounts/reauthentication/begin (the `BeginReauthentication` operationId).
+	BeginReauthentication(ctx context.Context, body BeginReauthenticationJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// FinishReauthenticationWithBody Verify a passkey for sensitive changes.
+	//
+	// Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
+	//
+	// Takes any type of body and a specified content type.
+	//
+	// Corresponds with POST /api/accounts/reauthentication/finish (the `FinishReauthentication` operationId).
+	FinishReauthenticationWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// FinishReauthentication Verify a passkey for sensitive changes.
+	//
+	// Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
+	//
+	// Takes a body of the `application/json` content type.
+	//
+	// Corresponds with POST /api/accounts/reauthentication/finish (the `FinishReauthentication` operationId).
+	FinishReauthentication(ctx context.Context, body FinishReauthenticationJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// RegenerateRecoveryCodesWithBody Replace recovery codes after recent verification.
+	//
+	// Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
+	//
+	// Takes any type of body and a specified content type.
+	//
+	// Corresponds with POST /api/accounts/recovery-codes (the `RegenerateRecoveryCodes` operationId).
+	RegenerateRecoveryCodesWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// RegenerateRecoveryCodes Replace recovery codes after recent verification.
+	//
+	// Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
+	//
+	// Takes a body of the `application/json` content type.
+	//
+	// Corresponds with POST /api/accounts/recovery-codes (the `RegenerateRecoveryCodes` operationId).
+	RegenerateRecoveryCodes(ctx context.Context, body RegenerateRecoveryCodesJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// BeginRecoveryWithBody Begin account-specific replacement enrollment.
+	//
+	// Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
+	//
+	// Takes any type of body and a specified content type.
+	//
+	// Corresponds with POST /api/accounts/recovery/begin (the `BeginRecovery` operationId).
+	BeginRecoveryWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// BeginRecovery Begin account-specific replacement enrollment.
+	//
+	// Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
+	//
+	// Takes a body of the `application/json` content type.
+	//
+	// Corresponds with POST /api/accounts/recovery/begin (the `BeginRecovery` operationId).
+	BeginRecovery(ctx context.Context, body BeginRecoveryJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// FinishRecoveryWithBody Complete recovery and revoke all old account access.
+	//
+	// Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
+	//
+	// Takes any type of body and a specified content type.
+	//
+	// Corresponds with POST /api/accounts/recovery/finish (the `FinishRecovery` operationId).
+	FinishRecoveryWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// FinishRecovery Complete recovery and revoke all old account access.
+	//
+	// Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
+	//
+	// Takes a body of the `application/json` content type.
+	//
+	// Corresponds with POST /api/accounts/recovery/finish (the `FinishRecovery` operationId).
+	FinishRecovery(ctx context.Context, body FinishRecoveryJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// BeginRegistrationWithBody Begin invitation-only enrollment.
+	//
+	// Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
+	//
+	// Takes any type of body and a specified content type.
+	//
+	// Corresponds with POST /api/accounts/registration/begin (the `BeginRegistration` operationId).
+	BeginRegistrationWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// BeginRegistration Begin invitation-only enrollment.
+	//
+	// Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
+	//
+	// Takes a body of the `application/json` content type.
+	//
+	// Corresponds with POST /api/accounts/registration/begin (the `BeginRegistration` operationId).
+	BeginRegistration(ctx context.Context, body BeginRegistrationJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// FinishRegistrationWithBody Complete verified invitation enrollment.
+	//
+	// Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
+	//
+	// Takes any type of body and a specified content type.
+	//
+	// Corresponds with POST /api/accounts/registration/finish (the `FinishRegistration` operationId).
+	FinishRegistrationWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// FinishRegistration Complete verified invitation enrollment.
+	//
+	// Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
+	//
+	// Takes a body of the `application/json` content type.
+	//
+	// Corresponds with POST /api/accounts/registration/finish (the `FinishRegistration` operationId).
+	FinishRegistration(ctx context.Context, body FinishRegistrationJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// GetAccountSession Read the current resolved session.
+	//
+	// Owner-only current session cookie; credential deletion also requires recent verified passkey proof and refuses the last credential. Mutations require exact configured Origin. Responses prohibit caching.
+	//
+	// Corresponds with GET /api/accounts/session (the `GetAccountSession` operationId).
+	GetAccountSession(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// EnterWithBody Enter with the access link's secret and a name.
 	//
-	// Exchanges the secret from the access link (the `k` value in its URL fragment) and a name for a new visitor, and sets the visitor cookie. The name is reserved for 60 seconds so that no one else can enter under it meanwhile; once the visitor opens a live-update connection (`GET /api/live`) they hold it for as long as they stay connected. Attempts are limited per client IP, whether they succeed or not.
+	// Exchanges the secret from the access link (the `k` value in its URL fragment) and a name for a new guest, and sets the visitor cookie. Account names remain reserved even while offline or disabled and cannot be claimed by guests. The guest's name is reserved against other guests for 60 seconds; opening live updates (`GET /api/live`) holds it while connected. Account registration or rename may claim a guest's name, assigning that guest a replacement and refreshing connected clients. Attempts are limited per client IP, whether they succeed or not.
 	//
 	// Takes any type of body and a specified content type.
 	//
@@ -1007,7 +1460,7 @@ type ClientInterface interface {
 
 	// Enter Enter with the access link's secret and a name.
 	//
-	// Exchanges the secret from the access link (the `k` value in its URL fragment) and a name for a new visitor, and sets the visitor cookie. The name is reserved for 60 seconds so that no one else can enter under it meanwhile; once the visitor opens a live-update connection (`GET /api/live`) they hold it for as long as they stay connected. Attempts are limited per client IP, whether they succeed or not.
+	// Exchanges the secret from the access link (the `k` value in its URL fragment) and a name for a new guest, and sets the visitor cookie. Account names remain reserved even while offline or disabled and cannot be claimed by guests. The guest's name is reserved against other guests for 60 seconds; opening live updates (`GET /api/live`) holds it while connected. Account registration or rename may claim a guest's name, assigning that guest a replacement and refreshing connected clients. Attempts are limited per client IP, whether they succeed or not.
 	//
 	// Takes a body of the `application/json` content type.
 	//
@@ -1016,14 +1469,14 @@ type ClientInterface interface {
 
 	// GetMe Return the current visitor.
 	//
-	// Returns the visitor the cookie belongs to, and whether another connected visitor now holds their name (`nameTaken`). Such a visitor cannot open live updates or join voice until they rename. Another visitor's reservation from entering does not count.
+	// Returns the current guest or account identity. For guests, `nameTaken` reports whether another connected guest holds their name; live updates and voice then remain closed until they rename. Temporary guest entry reservations do not count. Account names remain reserved offline. Account name claims assign displaced guests replacement names rather than marking an account's name as taken.
 	//
 	// Corresponds with GET /api/me (the `GetMe` operationId).
 	GetMe(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// RenameMeWithBody Change the current visitor's name.
 	//
-	// Renames the visitor the cookie belongs to. The new name must be free; the visitor's own current name is, unless another visitor holds it. A connected visitor keeps holding their name under the new one.
+	// Renames the guest or account the cookie belongs to. A guest cannot claim a name reserved by an account or held by another guest. An account cannot claim another account's name, including an offline or disabled account, but may claim a guest's name and assign that guest a replacement. Changed identities receive a retryable live close (1001) to refresh their names, and current voice names are published in occupancy updates.
 	//
 	// Takes any type of body and a specified content type.
 	//
@@ -1032,7 +1485,7 @@ type ClientInterface interface {
 
 	// RenameMe Change the current visitor's name.
 	//
-	// Renames the visitor the cookie belongs to. The new name must be free; the visitor's own current name is, unless another visitor holds it. A connected visitor keeps holding their name under the new one.
+	// Renames the guest or account the cookie belongs to. A guest cannot claim a name reserved by an account or held by another guest. An account cannot claim another account's name, including an offline or disabled account, but may claim a guest's name and assign that guest a replacement. Changed identities receive a retryable live close (1001) to refresh their names, and current voice names are published in occupancy updates.
 	//
 	// Takes a body of the `application/json` content type.
 	//
@@ -1089,16 +1542,31 @@ type ClientInterface interface {
 	// Corresponds with POST /api/rooms/{id}/messages (the `PostMessage` operationId).
 	PostMessage(ctx context.Context, id RoomId, body PostMessageJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
-	// JoinVoice Join a room's voice.
+	// JoinVoiceWithBody Join a room's voice.
 	//
-	// Returns the LiveKit URL and a token to connect to the room's voice with a LiveKit SDK. A visitor is a participant in one room at most: the server first removes them from any other room's voice. Joining the room again, say from a second tab, is allowed even when the room is full, and the new connection replaces the earlier one.
+	// Returns the LiveKit URL and a token to connect to the room's voice with a LiveKit SDK. A visitor is a participant in one room at most: the server first removes them from any other room's voice. Joining the room again, say from a second tab, is allowed even when the room is full, and the new connection replaces the earlier one. For accounts, a different browser session must explicitly send confirmTransfer=true; otherwise voice_transfer_required leaves the first participant intact. Guest callers may continue omitting the request body. Account requests require this server's exact configured Origin header.
 	//
-	// The token admits the visitor to this room only, under their visitor ID as participant identity and their name as display name. It may publish the microphone, a camera, a screen share and the screen share's audio, subscribe to the other participants, and update the participant's own attributes, but not send data messages. It expires 10 minutes after it is issued, so connect right away; once connected, LiveKit renews it.
+	// The token admits the visitor to this room only, under their visitor ID as participant identity for guests and their name as display name. Account transport identities append an opaque grant nonce after a dot; occupancy continues to expose the permanent visitor ID. Account clients map a transport identity to that ID by taking its prefix before the dot. Account credentials always use this server's guarded public signalling origin. Restarting Falky requires fresh account voice credentials. Guests may reuse a valid original or LiveKit-refreshed JWT after a backend restart while exactly one persisted guest session and its guest link generation remain current. Guest logout, link rotation or account upgrade prevent restoration; room and name authorization still apply. A newer room choice fences earlier room tokens. It may publish the microphone, a camera, a screen share and the screen share's audio, subscribe to the other participants, and update the participant's own attributes, but not send data messages. It expires 10 minutes after it is issued, so connect right away; once connected, LiveKit renews it.
 	//
 	// Muted is the state of the microphone track. Deafened is the participant attribute `deafened`: a client sets it to `"true"` while it plays no one's audio, and also mutes its microphone, then sets it to `"false"` again; an absent attribute means not deafened. The other participants see it through the SDK, for example with `room.localParticipant.setAttributes({ deafened: 'true' })` in `livekit-client`.
 	//
+	// Takes any type of body and a specified content type.
+	//
 	// Corresponds with POST /api/rooms/{id}/voice (the `JoinVoice` operationId).
-	JoinVoice(ctx context.Context, id RoomId, reqEditors ...RequestEditorFn) (*http.Response, error)
+	JoinVoiceWithBody(ctx context.Context, id RoomId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// JoinVoice Join a room's voice.
+	//
+	// Returns the LiveKit URL and a token to connect to the room's voice with a LiveKit SDK. A visitor is a participant in one room at most: the server first removes them from any other room's voice. Joining the room again, say from a second tab, is allowed even when the room is full, and the new connection replaces the earlier one. For accounts, a different browser session must explicitly send confirmTransfer=true; otherwise voice_transfer_required leaves the first participant intact. Guest callers may continue omitting the request body. Account requests require this server's exact configured Origin header.
+	//
+	// The token admits the visitor to this room only, under their visitor ID as participant identity for guests and their name as display name. Account transport identities append an opaque grant nonce after a dot; occupancy continues to expose the permanent visitor ID. Account clients map a transport identity to that ID by taking its prefix before the dot. Account credentials always use this server's guarded public signalling origin. Restarting Falky requires fresh account voice credentials. Guests may reuse a valid original or LiveKit-refreshed JWT after a backend restart while exactly one persisted guest session and its guest link generation remain current. Guest logout, link rotation or account upgrade prevent restoration; room and name authorization still apply. A newer room choice fences earlier room tokens. It may publish the microphone, a camera, a screen share and the screen share's audio, subscribe to the other participants, and update the participant's own attributes, but not send data messages. It expires 10 minutes after it is issued, so connect right away; once connected, LiveKit renews it.
+	//
+	// Muted is the state of the microphone track. Deafened is the participant attribute `deafened`: a client sets it to `"true"` while it plays no one's audio, and also mutes its microphone, then sets it to `"false"` again; an absent attribute means not deafened. The other participants see it through the SDK, for example with `room.localParticipant.setAttributes({ deafened: 'true' })` in `livekit-client`.
+	//
+	// Takes a body of the `application/json` content type.
+	//
+	// Corresponds with POST /api/rooms/{id}/voice (the `JoinVoice` operationId).
+	JoinVoice(ctx context.Context, id RoomId, body JoinVoiceJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// LookupVisitorColoursWithBody Read current colours for explicit visitor IDs.
 	//
@@ -1133,9 +1601,516 @@ type ClientInterface interface {
 	GetReadiness(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
 }
 
+// BeginAuthenticationWithBody Begin discoverable passkey sign-in.
+//
+// Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
+//
+// Takes any type of body and a specified content type.
+//
+// Corresponds with POST /api/accounts/authentication/begin (the `BeginAuthentication` operationId).
+func (c *Client) BeginAuthenticationWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewBeginAuthenticationRequestWithBody(c.Server, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// BeginAuthentication Begin discoverable passkey sign-in.
+//
+// Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
+//
+// Takes a body of the `application/json` content type.
+//
+// Corresponds with POST /api/accounts/authentication/begin (the `BeginAuthentication` operationId).
+func (c *Client) BeginAuthentication(ctx context.Context, body BeginAuthenticationJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewBeginAuthenticationRequest(c.Server, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// FinishAuthenticationWithBody Complete discoverable passkey sign-in.
+//
+// Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
+//
+// Takes any type of body and a specified content type.
+//
+// Corresponds with POST /api/accounts/authentication/finish (the `FinishAuthentication` operationId).
+func (c *Client) FinishAuthenticationWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewFinishAuthenticationRequestWithBody(c.Server, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// FinishAuthentication Complete discoverable passkey sign-in.
+//
+// Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
+//
+// Takes a body of the `application/json` content type.
+//
+// Corresponds with POST /api/accounts/authentication/finish (the `FinishAuthentication` operationId).
+func (c *Client) FinishAuthentication(ctx context.Context, body FinishAuthenticationJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewFinishAuthenticationRequest(c.Server, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// LogoutWithBody Revoke the current browser session.
+//
+// Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
+//
+// Takes any type of body and a specified content type.
+//
+// Corresponds with POST /api/accounts/logout (the `Logout` operationId).
+func (c *Client) LogoutWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewLogoutRequestWithBody(c.Server, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// Logout Revoke the current browser session.
+//
+// Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
+//
+// Takes a body of the `application/json` content type.
+//
+// Corresponds with POST /api/accounts/logout (the `Logout` operationId).
+func (c *Client) Logout(ctx context.Context, body LogoutJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewLogoutRequest(c.Server, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// ListPasskeys List the owner’s passkeys.
+//
+// Owner-only current session cookie; credential deletion also requires recent verified passkey proof and refuses the last credential. Mutations require exact configured Origin. Responses prohibit caching.
+//
+// Corresponds with GET /api/accounts/passkeys (the `ListPasskeys` operationId).
+func (c *Client) ListPasskeys(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewListPasskeysRequest(c.Server)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// BeginAddPasskeyWithBody Begin enrollment of another passkey.
+//
+// Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
+//
+// Takes any type of body and a specified content type.
+//
+// Corresponds with POST /api/accounts/passkeys/begin (the `BeginAddPasskey` operationId).
+func (c *Client) BeginAddPasskeyWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewBeginAddPasskeyRequestWithBody(c.Server, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// BeginAddPasskey Begin enrollment of another passkey.
+//
+// Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
+//
+// Takes a body of the `application/json` content type.
+//
+// Corresponds with POST /api/accounts/passkeys/begin (the `BeginAddPasskey` operationId).
+func (c *Client) BeginAddPasskey(ctx context.Context, body BeginAddPasskeyJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewBeginAddPasskeyRequest(c.Server, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// FinishAddPasskeyWithBody Complete enrollment of another passkey.
+//
+// Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
+//
+// Takes any type of body and a specified content type.
+//
+// Corresponds with POST /api/accounts/passkeys/finish (the `FinishAddPasskey` operationId).
+func (c *Client) FinishAddPasskeyWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewFinishAddPasskeyRequestWithBody(c.Server, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// FinishAddPasskey Complete enrollment of another passkey.
+//
+// Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
+//
+// Takes a body of the `application/json` content type.
+//
+// Corresponds with POST /api/accounts/passkeys/finish (the `FinishAddPasskey` operationId).
+func (c *Client) FinishAddPasskey(ctx context.Context, body FinishAddPasskeyJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewFinishAddPasskeyRequest(c.Server, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// RemovePasskey Remove an owned passkey, retaining at least one.
+//
+// Owner-only current session cookie; credential deletion also requires recent verified passkey proof and refuses the last credential. Mutations require exact configured Origin. Responses prohibit caching.
+//
+// Corresponds with DELETE /api/accounts/passkeys/{credentialId} (the `RemovePasskey` operationId).
+func (c *Client) RemovePasskey(ctx context.Context, credentialId string, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewRemovePasskeyRequest(c.Server, credentialId)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// BeginReauthenticationWithBody Begin recent proof for this session.
+//
+// Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
+//
+// Takes any type of body and a specified content type.
+//
+// Corresponds with POST /api/accounts/reauthentication/begin (the `BeginReauthentication` operationId).
+func (c *Client) BeginReauthenticationWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewBeginReauthenticationRequestWithBody(c.Server, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// BeginReauthentication Begin recent proof for this session.
+//
+// Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
+//
+// Takes a body of the `application/json` content type.
+//
+// Corresponds with POST /api/accounts/reauthentication/begin (the `BeginReauthentication` operationId).
+func (c *Client) BeginReauthentication(ctx context.Context, body BeginReauthenticationJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewBeginReauthenticationRequest(c.Server, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// FinishReauthenticationWithBody Verify a passkey for sensitive changes.
+//
+// Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
+//
+// Takes any type of body and a specified content type.
+//
+// Corresponds with POST /api/accounts/reauthentication/finish (the `FinishReauthentication` operationId).
+func (c *Client) FinishReauthenticationWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewFinishReauthenticationRequestWithBody(c.Server, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// FinishReauthentication Verify a passkey for sensitive changes.
+//
+// Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
+//
+// Takes a body of the `application/json` content type.
+//
+// Corresponds with POST /api/accounts/reauthentication/finish (the `FinishReauthentication` operationId).
+func (c *Client) FinishReauthentication(ctx context.Context, body FinishReauthenticationJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewFinishReauthenticationRequest(c.Server, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// RegenerateRecoveryCodesWithBody Replace recovery codes after recent verification.
+//
+// Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
+//
+// Takes any type of body and a specified content type.
+//
+// Corresponds with POST /api/accounts/recovery-codes (the `RegenerateRecoveryCodes` operationId).
+func (c *Client) RegenerateRecoveryCodesWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewRegenerateRecoveryCodesRequestWithBody(c.Server, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// RegenerateRecoveryCodes Replace recovery codes after recent verification.
+//
+// Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
+//
+// Takes a body of the `application/json` content type.
+//
+// Corresponds with POST /api/accounts/recovery-codes (the `RegenerateRecoveryCodes` operationId).
+func (c *Client) RegenerateRecoveryCodes(ctx context.Context, body RegenerateRecoveryCodesJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewRegenerateRecoveryCodesRequest(c.Server, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// BeginRecoveryWithBody Begin account-specific replacement enrollment.
+//
+// Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
+//
+// Takes any type of body and a specified content type.
+//
+// Corresponds with POST /api/accounts/recovery/begin (the `BeginRecovery` operationId).
+func (c *Client) BeginRecoveryWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewBeginRecoveryRequestWithBody(c.Server, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// BeginRecovery Begin account-specific replacement enrollment.
+//
+// Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
+//
+// Takes a body of the `application/json` content type.
+//
+// Corresponds with POST /api/accounts/recovery/begin (the `BeginRecovery` operationId).
+func (c *Client) BeginRecovery(ctx context.Context, body BeginRecoveryJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewBeginRecoveryRequest(c.Server, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// FinishRecoveryWithBody Complete recovery and revoke all old account access.
+//
+// Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
+//
+// Takes any type of body and a specified content type.
+//
+// Corresponds with POST /api/accounts/recovery/finish (the `FinishRecovery` operationId).
+func (c *Client) FinishRecoveryWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewFinishRecoveryRequestWithBody(c.Server, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// FinishRecovery Complete recovery and revoke all old account access.
+//
+// Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
+//
+// Takes a body of the `application/json` content type.
+//
+// Corresponds with POST /api/accounts/recovery/finish (the `FinishRecovery` operationId).
+func (c *Client) FinishRecovery(ctx context.Context, body FinishRecoveryJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewFinishRecoveryRequest(c.Server, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// BeginRegistrationWithBody Begin invitation-only enrollment.
+//
+// Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
+//
+// Takes any type of body and a specified content type.
+//
+// Corresponds with POST /api/accounts/registration/begin (the `BeginRegistration` operationId).
+func (c *Client) BeginRegistrationWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewBeginRegistrationRequestWithBody(c.Server, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// BeginRegistration Begin invitation-only enrollment.
+//
+// Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
+//
+// Takes a body of the `application/json` content type.
+//
+// Corresponds with POST /api/accounts/registration/begin (the `BeginRegistration` operationId).
+func (c *Client) BeginRegistration(ctx context.Context, body BeginRegistrationJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewBeginRegistrationRequest(c.Server, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// FinishRegistrationWithBody Complete verified invitation enrollment.
+//
+// Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
+//
+// Takes any type of body and a specified content type.
+//
+// Corresponds with POST /api/accounts/registration/finish (the `FinishRegistration` operationId).
+func (c *Client) FinishRegistrationWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewFinishRegistrationRequestWithBody(c.Server, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// FinishRegistration Complete verified invitation enrollment.
+//
+// Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
+//
+// Takes a body of the `application/json` content type.
+//
+// Corresponds with POST /api/accounts/registration/finish (the `FinishRegistration` operationId).
+func (c *Client) FinishRegistration(ctx context.Context, body FinishRegistrationJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewFinishRegistrationRequest(c.Server, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// GetAccountSession Read the current resolved session.
+//
+// Owner-only current session cookie; credential deletion also requires recent verified passkey proof and refuses the last credential. Mutations require exact configured Origin. Responses prohibit caching.
+//
+// Corresponds with GET /api/accounts/session (the `GetAccountSession` operationId).
+func (c *Client) GetAccountSession(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetAccountSessionRequest(c.Server)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
 // EnterWithBody Enter with the access link's secret and a name.
 //
-// Exchanges the secret from the access link (the `k` value in its URL fragment) and a name for a new visitor, and sets the visitor cookie. The name is reserved for 60 seconds so that no one else can enter under it meanwhile; once the visitor opens a live-update connection (`GET /api/live`) they hold it for as long as they stay connected. Attempts are limited per client IP, whether they succeed or not.
+// Exchanges the secret from the access link (the `k` value in its URL fragment) and a name for a new guest, and sets the visitor cookie. Account names remain reserved even while offline or disabled and cannot be claimed by guests. The guest's name is reserved against other guests for 60 seconds; opening live updates (`GET /api/live`) holds it while connected. Account registration or rename may claim a guest's name, assigning that guest a replacement and refreshing connected clients. Attempts are limited per client IP, whether they succeed or not.
 //
 // Takes any type of body and a specified content type.
 //
@@ -1154,7 +2129,7 @@ func (c *Client) EnterWithBody(ctx context.Context, contentType string, body io.
 
 // Enter Enter with the access link's secret and a name.
 //
-// Exchanges the secret from the access link (the `k` value in its URL fragment) and a name for a new visitor, and sets the visitor cookie. The name is reserved for 60 seconds so that no one else can enter under it meanwhile; once the visitor opens a live-update connection (`GET /api/live`) they hold it for as long as they stay connected. Attempts are limited per client IP, whether they succeed or not.
+// Exchanges the secret from the access link (the `k` value in its URL fragment) and a name for a new guest, and sets the visitor cookie. Account names remain reserved even while offline or disabled and cannot be claimed by guests. The guest's name is reserved against other guests for 60 seconds; opening live updates (`GET /api/live`) holds it while connected. Account registration or rename may claim a guest's name, assigning that guest a replacement and refreshing connected clients. Attempts are limited per client IP, whether they succeed or not.
 //
 // Takes a body of the `application/json` content type.
 //
@@ -1173,7 +2148,7 @@ func (c *Client) Enter(ctx context.Context, body EnterJSONRequestBody, reqEditor
 
 // GetMe Return the current visitor.
 //
-// Returns the visitor the cookie belongs to, and whether another connected visitor now holds their name (`nameTaken`). Such a visitor cannot open live updates or join voice until they rename. Another visitor's reservation from entering does not count.
+// Returns the current guest or account identity. For guests, `nameTaken` reports whether another connected guest holds their name; live updates and voice then remain closed until they rename. Temporary guest entry reservations do not count. Account names remain reserved offline. Account name claims assign displaced guests replacement names rather than marking an account's name as taken.
 //
 // Corresponds with GET /api/me (the `GetMe` operationId).
 func (c *Client) GetMe(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
@@ -1190,7 +2165,7 @@ func (c *Client) GetMe(ctx context.Context, reqEditors ...RequestEditorFn) (*htt
 
 // RenameMeWithBody Change the current visitor's name.
 //
-// Renames the visitor the cookie belongs to. The new name must be free; the visitor's own current name is, unless another visitor holds it. A connected visitor keeps holding their name under the new one.
+// Renames the guest or account the cookie belongs to. A guest cannot claim a name reserved by an account or held by another guest. An account cannot claim another account's name, including an offline or disabled account, but may claim a guest's name and assign that guest a replacement. Changed identities receive a retryable live close (1001) to refresh their names, and current voice names are published in occupancy updates.
 //
 // Takes any type of body and a specified content type.
 //
@@ -1209,7 +2184,7 @@ func (c *Client) RenameMeWithBody(ctx context.Context, contentType string, body 
 
 // RenameMe Change the current visitor's name.
 //
-// Renames the visitor the cookie belongs to. The new name must be free; the visitor's own current name is, unless another visitor holds it. A connected visitor keeps holding their name under the new one.
+// Renames the guest or account the cookie belongs to. A guest cannot claim a name reserved by an account or held by another guest. An account cannot claim another account's name, including an offline or disabled account, but may claim a guest's name and assign that guest a replacement. Changed identities receive a retryable live close (1001) to refresh their names, and current voice names are published in occupancy updates.
 //
 // Takes a body of the `application/json` content type.
 //
@@ -1336,17 +2311,42 @@ func (c *Client) PostMessage(ctx context.Context, id RoomId, body PostMessageJSO
 	return c.Client.Do(req)
 }
 
-// JoinVoice Join a room's voice.
+// JoinVoiceWithBody Join a room's voice.
 //
-// Returns the LiveKit URL and a token to connect to the room's voice with a LiveKit SDK. A visitor is a participant in one room at most: the server first removes them from any other room's voice. Joining the room again, say from a second tab, is allowed even when the room is full, and the new connection replaces the earlier one.
+// Returns the LiveKit URL and a token to connect to the room's voice with a LiveKit SDK. A visitor is a participant in one room at most: the server first removes them from any other room's voice. Joining the room again, say from a second tab, is allowed even when the room is full, and the new connection replaces the earlier one. For accounts, a different browser session must explicitly send confirmTransfer=true; otherwise voice_transfer_required leaves the first participant intact. Guest callers may continue omitting the request body. Account requests require this server's exact configured Origin header.
 //
-// The token admits the visitor to this room only, under their visitor ID as participant identity and their name as display name. It may publish the microphone, a camera, a screen share and the screen share's audio, subscribe to the other participants, and update the participant's own attributes, but not send data messages. It expires 10 minutes after it is issued, so connect right away; once connected, LiveKit renews it.
+// The token admits the visitor to this room only, under their visitor ID as participant identity for guests and their name as display name. Account transport identities append an opaque grant nonce after a dot; occupancy continues to expose the permanent visitor ID. Account clients map a transport identity to that ID by taking its prefix before the dot. Account credentials always use this server's guarded public signalling origin. Restarting Falky requires fresh account voice credentials. Guests may reuse a valid original or LiveKit-refreshed JWT after a backend restart while exactly one persisted guest session and its guest link generation remain current. Guest logout, link rotation or account upgrade prevent restoration; room and name authorization still apply. A newer room choice fences earlier room tokens. It may publish the microphone, a camera, a screen share and the screen share's audio, subscribe to the other participants, and update the participant's own attributes, but not send data messages. It expires 10 minutes after it is issued, so connect right away; once connected, LiveKit renews it.
 //
 // Muted is the state of the microphone track. Deafened is the participant attribute `deafened`: a client sets it to `"true"` while it plays no one's audio, and also mutes its microphone, then sets it to `"false"` again; an absent attribute means not deafened. The other participants see it through the SDK, for example with `room.localParticipant.setAttributes({ deafened: 'true' })` in `livekit-client`.
 //
+// Takes any type of body and a specified content type.
+//
 // Corresponds with POST /api/rooms/{id}/voice (the `JoinVoice` operationId).
-func (c *Client) JoinVoice(ctx context.Context, id RoomId, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewJoinVoiceRequest(c.Server, id)
+func (c *Client) JoinVoiceWithBody(ctx context.Context, id RoomId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewJoinVoiceRequestWithBody(c.Server, id, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// JoinVoice Join a room's voice.
+//
+// Returns the LiveKit URL and a token to connect to the room's voice with a LiveKit SDK. A visitor is a participant in one room at most: the server first removes them from any other room's voice. Joining the room again, say from a second tab, is allowed even when the room is full, and the new connection replaces the earlier one. For accounts, a different browser session must explicitly send confirmTransfer=true; otherwise voice_transfer_required leaves the first participant intact. Guest callers may continue omitting the request body. Account requests require this server's exact configured Origin header.
+//
+// The token admits the visitor to this room only, under their visitor ID as participant identity for guests and their name as display name. Account transport identities append an opaque grant nonce after a dot; occupancy continues to expose the permanent visitor ID. Account clients map a transport identity to that ID by taking its prefix before the dot. Account credentials always use this server's guarded public signalling origin. Restarting Falky requires fresh account voice credentials. Guests may reuse a valid original or LiveKit-refreshed JWT after a backend restart while exactly one persisted guest session and its guest link generation remain current. Guest logout, link rotation or account upgrade prevent restoration; room and name authorization still apply. A newer room choice fences earlier room tokens. It may publish the microphone, a camera, a screen share and the screen share's audio, subscribe to the other participants, and update the participant's own attributes, but not send data messages. It expires 10 minutes after it is issued, so connect right away; once connected, LiveKit renews it.
+//
+// Muted is the state of the microphone track. Deafened is the participant attribute `deafened`: a client sets it to `"true"` while it plays no one's audio, and also mutes its microphone, then sets it to `"false"` again; an absent attribute means not deafened. The other participants see it through the SDK, for example with `room.localParticipant.setAttributes({ deafened: 'true' })` in `livekit-client`.
+//
+// Takes a body of the `application/json` content type.
+//
+// Corresponds with POST /api/rooms/{id}/voice (the `JoinVoice` operationId).
+func (c *Client) JoinVoice(ctx context.Context, id RoomId, body JoinVoiceJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewJoinVoiceRequest(c.Server, id, body)
 	if err != nil {
 		return nil, err
 	}
@@ -1427,6 +2427,574 @@ func (c *Client) GetReadiness(ctx context.Context, reqEditors ...RequestEditorFn
 		return nil, err
 	}
 	return c.Client.Do(req)
+}
+
+// NewBeginAuthenticationRequest calls the generic BeginAuthentication builder with application/json body
+func NewBeginAuthenticationRequest(server string, body BeginAuthenticationJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewBeginAuthenticationRequestWithBody(server, "application/json", bodyReader)
+}
+
+// NewBeginAuthenticationRequestWithBody constructs an http.Request for the BeginAuthentication method, with any body, and a specified content type
+func NewBeginAuthenticationRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/accounts/authentication/begin")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewFinishAuthenticationRequest calls the generic FinishAuthentication builder with application/json body
+func NewFinishAuthenticationRequest(server string, body FinishAuthenticationJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewFinishAuthenticationRequestWithBody(server, "application/json", bodyReader)
+}
+
+// NewFinishAuthenticationRequestWithBody constructs an http.Request for the FinishAuthentication method, with any body, and a specified content type
+func NewFinishAuthenticationRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/accounts/authentication/finish")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewLogoutRequest calls the generic Logout builder with application/json body
+func NewLogoutRequest(server string, body LogoutJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewLogoutRequestWithBody(server, "application/json", bodyReader)
+}
+
+// NewLogoutRequestWithBody constructs an http.Request for the Logout method, with any body, and a specified content type
+func NewLogoutRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/accounts/logout")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewListPasskeysRequest constructs an http.Request for the ListPasskeys method
+func NewListPasskeysRequest(server string) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/accounts/passkeys")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewBeginAddPasskeyRequest calls the generic BeginAddPasskey builder with application/json body
+func NewBeginAddPasskeyRequest(server string, body BeginAddPasskeyJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewBeginAddPasskeyRequestWithBody(server, "application/json", bodyReader)
+}
+
+// NewBeginAddPasskeyRequestWithBody constructs an http.Request for the BeginAddPasskey method, with any body, and a specified content type
+func NewBeginAddPasskeyRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/accounts/passkeys/begin")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewFinishAddPasskeyRequest calls the generic FinishAddPasskey builder with application/json body
+func NewFinishAddPasskeyRequest(server string, body FinishAddPasskeyJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewFinishAddPasskeyRequestWithBody(server, "application/json", bodyReader)
+}
+
+// NewFinishAddPasskeyRequestWithBody constructs an http.Request for the FinishAddPasskey method, with any body, and a specified content type
+func NewFinishAddPasskeyRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/accounts/passkeys/finish")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewRemovePasskeyRequest constructs an http.Request for the RemovePasskey method
+func NewRemovePasskeyRequest(server string, credentialId string) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "credentialId", credentialId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/accounts/passkeys/%s", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodDelete, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewBeginReauthenticationRequest calls the generic BeginReauthentication builder with application/json body
+func NewBeginReauthenticationRequest(server string, body BeginReauthenticationJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewBeginReauthenticationRequestWithBody(server, "application/json", bodyReader)
+}
+
+// NewBeginReauthenticationRequestWithBody constructs an http.Request for the BeginReauthentication method, with any body, and a specified content type
+func NewBeginReauthenticationRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/accounts/reauthentication/begin")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewFinishReauthenticationRequest calls the generic FinishReauthentication builder with application/json body
+func NewFinishReauthenticationRequest(server string, body FinishReauthenticationJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewFinishReauthenticationRequestWithBody(server, "application/json", bodyReader)
+}
+
+// NewFinishReauthenticationRequestWithBody constructs an http.Request for the FinishReauthentication method, with any body, and a specified content type
+func NewFinishReauthenticationRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/accounts/reauthentication/finish")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewRegenerateRecoveryCodesRequest calls the generic RegenerateRecoveryCodes builder with application/json body
+func NewRegenerateRecoveryCodesRequest(server string, body RegenerateRecoveryCodesJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewRegenerateRecoveryCodesRequestWithBody(server, "application/json", bodyReader)
+}
+
+// NewRegenerateRecoveryCodesRequestWithBody constructs an http.Request for the RegenerateRecoveryCodes method, with any body, and a specified content type
+func NewRegenerateRecoveryCodesRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/accounts/recovery-codes")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewBeginRecoveryRequest calls the generic BeginRecovery builder with application/json body
+func NewBeginRecoveryRequest(server string, body BeginRecoveryJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewBeginRecoveryRequestWithBody(server, "application/json", bodyReader)
+}
+
+// NewBeginRecoveryRequestWithBody constructs an http.Request for the BeginRecovery method, with any body, and a specified content type
+func NewBeginRecoveryRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/accounts/recovery/begin")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewFinishRecoveryRequest calls the generic FinishRecovery builder with application/json body
+func NewFinishRecoveryRequest(server string, body FinishRecoveryJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewFinishRecoveryRequestWithBody(server, "application/json", bodyReader)
+}
+
+// NewFinishRecoveryRequestWithBody constructs an http.Request for the FinishRecovery method, with any body, and a specified content type
+func NewFinishRecoveryRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/accounts/recovery/finish")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewBeginRegistrationRequest calls the generic BeginRegistration builder with application/json body
+func NewBeginRegistrationRequest(server string, body BeginRegistrationJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewBeginRegistrationRequestWithBody(server, "application/json", bodyReader)
+}
+
+// NewBeginRegistrationRequestWithBody constructs an http.Request for the BeginRegistration method, with any body, and a specified content type
+func NewBeginRegistrationRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/accounts/registration/begin")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewFinishRegistrationRequest calls the generic FinishRegistration builder with application/json body
+func NewFinishRegistrationRequest(server string, body FinishRegistrationJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewFinishRegistrationRequestWithBody(server, "application/json", bodyReader)
+}
+
+// NewFinishRegistrationRequestWithBody constructs an http.Request for the FinishRegistration method, with any body, and a specified content type
+func NewFinishRegistrationRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/accounts/registration/finish")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewGetAccountSessionRequest constructs an http.Request for the GetAccountSession method
+func NewGetAccountSessionRequest(server string) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/accounts/session")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
 }
 
 // NewEnterRequest calls the generic Enter builder with application/json body
@@ -1727,8 +3295,19 @@ func NewPostMessageRequestWithBody(server string, id RoomId, contentType string,
 	return req, nil
 }
 
-// NewJoinVoiceRequest constructs an http.Request for the JoinVoice method
-func NewJoinVoiceRequest(server string, id RoomId) (*http.Request, error) {
+// NewJoinVoiceRequest calls the generic JoinVoice builder with application/json body
+func NewJoinVoiceRequest(server string, id RoomId, body JoinVoiceJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewJoinVoiceRequestWithBody(server, id, "application/json", bodyReader)
+}
+
+// NewJoinVoiceRequestWithBody constructs an http.Request for the JoinVoice method, with any body, and a specified content type
+func NewJoinVoiceRequestWithBody(server string, id RoomId, contentType string, body io.Reader) (*http.Request, error) {
 	var err error
 
 	var pathParam0 string
@@ -1753,10 +3332,12 @@ func NewJoinVoiceRequest(server string, id RoomId) (*http.Request, error) {
 		return nil, err
 	}
 
-	req, err := http.NewRequest(http.MethodPost, queryURL.String(), nil)
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
 	if err != nil {
 		return nil, err
 	}
+
+	req.Header.Add("Content-Type", contentType)
 
 	return req, nil
 }
@@ -1899,9 +3480,252 @@ func WithBaseURL(baseURL string) ClientOption {
 // ClientWithResponsesInterface is the interface specification for the client with responses above.
 type ClientWithResponsesInterface interface {
 
+	// BeginAuthenticationWithBodyWithResponse Begin discoverable passkey sign-in.
+	//
+	// Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
+	//
+	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /api/accounts/authentication/begin (the `BeginAuthentication` operationId).
+	BeginAuthenticationWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*BeginAuthenticationResponse, error)
+
+	// BeginAuthenticationWithResponse Begin discoverable passkey sign-in.
+	//
+	// Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
+	//
+	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /api/accounts/authentication/begin (the `BeginAuthentication` operationId).
+	BeginAuthenticationWithResponse(ctx context.Context, body BeginAuthenticationJSONRequestBody, reqEditors ...RequestEditorFn) (*BeginAuthenticationResponse, error)
+
+	// FinishAuthenticationWithBodyWithResponse Complete discoverable passkey sign-in.
+	//
+	// Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
+	//
+	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /api/accounts/authentication/finish (the `FinishAuthentication` operationId).
+	FinishAuthenticationWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*FinishAuthenticationResponse, error)
+
+	// FinishAuthenticationWithResponse Complete discoverable passkey sign-in.
+	//
+	// Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
+	//
+	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /api/accounts/authentication/finish (the `FinishAuthentication` operationId).
+	FinishAuthenticationWithResponse(ctx context.Context, body FinishAuthenticationJSONRequestBody, reqEditors ...RequestEditorFn) (*FinishAuthenticationResponse, error)
+
+	// LogoutWithBodyWithResponse Revoke the current browser session.
+	//
+	// Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
+	//
+	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /api/accounts/logout (the `Logout` operationId).
+	LogoutWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*LogoutResponse, error)
+
+	// LogoutWithResponse Revoke the current browser session.
+	//
+	// Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
+	//
+	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /api/accounts/logout (the `Logout` operationId).
+	LogoutWithResponse(ctx context.Context, body LogoutJSONRequestBody, reqEditors ...RequestEditorFn) (*LogoutResponse, error)
+
+	// ListPasskeysWithResponse List the owner’s passkeys.
+	//
+	// Owner-only current session cookie; credential deletion also requires recent verified passkey proof and refuses the last credential. Mutations require exact configured Origin. Responses prohibit caching.
+	//
+	// Returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with GET /api/accounts/passkeys (the `ListPasskeys` operationId).
+	ListPasskeysWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListPasskeysResponse, error)
+
+	// BeginAddPasskeyWithBodyWithResponse Begin enrollment of another passkey.
+	//
+	// Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
+	//
+	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /api/accounts/passkeys/begin (the `BeginAddPasskey` operationId).
+	BeginAddPasskeyWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*BeginAddPasskeyResponse, error)
+
+	// BeginAddPasskeyWithResponse Begin enrollment of another passkey.
+	//
+	// Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
+	//
+	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /api/accounts/passkeys/begin (the `BeginAddPasskey` operationId).
+	BeginAddPasskeyWithResponse(ctx context.Context, body BeginAddPasskeyJSONRequestBody, reqEditors ...RequestEditorFn) (*BeginAddPasskeyResponse, error)
+
+	// FinishAddPasskeyWithBodyWithResponse Complete enrollment of another passkey.
+	//
+	// Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
+	//
+	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /api/accounts/passkeys/finish (the `FinishAddPasskey` operationId).
+	FinishAddPasskeyWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*FinishAddPasskeyResponse, error)
+
+	// FinishAddPasskeyWithResponse Complete enrollment of another passkey.
+	//
+	// Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
+	//
+	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /api/accounts/passkeys/finish (the `FinishAddPasskey` operationId).
+	FinishAddPasskeyWithResponse(ctx context.Context, body FinishAddPasskeyJSONRequestBody, reqEditors ...RequestEditorFn) (*FinishAddPasskeyResponse, error)
+
+	// RemovePasskeyWithResponse Remove an owned passkey, retaining at least one.
+	//
+	// Owner-only current session cookie; credential deletion also requires recent verified passkey proof and refuses the last credential. Mutations require exact configured Origin. Responses prohibit caching.
+	//
+	// Returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with DELETE /api/accounts/passkeys/{credentialId} (the `RemovePasskey` operationId).
+	RemovePasskeyWithResponse(ctx context.Context, credentialId string, reqEditors ...RequestEditorFn) (*RemovePasskeyResponse, error)
+
+	// BeginReauthenticationWithBodyWithResponse Begin recent proof for this session.
+	//
+	// Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
+	//
+	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /api/accounts/reauthentication/begin (the `BeginReauthentication` operationId).
+	BeginReauthenticationWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*BeginReauthenticationResponse, error)
+
+	// BeginReauthenticationWithResponse Begin recent proof for this session.
+	//
+	// Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
+	//
+	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /api/accounts/reauthentication/begin (the `BeginReauthentication` operationId).
+	BeginReauthenticationWithResponse(ctx context.Context, body BeginReauthenticationJSONRequestBody, reqEditors ...RequestEditorFn) (*BeginReauthenticationResponse, error)
+
+	// FinishReauthenticationWithBodyWithResponse Verify a passkey for sensitive changes.
+	//
+	// Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
+	//
+	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /api/accounts/reauthentication/finish (the `FinishReauthentication` operationId).
+	FinishReauthenticationWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*FinishReauthenticationResponse, error)
+
+	// FinishReauthenticationWithResponse Verify a passkey for sensitive changes.
+	//
+	// Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
+	//
+	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /api/accounts/reauthentication/finish (the `FinishReauthentication` operationId).
+	FinishReauthenticationWithResponse(ctx context.Context, body FinishReauthenticationJSONRequestBody, reqEditors ...RequestEditorFn) (*FinishReauthenticationResponse, error)
+
+	// RegenerateRecoveryCodesWithBodyWithResponse Replace recovery codes after recent verification.
+	//
+	// Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
+	//
+	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /api/accounts/recovery-codes (the `RegenerateRecoveryCodes` operationId).
+	RegenerateRecoveryCodesWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*RegenerateRecoveryCodesResponse, error)
+
+	// RegenerateRecoveryCodesWithResponse Replace recovery codes after recent verification.
+	//
+	// Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
+	//
+	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /api/accounts/recovery-codes (the `RegenerateRecoveryCodes` operationId).
+	RegenerateRecoveryCodesWithResponse(ctx context.Context, body RegenerateRecoveryCodesJSONRequestBody, reqEditors ...RequestEditorFn) (*RegenerateRecoveryCodesResponse, error)
+
+	// BeginRecoveryWithBodyWithResponse Begin account-specific replacement enrollment.
+	//
+	// Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
+	//
+	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /api/accounts/recovery/begin (the `BeginRecovery` operationId).
+	BeginRecoveryWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*BeginRecoveryResponse, error)
+
+	// BeginRecoveryWithResponse Begin account-specific replacement enrollment.
+	//
+	// Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
+	//
+	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /api/accounts/recovery/begin (the `BeginRecovery` operationId).
+	BeginRecoveryWithResponse(ctx context.Context, body BeginRecoveryJSONRequestBody, reqEditors ...RequestEditorFn) (*BeginRecoveryResponse, error)
+
+	// FinishRecoveryWithBodyWithResponse Complete recovery and revoke all old account access.
+	//
+	// Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
+	//
+	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /api/accounts/recovery/finish (the `FinishRecovery` operationId).
+	FinishRecoveryWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*FinishRecoveryResponse, error)
+
+	// FinishRecoveryWithResponse Complete recovery and revoke all old account access.
+	//
+	// Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
+	//
+	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /api/accounts/recovery/finish (the `FinishRecovery` operationId).
+	FinishRecoveryWithResponse(ctx context.Context, body FinishRecoveryJSONRequestBody, reqEditors ...RequestEditorFn) (*FinishRecoveryResponse, error)
+
+	// BeginRegistrationWithBodyWithResponse Begin invitation-only enrollment.
+	//
+	// Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
+	//
+	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /api/accounts/registration/begin (the `BeginRegistration` operationId).
+	BeginRegistrationWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*BeginRegistrationResponse, error)
+
+	// BeginRegistrationWithResponse Begin invitation-only enrollment.
+	//
+	// Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
+	//
+	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /api/accounts/registration/begin (the `BeginRegistration` operationId).
+	BeginRegistrationWithResponse(ctx context.Context, body BeginRegistrationJSONRequestBody, reqEditors ...RequestEditorFn) (*BeginRegistrationResponse, error)
+
+	// FinishRegistrationWithBodyWithResponse Complete verified invitation enrollment.
+	//
+	// Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
+	//
+	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /api/accounts/registration/finish (the `FinishRegistration` operationId).
+	FinishRegistrationWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*FinishRegistrationResponse, error)
+
+	// FinishRegistrationWithResponse Complete verified invitation enrollment.
+	//
+	// Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
+	//
+	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /api/accounts/registration/finish (the `FinishRegistration` operationId).
+	FinishRegistrationWithResponse(ctx context.Context, body FinishRegistrationJSONRequestBody, reqEditors ...RequestEditorFn) (*FinishRegistrationResponse, error)
+
+	// GetAccountSessionWithResponse Read the current resolved session.
+	//
+	// Owner-only current session cookie; credential deletion also requires recent verified passkey proof and refuses the last credential. Mutations require exact configured Origin. Responses prohibit caching.
+	//
+	// Returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with GET /api/accounts/session (the `GetAccountSession` operationId).
+	GetAccountSessionWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetAccountSessionResponse, error)
+
 	// EnterWithBodyWithResponse Enter with the access link's secret and a name.
 	//
-	// Exchanges the secret from the access link (the `k` value in its URL fragment) and a name for a new visitor, and sets the visitor cookie. The name is reserved for 60 seconds so that no one else can enter under it meanwhile; once the visitor opens a live-update connection (`GET /api/live`) they hold it for as long as they stay connected. Attempts are limited per client IP, whether they succeed or not.
+	// Exchanges the secret from the access link (the `k` value in its URL fragment) and a name for a new guest, and sets the visitor cookie. Account names remain reserved even while offline or disabled and cannot be claimed by guests. The guest's name is reserved against other guests for 60 seconds; opening live updates (`GET /api/live`) holds it while connected. Account registration or rename may claim a guest's name, assigning that guest a replacement and refreshing connected clients. Attempts are limited per client IP, whether they succeed or not.
 	//
 	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
 	//
@@ -1910,7 +3734,7 @@ type ClientWithResponsesInterface interface {
 
 	// EnterWithResponse Enter with the access link's secret and a name.
 	//
-	// Exchanges the secret from the access link (the `k` value in its URL fragment) and a name for a new visitor, and sets the visitor cookie. The name is reserved for 60 seconds so that no one else can enter under it meanwhile; once the visitor opens a live-update connection (`GET /api/live`) they hold it for as long as they stay connected. Attempts are limited per client IP, whether they succeed or not.
+	// Exchanges the secret from the access link (the `k` value in its URL fragment) and a name for a new guest, and sets the visitor cookie. Account names remain reserved even while offline or disabled and cannot be claimed by guests. The guest's name is reserved against other guests for 60 seconds; opening live updates (`GET /api/live`) holds it while connected. Account registration or rename may claim a guest's name, assigning that guest a replacement and refreshing connected clients. Attempts are limited per client IP, whether they succeed or not.
 	//
 	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
 	//
@@ -1919,7 +3743,7 @@ type ClientWithResponsesInterface interface {
 
 	// GetMeWithResponse Return the current visitor.
 	//
-	// Returns the visitor the cookie belongs to, and whether another connected visitor now holds their name (`nameTaken`). Such a visitor cannot open live updates or join voice until they rename. Another visitor's reservation from entering does not count.
+	// Returns the current guest or account identity. For guests, `nameTaken` reports whether another connected guest holds their name; live updates and voice then remain closed until they rename. Temporary guest entry reservations do not count. Account names remain reserved offline. Account name claims assign displaced guests replacement names rather than marking an account's name as taken.
 	//
 	// Returns a wrapper object for the known response body format(s).
 	//
@@ -1928,7 +3752,7 @@ type ClientWithResponsesInterface interface {
 
 	// RenameMeWithBodyWithResponse Change the current visitor's name.
 	//
-	// Renames the visitor the cookie belongs to. The new name must be free; the visitor's own current name is, unless another visitor holds it. A connected visitor keeps holding their name under the new one.
+	// Renames the guest or account the cookie belongs to. A guest cannot claim a name reserved by an account or held by another guest. An account cannot claim another account's name, including an offline or disabled account, but may claim a guest's name and assign that guest a replacement. Changed identities receive a retryable live close (1001) to refresh their names, and current voice names are published in occupancy updates.
 	//
 	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
 	//
@@ -1937,7 +3761,7 @@ type ClientWithResponsesInterface interface {
 
 	// RenameMeWithResponse Change the current visitor's name.
 	//
-	// Renames the visitor the cookie belongs to. The new name must be free; the visitor's own current name is, unless another visitor holds it. A connected visitor keeps holding their name under the new one.
+	// Renames the guest or account the cookie belongs to. A guest cannot claim a name reserved by an account or held by another guest. An account cannot claim another account's name, including an offline or disabled account, but may claim a guest's name and assign that guest a replacement. Changed identities receive a retryable live close (1001) to refresh their names, and current voice names are published in occupancy updates.
 	//
 	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
 	//
@@ -1998,18 +3822,31 @@ type ClientWithResponsesInterface interface {
 	// Corresponds with POST /api/rooms/{id}/messages (the `PostMessage` operationId).
 	PostMessageWithResponse(ctx context.Context, id RoomId, body PostMessageJSONRequestBody, reqEditors ...RequestEditorFn) (*PostMessageResponse, error)
 
-	// JoinVoiceWithResponse Join a room's voice.
+	// JoinVoiceWithBodyWithResponse Join a room's voice.
 	//
-	// Returns the LiveKit URL and a token to connect to the room's voice with a LiveKit SDK. A visitor is a participant in one room at most: the server first removes them from any other room's voice. Joining the room again, say from a second tab, is allowed even when the room is full, and the new connection replaces the earlier one.
+	// Returns the LiveKit URL and a token to connect to the room's voice with a LiveKit SDK. A visitor is a participant in one room at most: the server first removes them from any other room's voice. Joining the room again, say from a second tab, is allowed even when the room is full, and the new connection replaces the earlier one. For accounts, a different browser session must explicitly send confirmTransfer=true; otherwise voice_transfer_required leaves the first participant intact. Guest callers may continue omitting the request body. Account requests require this server's exact configured Origin header.
 	//
-	// The token admits the visitor to this room only, under their visitor ID as participant identity and their name as display name. It may publish the microphone, a camera, a screen share and the screen share's audio, subscribe to the other participants, and update the participant's own attributes, but not send data messages. It expires 10 minutes after it is issued, so connect right away; once connected, LiveKit renews it.
+	// The token admits the visitor to this room only, under their visitor ID as participant identity for guests and their name as display name. Account transport identities append an opaque grant nonce after a dot; occupancy continues to expose the permanent visitor ID. Account clients map a transport identity to that ID by taking its prefix before the dot. Account credentials always use this server's guarded public signalling origin. Restarting Falky requires fresh account voice credentials. Guests may reuse a valid original or LiveKit-refreshed JWT after a backend restart while exactly one persisted guest session and its guest link generation remain current. Guest logout, link rotation or account upgrade prevent restoration; room and name authorization still apply. A newer room choice fences earlier room tokens. It may publish the microphone, a camera, a screen share and the screen share's audio, subscribe to the other participants, and update the participant's own attributes, but not send data messages. It expires 10 minutes after it is issued, so connect right away; once connected, LiveKit renews it.
 	//
 	// Muted is the state of the microphone track. Deafened is the participant attribute `deafened`: a client sets it to `"true"` while it plays no one's audio, and also mutes its microphone, then sets it to `"false"` again; an absent attribute means not deafened. The other participants see it through the SDK, for example with `room.localParticipant.setAttributes({ deafened: 'true' })` in `livekit-client`.
 	//
-	// Returns a wrapper object for the known response body format(s).
+	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
 	//
 	// Corresponds with POST /api/rooms/{id}/voice (the `JoinVoice` operationId).
-	JoinVoiceWithResponse(ctx context.Context, id RoomId, reqEditors ...RequestEditorFn) (*JoinVoiceResponse, error)
+	JoinVoiceWithBodyWithResponse(ctx context.Context, id RoomId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*JoinVoiceResponse, error)
+
+	// JoinVoiceWithResponse Join a room's voice.
+	//
+	// Returns the LiveKit URL and a token to connect to the room's voice with a LiveKit SDK. A visitor is a participant in one room at most: the server first removes them from any other room's voice. Joining the room again, say from a second tab, is allowed even when the room is full, and the new connection replaces the earlier one. For accounts, a different browser session must explicitly send confirmTransfer=true; otherwise voice_transfer_required leaves the first participant intact. Guest callers may continue omitting the request body. Account requests require this server's exact configured Origin header.
+	//
+	// The token admits the visitor to this room only, under their visitor ID as participant identity for guests and their name as display name. Account transport identities append an opaque grant nonce after a dot; occupancy continues to expose the permanent visitor ID. Account clients map a transport identity to that ID by taking its prefix before the dot. Account credentials always use this server's guarded public signalling origin. Restarting Falky requires fresh account voice credentials. Guests may reuse a valid original or LiveKit-refreshed JWT after a backend restart while exactly one persisted guest session and its guest link generation remain current. Guest logout, link rotation or account upgrade prevent restoration; room and name authorization still apply. A newer room choice fences earlier room tokens. It may publish the microphone, a camera, a screen share and the screen share's audio, subscribe to the other participants, and update the participant's own attributes, but not send data messages. It expires 10 minutes after it is issued, so connect right away; once connected, LiveKit renews it.
+	//
+	// Muted is the state of the microphone track. Deafened is the participant attribute `deafened`: a client sets it to `"true"` while it plays no one's audio, and also mutes its microphone, then sets it to `"false"` again; an absent attribute means not deafened. The other participants see it through the SDK, for example with `room.localParticipant.setAttributes({ deafened: 'true' })` in `livekit-client`.
+	//
+	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /api/rooms/{id}/voice (the `JoinVoice` operationId).
+	JoinVoiceWithResponse(ctx context.Context, id RoomId, body JoinVoiceJSONRequestBody, reqEditors ...RequestEditorFn) (*JoinVoiceResponse, error)
 
 	// LookupVisitorColoursWithBodyWithResponse Read current colours for explicit visitor IDs.
 	//
@@ -2046,6 +3883,810 @@ type ClientWithResponsesInterface interface {
 	//
 	// Corresponds with GET /health/ready (the `GetReadiness` operationId).
 	GetReadinessWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetReadinessResponse, error)
+}
+
+// BeginAuthenticationResponse200Headers the declared response headers of an HTTP 200 response for BeginAuthentication
+type BeginAuthenticationResponse200Headers struct {
+	SetCookie string
+}
+
+type BeginAuthenticationResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *AccountCeremony
+	// JSONDefault the response for an HTTP default `application/json` response
+	JSONDefault *Error
+	// Headers200 the parsed response headers for an HTTP 200 response
+	Headers200 *BeginAuthenticationResponse200Headers
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r BeginAuthenticationResponse) GetJSON200() *AccountCeremony {
+	return r.JSON200
+}
+
+// GetJSONDefault returns the response for an HTTP default `application/json` response
+func (r BeginAuthenticationResponse) GetJSONDefault() *Error {
+	return r.JSONDefault
+}
+
+// GetBody returns the raw response body bytes
+func (r BeginAuthenticationResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r BeginAuthenticationResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r BeginAuthenticationResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r BeginAuthenticationResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+// FinishAuthenticationResponse200Headers the declared response headers of an HTTP 200 response for FinishAuthentication
+type FinishAuthenticationResponse200Headers struct {
+	SetCookie string
+}
+
+type FinishAuthenticationResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *AccountEnrollment
+	// JSONDefault the response for an HTTP default `application/json` response
+	JSONDefault *Error
+	// Headers200 the parsed response headers for an HTTP 200 response
+	Headers200 *FinishAuthenticationResponse200Headers
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r FinishAuthenticationResponse) GetJSON200() *AccountEnrollment {
+	return r.JSON200
+}
+
+// GetJSONDefault returns the response for an HTTP default `application/json` response
+func (r FinishAuthenticationResponse) GetJSONDefault() *Error {
+	return r.JSONDefault
+}
+
+// GetBody returns the raw response body bytes
+func (r FinishAuthenticationResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r FinishAuthenticationResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r FinishAuthenticationResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r FinishAuthenticationResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+// LogoutResponse200Headers the declared response headers of an HTTP 200 response for Logout
+type LogoutResponse200Headers struct {
+	SetCookie string
+}
+
+type LogoutResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *AccountEmpty
+	// JSONDefault the response for an HTTP default `application/json` response
+	JSONDefault *Error
+	// Headers200 the parsed response headers for an HTTP 200 response
+	Headers200 *LogoutResponse200Headers
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r LogoutResponse) GetJSON200() *AccountEmpty {
+	return r.JSON200
+}
+
+// GetJSONDefault returns the response for an HTTP default `application/json` response
+func (r LogoutResponse) GetJSONDefault() *Error {
+	return r.JSONDefault
+}
+
+// GetBody returns the raw response body bytes
+func (r LogoutResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r LogoutResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r LogoutResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r LogoutResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type ListPasskeysResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *AccountPasskeys
+	// JSONDefault the response for an HTTP default `application/json` response
+	JSONDefault *Error
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r ListPasskeysResponse) GetJSON200() *AccountPasskeys {
+	return r.JSON200
+}
+
+// GetJSONDefault returns the response for an HTTP default `application/json` response
+func (r ListPasskeysResponse) GetJSONDefault() *Error {
+	return r.JSONDefault
+}
+
+// GetBody returns the raw response body bytes
+func (r ListPasskeysResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r ListPasskeysResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ListPasskeysResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r ListPasskeysResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+// BeginAddPasskeyResponse200Headers the declared response headers of an HTTP 200 response for BeginAddPasskey
+type BeginAddPasskeyResponse200Headers struct {
+	SetCookie string
+}
+
+type BeginAddPasskeyResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *AccountCeremony
+	// JSONDefault the response for an HTTP default `application/json` response
+	JSONDefault *Error
+	// Headers200 the parsed response headers for an HTTP 200 response
+	Headers200 *BeginAddPasskeyResponse200Headers
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r BeginAddPasskeyResponse) GetJSON200() *AccountCeremony {
+	return r.JSON200
+}
+
+// GetJSONDefault returns the response for an HTTP default `application/json` response
+func (r BeginAddPasskeyResponse) GetJSONDefault() *Error {
+	return r.JSONDefault
+}
+
+// GetBody returns the raw response body bytes
+func (r BeginAddPasskeyResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r BeginAddPasskeyResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r BeginAddPasskeyResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r BeginAddPasskeyResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+// FinishAddPasskeyResponse200Headers the declared response headers of an HTTP 200 response for FinishAddPasskey
+type FinishAddPasskeyResponse200Headers struct {
+	SetCookie string
+}
+
+type FinishAddPasskeyResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *AccountPasskey
+	// JSONDefault the response for an HTTP default `application/json` response
+	JSONDefault *Error
+	// Headers200 the parsed response headers for an HTTP 200 response
+	Headers200 *FinishAddPasskeyResponse200Headers
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r FinishAddPasskeyResponse) GetJSON200() *AccountPasskey {
+	return r.JSON200
+}
+
+// GetJSONDefault returns the response for an HTTP default `application/json` response
+func (r FinishAddPasskeyResponse) GetJSONDefault() *Error {
+	return r.JSONDefault
+}
+
+// GetBody returns the raw response body bytes
+func (r FinishAddPasskeyResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r FinishAddPasskeyResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r FinishAddPasskeyResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r FinishAddPasskeyResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type RemovePasskeyResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *AccountEmpty
+	// JSONDefault the response for an HTTP default `application/json` response
+	JSONDefault *Error
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r RemovePasskeyResponse) GetJSON200() *AccountEmpty {
+	return r.JSON200
+}
+
+// GetJSONDefault returns the response for an HTTP default `application/json` response
+func (r RemovePasskeyResponse) GetJSONDefault() *Error {
+	return r.JSONDefault
+}
+
+// GetBody returns the raw response body bytes
+func (r RemovePasskeyResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r RemovePasskeyResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r RemovePasskeyResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r RemovePasskeyResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+// BeginReauthenticationResponse200Headers the declared response headers of an HTTP 200 response for BeginReauthentication
+type BeginReauthenticationResponse200Headers struct {
+	SetCookie string
+}
+
+type BeginReauthenticationResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *AccountCeremony
+	// JSONDefault the response for an HTTP default `application/json` response
+	JSONDefault *Error
+	// Headers200 the parsed response headers for an HTTP 200 response
+	Headers200 *BeginReauthenticationResponse200Headers
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r BeginReauthenticationResponse) GetJSON200() *AccountCeremony {
+	return r.JSON200
+}
+
+// GetJSONDefault returns the response for an HTTP default `application/json` response
+func (r BeginReauthenticationResponse) GetJSONDefault() *Error {
+	return r.JSONDefault
+}
+
+// GetBody returns the raw response body bytes
+func (r BeginReauthenticationResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r BeginReauthenticationResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r BeginReauthenticationResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r BeginReauthenticationResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+// FinishReauthenticationResponse200Headers the declared response headers of an HTTP 200 response for FinishReauthentication
+type FinishReauthenticationResponse200Headers struct {
+	SetCookie string
+}
+
+type FinishReauthenticationResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *AccountSession
+	// JSONDefault the response for an HTTP default `application/json` response
+	JSONDefault *Error
+	// Headers200 the parsed response headers for an HTTP 200 response
+	Headers200 *FinishReauthenticationResponse200Headers
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r FinishReauthenticationResponse) GetJSON200() *AccountSession {
+	return r.JSON200
+}
+
+// GetJSONDefault returns the response for an HTTP default `application/json` response
+func (r FinishReauthenticationResponse) GetJSONDefault() *Error {
+	return r.JSONDefault
+}
+
+// GetBody returns the raw response body bytes
+func (r FinishReauthenticationResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r FinishReauthenticationResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r FinishReauthenticationResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r FinishReauthenticationResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+// RegenerateRecoveryCodesResponse200Headers the declared response headers of an HTTP 200 response for RegenerateRecoveryCodes
+type RegenerateRecoveryCodesResponse200Headers struct {
+	SetCookie string
+}
+
+type RegenerateRecoveryCodesResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *RecoveryCodes
+	// JSONDefault the response for an HTTP default `application/json` response
+	JSONDefault *Error
+	// Headers200 the parsed response headers for an HTTP 200 response
+	Headers200 *RegenerateRecoveryCodesResponse200Headers
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r RegenerateRecoveryCodesResponse) GetJSON200() *RecoveryCodes {
+	return r.JSON200
+}
+
+// GetJSONDefault returns the response for an HTTP default `application/json` response
+func (r RegenerateRecoveryCodesResponse) GetJSONDefault() *Error {
+	return r.JSONDefault
+}
+
+// GetBody returns the raw response body bytes
+func (r RegenerateRecoveryCodesResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r RegenerateRecoveryCodesResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r RegenerateRecoveryCodesResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r RegenerateRecoveryCodesResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+// BeginRecoveryResponse200Headers the declared response headers of an HTTP 200 response for BeginRecovery
+type BeginRecoveryResponse200Headers struct {
+	SetCookie string
+}
+
+type BeginRecoveryResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *AccountCeremony
+	// JSONDefault the response for an HTTP default `application/json` response
+	JSONDefault *Error
+	// Headers200 the parsed response headers for an HTTP 200 response
+	Headers200 *BeginRecoveryResponse200Headers
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r BeginRecoveryResponse) GetJSON200() *AccountCeremony {
+	return r.JSON200
+}
+
+// GetJSONDefault returns the response for an HTTP default `application/json` response
+func (r BeginRecoveryResponse) GetJSONDefault() *Error {
+	return r.JSONDefault
+}
+
+// GetBody returns the raw response body bytes
+func (r BeginRecoveryResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r BeginRecoveryResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r BeginRecoveryResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r BeginRecoveryResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+// FinishRecoveryResponse200Headers the declared response headers of an HTTP 200 response for FinishRecovery
+type FinishRecoveryResponse200Headers struct {
+	SetCookie string
+}
+
+type FinishRecoveryResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *AccountEnrollment
+	// JSONDefault the response for an HTTP default `application/json` response
+	JSONDefault *Error
+	// Headers200 the parsed response headers for an HTTP 200 response
+	Headers200 *FinishRecoveryResponse200Headers
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r FinishRecoveryResponse) GetJSON200() *AccountEnrollment {
+	return r.JSON200
+}
+
+// GetJSONDefault returns the response for an HTTP default `application/json` response
+func (r FinishRecoveryResponse) GetJSONDefault() *Error {
+	return r.JSONDefault
+}
+
+// GetBody returns the raw response body bytes
+func (r FinishRecoveryResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r FinishRecoveryResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r FinishRecoveryResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r FinishRecoveryResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+// BeginRegistrationResponse200Headers the declared response headers of an HTTP 200 response for BeginRegistration
+type BeginRegistrationResponse200Headers struct {
+	SetCookie string
+}
+
+type BeginRegistrationResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *AccountCeremony
+	// JSONDefault the response for an HTTP default `application/json` response
+	JSONDefault *Error
+	// Headers200 the parsed response headers for an HTTP 200 response
+	Headers200 *BeginRegistrationResponse200Headers
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r BeginRegistrationResponse) GetJSON200() *AccountCeremony {
+	return r.JSON200
+}
+
+// GetJSONDefault returns the response for an HTTP default `application/json` response
+func (r BeginRegistrationResponse) GetJSONDefault() *Error {
+	return r.JSONDefault
+}
+
+// GetBody returns the raw response body bytes
+func (r BeginRegistrationResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r BeginRegistrationResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r BeginRegistrationResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r BeginRegistrationResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+// FinishRegistrationResponse200Headers the declared response headers of an HTTP 200 response for FinishRegistration
+type FinishRegistrationResponse200Headers struct {
+	SetCookie string
+}
+
+type FinishRegistrationResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *AccountEnrollment
+	// JSONDefault the response for an HTTP default `application/json` response
+	JSONDefault *Error
+	// Headers200 the parsed response headers for an HTTP 200 response
+	Headers200 *FinishRegistrationResponse200Headers
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r FinishRegistrationResponse) GetJSON200() *AccountEnrollment {
+	return r.JSON200
+}
+
+// GetJSONDefault returns the response for an HTTP default `application/json` response
+func (r FinishRegistrationResponse) GetJSONDefault() *Error {
+	return r.JSONDefault
+}
+
+// GetBody returns the raw response body bytes
+func (r FinishRegistrationResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r FinishRegistrationResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r FinishRegistrationResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r FinishRegistrationResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type GetAccountSessionResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *AccountSession
+	// JSONDefault the response for an HTTP default `application/json` response
+	JSONDefault *Error
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r GetAccountSessionResponse) GetJSON200() *AccountSession {
+	return r.JSON200
+}
+
+// GetJSONDefault returns the response for an HTTP default `application/json` response
+func (r GetAccountSessionResponse) GetJSONDefault() *Error {
+	return r.JSONDefault
+}
+
+// GetBody returns the raw response body bytes
+func (r GetAccountSessionResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r GetAccountSessionResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r GetAccountSessionResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r GetAccountSessionResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
 }
 
 // EnterResponse201Headers the declared response headers of an HTTP 201 response for Enter
@@ -2545,6 +5186,8 @@ type JoinVoiceResponse struct {
 	JSON200 *VoiceCredentials
 	// JSON401 the response for an HTTP 401 `application/json` response
 	JSON401 *VisitorRequired
+	// JSON403 the response for an HTTP 403 `application/json` response
+	JSON403 *Error
 	// JSON404 the response for an HTTP 404 `application/json` response
 	JSON404 *RoomNotFound
 	// JSON409 the response for an HTTP 409 `application/json` response
@@ -2563,6 +5206,11 @@ func (r JoinVoiceResponse) GetJSON200() *VoiceCredentials {
 // GetJSON401 returns the response for an HTTP 401 `application/json` response
 func (r JoinVoiceResponse) GetJSON401() *VisitorRequired {
 	return r.JSON401
+}
+
+// GetJSON403 returns the response for an HTTP 403 `application/json` response
+func (r JoinVoiceResponse) GetJSON403() *Error {
+	return r.JSON403
 }
 
 // GetJSON404 returns the response for an HTTP 404 `application/json` response
@@ -2779,9 +5427,414 @@ func (r GetReadinessResponse) ContentType() string {
 	return ""
 }
 
+// BeginAuthenticationWithBodyWithResponse Begin discoverable passkey sign-in.
+//
+// Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
+//
+// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /api/accounts/authentication/begin (the `BeginAuthentication` operationId).
+func (c *ClientWithResponses) BeginAuthenticationWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*BeginAuthenticationResponse, error) {
+	rsp, err := c.BeginAuthenticationWithBody(ctx, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseBeginAuthenticationResponse(rsp)
+}
+
+// BeginAuthenticationWithResponse Begin discoverable passkey sign-in.
+//
+// Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
+//
+// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /api/accounts/authentication/begin (the `BeginAuthentication` operationId).
+func (c *ClientWithResponses) BeginAuthenticationWithResponse(ctx context.Context, body BeginAuthenticationJSONRequestBody, reqEditors ...RequestEditorFn) (*BeginAuthenticationResponse, error) {
+	rsp, err := c.BeginAuthentication(ctx, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseBeginAuthenticationResponse(rsp)
+}
+
+// FinishAuthenticationWithBodyWithResponse Complete discoverable passkey sign-in.
+//
+// Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
+//
+// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /api/accounts/authentication/finish (the `FinishAuthentication` operationId).
+func (c *ClientWithResponses) FinishAuthenticationWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*FinishAuthenticationResponse, error) {
+	rsp, err := c.FinishAuthenticationWithBody(ctx, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseFinishAuthenticationResponse(rsp)
+}
+
+// FinishAuthenticationWithResponse Complete discoverable passkey sign-in.
+//
+// Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
+//
+// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /api/accounts/authentication/finish (the `FinishAuthentication` operationId).
+func (c *ClientWithResponses) FinishAuthenticationWithResponse(ctx context.Context, body FinishAuthenticationJSONRequestBody, reqEditors ...RequestEditorFn) (*FinishAuthenticationResponse, error) {
+	rsp, err := c.FinishAuthentication(ctx, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseFinishAuthenticationResponse(rsp)
+}
+
+// LogoutWithBodyWithResponse Revoke the current browser session.
+//
+// Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
+//
+// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /api/accounts/logout (the `Logout` operationId).
+func (c *ClientWithResponses) LogoutWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*LogoutResponse, error) {
+	rsp, err := c.LogoutWithBody(ctx, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseLogoutResponse(rsp)
+}
+
+// LogoutWithResponse Revoke the current browser session.
+//
+// Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
+//
+// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /api/accounts/logout (the `Logout` operationId).
+func (c *ClientWithResponses) LogoutWithResponse(ctx context.Context, body LogoutJSONRequestBody, reqEditors ...RequestEditorFn) (*LogoutResponse, error) {
+	rsp, err := c.Logout(ctx, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseLogoutResponse(rsp)
+}
+
+// ListPasskeysWithResponse List the owner’s passkeys.
+//
+// Owner-only current session cookie; credential deletion also requires recent verified passkey proof and refuses the last credential. Mutations require exact configured Origin. Responses prohibit caching.
+//
+// Returns a wrapper object for the known response body format(s).
+//
+// Corresponds with GET /api/accounts/passkeys (the `ListPasskeys` operationId).
+func (c *ClientWithResponses) ListPasskeysWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListPasskeysResponse, error) {
+	rsp, err := c.ListPasskeys(ctx, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseListPasskeysResponse(rsp)
+}
+
+// BeginAddPasskeyWithBodyWithResponse Begin enrollment of another passkey.
+//
+// Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
+//
+// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /api/accounts/passkeys/begin (the `BeginAddPasskey` operationId).
+func (c *ClientWithResponses) BeginAddPasskeyWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*BeginAddPasskeyResponse, error) {
+	rsp, err := c.BeginAddPasskeyWithBody(ctx, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseBeginAddPasskeyResponse(rsp)
+}
+
+// BeginAddPasskeyWithResponse Begin enrollment of another passkey.
+//
+// Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
+//
+// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /api/accounts/passkeys/begin (the `BeginAddPasskey` operationId).
+func (c *ClientWithResponses) BeginAddPasskeyWithResponse(ctx context.Context, body BeginAddPasskeyJSONRequestBody, reqEditors ...RequestEditorFn) (*BeginAddPasskeyResponse, error) {
+	rsp, err := c.BeginAddPasskey(ctx, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseBeginAddPasskeyResponse(rsp)
+}
+
+// FinishAddPasskeyWithBodyWithResponse Complete enrollment of another passkey.
+//
+// Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
+//
+// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /api/accounts/passkeys/finish (the `FinishAddPasskey` operationId).
+func (c *ClientWithResponses) FinishAddPasskeyWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*FinishAddPasskeyResponse, error) {
+	rsp, err := c.FinishAddPasskeyWithBody(ctx, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseFinishAddPasskeyResponse(rsp)
+}
+
+// FinishAddPasskeyWithResponse Complete enrollment of another passkey.
+//
+// Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
+//
+// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /api/accounts/passkeys/finish (the `FinishAddPasskey` operationId).
+func (c *ClientWithResponses) FinishAddPasskeyWithResponse(ctx context.Context, body FinishAddPasskeyJSONRequestBody, reqEditors ...RequestEditorFn) (*FinishAddPasskeyResponse, error) {
+	rsp, err := c.FinishAddPasskey(ctx, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseFinishAddPasskeyResponse(rsp)
+}
+
+// RemovePasskeyWithResponse Remove an owned passkey, retaining at least one.
+//
+// Owner-only current session cookie; credential deletion also requires recent verified passkey proof and refuses the last credential. Mutations require exact configured Origin. Responses prohibit caching.
+//
+// Returns a wrapper object for the known response body format(s).
+//
+// Corresponds with DELETE /api/accounts/passkeys/{credentialId} (the `RemovePasskey` operationId).
+func (c *ClientWithResponses) RemovePasskeyWithResponse(ctx context.Context, credentialId string, reqEditors ...RequestEditorFn) (*RemovePasskeyResponse, error) {
+	rsp, err := c.RemovePasskey(ctx, credentialId, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseRemovePasskeyResponse(rsp)
+}
+
+// BeginReauthenticationWithBodyWithResponse Begin recent proof for this session.
+//
+// Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
+//
+// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /api/accounts/reauthentication/begin (the `BeginReauthentication` operationId).
+func (c *ClientWithResponses) BeginReauthenticationWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*BeginReauthenticationResponse, error) {
+	rsp, err := c.BeginReauthenticationWithBody(ctx, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseBeginReauthenticationResponse(rsp)
+}
+
+// BeginReauthenticationWithResponse Begin recent proof for this session.
+//
+// Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
+//
+// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /api/accounts/reauthentication/begin (the `BeginReauthentication` operationId).
+func (c *ClientWithResponses) BeginReauthenticationWithResponse(ctx context.Context, body BeginReauthenticationJSONRequestBody, reqEditors ...RequestEditorFn) (*BeginReauthenticationResponse, error) {
+	rsp, err := c.BeginReauthentication(ctx, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseBeginReauthenticationResponse(rsp)
+}
+
+// FinishReauthenticationWithBodyWithResponse Verify a passkey for sensitive changes.
+//
+// Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
+//
+// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /api/accounts/reauthentication/finish (the `FinishReauthentication` operationId).
+func (c *ClientWithResponses) FinishReauthenticationWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*FinishReauthenticationResponse, error) {
+	rsp, err := c.FinishReauthenticationWithBody(ctx, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseFinishReauthenticationResponse(rsp)
+}
+
+// FinishReauthenticationWithResponse Verify a passkey for sensitive changes.
+//
+// Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
+//
+// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /api/accounts/reauthentication/finish (the `FinishReauthentication` operationId).
+func (c *ClientWithResponses) FinishReauthenticationWithResponse(ctx context.Context, body FinishReauthenticationJSONRequestBody, reqEditors ...RequestEditorFn) (*FinishReauthenticationResponse, error) {
+	rsp, err := c.FinishReauthentication(ctx, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseFinishReauthenticationResponse(rsp)
+}
+
+// RegenerateRecoveryCodesWithBodyWithResponse Replace recovery codes after recent verification.
+//
+// Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
+//
+// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /api/accounts/recovery-codes (the `RegenerateRecoveryCodes` operationId).
+func (c *ClientWithResponses) RegenerateRecoveryCodesWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*RegenerateRecoveryCodesResponse, error) {
+	rsp, err := c.RegenerateRecoveryCodesWithBody(ctx, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseRegenerateRecoveryCodesResponse(rsp)
+}
+
+// RegenerateRecoveryCodesWithResponse Replace recovery codes after recent verification.
+//
+// Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
+//
+// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /api/accounts/recovery-codes (the `RegenerateRecoveryCodes` operationId).
+func (c *ClientWithResponses) RegenerateRecoveryCodesWithResponse(ctx context.Context, body RegenerateRecoveryCodesJSONRequestBody, reqEditors ...RequestEditorFn) (*RegenerateRecoveryCodesResponse, error) {
+	rsp, err := c.RegenerateRecoveryCodes(ctx, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseRegenerateRecoveryCodesResponse(rsp)
+}
+
+// BeginRecoveryWithBodyWithResponse Begin account-specific replacement enrollment.
+//
+// Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
+//
+// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /api/accounts/recovery/begin (the `BeginRecovery` operationId).
+func (c *ClientWithResponses) BeginRecoveryWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*BeginRecoveryResponse, error) {
+	rsp, err := c.BeginRecoveryWithBody(ctx, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseBeginRecoveryResponse(rsp)
+}
+
+// BeginRecoveryWithResponse Begin account-specific replacement enrollment.
+//
+// Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
+//
+// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /api/accounts/recovery/begin (the `BeginRecovery` operationId).
+func (c *ClientWithResponses) BeginRecoveryWithResponse(ctx context.Context, body BeginRecoveryJSONRequestBody, reqEditors ...RequestEditorFn) (*BeginRecoveryResponse, error) {
+	rsp, err := c.BeginRecovery(ctx, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseBeginRecoveryResponse(rsp)
+}
+
+// FinishRecoveryWithBodyWithResponse Complete recovery and revoke all old account access.
+//
+// Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
+//
+// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /api/accounts/recovery/finish (the `FinishRecovery` operationId).
+func (c *ClientWithResponses) FinishRecoveryWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*FinishRecoveryResponse, error) {
+	rsp, err := c.FinishRecoveryWithBody(ctx, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseFinishRecoveryResponse(rsp)
+}
+
+// FinishRecoveryWithResponse Complete recovery and revoke all old account access.
+//
+// Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
+//
+// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /api/accounts/recovery/finish (the `FinishRecovery` operationId).
+func (c *ClientWithResponses) FinishRecoveryWithResponse(ctx context.Context, body FinishRecoveryJSONRequestBody, reqEditors ...RequestEditorFn) (*FinishRecoveryResponse, error) {
+	rsp, err := c.FinishRecovery(ctx, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseFinishRecoveryResponse(rsp)
+}
+
+// BeginRegistrationWithBodyWithResponse Begin invitation-only enrollment.
+//
+// Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
+//
+// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /api/accounts/registration/begin (the `BeginRegistration` operationId).
+func (c *ClientWithResponses) BeginRegistrationWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*BeginRegistrationResponse, error) {
+	rsp, err := c.BeginRegistrationWithBody(ctx, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseBeginRegistrationResponse(rsp)
+}
+
+// BeginRegistrationWithResponse Begin invitation-only enrollment.
+//
+// Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
+//
+// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /api/accounts/registration/begin (the `BeginRegistration` operationId).
+func (c *ClientWithResponses) BeginRegistrationWithResponse(ctx context.Context, body BeginRegistrationJSONRequestBody, reqEditors ...RequestEditorFn) (*BeginRegistrationResponse, error) {
+	rsp, err := c.BeginRegistration(ctx, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseBeginRegistrationResponse(rsp)
+}
+
+// FinishRegistrationWithBodyWithResponse Complete verified invitation enrollment.
+//
+// Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
+//
+// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /api/accounts/registration/finish (the `FinishRegistration` operationId).
+func (c *ClientWithResponses) FinishRegistrationWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*FinishRegistrationResponse, error) {
+	rsp, err := c.FinishRegistrationWithBody(ctx, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseFinishRegistrationResponse(rsp)
+}
+
+// FinishRegistrationWithResponse Complete verified invitation enrollment.
+//
+// Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
+//
+// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /api/accounts/registration/finish (the `FinishRegistration` operationId).
+func (c *ClientWithResponses) FinishRegistrationWithResponse(ctx context.Context, body FinishRegistrationJSONRequestBody, reqEditors ...RequestEditorFn) (*FinishRegistrationResponse, error) {
+	rsp, err := c.FinishRegistration(ctx, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseFinishRegistrationResponse(rsp)
+}
+
+// GetAccountSessionWithResponse Read the current resolved session.
+//
+// Owner-only current session cookie; credential deletion also requires recent verified passkey proof and refuses the last credential. Mutations require exact configured Origin. Responses prohibit caching.
+//
+// Returns a wrapper object for the known response body format(s).
+//
+// Corresponds with GET /api/accounts/session (the `GetAccountSession` operationId).
+func (c *ClientWithResponses) GetAccountSessionWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetAccountSessionResponse, error) {
+	rsp, err := c.GetAccountSession(ctx, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseGetAccountSessionResponse(rsp)
+}
+
 // EnterWithBodyWithResponse Enter with the access link's secret and a name.
 //
-// Exchanges the secret from the access link (the `k` value in its URL fragment) and a name for a new visitor, and sets the visitor cookie. The name is reserved for 60 seconds so that no one else can enter under it meanwhile; once the visitor opens a live-update connection (`GET /api/live`) they hold it for as long as they stay connected. Attempts are limited per client IP, whether they succeed or not.
+// Exchanges the secret from the access link (the `k` value in its URL fragment) and a name for a new guest, and sets the visitor cookie. Account names remain reserved even while offline or disabled and cannot be claimed by guests. The guest's name is reserved against other guests for 60 seconds; opening live updates (`GET /api/live`) holds it while connected. Account registration or rename may claim a guest's name, assigning that guest a replacement and refreshing connected clients. Attempts are limited per client IP, whether they succeed or not.
 //
 // Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
 //
@@ -2796,7 +5849,7 @@ func (c *ClientWithResponses) EnterWithBodyWithResponse(ctx context.Context, con
 
 // EnterWithResponse Enter with the access link's secret and a name.
 //
-// Exchanges the secret from the access link (the `k` value in its URL fragment) and a name for a new visitor, and sets the visitor cookie. The name is reserved for 60 seconds so that no one else can enter under it meanwhile; once the visitor opens a live-update connection (`GET /api/live`) they hold it for as long as they stay connected. Attempts are limited per client IP, whether they succeed or not.
+// Exchanges the secret from the access link (the `k` value in its URL fragment) and a name for a new guest, and sets the visitor cookie. Account names remain reserved even while offline or disabled and cannot be claimed by guests. The guest's name is reserved against other guests for 60 seconds; opening live updates (`GET /api/live`) holds it while connected. Account registration or rename may claim a guest's name, assigning that guest a replacement and refreshing connected clients. Attempts are limited per client IP, whether they succeed or not.
 //
 // Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
 //
@@ -2811,7 +5864,7 @@ func (c *ClientWithResponses) EnterWithResponse(ctx context.Context, body EnterJ
 
 // GetMeWithResponse Return the current visitor.
 //
-// Returns the visitor the cookie belongs to, and whether another connected visitor now holds their name (`nameTaken`). Such a visitor cannot open live updates or join voice until they rename. Another visitor's reservation from entering does not count.
+// Returns the current guest or account identity. For guests, `nameTaken` reports whether another connected guest holds their name; live updates and voice then remain closed until they rename. Temporary guest entry reservations do not count. Account names remain reserved offline. Account name claims assign displaced guests replacement names rather than marking an account's name as taken.
 //
 // Returns a wrapper object for the known response body format(s).
 //
@@ -2826,7 +5879,7 @@ func (c *ClientWithResponses) GetMeWithResponse(ctx context.Context, reqEditors 
 
 // RenameMeWithBodyWithResponse Change the current visitor's name.
 //
-// Renames the visitor the cookie belongs to. The new name must be free; the visitor's own current name is, unless another visitor holds it. A connected visitor keeps holding their name under the new one.
+// Renames the guest or account the cookie belongs to. A guest cannot claim a name reserved by an account or held by another guest. An account cannot claim another account's name, including an offline or disabled account, but may claim a guest's name and assign that guest a replacement. Changed identities receive a retryable live close (1001) to refresh their names, and current voice names are published in occupancy updates.
 //
 // Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
 //
@@ -2841,7 +5894,7 @@ func (c *ClientWithResponses) RenameMeWithBodyWithResponse(ctx context.Context, 
 
 // RenameMeWithResponse Change the current visitor's name.
 //
-// Renames the visitor the cookie belongs to. The new name must be free; the visitor's own current name is, unless another visitor holds it. A connected visitor keeps holding their name under the new one.
+// Renames the guest or account the cookie belongs to. A guest cannot claim a name reserved by an account or held by another guest. An account cannot claim another account's name, including an offline or disabled account, but may claim a guest's name and assign that guest a replacement. Changed identities receive a retryable live close (1001) to refresh their names, and current voice names are published in occupancy updates.
 //
 // Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
 //
@@ -2944,19 +5997,38 @@ func (c *ClientWithResponses) PostMessageWithResponse(ctx context.Context, id Ro
 	return ParsePostMessageResponse(rsp)
 }
 
-// JoinVoiceWithResponse Join a room's voice.
+// JoinVoiceWithBodyWithResponse Join a room's voice.
 //
-// Returns the LiveKit URL and a token to connect to the room's voice with a LiveKit SDK. A visitor is a participant in one room at most: the server first removes them from any other room's voice. Joining the room again, say from a second tab, is allowed even when the room is full, and the new connection replaces the earlier one.
+// Returns the LiveKit URL and a token to connect to the room's voice with a LiveKit SDK. A visitor is a participant in one room at most: the server first removes them from any other room's voice. Joining the room again, say from a second tab, is allowed even when the room is full, and the new connection replaces the earlier one. For accounts, a different browser session must explicitly send confirmTransfer=true; otherwise voice_transfer_required leaves the first participant intact. Guest callers may continue omitting the request body. Account requests require this server's exact configured Origin header.
 //
-// The token admits the visitor to this room only, under their visitor ID as participant identity and their name as display name. It may publish the microphone, a camera, a screen share and the screen share's audio, subscribe to the other participants, and update the participant's own attributes, but not send data messages. It expires 10 minutes after it is issued, so connect right away; once connected, LiveKit renews it.
+// The token admits the visitor to this room only, under their visitor ID as participant identity for guests and their name as display name. Account transport identities append an opaque grant nonce after a dot; occupancy continues to expose the permanent visitor ID. Account clients map a transport identity to that ID by taking its prefix before the dot. Account credentials always use this server's guarded public signalling origin. Restarting Falky requires fresh account voice credentials. Guests may reuse a valid original or LiveKit-refreshed JWT after a backend restart while exactly one persisted guest session and its guest link generation remain current. Guest logout, link rotation or account upgrade prevent restoration; room and name authorization still apply. A newer room choice fences earlier room tokens. It may publish the microphone, a camera, a screen share and the screen share's audio, subscribe to the other participants, and update the participant's own attributes, but not send data messages. It expires 10 minutes after it is issued, so connect right away; once connected, LiveKit renews it.
 //
 // Muted is the state of the microphone track. Deafened is the participant attribute `deafened`: a client sets it to `"true"` while it plays no one's audio, and also mutes its microphone, then sets it to `"false"` again; an absent attribute means not deafened. The other participants see it through the SDK, for example with `room.localParticipant.setAttributes({ deafened: 'true' })` in `livekit-client`.
 //
-// Returns a wrapper object for the known response body format(s).
+// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
 //
 // Corresponds with POST /api/rooms/{id}/voice (the `JoinVoice` operationId).
-func (c *ClientWithResponses) JoinVoiceWithResponse(ctx context.Context, id RoomId, reqEditors ...RequestEditorFn) (*JoinVoiceResponse, error) {
-	rsp, err := c.JoinVoice(ctx, id, reqEditors...)
+func (c *ClientWithResponses) JoinVoiceWithBodyWithResponse(ctx context.Context, id RoomId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*JoinVoiceResponse, error) {
+	rsp, err := c.JoinVoiceWithBody(ctx, id, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseJoinVoiceResponse(rsp)
+}
+
+// JoinVoiceWithResponse Join a room's voice.
+//
+// Returns the LiveKit URL and a token to connect to the room's voice with a LiveKit SDK. A visitor is a participant in one room at most: the server first removes them from any other room's voice. Joining the room again, say from a second tab, is allowed even when the room is full, and the new connection replaces the earlier one. For accounts, a different browser session must explicitly send confirmTransfer=true; otherwise voice_transfer_required leaves the first participant intact. Guest callers may continue omitting the request body. Account requests require this server's exact configured Origin header.
+//
+// The token admits the visitor to this room only, under their visitor ID as participant identity for guests and their name as display name. Account transport identities append an opaque grant nonce after a dot; occupancy continues to expose the permanent visitor ID. Account clients map a transport identity to that ID by taking its prefix before the dot. Account credentials always use this server's guarded public signalling origin. Restarting Falky requires fresh account voice credentials. Guests may reuse a valid original or LiveKit-refreshed JWT after a backend restart while exactly one persisted guest session and its guest link generation remain current. Guest logout, link rotation or account upgrade prevent restoration; room and name authorization still apply. A newer room choice fences earlier room tokens. It may publish the microphone, a camera, a screen share and the screen share's audio, subscribe to the other participants, and update the participant's own attributes, but not send data messages. It expires 10 minutes after it is issued, so connect right away; once connected, LiveKit renews it.
+//
+// Muted is the state of the microphone track. Deafened is the participant attribute `deafened`: a client sets it to `"true"` while it plays no one's audio, and also mutes its microphone, then sets it to `"false"` again; an absent attribute means not deafened. The other participants see it through the SDK, for example with `room.localParticipant.setAttributes({ deafened: 'true' })` in `livekit-client`.
+//
+// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /api/rooms/{id}/voice (the `JoinVoice` operationId).
+func (c *ClientWithResponses) JoinVoiceWithResponse(ctx context.Context, id RoomId, body JoinVoiceJSONRequestBody, reqEditors ...RequestEditorFn) (*JoinVoiceResponse, error) {
+	rsp, err := c.JoinVoice(ctx, id, body, reqEditors...)
 	if err != nil {
 		return nil, err
 	}
@@ -3021,6 +6093,657 @@ func (c *ClientWithResponses) GetReadinessWithResponse(ctx context.Context, reqE
 		return nil, err
 	}
 	return ParseGetReadinessResponse(rsp)
+}
+
+// ParseBeginAuthenticationResponse parses an HTTP response from a BeginAuthenticationWithResponse call
+func ParseBeginAuthenticationResponse(rsp *http.Response) (*BeginAuthenticationResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &BeginAuthenticationResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest AccountCeremony
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && true:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSONDefault = &dest
+
+	}
+
+	switch {
+	case rsp.StatusCode == 200:
+		var headers BeginAuthenticationResponse200Headers
+		if values := rsp.Header.Values("Set-Cookie"); len(values) > 0 {
+			var value string
+			if err := runtime.BindStyledParameterWithOptions("simple", "Set-Cookie", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			}
+			headers.SetCookie = value
+		}
+		response.Headers200 = &headers
+	}
+
+	return response, nil
+}
+
+// ParseFinishAuthenticationResponse parses an HTTP response from a FinishAuthenticationWithResponse call
+func ParseFinishAuthenticationResponse(rsp *http.Response) (*FinishAuthenticationResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &FinishAuthenticationResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest AccountEnrollment
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && true:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSONDefault = &dest
+
+	}
+
+	switch {
+	case rsp.StatusCode == 200:
+		var headers FinishAuthenticationResponse200Headers
+		if values := rsp.Header.Values("Set-Cookie"); len(values) > 0 {
+			var value string
+			if err := runtime.BindStyledParameterWithOptions("simple", "Set-Cookie", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			}
+			headers.SetCookie = value
+		}
+		response.Headers200 = &headers
+	}
+
+	return response, nil
+}
+
+// ParseLogoutResponse parses an HTTP response from a LogoutWithResponse call
+func ParseLogoutResponse(rsp *http.Response) (*LogoutResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &LogoutResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest AccountEmpty
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && true:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSONDefault = &dest
+
+	}
+
+	switch {
+	case rsp.StatusCode == 200:
+		var headers LogoutResponse200Headers
+		if values := rsp.Header.Values("Set-Cookie"); len(values) > 0 {
+			var value string
+			if err := runtime.BindStyledParameterWithOptions("simple", "Set-Cookie", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			}
+			headers.SetCookie = value
+		}
+		response.Headers200 = &headers
+	}
+
+	return response, nil
+}
+
+// ParseListPasskeysResponse parses an HTTP response from a ListPasskeysWithResponse call
+func ParseListPasskeysResponse(rsp *http.Response) (*ListPasskeysResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ListPasskeysResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest AccountPasskeys
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && true:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSONDefault = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseBeginAddPasskeyResponse parses an HTTP response from a BeginAddPasskeyWithResponse call
+func ParseBeginAddPasskeyResponse(rsp *http.Response) (*BeginAddPasskeyResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &BeginAddPasskeyResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest AccountCeremony
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && true:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSONDefault = &dest
+
+	}
+
+	switch {
+	case rsp.StatusCode == 200:
+		var headers BeginAddPasskeyResponse200Headers
+		if values := rsp.Header.Values("Set-Cookie"); len(values) > 0 {
+			var value string
+			if err := runtime.BindStyledParameterWithOptions("simple", "Set-Cookie", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			}
+			headers.SetCookie = value
+		}
+		response.Headers200 = &headers
+	}
+
+	return response, nil
+}
+
+// ParseFinishAddPasskeyResponse parses an HTTP response from a FinishAddPasskeyWithResponse call
+func ParseFinishAddPasskeyResponse(rsp *http.Response) (*FinishAddPasskeyResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &FinishAddPasskeyResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest AccountPasskey
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && true:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSONDefault = &dest
+
+	}
+
+	switch {
+	case rsp.StatusCode == 200:
+		var headers FinishAddPasskeyResponse200Headers
+		if values := rsp.Header.Values("Set-Cookie"); len(values) > 0 {
+			var value string
+			if err := runtime.BindStyledParameterWithOptions("simple", "Set-Cookie", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			}
+			headers.SetCookie = value
+		}
+		response.Headers200 = &headers
+	}
+
+	return response, nil
+}
+
+// ParseRemovePasskeyResponse parses an HTTP response from a RemovePasskeyWithResponse call
+func ParseRemovePasskeyResponse(rsp *http.Response) (*RemovePasskeyResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &RemovePasskeyResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest AccountEmpty
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && true:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSONDefault = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseBeginReauthenticationResponse parses an HTTP response from a BeginReauthenticationWithResponse call
+func ParseBeginReauthenticationResponse(rsp *http.Response) (*BeginReauthenticationResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &BeginReauthenticationResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest AccountCeremony
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && true:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSONDefault = &dest
+
+	}
+
+	switch {
+	case rsp.StatusCode == 200:
+		var headers BeginReauthenticationResponse200Headers
+		if values := rsp.Header.Values("Set-Cookie"); len(values) > 0 {
+			var value string
+			if err := runtime.BindStyledParameterWithOptions("simple", "Set-Cookie", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			}
+			headers.SetCookie = value
+		}
+		response.Headers200 = &headers
+	}
+
+	return response, nil
+}
+
+// ParseFinishReauthenticationResponse parses an HTTP response from a FinishReauthenticationWithResponse call
+func ParseFinishReauthenticationResponse(rsp *http.Response) (*FinishReauthenticationResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &FinishReauthenticationResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest AccountSession
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && true:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSONDefault = &dest
+
+	}
+
+	switch {
+	case rsp.StatusCode == 200:
+		var headers FinishReauthenticationResponse200Headers
+		if values := rsp.Header.Values("Set-Cookie"); len(values) > 0 {
+			var value string
+			if err := runtime.BindStyledParameterWithOptions("simple", "Set-Cookie", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			}
+			headers.SetCookie = value
+		}
+		response.Headers200 = &headers
+	}
+
+	return response, nil
+}
+
+// ParseRegenerateRecoveryCodesResponse parses an HTTP response from a RegenerateRecoveryCodesWithResponse call
+func ParseRegenerateRecoveryCodesResponse(rsp *http.Response) (*RegenerateRecoveryCodesResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &RegenerateRecoveryCodesResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest RecoveryCodes
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && true:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSONDefault = &dest
+
+	}
+
+	switch {
+	case rsp.StatusCode == 200:
+		var headers RegenerateRecoveryCodesResponse200Headers
+		if values := rsp.Header.Values("Set-Cookie"); len(values) > 0 {
+			var value string
+			if err := runtime.BindStyledParameterWithOptions("simple", "Set-Cookie", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			}
+			headers.SetCookie = value
+		}
+		response.Headers200 = &headers
+	}
+
+	return response, nil
+}
+
+// ParseBeginRecoveryResponse parses an HTTP response from a BeginRecoveryWithResponse call
+func ParseBeginRecoveryResponse(rsp *http.Response) (*BeginRecoveryResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &BeginRecoveryResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest AccountCeremony
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && true:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSONDefault = &dest
+
+	}
+
+	switch {
+	case rsp.StatusCode == 200:
+		var headers BeginRecoveryResponse200Headers
+		if values := rsp.Header.Values("Set-Cookie"); len(values) > 0 {
+			var value string
+			if err := runtime.BindStyledParameterWithOptions("simple", "Set-Cookie", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			}
+			headers.SetCookie = value
+		}
+		response.Headers200 = &headers
+	}
+
+	return response, nil
+}
+
+// ParseFinishRecoveryResponse parses an HTTP response from a FinishRecoveryWithResponse call
+func ParseFinishRecoveryResponse(rsp *http.Response) (*FinishRecoveryResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &FinishRecoveryResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest AccountEnrollment
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && true:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSONDefault = &dest
+
+	}
+
+	switch {
+	case rsp.StatusCode == 200:
+		var headers FinishRecoveryResponse200Headers
+		if values := rsp.Header.Values("Set-Cookie"); len(values) > 0 {
+			var value string
+			if err := runtime.BindStyledParameterWithOptions("simple", "Set-Cookie", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			}
+			headers.SetCookie = value
+		}
+		response.Headers200 = &headers
+	}
+
+	return response, nil
+}
+
+// ParseBeginRegistrationResponse parses an HTTP response from a BeginRegistrationWithResponse call
+func ParseBeginRegistrationResponse(rsp *http.Response) (*BeginRegistrationResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &BeginRegistrationResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest AccountCeremony
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && true:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSONDefault = &dest
+
+	}
+
+	switch {
+	case rsp.StatusCode == 200:
+		var headers BeginRegistrationResponse200Headers
+		if values := rsp.Header.Values("Set-Cookie"); len(values) > 0 {
+			var value string
+			if err := runtime.BindStyledParameterWithOptions("simple", "Set-Cookie", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			}
+			headers.SetCookie = value
+		}
+		response.Headers200 = &headers
+	}
+
+	return response, nil
+}
+
+// ParseFinishRegistrationResponse parses an HTTP response from a FinishRegistrationWithResponse call
+func ParseFinishRegistrationResponse(rsp *http.Response) (*FinishRegistrationResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &FinishRegistrationResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest AccountEnrollment
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && true:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSONDefault = &dest
+
+	}
+
+	switch {
+	case rsp.StatusCode == 200:
+		var headers FinishRegistrationResponse200Headers
+		if values := rsp.Header.Values("Set-Cookie"); len(values) > 0 {
+			var value string
+			if err := runtime.BindStyledParameterWithOptions("simple", "Set-Cookie", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			}
+			headers.SetCookie = value
+		}
+		response.Headers200 = &headers
+	}
+
+	return response, nil
+}
+
+// ParseGetAccountSessionResponse parses an HTTP response from a GetAccountSessionWithResponse call
+func ParseGetAccountSessionResponse(rsp *http.Response) (*GetAccountSessionResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &GetAccountSessionResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest AccountSession
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && true:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSONDefault = &dest
+
+	}
+
+	return response, nil
 }
 
 // ParseEnterResponse parses an HTTP response from a EnterWithResponse call
@@ -3442,6 +7165,13 @@ func ParseJoinVoiceResponse(rsp *http.Response) (*JoinVoiceResponse, error) {
 		}
 		response.JSON401 = &dest
 
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
 		var dest RoomNotFound
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
@@ -3597,6 +7327,51 @@ func ParseGetReadinessResponse(rsp *http.Response) (*GetReadinessResponse, error
 
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
+	// BeginAuthentication Begin discoverable passkey sign-in.
+	// (POST /api/accounts/authentication/begin)
+	BeginAuthentication(w http.ResponseWriter, r *http.Request)
+	// FinishAuthentication Complete discoverable passkey sign-in.
+	// (POST /api/accounts/authentication/finish)
+	FinishAuthentication(w http.ResponseWriter, r *http.Request)
+	// Logout Revoke the current browser session.
+	// (POST /api/accounts/logout)
+	Logout(w http.ResponseWriter, r *http.Request)
+	// ListPasskeys List the owner’s passkeys.
+	// (GET /api/accounts/passkeys)
+	ListPasskeys(w http.ResponseWriter, r *http.Request)
+	// BeginAddPasskey Begin enrollment of another passkey.
+	// (POST /api/accounts/passkeys/begin)
+	BeginAddPasskey(w http.ResponseWriter, r *http.Request)
+	// FinishAddPasskey Complete enrollment of another passkey.
+	// (POST /api/accounts/passkeys/finish)
+	FinishAddPasskey(w http.ResponseWriter, r *http.Request)
+	// RemovePasskey Remove an owned passkey, retaining at least one.
+	// (DELETE /api/accounts/passkeys/{credentialId})
+	RemovePasskey(w http.ResponseWriter, r *http.Request, credentialId string)
+	// BeginReauthentication Begin recent proof for this session.
+	// (POST /api/accounts/reauthentication/begin)
+	BeginReauthentication(w http.ResponseWriter, r *http.Request)
+	// FinishReauthentication Verify a passkey for sensitive changes.
+	// (POST /api/accounts/reauthentication/finish)
+	FinishReauthentication(w http.ResponseWriter, r *http.Request)
+	// RegenerateRecoveryCodes Replace recovery codes after recent verification.
+	// (POST /api/accounts/recovery-codes)
+	RegenerateRecoveryCodes(w http.ResponseWriter, r *http.Request)
+	// BeginRecovery Begin account-specific replacement enrollment.
+	// (POST /api/accounts/recovery/begin)
+	BeginRecovery(w http.ResponseWriter, r *http.Request)
+	// FinishRecovery Complete recovery and revoke all old account access.
+	// (POST /api/accounts/recovery/finish)
+	FinishRecovery(w http.ResponseWriter, r *http.Request)
+	// BeginRegistration Begin invitation-only enrollment.
+	// (POST /api/accounts/registration/begin)
+	BeginRegistration(w http.ResponseWriter, r *http.Request)
+	// FinishRegistration Complete verified invitation enrollment.
+	// (POST /api/accounts/registration/finish)
+	FinishRegistration(w http.ResponseWriter, r *http.Request)
+	// GetAccountSession Read the current resolved session.
+	// (GET /api/accounts/session)
+	GetAccountSession(w http.ResponseWriter, r *http.Request)
 	// Enter Enter with the access link's secret and a name.
 	// (POST /api/enter)
 	Enter(w http.ResponseWriter, r *http.Request)
@@ -3640,6 +7415,228 @@ type ServerInterfaceWrapper struct {
 }
 
 type MiddlewareFunc func(http.Handler) http.Handler
+
+// BeginAuthentication operation middleware
+func (siw *ServerInterfaceWrapper) BeginAuthentication(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.BeginAuthentication(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// FinishAuthentication operation middleware
+func (siw *ServerInterfaceWrapper) FinishAuthentication(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.FinishAuthentication(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// Logout operation middleware
+func (siw *ServerInterfaceWrapper) Logout(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.Logout(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListPasskeys operation middleware
+func (siw *ServerInterfaceWrapper) ListPasskeys(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListPasskeys(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// BeginAddPasskey operation middleware
+func (siw *ServerInterfaceWrapper) BeginAddPasskey(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.BeginAddPasskey(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// FinishAddPasskey operation middleware
+func (siw *ServerInterfaceWrapper) FinishAddPasskey(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.FinishAddPasskey(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// RemovePasskey operation middleware
+func (siw *ServerInterfaceWrapper) RemovePasskey(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "credentialId" -------------
+	var credentialId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "credentialId", r.PathValue("credentialId"), &credentialId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "credentialId", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.RemovePasskey(w, r, credentialId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// BeginReauthentication operation middleware
+func (siw *ServerInterfaceWrapper) BeginReauthentication(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.BeginReauthentication(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// FinishReauthentication operation middleware
+func (siw *ServerInterfaceWrapper) FinishReauthentication(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.FinishReauthentication(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// RegenerateRecoveryCodes operation middleware
+func (siw *ServerInterfaceWrapper) RegenerateRecoveryCodes(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.RegenerateRecoveryCodes(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// BeginRecovery operation middleware
+func (siw *ServerInterfaceWrapper) BeginRecovery(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.BeginRecovery(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// FinishRecovery operation middleware
+func (siw *ServerInterfaceWrapper) FinishRecovery(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.FinishRecovery(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// BeginRegistration operation middleware
+func (siw *ServerInterfaceWrapper) BeginRegistration(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.BeginRegistration(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// FinishRegistration operation middleware
+func (siw *ServerInterfaceWrapper) FinishRegistration(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.FinishRegistration(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetAccountSession operation middleware
+func (siw *ServerInterfaceWrapper) GetAccountSession(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetAccountSession(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
 
 // Enter operation middleware
 func (siw *ServerInterfaceWrapper) Enter(w http.ResponseWriter, r *http.Request) {
@@ -3993,6 +7990,21 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 		ErrorHandlerFunc:   options.ErrorHandlerFunc,
 	}
 
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/accounts/registration/begin", wrapper.BeginRegistration)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/accounts/registration/finish", wrapper.FinishRegistration)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/accounts/authentication/begin", wrapper.BeginAuthentication)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/accounts/authentication/finish", wrapper.FinishAuthentication)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/accounts/reauthentication/begin", wrapper.BeginReauthentication)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/accounts/reauthentication/finish", wrapper.FinishReauthentication)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/accounts/passkeys/begin", wrapper.BeginAddPasskey)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/accounts/passkeys/finish", wrapper.FinishAddPasskey)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/accounts/recovery/begin", wrapper.BeginRecovery)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/accounts/recovery/finish", wrapper.FinishRecovery)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/accounts/recovery-codes", wrapper.RegenerateRecoveryCodes)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/accounts/logout", wrapper.Logout)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/accounts/session", wrapper.GetAccountSession)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/accounts/passkeys", wrapper.ListPasskeys)
+	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/accounts/passkeys/{credentialId}", wrapper.RemovePasskey)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/enter", wrapper.Enter)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/me", wrapper.GetMe)
 	m.HandleFunc(http.MethodPatch+" "+options.BaseURL+"/api/me", wrapper.RenameMe)
@@ -4017,6 +8029,685 @@ type NameTakenJSONResponse Error
 type RoomNotFoundJSONResponse Error
 
 type VisitorRequiredJSONResponse Error
+
+type BeginAuthenticationRequestObject struct {
+	Body *BeginAuthenticationJSONRequestBody
+}
+
+type BeginAuthenticationResponseObject interface {
+	VisitBeginAuthenticationResponse(w http.ResponseWriter) error
+}
+
+type BeginAuthentication200ResponseHeaders struct {
+	SetCookie string
+}
+
+type BeginAuthentication200JSONResponse struct {
+	Body    AccountCeremony
+	Headers BeginAuthentication200ResponseHeaders
+}
+
+func (response BeginAuthentication200JSONResponse) VisitBeginAuthenticationResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Set-Cookie", fmt.Sprint(response.Headers.SetCookie))
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type BeginAuthenticationdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response BeginAuthenticationdefaultJSONResponse) VisitBeginAuthenticationResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type FinishAuthenticationRequestObject struct {
+	Body *FinishAuthenticationJSONRequestBody
+}
+
+type FinishAuthenticationResponseObject interface {
+	VisitFinishAuthenticationResponse(w http.ResponseWriter) error
+}
+
+type FinishAuthentication200ResponseHeaders struct {
+	SetCookie string
+}
+
+type FinishAuthentication200JSONResponse struct {
+	Body    AccountEnrollment
+	Headers FinishAuthentication200ResponseHeaders
+}
+
+func (response FinishAuthentication200JSONResponse) VisitFinishAuthenticationResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Set-Cookie", fmt.Sprint(response.Headers.SetCookie))
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type FinishAuthenticationdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response FinishAuthenticationdefaultJSONResponse) VisitFinishAuthenticationResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type LogoutRequestObject struct {
+	Body *LogoutJSONRequestBody
+}
+
+type LogoutResponseObject interface {
+	VisitLogoutResponse(w http.ResponseWriter) error
+}
+
+type Logout200ResponseHeaders struct {
+	SetCookie string
+}
+
+type Logout200JSONResponse struct {
+	Body    AccountEmpty
+	Headers Logout200ResponseHeaders
+}
+
+func (response Logout200JSONResponse) VisitLogoutResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Set-Cookie", fmt.Sprint(response.Headers.SetCookie))
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type LogoutdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response LogoutdefaultJSONResponse) VisitLogoutResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListPasskeysRequestObject struct {
+}
+
+type ListPasskeysResponseObject interface {
+	VisitListPasskeysResponse(w http.ResponseWriter) error
+}
+
+type ListPasskeys200JSONResponse AccountPasskeys
+
+func (response ListPasskeys200JSONResponse) VisitListPasskeysResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListPasskeysdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response ListPasskeysdefaultJSONResponse) VisitListPasskeysResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type BeginAddPasskeyRequestObject struct {
+	Body *BeginAddPasskeyJSONRequestBody
+}
+
+type BeginAddPasskeyResponseObject interface {
+	VisitBeginAddPasskeyResponse(w http.ResponseWriter) error
+}
+
+type BeginAddPasskey200ResponseHeaders struct {
+	SetCookie string
+}
+
+type BeginAddPasskey200JSONResponse struct {
+	Body    AccountCeremony
+	Headers BeginAddPasskey200ResponseHeaders
+}
+
+func (response BeginAddPasskey200JSONResponse) VisitBeginAddPasskeyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Set-Cookie", fmt.Sprint(response.Headers.SetCookie))
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type BeginAddPasskeydefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response BeginAddPasskeydefaultJSONResponse) VisitBeginAddPasskeyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type FinishAddPasskeyRequestObject struct {
+	Body *FinishAddPasskeyJSONRequestBody
+}
+
+type FinishAddPasskeyResponseObject interface {
+	VisitFinishAddPasskeyResponse(w http.ResponseWriter) error
+}
+
+type FinishAddPasskey200ResponseHeaders struct {
+	SetCookie string
+}
+
+type FinishAddPasskey200JSONResponse struct {
+	Body    AccountPasskey
+	Headers FinishAddPasskey200ResponseHeaders
+}
+
+func (response FinishAddPasskey200JSONResponse) VisitFinishAddPasskeyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Set-Cookie", fmt.Sprint(response.Headers.SetCookie))
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type FinishAddPasskeydefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response FinishAddPasskeydefaultJSONResponse) VisitFinishAddPasskeyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RemovePasskeyRequestObject struct {
+	CredentialId string `json:"credentialId"`
+}
+
+type RemovePasskeyResponseObject interface {
+	VisitRemovePasskeyResponse(w http.ResponseWriter) error
+}
+
+type RemovePasskey200JSONResponse AccountEmpty
+
+func (response RemovePasskey200JSONResponse) VisitRemovePasskeyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RemovePasskeydefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response RemovePasskeydefaultJSONResponse) VisitRemovePasskeyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type BeginReauthenticationRequestObject struct {
+	Body *BeginReauthenticationJSONRequestBody
+}
+
+type BeginReauthenticationResponseObject interface {
+	VisitBeginReauthenticationResponse(w http.ResponseWriter) error
+}
+
+type BeginReauthentication200ResponseHeaders struct {
+	SetCookie string
+}
+
+type BeginReauthentication200JSONResponse struct {
+	Body    AccountCeremony
+	Headers BeginReauthentication200ResponseHeaders
+}
+
+func (response BeginReauthentication200JSONResponse) VisitBeginReauthenticationResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Set-Cookie", fmt.Sprint(response.Headers.SetCookie))
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type BeginReauthenticationdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response BeginReauthenticationdefaultJSONResponse) VisitBeginReauthenticationResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type FinishReauthenticationRequestObject struct {
+	Body *FinishReauthenticationJSONRequestBody
+}
+
+type FinishReauthenticationResponseObject interface {
+	VisitFinishReauthenticationResponse(w http.ResponseWriter) error
+}
+
+type FinishReauthentication200ResponseHeaders struct {
+	SetCookie string
+}
+
+type FinishReauthentication200JSONResponse struct {
+	Body    AccountSession
+	Headers FinishReauthentication200ResponseHeaders
+}
+
+func (response FinishReauthentication200JSONResponse) VisitFinishReauthenticationResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Set-Cookie", fmt.Sprint(response.Headers.SetCookie))
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type FinishReauthenticationdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response FinishReauthenticationdefaultJSONResponse) VisitFinishReauthenticationResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RegenerateRecoveryCodesRequestObject struct {
+	Body *RegenerateRecoveryCodesJSONRequestBody
+}
+
+type RegenerateRecoveryCodesResponseObject interface {
+	VisitRegenerateRecoveryCodesResponse(w http.ResponseWriter) error
+}
+
+type RegenerateRecoveryCodes200ResponseHeaders struct {
+	SetCookie string
+}
+
+type RegenerateRecoveryCodes200JSONResponse struct {
+	Body    RecoveryCodes
+	Headers RegenerateRecoveryCodes200ResponseHeaders
+}
+
+func (response RegenerateRecoveryCodes200JSONResponse) VisitRegenerateRecoveryCodesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Set-Cookie", fmt.Sprint(response.Headers.SetCookie))
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RegenerateRecoveryCodesdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response RegenerateRecoveryCodesdefaultJSONResponse) VisitRegenerateRecoveryCodesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type BeginRecoveryRequestObject struct {
+	Body *BeginRecoveryJSONRequestBody
+}
+
+type BeginRecoveryResponseObject interface {
+	VisitBeginRecoveryResponse(w http.ResponseWriter) error
+}
+
+type BeginRecovery200ResponseHeaders struct {
+	SetCookie string
+}
+
+type BeginRecovery200JSONResponse struct {
+	Body    AccountCeremony
+	Headers BeginRecovery200ResponseHeaders
+}
+
+func (response BeginRecovery200JSONResponse) VisitBeginRecoveryResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Set-Cookie", fmt.Sprint(response.Headers.SetCookie))
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type BeginRecoverydefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response BeginRecoverydefaultJSONResponse) VisitBeginRecoveryResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type FinishRecoveryRequestObject struct {
+	Body *FinishRecoveryJSONRequestBody
+}
+
+type FinishRecoveryResponseObject interface {
+	VisitFinishRecoveryResponse(w http.ResponseWriter) error
+}
+
+type FinishRecovery200ResponseHeaders struct {
+	SetCookie string
+}
+
+type FinishRecovery200JSONResponse struct {
+	Body    AccountEnrollment
+	Headers FinishRecovery200ResponseHeaders
+}
+
+func (response FinishRecovery200JSONResponse) VisitFinishRecoveryResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Set-Cookie", fmt.Sprint(response.Headers.SetCookie))
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type FinishRecoverydefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response FinishRecoverydefaultJSONResponse) VisitFinishRecoveryResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type BeginRegistrationRequestObject struct {
+	Body *BeginRegistrationJSONRequestBody
+}
+
+type BeginRegistrationResponseObject interface {
+	VisitBeginRegistrationResponse(w http.ResponseWriter) error
+}
+
+type BeginRegistration200ResponseHeaders struct {
+	SetCookie string
+}
+
+type BeginRegistration200JSONResponse struct {
+	Body    AccountCeremony
+	Headers BeginRegistration200ResponseHeaders
+}
+
+func (response BeginRegistration200JSONResponse) VisitBeginRegistrationResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Set-Cookie", fmt.Sprint(response.Headers.SetCookie))
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type BeginRegistrationdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response BeginRegistrationdefaultJSONResponse) VisitBeginRegistrationResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type FinishRegistrationRequestObject struct {
+	Body *FinishRegistrationJSONRequestBody
+}
+
+type FinishRegistrationResponseObject interface {
+	VisitFinishRegistrationResponse(w http.ResponseWriter) error
+}
+
+type FinishRegistration200ResponseHeaders struct {
+	SetCookie string
+}
+
+type FinishRegistration200JSONResponse struct {
+	Body    AccountEnrollment
+	Headers FinishRegistration200ResponseHeaders
+}
+
+func (response FinishRegistration200JSONResponse) VisitFinishRegistrationResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Set-Cookie", fmt.Sprint(response.Headers.SetCookie))
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type FinishRegistrationdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response FinishRegistrationdefaultJSONResponse) VisitFinishRegistrationResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetAccountSessionRequestObject struct {
+}
+
+type GetAccountSessionResponseObject interface {
+	VisitGetAccountSessionResponse(w http.ResponseWriter) error
+}
+
+type GetAccountSession200JSONResponse AccountSession
+
+func (response GetAccountSession200JSONResponse) VisitGetAccountSessionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetAccountSessiondefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response GetAccountSessiondefaultJSONResponse) VisitGetAccountSessionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
 
 type EnterRequestObject struct {
 	Body *EnterJSONRequestBody
@@ -4594,7 +9285,8 @@ func (response PostMessagedefaultJSONResponse) VisitPostMessageResponse(w http.R
 }
 
 type JoinVoiceRequestObject struct {
-	Id RoomId `json:"id"`
+	Id   RoomId `json:"id"`
+	Body *JoinVoiceJSONRequestBody
 }
 
 type JoinVoiceResponseObject interface {
@@ -4625,6 +9317,20 @@ func (response JoinVoice401JSONResponse) VisitJoinVoiceResponse(w http.ResponseW
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type JoinVoice403JSONResponse Error
+
+func (response JoinVoice403JSONResponse) VisitJoinVoiceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -4847,6 +9553,51 @@ func (response GetReadinessdefaultJSONResponse) VisitGetReadinessResponse(w http
 
 // StrictServerInterface represents all server handlers.
 type StrictServerInterface interface {
+	// BeginAuthentication Begin discoverable passkey sign-in.
+	// (POST /api/accounts/authentication/begin)
+	BeginAuthentication(ctx context.Context, request BeginAuthenticationRequestObject) (BeginAuthenticationResponseObject, error)
+	// FinishAuthentication Complete discoverable passkey sign-in.
+	// (POST /api/accounts/authentication/finish)
+	FinishAuthentication(ctx context.Context, request FinishAuthenticationRequestObject) (FinishAuthenticationResponseObject, error)
+	// Logout Revoke the current browser session.
+	// (POST /api/accounts/logout)
+	Logout(ctx context.Context, request LogoutRequestObject) (LogoutResponseObject, error)
+	// ListPasskeys List the owner’s passkeys.
+	// (GET /api/accounts/passkeys)
+	ListPasskeys(ctx context.Context, request ListPasskeysRequestObject) (ListPasskeysResponseObject, error)
+	// BeginAddPasskey Begin enrollment of another passkey.
+	// (POST /api/accounts/passkeys/begin)
+	BeginAddPasskey(ctx context.Context, request BeginAddPasskeyRequestObject) (BeginAddPasskeyResponseObject, error)
+	// FinishAddPasskey Complete enrollment of another passkey.
+	// (POST /api/accounts/passkeys/finish)
+	FinishAddPasskey(ctx context.Context, request FinishAddPasskeyRequestObject) (FinishAddPasskeyResponseObject, error)
+	// RemovePasskey Remove an owned passkey, retaining at least one.
+	// (DELETE /api/accounts/passkeys/{credentialId})
+	RemovePasskey(ctx context.Context, request RemovePasskeyRequestObject) (RemovePasskeyResponseObject, error)
+	// BeginReauthentication Begin recent proof for this session.
+	// (POST /api/accounts/reauthentication/begin)
+	BeginReauthentication(ctx context.Context, request BeginReauthenticationRequestObject) (BeginReauthenticationResponseObject, error)
+	// FinishReauthentication Verify a passkey for sensitive changes.
+	// (POST /api/accounts/reauthentication/finish)
+	FinishReauthentication(ctx context.Context, request FinishReauthenticationRequestObject) (FinishReauthenticationResponseObject, error)
+	// RegenerateRecoveryCodes Replace recovery codes after recent verification.
+	// (POST /api/accounts/recovery-codes)
+	RegenerateRecoveryCodes(ctx context.Context, request RegenerateRecoveryCodesRequestObject) (RegenerateRecoveryCodesResponseObject, error)
+	// BeginRecovery Begin account-specific replacement enrollment.
+	// (POST /api/accounts/recovery/begin)
+	BeginRecovery(ctx context.Context, request BeginRecoveryRequestObject) (BeginRecoveryResponseObject, error)
+	// FinishRecovery Complete recovery and revoke all old account access.
+	// (POST /api/accounts/recovery/finish)
+	FinishRecovery(ctx context.Context, request FinishRecoveryRequestObject) (FinishRecoveryResponseObject, error)
+	// BeginRegistration Begin invitation-only enrollment.
+	// (POST /api/accounts/registration/begin)
+	BeginRegistration(ctx context.Context, request BeginRegistrationRequestObject) (BeginRegistrationResponseObject, error)
+	// FinishRegistration Complete verified invitation enrollment.
+	// (POST /api/accounts/registration/finish)
+	FinishRegistration(ctx context.Context, request FinishRegistrationRequestObject) (FinishRegistrationResponseObject, error)
+	// GetAccountSession Read the current resolved session.
+	// (GET /api/accounts/session)
+	GetAccountSession(ctx context.Context, request GetAccountSessionRequestObject) (GetAccountSessionResponseObject, error)
 	// Enter Enter with the access link's secret and a name.
 	// (POST /api/enter)
 	Enter(ctx context.Context, request EnterRequestObject) (EnterResponseObject, error)
@@ -4919,6 +9670,452 @@ type strictHandler struct {
 	ssi         StrictServerInterface
 	middlewares []StrictMiddlewareFunc
 	options     StrictHTTPServerOptions
+}
+
+// BeginAuthentication operation middleware
+func (sh *strictHandler) BeginAuthentication(w http.ResponseWriter, r *http.Request) {
+	var request BeginAuthenticationRequestObject
+
+	var body BeginAuthenticationJSONRequestBody
+	if err := runtime.BindJSONBody(r, &body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.BeginAuthentication(ctx, request.(BeginAuthenticationRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "BeginAuthentication")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(BeginAuthenticationResponseObject); ok {
+		if err := validResponse.VisitBeginAuthenticationResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// FinishAuthentication operation middleware
+func (sh *strictHandler) FinishAuthentication(w http.ResponseWriter, r *http.Request) {
+	var request FinishAuthenticationRequestObject
+
+	var body FinishAuthenticationJSONRequestBody
+	if err := runtime.BindJSONBody(r, &body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.FinishAuthentication(ctx, request.(FinishAuthenticationRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "FinishAuthentication")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(FinishAuthenticationResponseObject); ok {
+		if err := validResponse.VisitFinishAuthenticationResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// Logout operation middleware
+func (sh *strictHandler) Logout(w http.ResponseWriter, r *http.Request) {
+	var request LogoutRequestObject
+
+	var body LogoutJSONRequestBody
+	if err := runtime.BindJSONBody(r, &body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.Logout(ctx, request.(LogoutRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "Logout")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(LogoutResponseObject); ok {
+		if err := validResponse.VisitLogoutResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ListPasskeys operation middleware
+func (sh *strictHandler) ListPasskeys(w http.ResponseWriter, r *http.Request) {
+	var request ListPasskeysRequestObject
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListPasskeys(ctx, request.(ListPasskeysRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListPasskeys")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListPasskeysResponseObject); ok {
+		if err := validResponse.VisitListPasskeysResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// BeginAddPasskey operation middleware
+func (sh *strictHandler) BeginAddPasskey(w http.ResponseWriter, r *http.Request) {
+	var request BeginAddPasskeyRequestObject
+
+	var body BeginAddPasskeyJSONRequestBody
+	if err := runtime.BindJSONBody(r, &body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.BeginAddPasskey(ctx, request.(BeginAddPasskeyRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "BeginAddPasskey")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(BeginAddPasskeyResponseObject); ok {
+		if err := validResponse.VisitBeginAddPasskeyResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// FinishAddPasskey operation middleware
+func (sh *strictHandler) FinishAddPasskey(w http.ResponseWriter, r *http.Request) {
+	var request FinishAddPasskeyRequestObject
+
+	var body FinishAddPasskeyJSONRequestBody
+	if err := runtime.BindJSONBody(r, &body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.FinishAddPasskey(ctx, request.(FinishAddPasskeyRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "FinishAddPasskey")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(FinishAddPasskeyResponseObject); ok {
+		if err := validResponse.VisitFinishAddPasskeyResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// RemovePasskey operation middleware
+func (sh *strictHandler) RemovePasskey(w http.ResponseWriter, r *http.Request, credentialId string) {
+	var request RemovePasskeyRequestObject
+
+	request.CredentialId = credentialId
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.RemovePasskey(ctx, request.(RemovePasskeyRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "RemovePasskey")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(RemovePasskeyResponseObject); ok {
+		if err := validResponse.VisitRemovePasskeyResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// BeginReauthentication operation middleware
+func (sh *strictHandler) BeginReauthentication(w http.ResponseWriter, r *http.Request) {
+	var request BeginReauthenticationRequestObject
+
+	var body BeginReauthenticationJSONRequestBody
+	if err := runtime.BindJSONBody(r, &body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.BeginReauthentication(ctx, request.(BeginReauthenticationRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "BeginReauthentication")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(BeginReauthenticationResponseObject); ok {
+		if err := validResponse.VisitBeginReauthenticationResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// FinishReauthentication operation middleware
+func (sh *strictHandler) FinishReauthentication(w http.ResponseWriter, r *http.Request) {
+	var request FinishReauthenticationRequestObject
+
+	var body FinishReauthenticationJSONRequestBody
+	if err := runtime.BindJSONBody(r, &body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.FinishReauthentication(ctx, request.(FinishReauthenticationRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "FinishReauthentication")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(FinishReauthenticationResponseObject); ok {
+		if err := validResponse.VisitFinishReauthenticationResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// RegenerateRecoveryCodes operation middleware
+func (sh *strictHandler) RegenerateRecoveryCodes(w http.ResponseWriter, r *http.Request) {
+	var request RegenerateRecoveryCodesRequestObject
+
+	var body RegenerateRecoveryCodesJSONRequestBody
+	if err := runtime.BindJSONBody(r, &body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.RegenerateRecoveryCodes(ctx, request.(RegenerateRecoveryCodesRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "RegenerateRecoveryCodes")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(RegenerateRecoveryCodesResponseObject); ok {
+		if err := validResponse.VisitRegenerateRecoveryCodesResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// BeginRecovery operation middleware
+func (sh *strictHandler) BeginRecovery(w http.ResponseWriter, r *http.Request) {
+	var request BeginRecoveryRequestObject
+
+	var body BeginRecoveryJSONRequestBody
+	if err := runtime.BindJSONBody(r, &body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.BeginRecovery(ctx, request.(BeginRecoveryRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "BeginRecovery")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(BeginRecoveryResponseObject); ok {
+		if err := validResponse.VisitBeginRecoveryResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// FinishRecovery operation middleware
+func (sh *strictHandler) FinishRecovery(w http.ResponseWriter, r *http.Request) {
+	var request FinishRecoveryRequestObject
+
+	var body FinishRecoveryJSONRequestBody
+	if err := runtime.BindJSONBody(r, &body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.FinishRecovery(ctx, request.(FinishRecoveryRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "FinishRecovery")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(FinishRecoveryResponseObject); ok {
+		if err := validResponse.VisitFinishRecoveryResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// BeginRegistration operation middleware
+func (sh *strictHandler) BeginRegistration(w http.ResponseWriter, r *http.Request) {
+	var request BeginRegistrationRequestObject
+
+	var body BeginRegistrationJSONRequestBody
+	if err := runtime.BindJSONBody(r, &body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.BeginRegistration(ctx, request.(BeginRegistrationRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "BeginRegistration")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(BeginRegistrationResponseObject); ok {
+		if err := validResponse.VisitBeginRegistrationResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// FinishRegistration operation middleware
+func (sh *strictHandler) FinishRegistration(w http.ResponseWriter, r *http.Request) {
+	var request FinishRegistrationRequestObject
+
+	var body FinishRegistrationJSONRequestBody
+	if err := runtime.BindJSONBody(r, &body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.FinishRegistration(ctx, request.(FinishRegistrationRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "FinishRegistration")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(FinishRegistrationResponseObject); ok {
+		if err := validResponse.VisitFinishRegistrationResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetAccountSession operation middleware
+func (sh *strictHandler) GetAccountSession(w http.ResponseWriter, r *http.Request) {
+	var request GetAccountSessionRequestObject
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetAccountSession(ctx, request.(GetAccountSessionRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetAccountSession")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetAccountSessionResponseObject); ok {
+		if err := validResponse.VisitGetAccountSessionResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
 }
 
 // Enter operation middleware
@@ -5127,6 +10324,16 @@ func (sh *strictHandler) JoinVoice(w http.ResponseWriter, r *http.Request, id Ro
 	var request JoinVoiceRequestObject
 
 	request.Id = id
+
+	var body JoinVoiceJSONRequestBody
+	if err := runtime.BindJSONBody(r, &body); err != nil {
+		if !errors.Is(err, io.EOF) {
+			sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+			return
+		}
+	} else {
+		request.Body = &body
+	}
 
 	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
 		return sh.ssi.JoinVoice(ctx, request.(JoinVoiceRequestObject))

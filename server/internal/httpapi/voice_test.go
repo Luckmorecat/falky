@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -20,7 +21,10 @@ import (
 // it is.
 func joinVoice(t *testing.T, b *api.ClientWithResponses, roomID string) *api.JoinVoiceResponse {
 	t.Helper()
-	res, err := b.JoinVoiceWithResponse(t.Context(), roomID)
+	res, err := b.JoinVoiceWithBodyWithResponse(t.Context(), roomID, "application/json", nil, func(_ context.Context, request *http.Request) error {
+		request.Header.Set("Origin", testOrigin)
+		return nil
+	})
 	if err != nil {
 		t.Fatalf("JoinVoice: %v", err)
 	}

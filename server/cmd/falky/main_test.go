@@ -11,6 +11,7 @@ import (
 	"io/fs"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -627,10 +628,18 @@ func TestServeClosesLiveConnectionsWhenItStops(t *testing.T) {
 }
 
 func TestLinkRotateReplacesTheLinkAndEndsTheOldOnesAccess(t *testing.T) {
+	livekit := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/protobuf")
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(livekit.Close)
 	dir := t.TempDir()
 	vars := map[string]string{
-		platform.EnvDBPath:      filepath.Join(dir, "falky.db"),
-		platform.EnvAdminSocket: filepath.Join(dir, "admin.sock"),
+		platform.EnvDBPath:           filepath.Join(dir, "falky.db"),
+		platform.EnvAdminSocket:      filepath.Join(dir, "admin.sock"),
+		platform.EnvLiveKitAPIURL:    livekit.URL,
+		platform.EnvLiveKitAPIKey:    "test",
+		platform.EnvLiveKitAPISecret: "test-secret",
 	}
 	cfg, err := platform.LoadConfig(env(vars))
 	if err != nil {
@@ -661,8 +670,6 @@ func TestLinkRotateReplacesTheLinkAndEndsTheOldOnesAccess(t *testing.T) {
 	}
 	defer func() { _ = ws.CloseNow() }()
 
-	// No LiveKit is configured, so voice cannot be emptied; the rotation
-	// still succeeds.
 	start := time.Now()
 	code, rotated, stderr := runCommand(t, env(vars), "link", "rotate")
 	if code != 0 || rotated == link || !strings.Contains(rotated, "/#k=") || !strings.HasSuffix(rotated, "\n") {
@@ -695,9 +702,6 @@ func TestLinkRotateReplacesTheLinkAndEndsTheOldOnesAccess(t *testing.T) {
 	again, err := c.EnterWithResponse(t.Context(), api.EnterRequest{Secret: secretOf(rotated), Name: "Bob"})
 	if err != nil || again.StatusCode() != http.StatusCreated || again.JSON201 == nil || again.JSON201.Id == entered.JSON201.Id {
 		t.Errorf("Enter with the new secret = %v, %v, want 201 and a new visitor", again, err)
-	}
-	if !strings.Contains(logs.String(), "voice not emptied") {
-		t.Errorf("logs = %q, want voice reported not emptied", logs.String())
 	}
 	for _, l := range []string{link, rotated} {
 		if strings.Contains(logs.String(), secretOf(l)) {
@@ -914,5 +918,43 @@ func TestServeFailsExplicitlyWhenColourInitializationCannotComplete(t *testing.T
 	err = serveOn(t.Context(), logger, cfg, db, ms, ls)
 	if err == nil || !strings.Contains(err.Error(), "initialize visitor colours") {
 		t.Fatalf("startup = %v, want explicit backfill failure", err)
+	}
+}
+
+func TestInvitationCommandsUseRunningProtectedSocket(t *testing.T) {
+	dir := t.TempDir()
+	vars := map[string]string{platform.EnvDBPath: filepath.Join(dir, "falky.db"), platform.EnvAdminSocket: filepath.Join(dir, "admin.sock"), platform.EnvPublicOrigin: "https://falky.example"}
+	cfg, err := platform.LoadConfig(env(vars))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var logs syncBuffer
+	startServer(t, cfg, &logs)
+	code, out, stderr := runCommand(t, env(vars), "invitation", "create")
+	if code != 0 || stderr != "" || !strings.HasPrefix(out, "https://falky.example/#invite=") {
+		t.Fatal("invitation create did not return link")
+	}
+	bearer := strings.TrimSpace(strings.TrimPrefix(out, "https://falky.example/#invite="))
+	code, out, stderr = runCommand(t, env(vars), "invitation", "list")
+	if code != 0 || stderr != "" || strings.Contains(out, bearer) {
+		t.Fatal("unsafe invitation list")
+	}
+	var refs []struct{ ID string }
+	if err := json.Unmarshal([]byte(out), &refs); err != nil {
+		t.Fatal(err)
+	}
+	if len(refs) != 1 {
+		t.Fatal("missing invitation reference")
+	}
+	code, _, stderr = runCommand(t, env(vars), "invitation", "revoke", refs[0].ID)
+	if code != 0 || stderr != "" {
+		t.Fatal("invitation revoke failed")
+	}
+	code, out, stderr = runCommand(t, env(vars), "account", "list")
+	if code != 0 || stderr != "" || strings.TrimSpace(out) != "[]" {
+		t.Fatal("private account list failed")
+	}
+	if strings.Contains(logs.String(), bearer) {
+		t.Fatal("operator bearer leaked to server logs")
 	}
 }

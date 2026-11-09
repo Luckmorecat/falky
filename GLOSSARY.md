@@ -5,39 +5,61 @@ A private, self-hosted place for a small circle of friends to chat, talk by voic
 ## People and access
 
 **Access link**:
-The one secret link that lets a person into this server. Replacing it (the operator's `falky link rotate`) ends everyone's access.
-_Avoid_: Invite, guest link, join link, password
+The reusable secret link that admits guests to this server. Replacing it ends guest access while accounts keep theirs.
+_Avoid_: Account invitation, password
 
-**Visitor**:
-A person who entered through the access link under a chosen name, recognized afterwards by their browser. The same person on another browser is another visitor.
-_Avoid_: User, member, guest, account
+**Identity**:
+A lasting identity that owns messages and attachments, whether a guest or an account. Becoming an account preserves that identity.
+_Avoid_: Visitor, user, member
+
+**Guest**:
+An identity admitted through the access link and remembered by one browser. Entering afresh in another browser creates a different guest.
+
+**Account**:
+An identity with durable access established by accepting an account invitation and enrolling a passkey. The same account can use several browsers and keeps its name while away or disabled.
+
+**Session**:
+A browser's time-limited access to an identity, admitted as a guest or authenticated through an account. Several open tabs can share one session.
+
+**Account invitation**:
+A single-use invitation from the operator to become an account. It is separate from the shared access link.
+_Avoid_: Access link, recovery link
+
+**Recovery**:
+Replacing an account's passkeys using a recovery code or an operator-issued recovery link. It preserves the account's identity, name and history while ending its previous access.
+
+**Disabled account**:
+An account whose access the operator has ended, with its identity, name and messages retained.
 
 **Connected**:
-A visitor is connected while they have the app open. This is never shown to other visitors.
+Someone is connected while they have the app open. This is never shown to others.
 _Avoid_: Online, present, active
 
 **Name**:
-What a visitor is called. No two connected visitors share a name; a visitor may change theirs to any free name.
+What an identity is called, unique among connected identities. Accounts reserve their names even while away; a guest using a newly claimed account name receives another name.
 _Avoid_: Handle, username, nickname
+
+**Profile**:
+An identity's visual appearance and personal decoration, separate from their name and access.
 
 ## Rooms and chat
 
 **Room**:
-A named place where visitors talk by voice and chat. Every room has both.
+A named place where people talk by voice and chat. Every room has both.
 _Avoid_: Channel, voice channel, server, lobby
 
 **Message**:
-Text, attachments, or both that a visitor posts in a room's chat, shown under the name they had when posting.
+Text, attachments, or both that someone posts in a room's chat, shown under the name they had when posting.
 _Avoid_: Post, chat line
 
 **Attachment**:
-A file a visitor shares with a message. Before posting, it is a private draft belonging to that visitor.
+A file someone shares with a message. Before posting, it is a private draft belonging to their identity.
 _Avoid_: Upload, media
 
 ## Voice
 
 **Participant**:
-A visitor currently connected to a room's voice. A visitor is a participant in at most one room at a time.
+An identity currently connected to a room's voice. An identity is a participant in at most one room at a time.
 _Avoid_: Voice member, attendee
 
 **Occupancy**:

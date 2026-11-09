@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/kisshot/falky/server/internal/identity"
 )
 
 // Event is one live update, as published.
@@ -29,6 +30,11 @@ type Event struct {
 // Subscriber is the visitor a connection serves.
 type Subscriber struct {
 	VisitorID string
+	Session   identity.Session
+	// Registered releases the admission gate after the hub can fence this
+	// connection, including an upgrade that has not completed yet.
+	Registered func()
+	Authorized func(context.Context) bool
 	// Ticket is what Hub.Ticket returned before the visitor's access was
 	// checked.
 	Ticket Ticket
@@ -172,6 +178,30 @@ func (h *Hub) Revoke(notice []byte) {
 	}
 }
 
+// RevokeSessions ends exactly the matching browser sessions. New sessions of
+// a recovered account retain their newer security generation.
+func (h *Hub) RevokeSessions(matches func(identity.Session) bool, notice []byte) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for c := range h.conns {
+		if matches(c.sub.Session) {
+			c.notice = notice
+			h.removeLocked(c, StatusRevoked, "access revoked")
+		}
+	}
+}
+
+// RefreshIdentity gives legacy clients a retryable reconnect to refresh /me.
+func (h *Hub) RefreshIdentity(visitorID string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for c := range h.conns {
+		if c.sub.VisitorID == visitorID {
+			h.removeLocked(c, websocket.StatusGoingAway, "identity changed; reconnect")
+		}
+	}
+}
+
 // Ticket returns the ticket of a connection whose visitor's access is about
 // to be checked. Take it before the check, so that Serve can refuse the
 // connection if Revoke ran in between.
@@ -190,6 +220,9 @@ func (h *Hub) Ticket() Ticket {
 func (h *Hub) Serve(w http.ResponseWriter, r *http.Request, sub Subscriber) (opened bool) {
 	c := &conn{sub: sub, queue: make(chan Event, h.queueSize), ended: make(chan struct{})}
 	registered := h.add(c)
+	if sub.Registered != nil {
+		sub.Registered()
+	}
 	ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{InsecureSkipVerify: true})
 	if err != nil {
 		h.logger.Debug("live connection refused", "error", err) // Accept answered the request
@@ -206,6 +239,14 @@ func (h *Hub) Serve(w http.ResponseWriter, r *http.Request, sub Subscriber) (ope
 	defer h.serving.Done()
 	defer h.remove(c)
 	opened = h.opened(c)
+	if !sub.Session.ExpiresAt.IsZero() {
+		timer := time.AfterFunc(time.Until(sub.Session.ExpiresAt), func() {
+			h.mu.Lock()
+			defer h.mu.Unlock()
+			h.removeLocked(c, StatusRevoked, "session expired")
+		})
+		defer timer.Stop()
+	}
 
 	ctx, cancel := context.WithCancel(r.Context())
 	var wg sync.WaitGroup
@@ -303,6 +344,12 @@ func (h *Hub) send(ctx context.Context, c *conn, ws *websocket.Conn) {
 		case <-c.ended: // being closed: what is left, the client catches up on
 			return
 		case e = <-c.queue:
+		}
+		if c.sub.Authorized != nil && !c.sub.Authorized(ctx) {
+			h.mu.Lock()
+			h.removeLocked(c, StatusRevoked, "session expired or revoked")
+			h.mu.Unlock()
+			return
 		}
 		if e.RoomID != "" && c.sub.MayReceive != nil && !c.sub.MayReceive(ctx, e.RoomID) {
 			continue

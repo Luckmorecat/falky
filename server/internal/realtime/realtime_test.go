@@ -12,6 +12,7 @@ import (
 
 	"github.com/coder/websocket"
 
+	"github.com/kisshot/falky/server/internal/identity"
 	"github.com/kisshot/falky/server/internal/realtime"
 )
 
@@ -19,6 +20,29 @@ import (
 type change struct {
 	visitorID string
 	connected bool
+}
+
+func TestAbsoluteSessionExpiryEndsIdleLiveConnection(t *testing.T) {
+	hub := realtime.New()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hub.Serve(w, r, realtime.Subscriber{VisitorID: "account", Session: identity.Session{Visitor: identity.Visitor{ID: "account"}, ID: "session", Kind: identity.Account, ExpiresAt: time.Now().Add(50 * time.Millisecond)}})
+	}))
+	t.Cleanup(srv.Close)
+	t.Cleanup(func() { _ = hub.Shutdown(context.Background()) })
+	ws, res, err := websocket.Dial(t.Context(), srv.URL, nil)
+	if res != nil && res.Body != nil {
+		_ = res.Body.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = ws.CloseNow() }()
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	_, _, err = ws.Read(ctx)
+	if websocket.CloseStatus(err) != realtime.StatusRevoked {
+		t.Fatalf("idle expired connection = %v", err)
+	}
 }
 
 // testHub is a hub served over a real WebSocket by an httptest server.

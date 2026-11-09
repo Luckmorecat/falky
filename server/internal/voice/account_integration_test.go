@@ -1,0 +1,330 @@
+//go:build integration
+
+package voice_test
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"path/filepath"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/coder/websocket"
+	"github.com/livekit/protocol/livekit"
+	lksdk "github.com/livekit/server-sdk-go/v2"
+	"github.com/pion/webrtc/v4"
+	"github.com/pion/webrtc/v4/pkg/media"
+	"google.golang.org/protobuf/proto"
+
+	"github.com/kisshot/falky/server/internal/httpapi"
+	"github.com/kisshot/falky/server/internal/identity"
+	"github.com/kisshot/falky/server/internal/identity/passkeytest"
+	"github.com/kisshot/falky/server/internal/platform"
+	"github.com/kisshot/falky/server/internal/rooms"
+	"github.com/kisshot/falky/server/internal/voice"
+)
+
+type guardedVoice struct {
+	ident  *identity.Service
+	voice  *voice.Service
+	gate   *httpapi.Lifecycle
+	public *httptest.Server
+	room   string
+	rooms  *rooms.Service
+}
+
+func newGuardedVoice(t *testing.T, options ...identity.Option) guardedVoice {
+	t.Helper()
+	logger := platform.NewLogger(io.Discard, 0)
+	db, err := platform.OpenDB(t.Context(), filepath.Join(t.TempDir(), "voice.db"), logger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	migrations, err := platform.LoadMigrations(identity.Migrations(), rooms.Migrations())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Migrate(t.Context(), migrations); err != nil {
+		t.Fatal(err)
+	}
+	ident := identity.New(db, "https://falky.example", options...)
+	if _, err := ident.EnsureLink(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	rs := rooms.New(db)
+	room, err := rs.Create(t.Context(), "Voice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := voice.New(liveKitClient(), ident, rs, voice.Config{URL: "wss://must-not-bypass.invalid", APIKey: devKey, APISecret: devSecret, RoomCap: 8})
+	gate := &httpapi.Lifecycle{Enforce: httpapi.Enforcer(httpapi.Events{}, s)}
+	public := httptest.NewServer(s.Signalling(fmt.Sprintf("http://127.0.0.1:%d", liveKitPort)))
+	s.ConfigureAdmission(gate, ident.ValidateSession, public.URL)
+	t.Cleanup(func() { s.CloseSignalling(); public.Close() })
+	return guardedVoice{ident: ident, voice: s, gate: gate, public: public, room: room.ID, rooms: rs}
+}
+
+func (f guardedVoice) enroll(t *testing.T) (identity.Enrollment, *passkeytest.Authenticator) {
+	t.Helper()
+	i, err := f.ident.CreateInvitation(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := f.ident.BeginRegistration(t.Context(), identity.RegistrationInput{Invitation: i.Token, Name: "Account", BrowserContext: "registration"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := passkeytest.New(t)
+	enrolled, err := f.ident.FinishRegistration(t.Context(), c.ID, "registration", key.Registration(t, c.Creation, "https://falky.example"), "Laptop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return enrolled, key
+}
+
+func (f guardedVoice) login(t *testing.T, key *passkeytest.Authenticator) identity.Enrollment {
+	t.Helper()
+	c, err := f.ident.BeginAuthentication(t.Context(), "second")
+	if err != nil {
+		t.Fatal(err)
+	}
+	e, err := f.ident.FinishAuthentication(t.Context(), c.ID, "second", key.Assertion(t, c.Assertion, "https://falky.example"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return e
+}
+
+func (f guardedVoice) join(t *testing.T, session identity.Session, confirm bool) voice.Credentials {
+	t.Helper()
+	f.gate.Lock()
+	defer f.gate.Unlock()
+	c, err := f.voice.JoinSession(t.Context(), session, f.room, confirm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if session.Kind == identity.Account && c.URL != "ws"+strings.TrimPrefix(f.public.URL, "http") {
+		t.Fatal("account credentials bypass guarded public URL")
+	}
+	return c
+}
+
+func refusedAtGuard(t *testing.T, f guardedVoice, token string) {
+	t.Helper()
+	for _, path := range []string{"/rtc", "/rtc/v1", "/rtc/validate", "/rtc/v1/validate"} {
+		req, err := http.NewRequestWithContext(t.Context(), "GET", f.public.URL+path+"?access_token="+url.QueryEscape(token), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = res.Body.Close()
+		if res.StatusCode != 403 || res.Header.Get("X-Falky-RTC-Guard") != "1" {
+			t.Fatalf("stale grant at %s = %d", path, res.StatusCode)
+		}
+	}
+}
+
+func TestGuardedLiveKitTransferRecoveryDisableAndStaleTokens(t *testing.T) {
+	f := newGuardedVoice(t)
+	account, key := f.enroll(t)
+	second := f.login(t, key)
+	old := f.join(t, account.Session, false)
+	firstClient := connect(t, old)
+	track, err := lksdk.NewLocalTrack(webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = track.Close() }()
+	publication, err := firstClient.room.LocalParticipant.PublishTrack(track, &lksdk.TrackPublicationOptions{Name: "Microphone", Source: livekit.TrackSource_MICROPHONE})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if publication.SID() == "" {
+		t.Fatal("microphone track not published")
+	}
+	if err := track.WriteSample(media.Sample{Data: []byte{0xf8, 0xff, 0xfe}, Duration: 20 * time.Millisecond}, nil); err != nil {
+		t.Fatal(err)
+	}
+	oldID := firstClient.room.LocalParticipant.Identity()
+	if oldID == account.Session.Visitor.ID {
+		t.Fatal("account transport has no fence")
+	}
+	f.gate.Lock()
+	_, err = f.voice.JoinSession(t.Context(), second.Session, f.room, false)
+	f.gate.Unlock()
+	if !errors.Is(err, voice.ErrTransferRequired) {
+		t.Fatalf("unconfirmed transfer = %v", err)
+	}
+	waitForParticipants(t, liveKitClient(), f.room, oldID)
+	current := f.join(t, second.Session, true)
+	select {
+	case <-firstClient.disconnected:
+	case <-time.After(2 * time.Second):
+		t.Fatal("transfer did not disconnect old media")
+	}
+	refusedAtGuard(t, f, old.Token)
+	newClient := connect(t, current)
+	if err := f.voice.Refresh(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.voice.Occupancy(f.room); len(got) != 1 || got[0].ID != account.Session.Visitor.ID {
+		t.Fatalf("logical occupancy = %v", got)
+	}
+	ceremony, err := f.ident.BeginRecovery(t.Context(), account.Session.Visitor.ID, account.RecoveryCodes[0], "recovery")
+	if err != nil {
+		t.Fatal(err)
+	}
+	replacement := passkeytest.New(t)
+	f.gate.Lock()
+	recovered, err := f.ident.FinishRecovery(t.Context(), ceremony.ID, "recovery", replacement.Registration(t, ceremony.Creation, "https://falky.example"), "Replacement")
+	if err == nil {
+		err = f.gate.Apply(t.Context(), recovered.Effects)
+	}
+	f.gate.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-newClient.disconnected:
+	case <-time.After(2 * time.Second):
+		t.Fatal("recovery did not disconnect old media")
+	}
+	refusedAtGuard(t, f, current.Token)
+	fresh := f.join(t, recovered.Session, false)
+	finalClient := connect(t, fresh)
+	f.gate.Lock()
+	effects, err := f.ident.DisableAccount(t.Context(), account.Session.Visitor.ID)
+	if err == nil {
+		err = f.gate.Apply(t.Context(), effects)
+	}
+	f.gate.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-finalClient.disconnected:
+	case <-time.After(2 * time.Second):
+		t.Fatal("disable did not disconnect media")
+	}
+	refusedAtGuard(t, f, fresh.Token)
+	waitForParticipants(t, liveKitClient(), f.room)
+}
+
+func TestGuardedLiveKitAcceptsRefreshedTokenOnlyForCurrentImmutableGrant(t *testing.T) {
+	f := newGuardedVoice(t)
+	account, key := f.enroll(t)
+	creds := f.join(t, account.Session, false)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	ws, response, err := websocket.Dial(ctx, f.public.URL+"/rtc?protocol=15&auto_subscribe=0&access_token="+url.QueryEscape(creds.Token), nil)
+	if response != nil && response.Body != nil {
+		_ = response.Body.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = ws.CloseNow() }()
+	_, data, err := ws.Read(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var joined livekit.SignalResponse
+	if err := proto.Unmarshal(data, &joined); err != nil {
+		t.Fatal(err)
+	}
+	transport := joined.GetJoin().GetParticipant().GetIdentity()
+	// Editable attributes and metadata cannot change the signed transport binding.
+	request := &livekit.SignalRequest{Message: &livekit.SignalRequest_UpdateMetadata{UpdateMetadata: &livekit.UpdateParticipantMetadata{Metadata: `{"session":"forged"}`, Attributes: map[string]string{"deafened": "true", "grant": "forged"}, RequestId: 1}}}
+	data, err = proto.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ws.Write(ctx, websocket.MessageBinary, data); err != nil {
+		t.Fatal(err)
+	}
+	api := lksdk.NewRoomServiceClient(fmt.Sprintf("http://127.0.0.1:%d", liveKitPort), devKey, devSecret)
+	if _, err := api.UpdateParticipant(ctx, &livekit.UpdateParticipantRequest{Room: f.room, Identity: transport, Permission: &livekit.ParticipantPermission{CanSubscribe: true, CanPublish: true, CanUpdateMetadata: true}}); err != nil {
+		t.Fatal(err)
+	}
+	var refreshed string
+	for refreshed == "" {
+		_, data, err = ws.Read(ctx)
+		if err != nil {
+			t.Fatalf("LiveKit did not issue a refreshed token: %v", err)
+		}
+		var signal livekit.SignalResponse
+		if err := proto.Unmarshal(data, &signal); err != nil {
+			t.Fatal(err)
+		}
+		refreshed = signal.GetRefreshToken()
+	}
+	if refreshed == creds.Token {
+		t.Fatal("LiveKit refresh returned original JWT")
+	}
+	_ = ws.CloseNow()
+	// An actually refreshed LiveKit JWT (not a re-signed fixture) reconnects.
+	connect(t, voice.Credentials{URL: creds.URL, Token: refreshed})
+	second := f.login(t, key)
+	connect(t, f.join(t, second.Session, true))
+	refusedAtGuard(t, f, refreshed)
+}
+
+func TestGuardedLiveKitAbsoluteExpiryEndsIdleMediaWithoutHTTPRequest(t *testing.T) {
+	for _, kind := range []identity.Kind{identity.Guest, identity.Account} {
+		t.Run(string(kind), func(t *testing.T) {
+			ttl := identity.AccountSessionTTL
+			if kind == identity.Guest {
+				ttl = identity.GuestSessionTTL
+			}
+			var clockMu sync.Mutex
+			offset := -ttl + 3*time.Second
+			f := newGuardedVoice(t, identity.WithClock(func() time.Time { clockMu.Lock(); defer clockMu.Unlock(); return time.Now().Add(offset) }))
+			var session identity.Session
+			if kind == identity.Account {
+				account, _ := f.enroll(t)
+				session = account.Session
+			} else {
+				link, err := f.ident.Link(t.Context())
+				if err != nil {
+					t.Fatal(err)
+				}
+				_, token, err := f.ident.Enter(t.Context(), strings.TrimPrefix(link, "https://falky.example/#k="), "Guest")
+				if err != nil {
+					t.Fatal(err)
+				}
+				session, err = f.ident.ResolveSession(t.Context(), token)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			clockMu.Lock()
+			offset = 0
+			clockMu.Unlock()
+			creds := f.join(t, session, false)
+			if kind == identity.Guest {
+				// Production routes the legacy guest URL through this guard.
+				creds.URL = "ws" + strings.TrimPrefix(f.public.URL, "http")
+			}
+			client := connect(t, creds)
+			remaining := time.Until(session.ExpiresAt) + 2*time.Second
+			select {
+			case <-client.disconnected:
+			case <-time.After(remaining):
+				t.Fatal("absolute session expiry left idle media connected")
+			}
+			waitForParticipants(t, liveKitClient(), f.room)
+			refusedAtGuard(t, f, creds.Token)
+		})
+	}
+}

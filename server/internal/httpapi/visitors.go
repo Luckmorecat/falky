@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/netip"
 	"strings"
+	"time"
 
 	"github.com/kisshot/falky/server/internal/api"
 	"github.com/kisshot/falky/server/internal/identity"
@@ -15,20 +16,28 @@ import (
 // security scheme.
 const cookieName = "falky_visitor"
 
-// cookieMaxAge is how long a browser keeps the visitor cookie: 400 days, the
-// longest browsers allow.
-const cookieMaxAge = 400 * 24 * 60 * 60
+// cookieMaxAge matches the absolute server-side guest session lifetime.
+const cookieMaxAge = int(identity.GuestSessionTTL / time.Second)
 
 // openOperations are the operations that need no visitor: those the contract
 // marks with an empty security requirement. Every other operation does.
 var openOperations = map[string]bool{
-	"Enter":        true,
-	"GetLiveness":  true,
-	"GetReadiness": true,
+	"Enter":                true,
+	"GetLiveness":          true,
+	"GetReadiness":         true,
+	"BeginRegistration":    true,
+	"FinishRegistration":   true,
+	"BeginAuthentication":  true,
+	"FinishAuthentication": true,
+	"BeginRecovery":        true,
+	"FinishRecovery":       true,
 }
 
 type (
 	visitorKey  struct{}
+	sessionKey  struct{}
+	requestKey  struct{}
+	writerKey   struct{}
 	clientIPKey struct{}
 )
 
@@ -43,34 +52,50 @@ type visitorResolver struct {
 func (v visitorResolver) middleware(next api.StrictHandlerFunc, operationID string) api.StrictHandlerFunc {
 	return func(ctx context.Context, w http.ResponseWriter, r *http.Request, request any) (any, error) {
 		ctx = context.WithValue(ctx, clientIPKey{}, clientIP(r))
+		ctx = context.WithValue(ctx, requestKey{}, r)
+		ctx = context.WithValue(ctx, writerKey{}, w)
 		if openOperations[operationID] {
 			return next(ctx, w, r, request)
 		}
-		visitor, ok := v.visitor(w, r.WithContext(ctx))
+		session, ok := v.session(w, r.WithContext(ctx))
 		if !ok {
 			return nil, nil
 		}
-		return next(context.WithValue(ctx, visitorKey{}, visitor), w, r, request)
+		ctx = context.WithValue(ctx, sessionKey{}, session)
+		return next(context.WithValue(ctx, visitorKey{}, session.Visitor), w, r, request)
 	}
 }
 
 // visitor resolves the visitor cookie of r. When it does not resolve, it
 // answers 401 (or 500 when resolving fails) and reports false.
 func (v visitorResolver) visitor(w http.ResponseWriter, r *http.Request) (identity.Visitor, bool) {
-	var token string
-	if c, err := r.Cookie(cookieName); err == nil {
-		token = c.Value
-	}
-	visitor, err := v.identity.Resolve(r.Context(), token)
-	if errors.Is(err, identity.ErrNoVisitor) {
-		writeError(w, http.StatusUnauthorized, visitorRequired.Code, visitorRequired.Message)
-		return identity.Visitor{}, false
+	session, ok := v.session(w, r)
+	return session.Visitor, ok
+}
+
+func (v visitorResolver) session(w http.ResponseWriter, r *http.Request) (identity.Session, bool) {
+	session, err := v.identity.ResolveSession(r.Context(), sessionToken(r))
+	if errors.Is(err, identity.ErrNoVisitor) || errors.Is(err, identity.ErrDisabled) {
+		writeError(w, 401, visitorRequired.Code, visitorRequired.Message)
+		return identity.Session{}, false
 	}
 	if err != nil {
 		v.errs.internal(w, r, err)
-		return identity.Visitor{}, false
+		return identity.Session{}, false
 	}
-	return visitor, true
+	return session, true
+}
+
+func currentSession(ctx context.Context) identity.Session {
+	v, _ := ctx.Value(sessionKey{}).(identity.Session)
+	return v
+}
+
+func sessionToken(r *http.Request) string {
+	if c, err := r.Cookie(cookieName); err == nil {
+		return c.Value
+	}
+	return ""
 }
 
 // currentVisitor is the visitor the middleware resolved for this request.
@@ -138,7 +163,17 @@ func (s *server) GetMe(ctx context.Context, _ api.GetMeRequestObject) (api.GetMe
 }
 
 func (s *server) RenameMe(ctx context.Context, req api.RenameMeRequestObject) (api.RenameMeResponseObject, error) {
-	v, err := s.identity.Rename(ctx, currentVisitor(ctx).ID, req.Body.Name)
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	s.lifecycle.Lock()
+	defer s.lifecycle.Unlock()
+	if _, err := s.identity.ValidateSession(ctx, currentSession(ctx)); err != nil {
+		if errors.Is(err, identity.ErrNoVisitor) {
+			return api.RenameMe401JSONResponse{VisitorRequiredJSONResponse: visitorRequired}, nil
+		}
+		return nil, err
+	}
+	v, effects, err := s.identity.RenameWithEffects(ctx, currentVisitor(ctx).ID, req.Body.Name)
 	switch {
 	case errors.Is(err, identity.ErrInvalidName):
 		return api.RenameMe400JSONResponse{InvalidNameJSONResponse: invalidName(err)}, nil
@@ -148,6 +183,17 @@ func (s *server) RenameMe(ctx context.Context, req api.RenameMeRequestObject) (a
 		return api.RenameMe401JSONResponse{VisitorRequiredJSONResponse: visitorRequired}, nil
 	case err != nil:
 		return nil, err
+	}
+	if err := s.lifecycle.Apply(ctx, effects); err != nil {
+		return nil, err
+	}
+	if s.events.Hub != nil {
+		s.events.Hub.RefreshIdentity(v.ID)
+	}
+	if s.voice != nil {
+		if err := s.voice.Refresh(ctx); err != nil {
+			s.logger.WarnContext(ctx, "voice occupancy refresh after rename failed", "error", err)
+		}
 	}
 	return api.RenameMe200JSONResponse(s.visitorBody(v)), nil
 }

@@ -7,7 +7,7 @@
 //	falky room create <name>        create a room in the running server and print its ID
 //	falky room rename <id> <name>   rename a room in the running server
 //	falky link show                 print the access link of the running server
-//	falky link rotate               replace the access link, ending everyone's access, and print it
+//	falky link rotate               replace the access link, ending guest access, and print it
 //	falky health live|ready         probe the running server's health and fail unless it is live or ready
 //	falky snapshot                  have the running server snapshot its database and print where it went
 //	falky restore                   make the snapshot on standard input the database; the server must be stopped
@@ -18,6 +18,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -52,7 +53,13 @@ commands:
   room create <name>        create a room in the running server and print its ID
   room rename <id> <name>   rename a room in the running server
   link show                 print the access link of the running server
-  link rotate               replace the access link, ending everyone's access, and print it
+  link rotate               replace the access link, ending guest access, and print it
+  invitation create         create a seven-day single-use account invitation
+  invitation list           list invitation references (no bearer links)
+  invitation revoke <id>    revoke an invitation
+  account list              list private account IDs, names and disabled status
+  account disable <id>      disable an account and end its access
+  account recover <id>      issue a 30-minute replacement-passkey link after human verification
   health live|ready         probe the running server's health and fail unless it is live or ready
   snapshot                  have the running server snapshot its database and print where it went
   restore                   make the snapshot on standard input the database; the server must be stopped
@@ -128,6 +135,11 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdin i
 	case len(args) == 2 && args[0] == "health" && slices.Contains([]string{"live", "ready"}, args[1]):
 		operator = func(ctx context.Context, cfg platform.Config, stdout io.Writer) error {
 			return health(ctx, cfg, stdout, args[1])
+		}
+	case len(args) >= 2 && ((args[0] == "invitation" && ((len(args) == 2 && slices.Contains([]string{"create", "list"}, args[1])) || (len(args) == 3 && args[1] == "revoke"))) || (args[0] == "account" && ((len(args) == 2 && args[1] == "list") || (len(args) == 3 && slices.Contains([]string{"disable", "recover"}, args[1]))))):
+		command = strings.Join(args[:2], " ")
+		operator = func(ctx context.Context, cfg platform.Config, out io.Writer) error {
+			return accountCommand(ctx, cfg, out, args)
 		}
 	case slices.Equal(args, []string{"snapshot"}):
 		operator = snapshot
@@ -322,14 +334,32 @@ func serve(ctx context.Context, cfg platform.Config, logger *slog.Logger) (err e
 	if err != nil {
 		return errors.Join(err, publicLn.Close(), internalLn.Close())
 	}
-	return serveOn(ctx, logger, cfg, db, ms, listeners{public: publicLn, internal: internalLn, admin: adminLn})
+	ls := listeners{public: publicLn, internal: internalLn, admin: adminLn}
+	if cfg.SignallingAddr != "" {
+		ls.signalling, err = lc.Listen(ctx, "tcp", cfg.SignallingAddr)
+		if err != nil {
+			return errors.Join(fmt.Errorf("signalling listener: %w", err), ls.close())
+		}
+	}
+	return serveOn(ctx, logger, cfg, db, ms, ls)
 }
 
 // listeners are where serveOn accepts connections.
 type listeners struct {
 	public, internal net.Listener
+	signalling       net.Listener
 	// admin is the Unix socket of the operator commands.
 	admin net.Listener
+}
+
+func (ls listeners) close() error {
+	var err error
+	for _, listener := range []net.Listener{ls.public, ls.internal, ls.admin, ls.signalling} {
+		if listener != nil {
+			err = errors.Join(err, listener.Close())
+		}
+	}
+	return err
 }
 
 // serveOn serves every listener until ctx is done or one of them fails, then
@@ -339,7 +369,7 @@ func serveOn(ctx context.Context, logger *slog.Logger, cfg platform.Config, db *
 	health.Require("database", func(ctx context.Context) error { return db.CheckMigrated(ctx, ms) })
 	ident := identity.New(db, cfg.PublicOrigin)
 	if err := ident.InitializeColours(ctx); err != nil {
-		return errors.Join(err, ls.public.Close(), ls.internal.Close(), ls.admin.Close())
+		return errors.Join(err, ls.close())
 	}
 	hub := realtime.New(realtime.WithLogger(logger), realtime.WithConnectedFunc(ident.ColourConnected))
 	events := httpapi.Events{Hub: hub, Logger: logger}
@@ -356,10 +386,10 @@ func serveOn(ctx context.Context, logger *slog.Logger, cfg platform.Config, db *
 	}
 	store, err := attachments.New(db, root, options...)
 	if err != nil {
-		return errors.Join(err, ls.public.Close(), ls.internal.Close(), ls.admin.Close())
+		return errors.Join(err, ls.close())
 	}
 	if err := store.Recover(ctx); err != nil {
-		return errors.Join(err, store.Close(context.Background()), ls.public.Close(), ls.internal.Close(), ls.admin.Close())
+		return errors.Join(err, store.Close(context.Background()), ls.close())
 	}
 	defer func() { _ = store.Close(context.Background()) }()
 	runCtx, stopRun := context.WithCancel(context.WithoutCancel(ctx))
@@ -371,25 +401,28 @@ func serveOn(ctx context.Context, logger *slog.Logger, cfg platform.Config, db *
 		URL: cfg.LiveKitURL, APIKey: cfg.LiveKitAPIKey, APISecret: cfg.LiveKitAPISecret, RoomCap: cfg.VoiceRoomCap,
 	}, voice.WithPublisher(events.OccupancyChanged), voice.WithLogger(logger))
 	health.Optional("livekit", vs.Check)
+	lifecycle := &httpapi.Lifecycle{Enforce: httpapi.Enforcer(events, vs)}
 	handlers := httpapi.New(httpapi.Deps{
-		Logger:   logger,
-		Health:   health,
-		Metrics:  platform.NewMetrics().Handler(),
-		Identity: ident,
-		Rooms:    rs,
+		Lifecycle: lifecycle,
+		Logger:    logger,
+		Health:    health,
+		Metrics:   platform.NewMetrics().Handler(),
+		Identity:  ident,
+		Rooms:     rs,
 		Chat: chat.New(db,
 			chat.WithAttachments(store),
 			chat.WithPostLimit(platform.NewLimiter(postBurst, postInterval, time.Now)),
 			chat.WithPublisher(events.MessageCreated)),
-		Voice:        vs,
-		EnterLimit:   platform.NewLimiter(enterBurst, enterInterval, time.Now),
-		Live:         hub,
-		PublicOrigin: cfg.PublicOrigin,
-		Attachments:  store,
-		Shutdown:     runCtx,
+		Voice:         vs,
+		LiveKitAPIURL: cfg.LiveKitAPIURL,
+		EnterLimit:    platform.NewLimiter(enterBurst, enterInterval, time.Now),
+		Live:          hub,
+		PublicOrigin:  cfg.PublicOrigin,
+		Attachments:   store,
+		Shutdown:      runCtx,
 	})
 	adminHandler := admin.Handler(admin.Deps{
-		Logger: logger, Identity: ident, Rooms: rs, Voice: vs, AccessRevoked: events.AccessRevoked,
+		Lifecycle: lifecycle, Logger: logger, Identity: ident, Rooms: rs,
 		DB: db, SnapshotDir: cfg.SnapshotDir,
 	})
 
@@ -402,6 +435,13 @@ func serveOn(ctx context.Context, logger *slog.Logger, cfg platform.Config, db *
 		{"public", ls.public, &http.Server{Handler: handlers.Public, ReadHeaderTimeout: 10 * time.Second, ErrorLog: errorLog}},
 		{"internal", ls.internal, &http.Server{Handler: handlers.Internal, ReadHeaderTimeout: 10 * time.Second, ErrorLog: errorLog}},
 		{"admin", ls.admin, &http.Server{Handler: adminHandler, ReadHeaderTimeout: 10 * time.Second, ErrorLog: errorLog}},
+	}
+	if ls.signalling != nil {
+		servers = append(servers, struct {
+			name string
+			ln   net.Listener
+			srv  *http.Server
+		}{"signalling", ls.signalling, &http.Server{Handler: handlers.Signalling, ReadHeaderTimeout: 10 * time.Second, ErrorLog: errorLog}})
 	}
 	// The occupancy view refreshes from LiveKit, first as the servers start,
 	// until they stop.
@@ -442,8 +482,46 @@ func serveOn(ctx context.Context, logger *slog.Logger, cfg platform.Config, db *
 	if e := hub.Shutdown(shutdownCtx); e != nil {
 		err = errors.Join(err, fmt.Errorf("shut down live updates: %w", e))
 	}
+	vs.CloseSignalling()
 	if err == nil {
 		logger.Info("stopped")
 	}
 	return err
+}
+
+func accountCommand(ctx context.Context, cfg platform.Config, out io.Writer, args []string) error {
+	c := admin.NewClient(cfg.AdminSocket)
+	switch args[0] + " " + args[1] {
+	case "invitation create":
+		invite, err := c.CreateInvitation(ctx)
+		if err != nil {
+			return err
+		}
+		_, err = fmt.Fprintln(out, invite.Link)
+		return err
+	case "invitation list":
+		invites, err := c.Invitations(ctx)
+		if err != nil {
+			return err
+		}
+		return json.NewEncoder(out).Encode(invites)
+	case "invitation revoke":
+		return c.RevokeInvitation(ctx, args[2])
+	case "account list":
+		accounts, err := c.Accounts(ctx)
+		if err != nil {
+			return err
+		}
+		return json.NewEncoder(out).Encode(accounts)
+	case "account disable":
+		return c.DisableAccount(ctx, args[2])
+	case "account recover":
+		grant, err := c.IssueRecovery(ctx, args[2])
+		if err != nil {
+			return err
+		}
+		_, err = fmt.Fprintln(out, grant.Link)
+		return err
+	}
+	return errors.New("unknown account command")
 }

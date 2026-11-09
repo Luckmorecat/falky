@@ -185,7 +185,7 @@ func (s *smoke) sentWebhook(ctx context.Context, start time.Time, event string) 
 // joinAnn asks the server for Ann's voice credentials, connects with them and
 // waits for the occupancy.changed that lists her.
 func (s *smoke) joinAnn(ctx context.Context) error {
-	res, err := s.ann.api.JoinVoiceWithResponse(ctx, s.roomID)
+	res, err := s.ann.api.JoinVoiceWithBodyWithResponse(ctx, s.roomID, "application/json", nil)
 	if err != nil {
 		return err
 	}
@@ -307,7 +307,7 @@ func (s *smoke) nameConflict(ctx context.Context) error {
 	if err := wantRefused(l, err, http.StatusConflict, "name_taken"); err != nil {
 		return fmt.Errorf("for Xan: %w", err)
 	}
-	voice, err := xan.api.JoinVoiceWithResponse(ctx, s.roomID)
+	voice, err := xan.api.JoinVoiceWithBodyWithResponse(ctx, s.roomID, "application/json", nil)
 	if err != nil {
 		return err
 	}
