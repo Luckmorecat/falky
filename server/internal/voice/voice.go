@@ -187,12 +187,15 @@ func (s *Service) join(ctx context.Context, session identity.Session, roomID str
 	s.mu.Lock()
 	old := s.grants[s.current[visitor.ID]]
 	s.mu.Unlock()
+	sameBinding := old != nil && !old.revoked && old.room == roomID &&
+		old.session.ID == session.ID && old.session.Kind == session.Kind &&
+		old.session.Generation == session.Generation && old.session.Visitor.ID == visitor.ID
 	if old != nil && !old.revoked && session.Kind == identity.Account && old.session.ID != session.ID && !confirm {
 		return Credentials{}, ErrTransferRequired
 	}
 	transport := visitor.ID
 	if session.Kind == identity.Account {
-		if old != nil && !old.revoked && old.session.ID == session.ID && old.room == roomID {
+		if sameBinding {
 			transport = old.transport
 		} else {
 			transport += "." + ulid.Make().String()
@@ -217,7 +220,8 @@ func (s *Service) join(ctx context.Context, session identity.Session, roomID str
 	if others >= s.cfg.RoomCap {
 		return Credentials{}, ErrRoomFull
 	}
-	if old != nil && old.transport != transport {
+	replacing := old != nil && (!sameBinding || old.transport != transport || !bound)
+	if replacing {
 		s.fence(old)
 		defer s.closeGrant(ctx, old)
 	}
@@ -226,7 +230,7 @@ func (s *Service) join(ctx context.Context, session identity.Session, roomID str
 			return Credentials{}, fmt.Errorf("%w: remove from room %s: %w", ErrUnavailable, p.Room, err)
 		}
 	}
-	if old != nil && old.transport != transport {
+	if replacing {
 		s.retire(old)
 	}
 	token, err := s.token(identity.Visitor{ID: transport, Name: visitor.Name, Colour: visitor.Colour}, roomID)
@@ -237,7 +241,7 @@ func (s *Service) join(ctx context.Context, session identity.Session, roomID str
 	s.issued[visitor.ID] = roomID
 	if bound {
 		g := &voiceGrant{session: session, transport: transport, room: roomID, sockets: make(map[*signalConnection]struct{})}
-		if old != nil && old.transport == transport && !old.revoked {
+		if sameBinding && old.transport == transport {
 			g = old
 		}
 		if g.expiry == nil && !session.ExpiresAt.IsZero() {

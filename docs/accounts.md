@@ -8,12 +8,32 @@ not a claim that a registration UI exists. Operator commands are in the
 
 ## Identity and ownership
 
-`visitors.id` is the permanent opaque identity ID for guests and accounts.
-`accounts.visitor_id` extends that same identity. A successful invitation
+`identities.id` is the permanent opaque identity ID for guests and accounts.
+`accounts.identity_id` extends that same identity. A successful invitation
 enrollment upgrades a valid starting guest, preserving its messages, private
 attachment drafts and colour. Without a valid guest cookie, an invitation alone
 can start registration; a new identity is created only on verified completion.
 Failure or cancellation creates no account and consumes no invitation.
+
+An identity has zero or one account. Guests have an identity, an appearance-only
+`profiles` row and a `sessions` row with `account_id=NULL`; they have no account
+row. Registered sessions set `account_id=identity_id`, with a foreign key to
+`accounts(identity_id)` and a constraint requiring both IDs to match. The
+session kind is derived from that optional account reference. Every session
+has an independent random ID and a separate random bearer token stored only
+as its SHA-256 hash.
+
+Registration adds the account and passkey, removes the old guest sessions and
+issues a new account session, all in one transaction. The identity and profile
+are retained. Multiple account sessions can reference the same account.
+Guest-session validity follows the current shared-link generation and requires
+that the identity still has no account. Account-session validity follows account
+status and security generation. Both kinds require an unexpired deadline.
+
+`profiles.identity_id` is its primary key and references `identities(id)`.
+Profiles hold appearance, currently palette and revision; names remain in
+`identities`, with account name reservations in `accounts.name_key`.
+The HTTP contract retains its existing `Visitor` and `visitorId` field names.
 
 Discoverable passkey sign-in selects an existing account and replaces the
 browser session. It does not merge that browser's previous guest messages or
@@ -90,12 +110,13 @@ out of URLs, logs and shared artifacts except the intended private fragment link
 
 ## Sessions, passkeys and recovery
 
-Account sessions use the existing `falky_visitor` Secure, HttpOnly,
-SameSite=Strict cookie at Path=/api. Server-side expiry is **90 days absolute**,
-without sliding renewal. Logout revokes that session only. Guest cookies retain
-their existing 400-day browser lifetime and shared-link-generation validation.
+Both session kinds use the existing `falky_visitor` Secure, HttpOnly,
+SameSite=Strict cookie at Path=/api. Server-side expiry is **90 days absolute
+for accounts and 400 days absolute for guests**, without sliding renewal.
+Cookie lifetimes match those deadlines. Logout revokes that session only.
 Session resolution rejects expired, revoked, old-generation and disabled access
-on API, attachments, live updates and RTC admission.
+on API, attachments, live updates and RTC admission. Idle live and voice
+connections end at the session deadline as well.
 
 An account can have several labeled passkeys. IDs identify individual credentials;
 labels default to `Passkey` and are limited to 128 bytes. A credential belongs to
@@ -106,6 +127,18 @@ that proof; reauthentication refreshes it. Deleting the proving credential ends
 its freshness, while normal previously issued sessions remain usable. Removing
 one key does not perform recovery's all-session revocation.
 The removed key can no longer sign in or establish fresh proof.
+
+In `sessions`, `proof_at` is the Unix time of the most recent verified passkey
+operation in that session; `proof_credential` is the credential ID used. The
+pair is null for guests. They record neither private keys nor stored signatures.
+Sensitive operations require a proof less than five minutes old, not in the
+future, whose credential still belongs to the account. Reauthentication updates
+only this pair and does not extend `expires_at`. These fields are scoped to a
+browser session rather than the account, so verification in one browser never
+refreshes another browser's permission. The credential reference is checked at
+use rather than enforced with a deletion cascade: removing the proving passkey
+invalidates recent proof while retaining normal access for an otherwise valid
+session.
 
 Each successful enrollment, recovery or authorized regeneration returns ten
 high-entropy single-use recovery codes, plaintext only in that response.
@@ -154,10 +187,19 @@ signed immutable LiveKit transport identity is
 the dot to the permanent identity; guest transport IDs remain their permanent
 IDs. Occupancy exposes permanent IDs. Metadata/attributes, including deafened,
 are editable and never authorization inputs. Actual LiveKit-refreshed JWTs work
-only while the bound session/generation/room grant remains current. Grants are
-process-local and fail closed: after a backend restart obtain fresh account
+only while the bound session/generation/room grant remains current. Account
+voice grants are process-local and fail closed: after a backend restart obtain fresh account
 voice credentials; persistent accounts and sessions survive. Reconciliation
 removes unknown account transports and unbound bare account participants.
+
+Authorized guests may reconnect after a backend restart with a still-valid
+original or LiveKit-refreshed JWT. The guard recovers only a unique persisted
+guest session under the current guest-link generation, with no account record,
+then revalidates that session and the room/name authorization under the same
+lifecycle gate. Ambiguous guest-token state fails closed. Guest logout, link
+rotation and account upgrade prevent restoration. A current issued-room choice
+still fences earlier room tokens; restoration records its room in the new
+process. No account or nonce-bearing transport uses this guest-only lookup.
 
 Both RTC entry points accept only GET `/rtc`, `/rtc/v1`, `/rtc/validate` and
 `/rtc/v1/validate`. They verify JWT issuer/signature/strict expiry, room-join scope,

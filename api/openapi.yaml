@@ -1152,7 +1152,12 @@ paths:
         occupancy continues to expose the permanent visitor ID. Account clients
         map a transport identity to that ID by taking its prefix before the dot.
         Account credentials always use this server's guarded public signalling
-        origin. Restarting Falky requires fresh account voice credentials. It may
+        origin. Restarting Falky requires fresh account voice credentials.
+        Guests may reuse a valid original or LiveKit-refreshed JWT after a
+        backend restart while exactly one persisted guest session and its guest
+        link generation remain current. Guest logout, link rotation or account
+        upgrade prevent restoration; room and name authorization still apply.
+        A newer room choice fences earlier room tokens. It may
         publish the microphone, a camera, a screen share and the screen share's
         audio, subscribe to the other participants, and update the
         participant's own attributes, but not send data messages. It expires
@@ -1399,8 +1404,9 @@ components:
         The opaque `falky_visitor` cookie is set by guest entry or successful
         account registration, authentication or recovery. Both kinds use
         Secure, HttpOnly, SameSite=Strict and Path=/api. Guest cookies require
-        the current guest-link generation; account sessions have a 90-day
-        absolute server expiry and survive guest-link rotation. Missing,
+        the current guest-link generation and expire server-side after 400 days;
+        account sessions expire server-side after 90 days and survive guest-link
+        rotation. Both deadlines are absolute and do not slide with activity. Missing,
         unknown, logged-out, revoked or expired sessions and disabled accounts
         are refused with 401 (`visitor_required`).
     liveKitSignature:
@@ -1569,7 +1575,7 @@ components:
           x-go-type-skip-optional-pointer: false
           type: string
           format: date-time
-          description: Absolute expiry; omitted for guests.
+          description: Absolute server-side expiry for guest and account sessions; ordinary activity does not extend it.
           example: '2027-02-07T12:00:00Z'
       description: Identity kind and absolute session lifetime.
       example:

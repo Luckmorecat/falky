@@ -124,7 +124,7 @@ func (s *Service) RotateWithEffects(ctx context.Context) (string, Effects, error
 	s.reservations.mu.Lock()
 	defer s.reservations.mu.Unlock()
 	err := s.db.Write(ctx, func(tx *sql.Tx) error {
-		rows, err := tx.QueryContext(ctx, "SELECT visitor_id FROM accounts")
+		rows, err := tx.QueryContext(ctx, "SELECT identity_id FROM accounts")
 		if err != nil {
 			return err
 		}

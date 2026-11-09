@@ -17,7 +17,7 @@ func (s *Service) user(ctx context.Context, q queryer, id string) (accountUser, 
 	u := accountUser{id: id}
 	var generation int64
 	var disabled bool
-	err := q.QueryRowContext(ctx, "SELECT v.name,a.generation,a.disabled FROM accounts a JOIN visitors v ON v.id=a.visitor_id WHERE a.visitor_id=?", id).Scan(&u.name, &generation, &disabled)
+	err := q.QueryRowContext(ctx, "SELECT v.name,a.generation,a.disabled FROM accounts a JOIN identities v ON v.id=a.identity_id WHERE a.identity_id=?", id).Scan(&u.name, &generation, &disabled)
 	if errors.Is(err, sql.ErrNoRows) {
 		return u, 0, ErrNoVisitor
 	}
@@ -27,7 +27,7 @@ func (s *Service) user(ctx context.Context, q queryer, id string) (accountUser, 
 	if disabled {
 		return u, 0, ErrDisabled
 	}
-	rows, err := q.QueryContext(ctx, "SELECT credential FROM passkeys WHERE visitor_id=? ORDER BY created_at,credential_id", id)
+	rows, err := q.QueryContext(ctx, "SELECT credential FROM passkeys WHERE identity_id=? ORDER BY created_at,credential_id", id)
 	if err != nil {
 		return u, 0, err
 	}
@@ -96,7 +96,7 @@ func (s *Service) FinishAuthentication(ctx context.Context, id, browser string, 
 		if _, err = tx.ExecContext(ctx, "DELETE FROM account_ceremonies WHERE id=?", id); err != nil {
 			return err
 		}
-		result.Session, result.Token, err = s.issueSession(ctx, tx, string(verified.WebAuthnID()), credential.ID)
+		result.Session, result.Token, err = s.issueSession(ctx, tx, string(verified.WebAuthnID()), Account, credential.ID)
 		return err
 	})
 	if err != nil {
@@ -112,13 +112,13 @@ func (s *Service) updateCredential(ctx context.Context, tx *sql.Tx, id []byte, c
 	if err != nil {
 		return err
 	}
-	r, err := tx.ExecContext(ctx, "UPDATE passkeys SET credential=? WHERE credential_id=? AND visitor_id=?", string(body), credential.ID, string(id))
+	r, err := tx.ExecContext(ctx, "UPDATE passkeys SET credential=? WHERE credential_id=? AND identity_id=?", string(body), credential.ID, string(id))
 	return affected(r, err, ErrInvalidProof)
 }
 
 func (s *Service) ownerSession(ctx context.Context, tx *sql.Tx, token string, recent bool) (Session, error) {
 	var id string
-	err := tx.QueryRowContext(ctx, "SELECT id FROM account_sessions WHERE token_hash=?", hashToken(token)).Scan(&id)
+	err := tx.QueryRowContext(ctx, "SELECT id FROM sessions WHERE token_hash=? AND account_id IS NOT NULL", hashToken(token)).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Session{}, ErrNoVisitor
 	}
@@ -131,7 +131,7 @@ func (s *Service) ownerSession(ctx context.Context, tx *sql.Tx, token string, re
 	}
 	if recent {
 		var valid bool
-		err = tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM account_sessions t JOIN passkeys p ON p.credential_id=t.proof_credential AND p.visitor_id=t.visitor_id WHERE t.id=? AND t.proof_at>? AND t.proof_at<=?)", id, s.now().Add(-RecentProofTTL).Unix(), s.now().Unix()).Scan(&valid)
+		err = tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM sessions t JOIN passkeys p ON p.credential_id=t.proof_credential AND p.identity_id=t.identity_id WHERE t.id=? AND t.proof_at>? AND t.proof_at<=?)", id, s.now().Add(-RecentProofTTL).Unix(), s.now().Unix()).Scan(&valid)
 		if err != nil {
 			return Session{}, err
 		}
@@ -206,7 +206,7 @@ func (s *Service) FinishReauthentication(ctx context.Context, token, id, browser
 		if err = s.updateCredential(ctx, tx, []byte(c.id), credential); err != nil {
 			return err
 		}
-		if _, err = tx.ExecContext(ctx, "UPDATE account_sessions SET proof_at=?,proof_credential=? WHERE id=?", s.now().Unix(), credential.ID, owner.ID); err != nil {
+		if _, err = tx.ExecContext(ctx, "UPDATE sessions SET proof_at=?,proof_credential=? WHERE id=?", s.now().Unix(), credential.ID, owner.ID); err != nil {
 			return err
 		}
 		if _, err = tx.ExecContext(ctx, "DELETE FROM account_ceremonies WHERE id=?", id); err != nil {
@@ -231,7 +231,7 @@ func (s *Service) Passkeys(ctx context.Context, token string) ([]Passkey, error)
 		if err != nil {
 			return err
 		}
-		rows, err := tx.QueryContext(ctx, "SELECT credential_id,label,created_at FROM passkeys WHERE visitor_id=? ORDER BY created_at,credential_id", owner.Visitor.ID)
+		rows, err := tx.QueryContext(ctx, "SELECT credential_id,label,created_at FROM passkeys WHERE identity_id=? ORDER BY created_at,credential_id", owner.Visitor.ID)
 		if err != nil {
 			return err
 		}
@@ -336,20 +336,20 @@ func (s *Service) RemovePasskey(ctx context.Context, token, credentialID string)
 			return err
 		}
 		var exists bool
-		if err = tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM passkeys WHERE visitor_id=? AND credential_id=?)", owner.Visitor.ID, raw).Scan(&exists); err != nil {
+		if err = tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM passkeys WHERE identity_id=? AND credential_id=?)", owner.Visitor.ID, raw).Scan(&exists); err != nil {
 			return err
 		}
 		if !exists {
 			return ErrInvalidProof
 		}
 		var count int
-		if err = tx.QueryRowContext(ctx, "SELECT count(*) FROM passkeys WHERE visitor_id=?", owner.Visitor.ID).Scan(&count); err != nil {
+		if err = tx.QueryRowContext(ctx, "SELECT count(*) FROM passkeys WHERE identity_id=?", owner.Visitor.ID).Scan(&count); err != nil {
 			return err
 		}
 		if count <= 1 {
 			return ErrLastPasskey
 		}
-		_, err = tx.ExecContext(ctx, "DELETE FROM passkeys WHERE visitor_id=? AND credential_id=?", owner.Visitor.ID, raw)
+		_, err = tx.ExecContext(ctx, "DELETE FROM passkeys WHERE identity_id=? AND credential_id=?", owner.Visitor.ID, raw)
 		return err
 	})
 }
@@ -374,10 +374,11 @@ func (s *Service) Logout(ctx context.Context, token string) (Effects, error) {
 	var effects Effects
 	err := s.db.Write(ctx, func(tx *sql.Tx) error {
 		var id string
-		err := tx.QueryRowContext(ctx, "SELECT id FROM account_sessions WHERE token_hash=?", hashToken(token)).Scan(&id)
+		err := tx.QueryRowContext(ctx, "SELECT id FROM sessions WHERE token_hash=?", hashToken(token)).Scan(&id)
 		if errors.Is(err, sql.ErrNoRows) {
-			id = "guest:" + base64.RawURLEncoding.EncodeToString(hashToken(token))
-		} else if err != nil {
+			return ErrNoVisitor
+		}
+		if err != nil {
 			return err
 		}
 		current, err := s.sessionByID(ctx, tx, id)
@@ -385,11 +386,7 @@ func (s *Service) Logout(ctx context.Context, token string) (Effects, error) {
 			return err
 		}
 		effects.RevokedSessions = []Session{current}
-		if current.Kind == Guest {
-			_, err = tx.ExecContext(ctx, "DELETE FROM visitor_tokens WHERE token_hash=?", hashToken(token))
-		} else {
-			_, err = tx.ExecContext(ctx, "DELETE FROM account_sessions WHERE id=?", id)
-		}
+		_, err = tx.ExecContext(ctx, "DELETE FROM sessions WHERE id=?", id)
 		return err
 	})
 	if err != nil {

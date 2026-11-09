@@ -211,10 +211,33 @@ func (s *Service) admit(r *http.Request) (*voiceGrant, error) {
 	if err != nil || claims.ExpiresAt == nil || !time.Now().Before(claims.ExpiresAt.Time) || grants.Video == nil || !grants.Video.RoomJoin || grants.Video.Room == "" || grants.Video.RoomAdmin || grants.Video.RoomCreate || grants.Video.RoomList || grants.Video.RoomRecord || grants.Video.IngressAdmin || grants.Video.Agent {
 		return nil, identity.ErrNoVisitor
 	}
+	if room, issued := s.IssuedRoom(s.logicalIdentity(grants.Identity)); issued && room != grants.Video.Room {
+		return nil, identity.ErrNoVisitor
+	}
 	s.mu.Lock()
 	g := s.grants[grants.Identity]
 	s.mu.Unlock()
-	if g == nil || g.revoked || g.room != grants.Video.Room {
+	restored := g == nil
+	if restored {
+		// Account transports, including upgraded bare IDs, must never regain
+		// access from identity alone. Only persisted current guest state can
+		// restore a signed guest token after process-local grant loss.
+		lookup, ok := s.visitors.(interface {
+			GuestSession(context.Context, string) (identity.Session, error)
+		})
+		if !ok || strings.Contains(grants.Identity, ".") {
+			return nil, identity.ErrNoVisitor
+		}
+		session, err := lookup.GuestSession(r.Context(), grants.Identity)
+		if err != nil {
+			return nil, err
+		}
+		if session.Kind != identity.Guest || session.Visitor.ID != grants.Identity {
+			return nil, identity.ErrNoVisitor
+		}
+		g = &voiceGrant{session: session, transport: grants.Identity, room: grants.Video.Room, sockets: make(map[*signalConnection]struct{})}
+	}
+	if g.revoked || g.room != grants.Video.Room {
 		return nil, identity.ErrNoVisitor
 	}
 	if requested := r.URL.Query().Get("room"); requested != "" && requested != g.room {
@@ -229,6 +252,14 @@ func (s *Service) admit(r *http.Request) (*voiceGrant, error) {
 			return nil, identity.ErrNoVisitor
 		}
 		return nil, err
+	}
+	if restored {
+		g.session = current
+		s.mu.Lock()
+		s.grants[g.transport] = g
+		s.current[current.Visitor.ID] = g.transport
+		s.issued[current.Visitor.ID] = g.room
+		s.mu.Unlock()
 	}
 	return g, nil
 }

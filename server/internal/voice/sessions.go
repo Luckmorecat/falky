@@ -60,9 +60,9 @@ func (s *Service) retire(g *voiceGrant) {
 	defer s.mu.Unlock()
 	if s.grants[g.transport] == g {
 		delete(s.grants, g.transport)
-	}
-	if s.current[g.session.Visitor.ID] == g.transport {
-		delete(s.current, g.session.Visitor.ID)
+		if s.current[g.session.Visitor.ID] == g.transport {
+			delete(s.current, g.session.Visitor.ID)
+		}
 	}
 }
 

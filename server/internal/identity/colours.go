@@ -46,7 +46,7 @@ func (s *Service) ColourConnected(visitorID string, connected bool) {
 // It is safe to run again and requires only identity's migrations.
 func (s *Service) InitializeColours(ctx context.Context) error {
 	err := s.db.Write(ctx, func(tx *sql.Tx) error {
-		rows, err := tx.QueryContext(ctx, `SELECT v.id FROM visitors v LEFT JOIN visitor_colours c ON c.visitor_id = v.id WHERE c.visitor_id IS NULL ORDER BY v.id`)
+		rows, err := tx.QueryContext(ctx, `SELECT v.id FROM identities v LEFT JOIN profiles c ON c.identity_id = v.id WHERE c.identity_id IS NULL ORDER BY v.id`)
 		if err != nil {
 			return err
 		}
@@ -80,7 +80,7 @@ func (s *Service) InitializeColours(ctx context.Context) error {
 // No assignments change between reading them and sampling. Connection membership
 // is sampled under its short memory lock, so extra tabs never weight a visitor.
 func (s *Service) allocateColour(ctx context.Context, tx *sql.Tx, id string) (Colour, error) {
-	rows, err := tx.QueryContext(ctx, "SELECT visitor_id, palette FROM visitor_colours")
+	rows, err := tx.QueryContext(ctx, "SELECT identity_id, palette FROM profiles")
 	if err != nil {
 		return Colour{}, err
 	}
@@ -126,7 +126,7 @@ func (s *Service) allocateColour(ctx context.Context, tx *sql.Tx, id string) (Co
 		}
 	}
 	c := Colour{VisitorID: id, Palette: candidates[s.chooseColour(len(candidates))], Revision: 1}
-	_, err = tx.ExecContext(ctx, "INSERT INTO visitor_colours (visitor_id, palette, revision) VALUES (?, ?, ?)", c.VisitorID, c.Palette, c.Revision)
+	_, err = tx.ExecContext(ctx, "INSERT INTO profiles (identity_id, palette, revision) VALUES (?, ?, ?)", c.VisitorID, c.Palette, c.Revision)
 	return c, err
 }
 
@@ -139,7 +139,7 @@ func (s *Service) SetColour(ctx context.Context, visitorID, palette string) (Col
 	}
 	c := Colour{VisitorID: visitorID, Palette: palette}
 	err := s.db.Write(ctx, func(tx *sql.Tx) error {
-		return tx.QueryRowContext(ctx, `UPDATE visitor_colours SET palette = ?, revision = revision + 1 WHERE visitor_id = ? RETURNING revision`, palette, visitorID).Scan(&c.Revision)
+		return tx.QueryRowContext(ctx, `UPDATE profiles SET palette = ?, revision = revision + 1 WHERE identity_id = ? RETURNING revision`, palette, visitorID).Scan(&c.Revision)
 	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return Colour{}, ErrNoVisitor
@@ -161,7 +161,7 @@ func (s *Service) Colours(ctx context.Context, visitorIDs []string) ([]Colour, e
 		}
 		seen[id] = true
 		c := Colour{VisitorID: id}
-		err := s.db.Read().QueryRowContext(ctx, "SELECT palette, revision FROM visitor_colours WHERE visitor_id = ?", id).Scan(&c.Palette, &c.Revision)
+		err := s.db.Read().QueryRowContext(ctx, "SELECT palette, revision FROM profiles WHERE identity_id = ?", id).Scan(&c.Palette, &c.Revision)
 		if errors.Is(err, sql.ErrNoRows) {
 			continue
 		}

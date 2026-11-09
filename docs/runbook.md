@@ -526,9 +526,14 @@ Edit this instance's `.env` and private saved copy with the new
 ```
 
 Both the server and LiveKit restart, briefly interrupting voice. Account browsers
-must obtain fresh voice credentials after a backend restart because voice grants
+must obtain fresh voice credentials after a backend restart because account voice grants
 are process-local and fail closed; account sessions persist. Never copy
 credentials or a database from production to development.
+
+Guests can reuse valid original or LiveKit-refreshed voice JWTs after a backend
+restart while their unique persisted guest session and guest-link generation
+remain current. Logout, guest-link rotation or account upgrade refuse that
+restoration; room/name checks and newer room choices still apply.
 
 ### Accounts, invitations and recovery
 
@@ -598,8 +603,18 @@ voice transfer at `POST /api/rooms/{id}/voice`. Account transport IDs map to the
 permanent prefix before their dot; public occupancy already uses permanent IDs.
 
 The additive `0007_accounts.sql` migration retains existing IDs, guest history
-and ownership. `serve` or `falky migrate` applies it through the normal application
-migration sources. No reset is required. Snapshot before an upgrade; an older
+and ownership. `0008_identity_profiles.sql` renames the lasting identity table to
+`identities`, appearance to `profiles` and identity-reference columns to
+`identity_id`, preserving data and updating foreign keys. `0009_sessions.sql`
+combines guest tokens and account sessions into `sessions`, preserving cookie
+hashes and existing account-session IDs. Guest sessions receive independent IDs
+and an absolute expiry 400 days after original issuance; account deadlines remain
+90 days from sign-in. Already expired guest tokens remain expired. A guest
+registration ceremony begun before this migration must be restarted because its
+old derived session ID is no longer valid. `serve` or `falky migrate` applies these
+through the normal application migration sources. No reset is required. A runtime
+from before these changes expects the old tables; rolling back to it requires a
+pre-upgrade database snapshot. Snapshot before an upgrade; an older
 binary cannot restore the newer migration set. A deliberate reset would lose
 accounts, credentials, reservations, sessions and history: never delete a live
 database for this feature.

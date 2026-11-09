@@ -198,6 +198,10 @@ func TestSensitiveChangesRequireSessionSpecificRecentPasskeyProof(t *testing.T) 
 	if _, err := f.ident.FinishReauthentication(t.Context(), account.Token, c.ID, "browser", response); err != nil {
 		t.Fatal(err)
 	}
+	refreshed, err := f.ident.ResolveSession(t.Context(), account.Token)
+	if err != nil || !refreshed.ExpiresAt.Equal(account.Session.ExpiresAt) {
+		t.Fatalf("recent proof extended session expiry: %+v, %v", refreshed, err)
+	}
 	if _, err := f.ident.RegenerateRecoveryCodes(t.Context(), account.Token); err != nil {
 		t.Fatal(err)
 	}
@@ -317,5 +321,46 @@ func TestAccountSessionHasNinetyDayAbsoluteExpiryAndLogoutIsSelective(t *testing
 	f.clock.Advance(time.Second)
 	if _, err := f.ident.ResolveSession(t.Context(), other.Token); !errors.Is(err, identity.ErrNoVisitor) {
 		t.Fatalf("expired account session = %v", err)
+	}
+}
+
+func TestRemovedProvingPasskeyInvalidatesFreshnessWithoutEndingSession(t *testing.T) {
+	f := newFixture(t, filepath.Join(t.TempDir(), "proof.db"))
+	account, first := enroll(t, f, "Account")
+	add, err := f.ident.BeginAddPasskey(t.Context(), account.Token, "laptop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	replacement := passkeytest.New(t)
+	if _, err := f.ident.FinishAddPasskey(t.Context(), account.Token, add.ID, "laptop", replacement.Registration(t, add.Creation, "https://falky.example"), "Replacement"); err != nil {
+		t.Fatal(err)
+	}
+	login, err := f.ident.BeginAuthentication(t.Context(), "other")
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := f.ident.FinishAuthentication(t.Context(), login.ID, "other", first.Assertion(t, login.Assertion, "https://falky.example"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	reauth, err := f.ident.BeginReauthentication(t.Context(), account.Token, "laptop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.ident.FinishReauthentication(t.Context(), account.Token, reauth.ID, "laptop", replacement.Assertion(t, reauth.Assertion, "https://falky.example")); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.ident.RemovePasskey(t.Context(), account.Token, base64.RawURLEncoding.EncodeToString(first.ID)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.ident.RegenerateRecoveryCodes(t.Context(), other.Token); !errors.Is(err, identity.ErrRecentProof) {
+		t.Fatalf("removed credential still justified sensitive action: %v", err)
+	}
+	resolved, err := f.ident.ResolveSession(t.Context(), other.Token)
+	if err != nil || resolved != other.Session {
+		t.Fatalf("credential removal ended ordinary session access: %+v, %v", resolved, err)
+	}
+	if _, err := f.ident.RegenerateRecoveryCodes(t.Context(), account.Token); err != nil {
+		t.Fatalf("remaining credential lost its recent proof: %v", err)
 	}
 }

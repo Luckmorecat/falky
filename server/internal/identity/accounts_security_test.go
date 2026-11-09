@@ -321,7 +321,7 @@ func TestDisableRejectsStaleSessionsAuthenticationRecoveryAndKeepsGuestLink(t *t
 func TestRecoveryCodesAreStoredAsHashesAndRegenerationInvalidatesOldProofs(t *testing.T) {
 	f := newFixture(t, filepath.Join(t.TempDir(), "falky.db"))
 	account, _ := enroll(t, f, "Alice")
-	rows, err := f.db.Read().QueryContext(t.Context(), "SELECT token_hash FROM account_recovery_proofs WHERE visitor_id=?", account.Session.Visitor.ID)
+	rows, err := f.db.Read().QueryContext(t.Context(), "SELECT token_hash FROM account_recovery_proofs WHERE identity_id=?", account.Session.Visitor.ID)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/rand"
 	"database/sql"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,6 +19,7 @@ const (
 	Guest               Kind = "guest"
 	Account             Kind = "account"
 	AccountSessionTTL        = 90 * 24 * time.Hour
+	GuestSessionTTL          = 400 * 24 * time.Hour
 	CeremonyTTL              = 5 * time.Minute
 	RecentProofTTL           = 5 * time.Minute
 	InvitationTTL            = 7 * 24 * time.Hour
@@ -215,7 +215,7 @@ func (s *Service) storeCeremony(ctx context.Context, tx *sql.Tx, c Ceremony, bro
 	if err != nil {
 		return err
 	}
-	_, err = tx.ExecContext(ctx, "INSERT INTO account_ceremonies(id,context_hash,purpose,visitor_id,session_id,name,proof_hash,session_data,expires_at) VALUES(?,?,?,?,?,?,?,?,?)", c.ID, hashToken(browser), purpose, u.id, sessionID, u.name, proof, string(body), c.ExpiresAt.Unix())
+	_, err = tx.ExecContext(ctx, "INSERT INTO account_ceremonies(id,context_hash,purpose,identity_id,session_id,name,proof_hash,session_data,expires_at) VALUES(?,?,?,?,?,?,?,?,?)", c.ID, hashToken(browser), purpose, u.id, sessionID, u.name, proof, string(body), c.ExpiresAt.Unix())
 	return err
 }
 
@@ -231,7 +231,7 @@ func (s *Service) loadCeremony(ctx context.Context, tx *sql.Tx, id, browser, pur
 	if browser == "" {
 		return c, ErrInvalidProof
 	}
-	err := tx.QueryRowContext(ctx, "SELECT visitor_id,session_id,name,proof_hash,session_data FROM account_ceremonies WHERE id=? AND context_hash=? AND purpose=? AND expires_at>?", id, hashToken(browser), purpose, s.now().Unix()).Scan(&c.id, &c.sessionID, &c.name, &c.proof, &body)
+	err := tx.QueryRowContext(ctx, "SELECT identity_id,session_id,name,proof_hash,session_data FROM account_ceremonies WHERE id=? AND context_hash=? AND purpose=? AND expires_at>?", id, hashToken(browser), purpose, s.now().Unix()).Scan(&c.id, &c.sessionID, &c.name, &c.proof, &body)
 	if errors.Is(err, sql.ErrNoRows) {
 		return c, ErrInvalidProof
 	}
@@ -270,7 +270,7 @@ func (s *Service) FinishRegistration(ctx context.Context, id, browser string, re
 			return err
 		}
 		if c.sessionID == "" {
-			if _, err = tx.ExecContext(ctx, "INSERT INTO visitors(id,name,created_at) VALUES(?,?,?)", c.id, c.name, s.now().UTC().Format(time.RFC3339Nano)); err != nil {
+			if _, err = tx.ExecContext(ctx, "INSERT INTO identities(id,name,created_at) VALUES(?,?,?)", c.id, c.name, s.now().UTC().Format(time.RFC3339Nano)); err != nil {
 				return err
 			}
 			if _, err = s.allocateColour(ctx, tx, c.id); err != nil {
@@ -280,13 +280,13 @@ func (s *Service) FinishRegistration(ctx context.Context, id, browser string, re
 		if err = s.claimName(ctx, tx, c.id, c.name, &result.Effects); err != nil {
 			return err
 		}
-		if _, err = tx.ExecContext(ctx, "INSERT INTO accounts(visitor_id,name_key,created_at) VALUES(?,?,?)", c.id, NameKey(c.name), s.now().Unix()); err != nil {
+		if _, err = tx.ExecContext(ctx, "INSERT INTO accounts(identity_id,name_key,created_at) VALUES(?,?,?)", c.id, NameKey(c.name), s.now().Unix()); err != nil {
 			return err
 		}
 		if err = s.insertCredential(ctx, tx, c.id, label, credential); err != nil {
 			return err
 		}
-		if _, err = tx.ExecContext(ctx, "DELETE FROM visitor_tokens WHERE visitor_id=?", c.id); err != nil {
+		if _, err = tx.ExecContext(ctx, "DELETE FROM sessions WHERE identity_id=? AND account_id IS NULL", c.id); err != nil {
 			return err
 		}
 		if _, err = tx.ExecContext(ctx, "UPDATE account_invitations SET redeemed_at=? WHERE token_hash=?", s.now().Unix(), c.proof); err != nil {
@@ -299,7 +299,7 @@ func (s *Service) FinishRegistration(ctx context.Context, id, browser string, re
 		if err != nil {
 			return err
 		}
-		result.Session, result.Token, err = s.issueSession(ctx, tx, c.id, credential.ID)
+		result.Session, result.Token, err = s.issueSession(ctx, tx, c.id, Account, credential.ID)
 		return err
 	})
 	if err != nil {
@@ -351,29 +351,49 @@ func (s *Service) insertCredential(ctx context.Context, tx *sql.Tx, id, label st
 	if err != nil {
 		return err
 	}
-	_, err = tx.ExecContext(ctx, "INSERT INTO passkeys(credential_id,visitor_id,label,credential,created_at) VALUES(?,?,?,?,?)", c.ID, id, label, string(body), s.now().Unix())
+	_, err = tx.ExecContext(ctx, "INSERT INTO passkeys(credential_id,identity_id,label,credential,created_at) VALUES(?,?,?,?,?)", c.ID, id, label, string(body), s.now().Unix())
 	return err
 }
 
 func (s *Service) replaceCodes(ctx context.Context, tx *sql.Tx, id string, generation int64) ([]string, error) {
-	if _, err := tx.ExecContext(ctx, "DELETE FROM account_recovery_proofs WHERE visitor_id=? AND kind='code'", id); err != nil {
+	if _, err := tx.ExecContext(ctx, "DELETE FROM account_recovery_proofs WHERE identity_id=? AND kind='code'", id); err != nil {
 		return nil, err
 	}
 	codes := make([]string, 10)
 	for i := range codes {
 		codes[i] = opaque()
-		if _, err := tx.ExecContext(ctx, "INSERT INTO account_recovery_proofs(token_hash,visitor_id,kind,generation) VALUES(?,?,'code',?)", hashToken(codes[i]), id, generation); err != nil {
+		if _, err := tx.ExecContext(ctx, "INSERT INTO account_recovery_proofs(token_hash,identity_id,kind,generation) VALUES(?,?,'code',?)", hashToken(codes[i]), id, generation); err != nil {
 			return nil, err
 		}
 	}
 	return codes, nil
 }
 
-func (s *Service) issueSession(ctx context.Context, tx *sql.Tx, id string, credential []byte) (Session, string, error) {
-	token := opaque()
-	sessionID := opaque()
-	expires := s.now().Add(AccountSessionTTL).Unix()
-	_, err := tx.ExecContext(ctx, "INSERT INTO account_sessions(id,token_hash,visitor_id,generation,expires_at,proof_at,proof_credential) SELECT ?,?,visitor_id,generation,?,?,? FROM accounts WHERE visitor_id=? AND disabled=0", sessionID, hashToken(token), expires, s.now().Unix(), credential, id)
+func (s *Service) issueSession(ctx context.Context, tx *sql.Tx, id string, kind Kind, credential []byte) (Session, string, error) {
+	var accountID, proofAt, proofCredential any
+	var generation int64
+	var err error
+	ttl := GuestSessionTTL
+	now := s.now().Unix()
+	switch kind {
+	case Guest:
+		err = tx.QueryRowContext(ctx, "SELECT generation FROM access WHERE id=1").Scan(&generation)
+	case Account:
+		err = tx.QueryRowContext(ctx, "SELECT generation FROM accounts WHERE identity_id=? AND disabled=0", id).Scan(&generation)
+		accountID, proofAt, proofCredential = id, now, credential
+		ttl = AccountSessionTTL
+	default:
+		return Session{}, "", ErrNoVisitor
+	}
+	if errors.Is(err, sql.ErrNoRows) {
+		return Session{}, "", ErrNoVisitor
+	}
+	if err != nil {
+		return Session{}, "", err
+	}
+	token, sessionID := opaque(), opaque()
+	_, err = tx.ExecContext(ctx, `INSERT INTO sessions(id,token_hash,identity_id,account_id,generation,created_at,expires_at,proof_at,proof_credential)
+        VALUES(?,?,?,?,?,?,?,?,?)`, sessionID, hashToken(token), id, accountID, generation, now, now+int64(ttl/time.Second), proofAt, proofCredential)
 	if err != nil {
 		return Session{}, "", err
 	}
@@ -383,7 +403,7 @@ func (s *Service) issueSession(ctx context.Context, tx *sql.Tx, id string, crede
 
 func (s *Service) visitorRecord(ctx context.Context, q queryer, id string) (Visitor, error) {
 	var v Visitor
-	err := q.QueryRowContext(ctx, "SELECT v.id,v.name,c.palette,c.revision FROM visitors v JOIN visitor_colours c ON c.visitor_id=v.id WHERE v.id=?", id).Scan(&v.ID, &v.Name, &v.Colour.Palette, &v.Colour.Revision)
+	err := q.QueryRowContext(ctx, "SELECT v.id,v.name,c.palette,c.revision FROM identities v JOIN profiles c ON c.identity_id=v.id WHERE v.id=?", id).Scan(&v.ID, &v.Name, &v.Colour.Palette, &v.Colour.Revision)
 	if errors.Is(err, sql.ErrNoRows) {
 		return v, ErrNoVisitor
 	}
@@ -391,46 +411,73 @@ func (s *Service) visitorRecord(ctx context.Context, q queryer, id string) (Visi
 	return v, err
 }
 
+const currentSessions = `FROM sessions t
+    LEFT JOIN accounts a ON a.identity_id=t.account_id
+    LEFT JOIN access g ON g.id=1
+    WHERE t.expires_at>? AND (
+        (t.account_id IS NOT NULL AND a.disabled=0 AND a.generation=t.generation)
+        OR (t.account_id IS NULL AND g.generation=t.generation
+            AND NOT EXISTS(SELECT 1 FROM accounts x WHERE x.identity_id=t.identity_id)))`
+
 func (s *Service) ResolveSession(ctx context.Context, token string) (Session, error) {
 	if token == "" {
 		return Session{}, ErrNoVisitor
 	}
 	var id string
-	err := s.db.Read().QueryRowContext(ctx, "SELECT id FROM account_sessions WHERE token_hash=?", hashToken(token)).Scan(&id)
-	if errors.Is(err, sql.ErrNoRows) {
-		id = "guest:" + base64.RawURLEncoding.EncodeToString(hashToken(token))
-	} else if err != nil {
-		return Session{}, err
-	}
-	return s.sessionByID(ctx, s.db.Read(), id)
-}
-
-func (s *Service) sessionByID(ctx context.Context, q queryer, id string) (Session, error) {
-	var result Session
-	var identityID string
-	var expires int64
-	result.ID = id
-	err := q.QueryRowContext(ctx, "SELECT t.visitor_id,t.generation,t.expires_at FROM account_sessions t JOIN accounts a ON a.visitor_id=t.visitor_id AND a.generation=t.generation AND a.disabled=0 WHERE t.id=? AND t.expires_at>?", id, s.now().Unix()).Scan(&identityID, &result.Generation, &expires)
-	if err == nil {
-		result.Kind = Account
-		result.ExpiresAt = unixTime(expires)
-	} else if errors.Is(err, sql.ErrNoRows) {
-		if len(id) < 6 || id[:6] != "guest:" {
-			return Session{}, ErrNoVisitor
-		}
-		hash, decodeErr := base64.RawURLEncoding.DecodeString(id[6:])
-		if decodeErr != nil {
-			return Session{}, ErrNoVisitor
-		}
-		err = q.QueryRowContext(ctx, "SELECT t.visitor_id,t.generation FROM visitor_tokens t JOIN access a ON a.generation=t.generation AND a.id=1 WHERE t.token_hash=? AND NOT EXISTS(SELECT 1 FROM accounts x WHERE x.visitor_id=t.visitor_id)", hash).Scan(&identityID, &result.Generation)
-		result.Kind = Guest
-	}
+	err := s.db.Read().QueryRowContext(ctx, "SELECT id FROM sessions WHERE token_hash=?", hashToken(token)).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Session{}, ErrNoVisitor
 	}
 	if err != nil {
 		return Session{}, err
 	}
+	return s.sessionByID(ctx, s.db.Read(), id)
+}
+
+// GuestSession recovers the unique current guest session for an already
+// authenticated transport identity. It never substitutes for cookie or JWT
+// authentication; ambiguous persisted authorization fails closed.
+func (s *Service) GuestSession(ctx context.Context, identityID string) (Session, error) {
+	rows, err := s.db.Read().QueryContext(ctx, "SELECT t.id "+currentSessions+" AND t.identity_id=? AND t.account_id IS NULL LIMIT 2", s.now().Unix(), identityID)
+	if err != nil {
+		return Session{}, err
+	}
+	defer func() { _ = rows.Close() }()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return Session{}, err
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return Session{}, err
+	}
+	if len(ids) != 1 {
+		return Session{}, ErrNoVisitor
+	}
+	return s.sessionByID(ctx, s.db.Read(), ids[0])
+}
+
+func (s *Service) sessionByID(ctx context.Context, q queryer, id string) (Session, error) {
+	var result Session
+	var identityID string
+	var accountID sql.NullString
+	var expires int64
+	result.ID = id
+	err := q.QueryRowContext(ctx, "SELECT t.identity_id,t.account_id,t.generation,t.expires_at "+currentSessions+" AND t.id=?", s.now().Unix(), id).Scan(&identityID, &accountID, &result.Generation, &expires)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Session{}, ErrNoVisitor
+	}
+	if err != nil {
+		return Session{}, err
+	}
+	result.Kind = Guest
+	if accountID.Valid {
+		result.Kind = Account
+	}
+	result.ExpiresAt = unixTime(expires)
 	result.Visitor, err = s.visitorRecord(ctx, q, identityID)
 	return result, err
 }
@@ -450,14 +497,14 @@ func (s *Service) ValidateSession(ctx context.Context, session Session) (Session
 
 func (s *Service) claimName(ctx context.Context, tx *sql.Tx, id, name string, effects *Effects) error {
 	var owner string
-	err := tx.QueryRowContext(ctx, "SELECT visitor_id FROM accounts WHERE name_key=? AND visitor_id<>?", NameKey(name), id).Scan(&owner)
+	err := tx.QueryRowContext(ctx, "SELECT identity_id FROM accounts WHERE name_key=? AND identity_id<>?", NameKey(name), id).Scan(&owner)
 	if err == nil {
 		return ErrNameTaken
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
-	rows, err := tx.QueryContext(ctx, "SELECT v.id,v.name,EXISTS(SELECT 1 FROM accounts a WHERE a.visitor_id=v.id) FROM visitors v")
+	rows, err := tx.QueryContext(ctx, "SELECT v.id,v.name,EXISTS(SELECT 1 FROM accounts a WHERE a.identity_id=v.id) FROM identities v")
 	if err != nil {
 		return err
 	}
@@ -484,7 +531,7 @@ func (s *Service) claimName(ctx context.Context, tx *sql.Tx, id, name string, ef
 			fallback = "Guest " + rand.Text()[:12]
 		}
 		used[NameKey(fallback)] = true
-		if _, err = tx.ExecContext(ctx, "UPDATE visitors SET name=? WHERE id=?", fallback, guestID); err != nil {
+		if _, err = tx.ExecContext(ctx, "UPDATE identities SET name=? WHERE id=?", fallback, guestID); err != nil {
 			return err
 		}
 		v, err := s.visitorRecord(ctx, tx, guestID)
@@ -493,7 +540,7 @@ func (s *Service) claimName(ctx context.Context, tx *sql.Tx, id, name string, ef
 		}
 		effects.Displaced = append(effects.Displaced, v)
 	}
-	_, err = tx.ExecContext(ctx, "UPDATE visitors SET name=? WHERE id=?", name, id)
+	_, err = tx.ExecContext(ctx, "UPDATE identities SET name=? WHERE id=?", name, id)
 	return err
 }
 
@@ -505,7 +552,7 @@ func (s *Service) applyNameEffects(e Effects) {
 
 func (s *Service) reservedName(ctx context.Context, q queryer, key, id string) error {
 	var owner string
-	err := q.QueryRowContext(ctx, "SELECT visitor_id FROM accounts WHERE name_key=? AND visitor_id<>?", key, id).Scan(&owner)
+	err := q.QueryRowContext(ctx, "SELECT identity_id FROM accounts WHERE name_key=? AND identity_id<>?", key, id).Scan(&owner)
 	if err == nil {
 		return ErrNameTaken
 	}

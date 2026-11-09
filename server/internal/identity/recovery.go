@@ -26,7 +26,7 @@ func (s *Service) IssueRecovery(ctx context.Context, accountID string) (Recovery
 		if err != nil {
 			return err
 		}
-		_, err = tx.ExecContext(ctx, "INSERT INTO account_recovery_proofs(token_hash,visitor_id,kind,generation,expires_at) VALUES(?,?,'operator',?,?)", hashToken(g.Token), accountID, generation, g.ExpiresAt.Unix())
+		_, err = tx.ExecContext(ctx, "INSERT INTO account_recovery_proofs(token_hash,identity_id,kind,generation,expires_at) VALUES(?,?,'operator',?,?)", hashToken(g.Token), accountID, generation, g.ExpiresAt.Unix())
 		return err
 	})
 	if err != nil {
@@ -37,7 +37,7 @@ func (s *Service) IssueRecovery(ctx context.Context, accountID string) (Recovery
 
 func (s *Service) recoveryProof(ctx context.Context, tx *sql.Tx, accountID string, hash []byte) error {
 	var valid bool
-	err := tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM account_recovery_proofs p JOIN accounts a ON a.visitor_id=p.visitor_id AND a.generation=p.generation AND a.disabled=0 WHERE p.visitor_id=? AND p.token_hash=? AND (p.expires_at IS NULL OR p.expires_at>?))", accountID, hash, s.now().Unix()).Scan(&valid)
+	err := tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM account_recovery_proofs p JOIN accounts a ON a.identity_id=p.identity_id AND a.generation=p.generation AND a.disabled=0 WHERE p.identity_id=? AND p.token_hash=? AND (p.expires_at IS NULL OR p.expires_at>?))", accountID, hash, s.now().Unix()).Scan(&valid)
 	if err != nil {
 		return err
 	}
@@ -99,12 +99,12 @@ func (s *Service) FinishRecovery(ctx context.Context, id, browser string, respon
 		if err != nil {
 			return err
 		}
-		for _, table := range []string{"passkeys", "account_sessions", "account_recovery_proofs", "account_ceremonies"} {
-			if _, err = tx.ExecContext(ctx, "DELETE FROM "+table+" WHERE visitor_id=?", c.id); err != nil {
+		for _, table := range []string{"passkeys", "sessions", "account_recovery_proofs", "account_ceremonies"} {
+			if _, err = tx.ExecContext(ctx, "DELETE FROM "+table+" WHERE identity_id=?", c.id); err != nil {
 				return err
 			}
 		}
-		if _, err = tx.ExecContext(ctx, "UPDATE accounts SET generation=generation+1 WHERE visitor_id=?", c.id); err != nil {
+		if _, err = tx.ExecContext(ctx, "UPDATE accounts SET generation=generation+1 WHERE identity_id=?", c.id); err != nil {
 			return err
 		}
 		if err = s.insertCredential(ctx, tx, c.id, label, credential); err != nil {
@@ -114,7 +114,7 @@ func (s *Service) FinishRecovery(ctx context.Context, id, browser string, respon
 		if err != nil {
 			return err
 		}
-		result.Session, result.Token, err = s.issueSession(ctx, tx, c.id, credential.ID)
+		result.Session, result.Token, err = s.issueSession(ctx, tx, c.id, Account, credential.ID)
 		return err
 	})
 	if err != nil {
@@ -129,7 +129,7 @@ func (s *Service) accountEffects(ctx context.Context, tx *sql.Tx, id string, gen
 	if err != nil {
 		return Effects{}, err
 	}
-	rows, err := tx.QueryContext(ctx, "SELECT id,generation,expires_at FROM account_sessions WHERE visitor_id=?", id)
+	rows, err := tx.QueryContext(ctx, "SELECT id,generation,expires_at FROM sessions WHERE identity_id=? AND account_id IS NOT NULL", id)
 	if err != nil {
 		return Effects{}, err
 	}
@@ -150,7 +150,7 @@ func (s *Service) DisableAccount(ctx context.Context, accountID string) (Effects
 	var effects Effects
 	err := s.db.Write(ctx, func(tx *sql.Tx) error {
 		var generation int64
-		if err := tx.QueryRowContext(ctx, "SELECT generation FROM accounts WHERE visitor_id=?", accountID).Scan(&generation); errors.Is(err, sql.ErrNoRows) {
+		if err := tx.QueryRowContext(ctx, "SELECT generation FROM accounts WHERE identity_id=?", accountID).Scan(&generation); errors.Is(err, sql.ErrNoRows) {
 			return ErrNoVisitor
 		} else if err != nil {
 			return err
@@ -160,11 +160,11 @@ func (s *Service) DisableAccount(ctx context.Context, accountID string) (Effects
 		if err != nil {
 			return err
 		}
-		if _, err = tx.ExecContext(ctx, "UPDATE accounts SET disabled=1,generation=generation+1 WHERE visitor_id=?", accountID); err != nil {
+		if _, err = tx.ExecContext(ctx, "UPDATE accounts SET disabled=1,generation=generation+1 WHERE identity_id=?", accountID); err != nil {
 			return err
 		}
-		for _, table := range []string{"account_sessions", "account_recovery_proofs", "account_ceremonies"} {
-			if _, err = tx.ExecContext(ctx, "DELETE FROM "+table+" WHERE visitor_id=?", accountID); err != nil {
+		for _, table := range []string{"sessions", "account_recovery_proofs", "account_ceremonies"} {
+			if _, err = tx.ExecContext(ctx, "DELETE FROM "+table+" WHERE identity_id=?", accountID); err != nil {
 				return err
 			}
 		}
@@ -185,7 +185,7 @@ type AccountInfo struct {
 
 func (s *Service) AccountInfo(ctx context.Context, id string) (AccountInfo, error) {
 	var a AccountInfo
-	err := s.db.Read().QueryRowContext(ctx, "SELECT v.id,v.name,a.disabled,a.generation FROM accounts a JOIN visitors v ON v.id=a.visitor_id WHERE a.visitor_id=?", id).Scan(&a.ID, &a.Name, &a.Disabled, &a.Generation)
+	err := s.db.Read().QueryRowContext(ctx, "SELECT v.id,v.name,a.disabled,a.generation FROM accounts a JOIN identities v ON v.id=a.identity_id WHERE a.identity_id=?", id).Scan(&a.ID, &a.Name, &a.Disabled, &a.Generation)
 	if errors.Is(err, sql.ErrNoRows) {
 		return AccountInfo{}, ErrNoVisitor
 	}
@@ -194,7 +194,7 @@ func (s *Service) AccountInfo(ctx context.Context, id string) (AccountInfo, erro
 
 // Accounts lists account references for the protected operator transport.
 func (s *Service) Accounts(ctx context.Context) ([]AccountInfo, error) {
-	rows, err := s.db.Read().QueryContext(ctx, "SELECT v.id,v.name,a.disabled,a.generation FROM accounts a JOIN visitors v ON v.id=a.visitor_id ORDER BY a.created_at,v.id")
+	rows, err := s.db.Read().QueryContext(ctx, "SELECT v.id,v.name,a.disabled,a.generation FROM accounts a JOIN identities v ON v.id=a.identity_id ORDER BY a.created_at,v.id")
 	if err != nil {
 		return nil, err
 	}

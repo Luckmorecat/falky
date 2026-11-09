@@ -541,7 +541,7 @@ export interface paths {
          * Join a room's voice.
          * @description Returns the LiveKit URL and a token to connect to the room's voice with a LiveKit SDK. A visitor is a participant in one room at most: the server first removes them from any other room's voice. Joining the room again, say from a second tab, is allowed even when the room is full, and the new connection replaces the earlier one. For accounts, a different browser session must explicitly send confirmTransfer=true; otherwise voice_transfer_required leaves the first participant intact. Guest callers may continue omitting the request body. Account requests require this server's exact configured Origin header.
          *
-         *     The token admits the visitor to this room only, under their visitor ID as participant identity for guests and their name as display name. Account transport identities append an opaque grant nonce after a dot; occupancy continues to expose the permanent visitor ID. Account clients map a transport identity to that ID by taking its prefix before the dot. Account credentials always use this server's guarded public signalling origin. Restarting Falky requires fresh account voice credentials. It may publish the microphone, a camera, a screen share and the screen share's audio, subscribe to the other participants, and update the participant's own attributes, but not send data messages. It expires 10 minutes after it is issued, so connect right away; once connected, LiveKit renews it.
+         *     The token admits the visitor to this room only, under their visitor ID as participant identity for guests and their name as display name. Account transport identities append an opaque grant nonce after a dot; occupancy continues to expose the permanent visitor ID. Account clients map a transport identity to that ID by taking its prefix before the dot. Account credentials always use this server's guarded public signalling origin. Restarting Falky requires fresh account voice credentials. Guests may reuse a valid original or LiveKit-refreshed JWT after a backend restart while exactly one persisted guest session and its guest link generation remain current. Guest logout, link rotation or account upgrade prevent restoration; room and name authorization still apply. A newer room choice fences earlier room tokens. It may publish the microphone, a camera, a screen share and the screen share's audio, subscribe to the other participants, and update the participant's own attributes, but not send data messages. It expires 10 minutes after it is issued, so connect right away; once connected, LiveKit renews it.
          *
          *     Muted is the state of the microphone track. Deafened is the participant attribute `deafened`: a client sets it to `"true"` while it plays no one's audio, and also mutes its microphone, then sets it to `"false"` again; an absent attribute means not deafened. The other participants see it through the SDK, for example with `room.localParticipant.setAttributes({ deafened: 'true' })` in `livekit-client`.
          */
@@ -767,7 +767,7 @@ export interface components {
             kind: "guest" | "account";
             /**
              * Format: date-time
-             * @description Absolute expiry; omitted for guests.
+             * @description Absolute server-side expiry for guest and account sessions; ordinary activity does not extend it.
              * @example 2027-02-07T12:00:00Z
              */
             expiresAt?: string;

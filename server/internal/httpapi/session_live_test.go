@@ -286,3 +286,31 @@ func TestAccountVoiceRequiresExactOriginWhileGuestLegacyJoinNeedsNoOrigin(t *tes
 	p.enter(t, guestAPI, "Guest")
 	accountRequest(t, p, guest, "POST", path, nil, "", 200)
 }
+
+func TestGuestAbsoluteExpiryRefusesHTTPVoiceAndGlobalLiveUpdates(t *testing.T) {
+	p := restartVoice(t, startPublic(t, 100))
+	room := p.createRoom(t, "Voice")
+	client, browser := p.browserWithHTTP(t)
+	p.enter(t, client, "Guest")
+	raw, _ := accountRequest(t, p, browser, "GET", "/api/accounts/session", nil, "", http.StatusOK)
+	var session api.AccountSession
+	if err := json.Unmarshal(raw, &session); err != nil {
+		t.Fatal(err)
+	}
+	if session.Kind != api.AccountSessionKindGuest || session.ExpiresAt == nil || session.ExpiresAt.Unix() != p.clock.Now().Add(identity.GuestSessionTTL).Unix() {
+		t.Fatalf("guest expiry missing from session response: %+v", session)
+	}
+	ws := p.connectLive(t, browser)
+	creds := joinedVoice(t, client, room.ID)
+	p.clock.Advance(identity.GuestSessionTTL)
+	accountRequest(t, p, browser, "GET", "/api/accounts/session", nil, "", http.StatusUnauthorized)
+	res, err := client.GetMeWithResponse(t.Context())
+	if err != nil || res.StatusCode() != http.StatusUnauthorized {
+		t.Fatalf("expired guest API access = %v, %v", res, err)
+	}
+	checkVoiceValidation(t, p, creds.Token, http.StatusForbidden)
+	p.createRoom(t, "Global after expiry")
+	readClosed(t, ws, realtime.StatusRevoked)
+	p = restartVoice(t, p)
+	checkVoiceValidation(t, p, creds.Token, http.StatusForbidden)
+}

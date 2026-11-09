@@ -93,7 +93,7 @@ func TestEnteringWithAWrongSecretIsRefused(t *testing.T) {
 		}
 	}
 	var visitors int
-	if err := f.db.Read().QueryRowContext(t.Context(), "SELECT count(*) FROM visitors").Scan(&visitors); err != nil {
+	if err := f.db.Read().QueryRowContext(t.Context(), "SELECT count(*) FROM identities").Scan(&visitors); err != nil {
 		t.Fatalf("count visitors: %v", err)
 	}
 	if visitors != 0 {
@@ -108,9 +108,9 @@ func TestTokensAreStoredOnlyAsHashesWithTheirGeneration(t *testing.T) {
 	var visitorID string
 	var generation int
 	if err := f.db.Read().QueryRowContext(t.Context(),
-		"SELECT token_hash, visitor_id, generation FROM visitor_tokens",
+		"SELECT token_hash, identity_id, generation FROM sessions",
 	).Scan(&hash, &visitorID, &generation); err != nil {
-		t.Fatalf("query visitor_tokens: %v", err)
+		t.Fatalf("query sessions: %v", err)
 	}
 	if want := sha256.Sum256([]byte(token)); string(hash) != string(want[:]) {
 		t.Errorf("token_hash = %x, want the SHA-256 of the token", hash)

@@ -16,9 +16,8 @@ import (
 // security scheme.
 const cookieName = "falky_visitor"
 
-// cookieMaxAge is how long a browser keeps the visitor cookie: 400 days, the
-// longest browsers allow.
-const cookieMaxAge = 400 * 24 * 60 * 60
+// cookieMaxAge matches the absolute server-side guest session lifetime.
+const cookieMaxAge = int(identity.GuestSessionTTL / time.Second)
 
 // openOperations are the operations that need no visitor: those the contract
 // marks with an empty security requirement. Every other operation does.
@@ -188,13 +187,13 @@ func (s *server) RenameMe(ctx context.Context, req api.RenameMeRequestObject) (a
 	if err := s.lifecycle.Apply(ctx, effects); err != nil {
 		return nil, err
 	}
-	if s.voice != nil {
-		if err := s.voice.Refresh(ctx); err != nil {
-			return nil, err
-		}
-	}
 	if s.events.Hub != nil {
 		s.events.Hub.RefreshIdentity(v.ID)
+	}
+	if s.voice != nil {
+		if err := s.voice.Refresh(ctx); err != nil {
+			s.logger.WarnContext(ctx, "voice occupancy refresh after rename failed", "error", err)
+		}
 	}
 	return api.RenameMe200JSONResponse(s.visitorBody(v)), nil
 }
