@@ -25,4 +25,4 @@ session lifecycle with live updates: self-hosted LiveKit removal alone cannot
 invalidate an already signed token. Distinct transport grants map to the lasting
 identity; process-local grants fail closed after restart rather than extending
 voice authorization independently of account state. The operational and API
-contracts are recorded in [accounts](../accounts.md) and the [runbook](../runbook.md).
+contracts are recorded in [OpenAPI](../../api/openapi.yaml) and the [runbook](../runbook.md).
