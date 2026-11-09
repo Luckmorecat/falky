@@ -274,6 +274,7 @@ input[type=range]::-moz-range-thumb { width: 18px; height: 18px; border: 0; bord
 .chat-veil b { background: linear-gradient(to left, var(--bg), transparent 98px); }
 /* As wide as the window from its right edge, so that its dots fall on the page's. */
 .chat-veil u { left: auto; width: 100vw; background-image: var(--dots); background-size: 20px 20px; -webkit-mask-image: linear-gradient(to left, #000 150px, transparent var(--peek)); mask-image: linear-gradient(to left, #000 150px, transparent var(--peek)); }
+.room-screen:has(> .live-background[data-ready][data-beacon]) .chat-veil u { background-image: none; }
 .chat-open .chat-veil i, .chat-open .chat-veil b, .chat-open .chat-veil u { opacity: 0; }
 .chat-hint { position: absolute; right: 24px; bottom: calc(var(--edge) + 13px); z-index: 3; display: flex; gap: 8px; align-items: center; color: var(--text-2); pointer-events: none; transition: opacity 180ms ease; }
 .chat-open .chat-hint { opacity: 0; }

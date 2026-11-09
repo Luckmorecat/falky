@@ -46,3 +46,12 @@
 .live-background-preview details p { padding: 12px; background: var(--bg); border-radius: 12px; overflow-wrap: anywhere; }
 
 .live-background-preview button:disabled { opacity: .5; cursor: default; }
+
+.live-background-unread { position: absolute; right: 24px; bottom: 33px; width: 20px; height: 20px; display: grid; place-items: center; z-index: 1; }
+.live-background-unread > .i { display: none; }
+@media (max-width: 1180px), (hover: none) {
+  .live-background-preview .live-background-unread { right: 16px; top: 16px; bottom: auto; width: 52px; height: 52px; padding: 0; background: var(--raised); border-radius: var(--round); }
+  .live-background-unread > .i { display: block; }
+  .live-background-unread .badge { position: absolute; top: -2px; right: -2px; }
+  .live-background-preview:has(.live-background-unread) header { max-width: calc(100% - 52px); }
+}

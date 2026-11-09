@@ -38,7 +38,7 @@ async function capture(args: string[], environment: NodeJS.ProcessEnv = {}, inte
 test('all presets produce PNGs and terminate their isolated servers', { timeout: 180_000 }, async () => {
   const directory = await mkdtemp(join(tmpdir(), 'falky-screenshots-'));
   try {
-    for (const preset of ['room', 'chat', 'voice', 'screen-share', 'settings', 'profile', 'entry']) {
+    for (const preset of ['room', 'chat', 'unread', 'voice', 'screen-share', 'settings', 'profile', 'entry']) {
       const output = join(directory, 'nested', `${preset}.png`);
       const result = await capture(['--preset', preset, '--output', output]);
       assert.equal(result.code, 0, result.stderr);
