@@ -11,12 +11,13 @@ let session: VoiceSession;
 let joinMuted = false;
 
 beforeEach(async () => {
+  localStorage.clear();
   state = {
     instanceId: crypto.randomUUID(), generation: 1, revision: 1, scenario: 'populated', scenarios: ['populated'],
     visitor: { id: 'self', name: 'Alex', nameTaken: false, colour: { visitorId: 'self', palette: 'sky', revision: 1 } }, voiceRoomId: null,
     rooms: [{ id: 'lounge', name: 'Lounge', occupancy: [] }, { id: 'games', name: 'Games', occupancy: [] }],
     peers: { lounge: [{ visitorId: 'sam', name: 'Sam', muted: false, deafened: false, sharing: false }] },
-    faults: { send: 'none', colourSave: 'none', colourDelayMs: 0, colourResponseDelayMs: 0, delayMs: 0, liveDisconnected: false, roomFull: null, micDenied: false, shareFailure: false, voiceReconnecting: false },
+    faults: { send: 'none', colourSave: 'none', colourDelayMs: 0, colourResponseDelayMs: 0, delayMs: 0, liveDisconnected: false, roomFull: null, micDenied: false, shareFailure: false, voiceReconnecting: false, leaveUnavailable: false },
     accessLink: '/#k=mock',
   };
   // HTTP is the external boundary. Exercise the normal api.joinVoice client, never replace it.
@@ -26,7 +27,11 @@ beforeEach(async () => {
       if (state.faults.roomFull === roomId) return Response.json({ code: 'room_full', message: 'Full' }, { status: 409 });
       state.voiceRoomId = roomId;
       state.revision++;
-      return Response.json({ url: 'ws://localhost/rtc', token: 'mock' });
+      return Response.json({ url: 'ws://localhost/rtc', token: 'mock', grantId: 'self.old' });
+    }
+    if (url === '/api/voice/leave') {
+      state.voiceRoomId = null; state.revision++;
+      return Response.json({ revoked: true });
     }
     if (url === '/__mock/action') {
       const body = JSON.parse(init!.body as string);

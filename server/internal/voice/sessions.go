@@ -2,10 +2,13 @@ package voice
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/kisshot/falky/server/internal/rooms"
 
 	"github.com/kisshot/falky/server/internal/identity"
 )
@@ -15,7 +18,6 @@ type voiceGrant struct {
 	transport, room string
 	revoked         bool
 	sockets         map[*signalConnection]struct{}
-	expiry          *time.Timer
 }
 
 // ConfigureAdmission must run before serving. One gate protects identity
@@ -26,19 +28,29 @@ func (s *Service) ConfigureAdmission(gate sync.Locker, validate func(context.Con
 }
 
 func (s *Service) logicalIdentity(transport string) string {
-	// Identity IDs never contain dots. Account grants append an opaque nonce;
+	// Identity IDs never contain dots. Voice grants append an opaque nonce;
 	// metadata and attributes remain freely editable and carry no authority.
 	id, _, _ := strings.Cut(transport, ".")
 	return id
 }
 
-func (s *Service) fence(g *voiceGrant) {
+func (s *Service) fence(ctx context.Context, g *voiceGrant) error {
+	if err := s.storeMu.lock(ctx); err != nil {
+		return err
+	}
+	defer s.storeMu.unlock()
+	if s.db != nil {
+		if err := s.db.Write(ctx, func(tx *sql.Tx) error {
+			_, err := tx.ExecContext(ctx, `UPDATE voice_grants SET revoked=1 WHERE transport=?`, g.transport)
+			return err
+		}); err != nil {
+			return err
+		}
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	g.revoked = true
-	if g.expiry != nil {
-		g.expiry.Stop()
-	}
+	return nil
 }
 
 func (s *Service) closeGrant(ctx context.Context, g *voiceGrant) {
@@ -55,70 +67,172 @@ func (s *Service) closeGrant(ctx context.Context, g *voiceGrant) {
 	}
 }
 
-func (s *Service) retire(g *voiceGrant) {
+func (s *Service) retire(ctx context.Context, g *voiceGrant) error {
+	if err := s.storeMu.lock(ctx); err != nil {
+		return err
+	}
+	defer s.storeMu.unlock()
+	if s.db != nil {
+		if err := s.db.Write(ctx, func(tx *sql.Tx) error {
+			_, err := tx.ExecContext(ctx, `DELETE FROM voice_grants WHERE transport=? AND revoked=1`, g.transport)
+			return err
+		}); err != nil {
+			return err
+		}
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.grants[g.transport] == g {
-		delete(s.grants, g.transport)
-		if s.current[g.session.Visitor.ID] == g.transport {
-			delete(s.current, g.session.Visitor.ID)
-		}
+	delete(s.grants, g.transport)
+	if s.current[g.session.Visitor.ID] == g.transport {
+		delete(s.current, g.session.Visitor.ID)
 	}
+	return nil
 }
 
-// Revoke fences matching grants before removing their media participants.
-// Failed removals are returned; their grants remain fenced for retry.
+func (s *Service) removeGrant(ctx context.Context, g *voiceGrant) error {
+	removalCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	if err := s.livekit.RemoveParticipant(removalCtx, g.room, g.transport); err != nil {
+		return err
+	}
+	return s.retire(ctx, g)
+}
+
+// Revoke durably fences all matches and closes every local socket before any
+// media call. Callers serialize it with admission through the lifecycle gate.
 func (s *Service) Revoke(ctx context.Context, matches func(identity.Session) bool) error {
-	s.mu.Lock()
-	var matched []*voiceGrant
-	for _, g := range s.grants {
+	if err := s.FenceSessions(ctx, matches); err != nil {
+		return err
+	}
+	return s.CleanupGrants(ctx)
+}
+
+// FenceSessions is the local part of Revoke, for composing lifecycle work.
+// Its caller holds the admission gate. It performs no external media calls.
+func (s *Service) FenceSessions(ctx context.Context, matches func(identity.Session) bool) error {
+	grants, err := s.allGrants(ctx)
+	if err != nil {
+		return err
+	}
+	for _, g := range grants {
 		if matches(g.session) {
-			matched = append(matched, g)
-		}
-	}
-	s.mu.Unlock()
-	for _, g := range matched {
-		s.fence(g)
-	}
-	var err error
-	for _, g := range matched {
-		removeErr := s.livekit.RemoveParticipant(ctx, g.room, g.transport)
-		s.closeGrant(ctx, g)
-		err = errors.Join(err, removeErr)
-		if removeErr == nil {
-			s.retire(g)
+			if e := s.fence(ctx, g); e != nil {
+				err = errors.Join(err, e)
+				continue
+			}
+			s.closeGrant(ctx, g)
 		}
 	}
 	return err
 }
 
-func (s *Service) expireAt(g *voiceGrant) {
-	if s.admission == nil {
-		return
+// Leave acknowledges durable revocation, even if immediate media cleanup fails.
+// A missing target is already complete; a target owned by another browser is
+// refused. It never substitutes the identity's newer active grant.
+func (s *Service) Leave(ctx context.Context, session identity.Session, transport string) error {
+	g, err := s.grant(ctx, transport)
+	if err != nil {
+		return err
 	}
-	g.expiry = time.AfterFunc(time.Until(g.session.ExpiresAt), func() {
-		s.admission.Lock()
-		defer s.admission.Unlock()
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		if err := s.Revoke(ctx, func(other identity.Session) bool { return other.ID == g.session.ID }); err != nil {
-			s.logger.ErrorContext(ctx, "expired voice session removal failed", "error", err)
-		} else if err := s.Refresh(ctx); err != nil {
-			s.logger.ErrorContext(ctx, "expired voice occupancy refresh failed", "error", err)
+	if g == nil {
+		return nil
+	}
+	if g.session.ID != session.ID || g.session.Kind != session.Kind || g.session.Generation != session.Generation || g.session.Visitor.ID != session.Visitor.ID {
+		return identity.ErrNoVisitor
+	}
+	if err := s.fence(ctx, g); err != nil {
+		return err
+	}
+	s.closeGrant(ctx, g)
+	if err := s.removeGrant(ctx, g); err != nil {
+		s.logger.WarnContext(ctx, "voice leave cleanup pending", "grant", transport, "error", err)
+	}
+	return nil
+}
+
+// ValidateGrants is maintenance's local phase. The lifecycle gate must be held.
+// It validates even absent participants, durably fences invalid grants, and
+// closes local signaling before returning. It makes no LiveKit calls.
+func (s *Service) ValidateGrants(ctx context.Context) error {
+	grants, err := s.allGrants(ctx)
+	if err != nil {
+		return err
+	}
+	for _, g := range grants {
+		s.mu.Lock()
+		revoked := g.revoked
+		s.mu.Unlock()
+		if !revoked {
+			var v identity.Visitor
+			var checkErr error
+			if s.validate != nil {
+				var current identity.Session
+				current, checkErr = s.validate(ctx, g.session)
+				v = current.Visitor
+			} else {
+				v, checkErr = s.visitors.Visitor(ctx, g.session.Visitor.ID)
+			}
+			if checkErr == nil {
+				checkErr = s.rooms.Authorize(ctx, v, g.room, rooms.JoinVoice)
+			}
+			if checkErr != nil {
+				if !errors.Is(checkErr, identity.ErrNoVisitor) && !errors.Is(checkErr, identity.ErrNameTaken) && !errors.Is(checkErr, rooms.ErrNotFound) {
+					err = errors.Join(err, checkErr)
+					continue
+				}
+				if e := s.fence(ctx, g); e != nil {
+					err = errors.Join(err, e)
+					continue
+				}
+				revoked = true
+			}
 		}
-	})
+		if revoked {
+			s.closeGrant(ctx, g)
+		}
+	}
+	return err
+}
+
+// CleanupGrants is maintenance's external phase, after all live/voice local
+// closures. Revoked records are retried independently of participant listings.
+// Do not hold the lifecycle gate, hub locks, or a DB transaction across it.
+func (s *Service) CleanupGrants(ctx context.Context) error {
+	grants, err := s.allGrants(ctx)
+	if err != nil {
+		return err
+	}
+	var running sync.WaitGroup
+	var resultMu sync.Mutex
+	for _, g := range grants {
+		s.mu.Lock()
+		revoked := g.revoked
+		s.mu.Unlock()
+		if !revoked {
+			continue
+		}
+		running.Go(func() {
+			removalErr := s.removeGrant(ctx, g)
+			resultMu.Lock()
+			err = errors.Join(err, removalErr)
+			resultMu.Unlock()
+		})
+	}
+	running.Wait()
+	return errors.Join(err, s.Refresh(ctx))
 }
 
 // CloseSignalling ends all proxied sockets during server shutdown.
 func (s *Service) CloseSignalling() {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	var sockets []*signalConnection
 	for _, g := range s.grants {
-		if g.expiry != nil {
-			g.expiry.Stop()
-		}
 		for socket := range g.sockets {
-			socket.close()
+			sockets = append(sockets, socket)
 		}
+	}
+	s.mu.Unlock()
+	for _, socket := range sockets {
+		socket.close()
 	}
 }

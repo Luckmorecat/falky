@@ -19,6 +19,7 @@ import (
 	"github.com/livekit/protocol/livekit"
 
 	"github.com/kisshot/falky/server/internal/identity"
+	"github.com/kisshot/falky/server/internal/scheduler"
 	"github.com/kisshot/falky/server/internal/voice"
 	"github.com/kisshot/falky/server/internal/voice/voicetest"
 )
@@ -94,10 +95,11 @@ func (f fixture) receive(t *testing.T, event *livekit.WebhookEvent) {
 // join issues v a token for room's voice and makes them a participant there.
 func (f fixture) join(t *testing.T, v identity.Visitor, room string) voice.Participant {
 	t.Helper()
-	if _, err := f.s.Join(t.Context(), v, room); err != nil {
+	creds, err := f.s.Join(t.Context(), v, room)
+	if err != nil {
 		t.Fatalf("Join(%s, %s): %v", v.Name, room, err)
 	}
-	return f.livekit.AddParticipant(room, v.ID)
+	return f.livekit.AddParticipant(room, creds.GrantID)
 }
 
 func wantOccupancy(t *testing.T, s *voice.Service, room string, want ...identity.Visitor) {
@@ -222,7 +224,7 @@ func TestAVisitorInTheirIssuedRoomIsKeptAndTheirSecondTabTakesNoPlace(t *testing
 	f := newFixture(bob)
 	first := f.join(t, bob, roomA)
 	f.receive(t, voicetest.Joined(first))
-	second := f.join(t, bob, roomA)
+	second := f.livekit.AddParticipant(roomA, first.Identity)
 	f.receive(t, voicetest.Joined(second))
 	wantOccupancy(t, f.s, roomA, bob)
 	f.receive(t, voicetest.Left(first))
@@ -264,14 +266,18 @@ func TestASignedBodyThatIsNotAnEventIsInvalid(t *testing.T) {
 	}
 }
 
-// startRun runs s's refresh loop until the test ends.
+// startRun schedules occupancy refreshes until the test ends.
 func startRun(t *testing.T, s *voice.Service) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		s.Run(ctx)
+		scheduler.Run(ctx, scheduler.Job{Interval: 30 * time.Second, Startup: true, Run: func(ctx context.Context) {
+			if err := s.Refresh(ctx); err != nil {
+				t.Error(err)
+			}
+		}})
 	}()
 	t.Cleanup(func() {
 		cancel()
@@ -283,11 +289,9 @@ func TestTheRefreshAtStartupKeepsTheParticipantsWhoMayStayAndRemovesTheOthers(t 
 	synctest.Test(t, func(t *testing.T) {
 		dave := identity.Visitor{ID: "01JBX6ZB2C3D4E5F6G7H8J9K0M", Name: "Dave"}
 		f := newFixture(bob, carol, dave)
-		// As after a restart, no token has been issued yet, so Bob may stay
-		// in whichever room he is in.
-		f.livekit.AddParticipant(roomB, bob.ID)
+		f.join(t, bob, roomB)
 		unknown := f.livekit.AddParticipant(roomA, "01JBX6ZZZZZZZZZZZZZZZZZZZZ")
-		f.livekit.AddParticipant(roomA, carol.ID)
+		f.join(t, carol, roomA)
 		f.access.takeName(dave.ID)
 		taken := f.livekit.AddParticipant(roomA, dave.ID)
 
@@ -309,7 +313,7 @@ func TestTheRefreshAtStartupKeepsTheParticipantsWhoMayStayAndRemovesTheOthers(t 
 			t.Fatalf("Join: %v", err)
 		}
 		returned := f.livekit.AddParticipant(roomA, carol.ID)
-		time.Sleep(voice.RefreshInterval)
+		time.Sleep((30 * time.Second))
 		synctest.Wait()
 		if got := f.livekit.Removed(); !slices.Contains(got, returned) {
 			t.Errorf("removed %+v, want %+v among them", got, returned)
@@ -326,7 +330,7 @@ func TestADroppedWebhookIsCorrectedByTheNextRefresh(t *testing.T) {
 
 		// Bob joins, and the webhook saying so is lost.
 		p := f.join(t, bob, roomA)
-		time.Sleep(voice.RefreshInterval - time.Millisecond)
+		time.Sleep((30 * time.Second) - time.Millisecond)
 		synctest.Wait()
 		wantOccupancy(t, f.s, roomA)
 		time.Sleep(time.Millisecond)
@@ -336,11 +340,11 @@ func TestADroppedWebhookIsCorrectedByTheNextRefresh(t *testing.T) {
 		// He renames, then leaves, and that webhook is lost too.
 		robert := identity.Visitor{ID: bob.ID, Name: "Robert"}
 		f.access.set(robert)
-		time.Sleep(voice.RefreshInterval)
+		time.Sleep((30 * time.Second))
 		synctest.Wait()
 		wantOccupancy(t, f.s, roomA, robert)
 		f.livekit.Leave(p)
-		time.Sleep(voice.RefreshInterval)
+		time.Sleep((30 * time.Second))
 		synctest.Wait()
 		wantOccupancy(t, f.s, roomA)
 
@@ -366,7 +370,7 @@ func TestAFailedRefreshOrCheckLeavesTheView(t *testing.T) {
 	if err := f.s.Refresh(t.Context()); err == nil {
 		t.Error("Refresh while access cannot be checked = nil, want an error")
 	}
-	second := f.livekit.AddParticipant(roomA, bob.ID)
+	second := f.livekit.AddParticipant(roomA, p.Identity)
 	if err := f.s.ReceiveWebhook(signed(t, voicetest.Joined(second), testKey, testSecret)); err == nil ||
 		errors.Is(err, voice.ErrUnverifiedWebhook) {
 		t.Errorf("ReceiveWebhook while access cannot be checked = %v, want an error for LiveKit to retry", err)

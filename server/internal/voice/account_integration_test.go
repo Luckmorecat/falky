@@ -32,6 +32,7 @@ import (
 )
 
 type guardedVoice struct {
+	db     *platform.DB
 	ident  *identity.Service
 	voice  *voice.Service
 	gate   *httpapi.Lifecycle
@@ -48,7 +49,7 @@ func newGuardedVoice(t *testing.T, options ...identity.Option) guardedVoice {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	migrations, err := platform.LoadMigrations(identity.Migrations(), rooms.Migrations())
+	migrations, err := platform.LoadMigrations(identity.Migrations(), rooms.Migrations(), voice.Migrations())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,12 +65,12 @@ func newGuardedVoice(t *testing.T, options ...identity.Option) guardedVoice {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := voice.New(liveKitClient(), ident, rs, voice.Config{URL: "wss://must-not-bypass.invalid", APIKey: devKey, APISecret: devSecret, RoomCap: 8})
+	s := voice.New(liveKitClient(), ident, rs, voice.Config{URL: "wss://must-not-bypass.invalid", APIKey: devKey, APISecret: devSecret, RoomCap: 8}, voice.WithDB(db))
 	gate := &httpapi.Lifecycle{Enforce: httpapi.Enforcer(httpapi.Events{}, s)}
 	public := httptest.NewServer(s.Signalling(fmt.Sprintf("http://127.0.0.1:%d", liveKitPort)))
 	s.ConfigureAdmission(gate, ident.ValidateSession, public.URL)
 	t.Cleanup(func() { s.CloseSignalling(); public.Close() })
-	return guardedVoice{ident: ident, voice: s, gate: gate, public: public, room: room.ID, rooms: rs}
+	return guardedVoice{db: db, ident: ident, voice: s, gate: gate, public: public, room: room.ID, rooms: rs}
 }
 
 func (f guardedVoice) enroll(t *testing.T) (identity.Enrollment, *passkeytest.Authenticator) {
@@ -280,7 +281,7 @@ func TestGuardedLiveKitAcceptsRefreshedTokenOnlyForCurrentImmutableGrant(t *test
 	refusedAtGuard(t, f, refreshed)
 }
 
-func TestGuardedLiveKitAbsoluteExpiryEndsIdleMediaWithoutHTTPRequest(t *testing.T) {
+func TestGuardedLiveKitMaintenanceEndsExpiredIdleMediaWithoutHTTPRequest(t *testing.T) {
 	for _, kind := range []identity.Kind{identity.Guest, identity.Account} {
 		t.Run(string(kind), func(t *testing.T) {
 			ttl := identity.AccountSessionTTL
@@ -288,7 +289,7 @@ func TestGuardedLiveKitAbsoluteExpiryEndsIdleMediaWithoutHTTPRequest(t *testing.
 				ttl = identity.GuestSessionTTL
 			}
 			var clockMu sync.Mutex
-			offset := -ttl + 3*time.Second
+			offset := time.Duration(0)
 			f := newGuardedVoice(t, identity.WithClock(func() time.Time { clockMu.Lock(); defer clockMu.Unlock(); return time.Now().Add(offset) }))
 			var session identity.Session
 			if kind == identity.Account {
@@ -308,20 +309,31 @@ func TestGuardedLiveKitAbsoluteExpiryEndsIdleMediaWithoutHTTPRequest(t *testing.
 					t.Fatal(err)
 				}
 			}
-			clockMu.Lock()
-			offset = 0
-			clockMu.Unlock()
 			creds := f.join(t, session, false)
 			if kind == identity.Guest {
 				// Production routes the legacy guest URL through this guard.
 				creds.URL = "ws" + strings.TrimPrefix(f.public.URL, "http")
 			}
 			client := connect(t, creds)
-			remaining := time.Until(session.ExpiresAt) + 2*time.Second
+			clockMu.Lock()
+			offset = ttl
+			clockMu.Unlock()
+			if _, err := f.ident.ValidateSession(t.Context(), session); !errors.Is(err, identity.ErrNoVisitor) {
+				t.Fatalf("expired request was accepted: %v", err)
+			}
+			refusedAtGuard(t, f, creds.Token)
 			select {
 			case <-client.disconnected:
-			case <-time.After(remaining):
-				t.Fatal("absolute session expiry left idle media connected")
+				t.Fatal("established media closed before maintenance")
+			case <-time.After(30 * time.Millisecond):
+			}
+			if err := f.gate.Maintain(t.Context(), nil, f.voice); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case <-client.disconnected:
+			case <-time.After(2 * time.Second):
+				t.Fatal("maintenance left expired idle media connected")
 			}
 			waitForParticipants(t, liveKitClient(), f.room)
 			refusedAtGuard(t, f, creds.Token)

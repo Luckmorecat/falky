@@ -222,7 +222,11 @@ func waitForParticipants(t *testing.T, lk *voice.Client, room string, want ...st
 		got = got[:0]
 		for _, p := range all {
 			if p.Room == room {
-				got = append(got, p.Identity)
+				id := p.Identity
+				if !slices.ContainsFunc(want, func(id string) bool { return strings.Contains(id, ".") }) {
+					id, _, _ = strings.Cut(id, ".")
+				}
+				got = append(got, id)
 			}
 		}
 		slices.Sort(got)

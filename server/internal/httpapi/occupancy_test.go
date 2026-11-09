@@ -99,8 +99,8 @@ func TestSignedWebhooksKeepTheOccupancyListedAndSentLive(t *testing.T) {
 	ws := p.connectLive(t, watcherHTTP)
 	next := func() api.Event { return nextEvent(t, ws) }
 
-	joinedVoice(t, b, lounge.ID)
-	inVoice := p.livekit.AddParticipant(lounge.ID, bob.Id)
+	creds := joinedVoice(t, b, lounge.ID)
+	inVoice := p.livekit.AddParticipant(lounge.ID, creds.GrantId)
 	p.applied(t, voicetest.Joined(inVoice))
 	want := []api.Participant{{VisitorId: bob.Id, Name: "Bob"}}
 	if got := nextOccupancy(t, next); got.RoomId != lounge.ID || !slices.Equal(got.Occupancy, want) {
@@ -123,9 +123,9 @@ func TestWebhooksNotSignedWithTheLiveKitKeyAreRefused(t *testing.T) {
 	p := startPublic(t, 10)
 	lounge := p.createRoom(t, "Lounge")
 	b := p.browser(t)
-	bob := p.enter(t, b, "Bob")
-	joinedVoice(t, b, lounge.ID)
-	joined := voicetest.Joined(p.livekit.AddParticipant(lounge.ID, bob.Id))
+	p.enter(t, b, "Bob")
+	creds := joinedVoice(t, b, lounge.ID)
+	joined := voicetest.Joined(p.livekit.AddParticipant(lounge.ID, creds.GrantId))
 
 	for name, secret := range map[string]string{"unsigned": "", "wrong secret": "another-secret-of-at-least-32-characters"} {
 		status, body := p.webhook(t, joined, secret)
@@ -156,8 +156,8 @@ func TestAParticipantWhoMayNotStayIsRemovedAndNotListed(t *testing.T) {
 	p := startPublic(t, 1000)
 	lounge := p.createRoom(t, "Lounge")
 	b := p.browser(t)
-	bob := p.enter(t, b, "Bob")
-	joinedVoice(t, b, lounge.ID)
+	p.enter(t, b, "Bob")
+	creds := joinedVoice(t, b, lounge.ID)
 
 	// Bob never connects live updates, so once his reservation lapses
 	// another visitor enters under his name and connects.
@@ -165,7 +165,7 @@ func TestAParticipantWhoMayNotStayIsRemovedAndNotListed(t *testing.T) {
 	other, otherHTTP := p.browserWithHTTP(t)
 	p.enter(t, other, "bob")
 	p.connectLive(t, otherHTTP)
-	taken := p.livekit.AddParticipant(lounge.ID, bob.Id)
+	taken := p.livekit.AddParticipant(lounge.ID, creds.GrantId)
 	p.applied(t, voicetest.Joined(taken))
 	unknown := p.livekit.AddParticipant(lounge.ID, "01JBX6ZZZZZZZZZZZZZZZZZZZZ")
 	p.applied(t, voicetest.Joined(unknown))
@@ -183,14 +183,14 @@ func TestAParticipantStaysWhileAnotherVisitorOnlyReservesTheirNameAndIsRemovedOn
 	lounge := p.createRoom(t, "Lounge")
 	b := p.browser(t)
 	bob := p.enter(t, b, "Bob")
-	joinedVoice(t, b, lounge.ID)
+	creds := joinedVoice(t, b, lounge.ID)
 
 	// Bob never connects live updates, so once his reservation lapses
 	// another visitor enters under his name, but does not connect yet.
 	p.clock.Advance(time.Minute)
 	other, otherHTTP := p.browserWithHTTP(t)
 	p.enter(t, other, "bob")
-	inVoice := p.livekit.AddParticipant(lounge.ID, bob.Id)
+	inVoice := p.livekit.AddParticipant(lounge.ID, creds.GrantId)
 	p.applied(t, voicetest.Joined(inVoice))
 	if err := p.voice.Refresh(t.Context()); err != nil {
 		t.Fatalf("Refresh: %v", err)

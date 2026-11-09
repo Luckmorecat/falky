@@ -108,9 +108,8 @@ func (s *Service) Signalling(upstream string) http.Handler {
 		// HTTP 101 precedes participant creation. Wait for LiveKit's first
 		// Join/Reconnect response before releasing the mutation gate, so an
 		// already checked handshake cannot attach after its removal.
-		// Keep the upstream alive until cleanup has removed a half-joined
-		// participant. Cancelling Read itself closes the socket immediately,
-		// which can tear down LiveKit's RPC route before removal is answered.
+		// A failed attempt closes only its own signal source. Management
+		// removal addresses identity and could remove a concurrent retry.
 		type frame struct {
 			typ  websocket.MessageType
 			data []byte
@@ -136,15 +135,13 @@ func (s *Service) Signalling(upstream string) http.Handler {
 			}
 		}
 		if err != nil || (response.GetJoin() == nil && response.GetReconnect() == nil) {
-			// Even a failed frontend handshake may already have created media.
-			s.removeFailedHandshake(r.Context(), g)
+			// LiveKit tears down this attempt when its signal source closes.
 			_ = up.CloseNow()
 			http.Error(w, "voice handshake failed", http.StatusBadGateway)
 			return
 		}
 		down, err := websocket.Accept(w, r, &websocket.AcceptOptions{InsecureSkipVerify: true})
 		if err != nil {
-			s.removeFailedHandshake(r.Context(), g)
 			_ = up.CloseNow()
 			return
 		}
@@ -167,14 +164,6 @@ func (s *Service) Signalling(upstream string) http.Handler {
 		connection.close()
 		<-done
 	})
-}
-
-func (s *Service) removeFailedHandshake(ctx context.Context, grant *voiceGrant) {
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
-	defer cancel()
-	if err := s.livekit.RemoveParticipant(ctx, grant.room, grant.transport); err != nil {
-		s.logger.ErrorContext(ctx, "failed signalling cleanup", "error", err)
-	}
 }
 
 func relaySignals(ctx context.Context, from, to *websocket.Conn) {
@@ -214,30 +203,14 @@ func (s *Service) admit(r *http.Request) (*voiceGrant, error) {
 	if room, issued := s.IssuedRoom(s.logicalIdentity(grants.Identity)); issued && room != grants.Video.Room {
 		return nil, identity.ErrNoVisitor
 	}
-	s.mu.Lock()
-	g := s.grants[grants.Identity]
-	s.mu.Unlock()
-	restored := g == nil
-	if restored {
-		// Account transports, including upgraded bare IDs, must never regain
-		// access from identity alone. Only persisted current guest state can
-		// restore a signed guest token after process-local grant loss.
-		lookup, ok := s.visitors.(interface {
-			GuestSession(context.Context, string) (identity.Session, error)
-		})
-		if !ok || strings.Contains(grants.Identity, ".") {
-			return nil, identity.ErrNoVisitor
-		}
-		session, err := lookup.GuestSession(r.Context(), grants.Identity)
-		if err != nil {
-			return nil, err
-		}
-		if session.Kind != identity.Guest || session.Visitor.ID != grants.Identity {
-			return nil, identity.ErrNoVisitor
-		}
-		g = &voiceGrant{session: session, transport: grants.Identity, room: grants.Video.Room, sockets: make(map[*signalConnection]struct{})}
+	g, err := s.grant(r.Context(), grants.Identity)
+	if err != nil {
+		return nil, err
 	}
-	if g.revoked || g.room != grants.Video.Room {
+	s.mu.Lock()
+	refused := g == nil || g.revoked || g.room != grants.Video.Room
+	s.mu.Unlock()
+	if refused {
 		return nil, identity.ErrNoVisitor
 	}
 	if requested := r.URL.Query().Get("room"); requested != "" && requested != g.room {
@@ -252,14 +225,6 @@ func (s *Service) admit(r *http.Request) (*voiceGrant, error) {
 			return nil, identity.ErrNoVisitor
 		}
 		return nil, err
-	}
-	if restored {
-		g.session = current
-		s.mu.Lock()
-		s.grants[g.transport] = g
-		s.current[current.Visitor.ID] = g.transport
-		s.issued[current.Visitor.ID] = g.room
-		s.mu.Unlock()
 	}
 	return g, nil
 }

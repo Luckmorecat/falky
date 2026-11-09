@@ -10,6 +10,7 @@ import type {
   VideoTrack,
 } from 'livekit-client';
 import { api, ApiError } from '../api/client';
+import { PendingLeaves } from './pendingLeaves';
 import { cameraOptions } from './camera';
 import { loudness } from './meter';
 import { shareOptions } from './share';
@@ -42,11 +43,15 @@ export function preloadVoice(): Promise<void> {
   );
 }
 
+const identityId = (transport: string) => transport.split('.')[0]!;
 const isDeafened = (p: LkParticipant) => p.attributes.deafened === 'true';
 
 /** One visitor's connection to one room's voice at a time, over LiveKit. */
 export class VoiceSession implements VoiceClient {
   private room: Room | null = null;
+  private grantId: string | null = null;
+  private joining: { leaveRequested: boolean } | null = null;
+  private readonly leaves: PendingLeaves;
   private snap: VoiceSnapshot = idleVoice;
   private audio: AudioContext | null = null;
   private meters = new Map<string, Meter>();
@@ -62,6 +67,7 @@ export class VoiceSession implements VoiceClient {
   private boosts = new WeakMap<RemoteAudioTrack, GainNode>();
 
   constructor(private readonly host: VoiceHost) {
+    this.leaves = new PendingLeaves(() => this.set({ pendingLeave: this.leaves.count }));
     this.sinkHost = document.createElement('div');
     this.sinkHost.hidden = true;
     document.body.append(this.sinkHost);
@@ -78,6 +84,8 @@ export class VoiceSession implements VoiceClient {
     this.audio ??= new AudioContext({ latencyHint: 'interactive' });
     void this.audio.resume();
     const operation = ++this.operation;
+    const intent = { leaveRequested: false };
+    this.joining = intent;
     const deafened = this.snap.deafened;
     // Moving rooms keeps the camera as it was; a first join never starts it.
     const keepCamera = this.snap.camera;
@@ -105,7 +113,12 @@ export class VoiceSession implements VoiceClient {
       else this.host.onProblem('join_failed');
       return;
     }
-    if (operation !== this.operation) return;
+    if (operation !== this.operation) {
+      if (intent.leaveRequested) await this.leaves.add(creds.grantId);
+      return;
+    }
+    this.joining = null;
+    this.grantId = creds.grantId;
     this.moving = false;
     this.teardownRoom();
 
@@ -131,6 +144,7 @@ export class VoiceSession implements VoiceClient {
     }
     if (this.room !== room) return;
     await room.startAudio().catch(() => {});
+    if (this.room !== room) return;
     this.knownShares.clear();
     this.set({ status: 'connected', roomId, joiningRoomId: null, joinedAt: performance.now(), deafened, listenOnly: false });
     this.host.onSound('join');
@@ -139,6 +153,7 @@ export class VoiceSession implements VoiceClient {
       void room.localParticipant.setAttributes({ deafened: 'true' }).catch(() => {});
     }
     if (!deafened && !startMuted) await this.enableMic(room);
+    if (this.room !== room) return;
     if (keepCamera) await this.enableCamera(room);
     this.refresh();
   }
@@ -146,7 +161,11 @@ export class VoiceSession implements VoiceClient {
   async leave(): Promise<void> {
     if (this.snap.status === 'idle') return;
     this.host.onSound('leave');
+    if (this.joining) this.joining.leaveRequested = true;
+    const grantId = this.grantId;
+    const pending = grantId ? this.leaves.add(grantId) : Promise.resolve();
     this.close();
+    await pending;
   }
 
   /** Ends voice without a sound: the access ended. */
@@ -190,7 +209,9 @@ export class VoiceSession implements VoiceClient {
     try {
       const { capture, publish } = shareOptions(this.host.shareSettings());
       await room.localParticipant.setScreenShareEnabled(on, capture, publish);
+      if (this.room !== room) this.stopTracks(room);
     } catch (err) {
+      if (this.room !== room) { this.stopTracks(room); return; }
       // Backing out of the browser's picker is not a failure.
       if ((err as Error).name !== 'NotAllowedError') this.host.onProblem('share_failed');
     }
@@ -219,10 +240,13 @@ export class VoiceSession implements VoiceClient {
   }
 
   private async enableCamera(room: Room): Promise<void> {
+    if (this.room !== room) return;
     try {
       const { capture, publish } = cameraOptions(this.host.cameraSettings());
       await room.localParticipant.setCameraEnabled(true, capture, publish);
+      if (this.room !== room) this.stopTracks(room);
     } catch (err) {
+      if (this.room !== room) { this.stopTracks(room); return; }
       const name = (err as Error).name;
       this.host.onProblem(name === 'NotAllowedError' ? 'camera_denied' : name === 'NotFoundError' || name === 'OverconstrainedError' ? 'camera_missing' : 'camera_failed');
     }
@@ -240,7 +264,7 @@ export class VoiceSession implements VoiceClient {
   private videoTrack(visitorId: string, source: Track.Source): VideoTrack | null {
     const room = this.room;
     if (!room) return null;
-    const p: LkParticipant | undefined = room.localParticipant.identity === visitorId ? room.localParticipant : room.remoteParticipants.get(visitorId);
+    const p: LkParticipant | undefined = identityId(room.localParticipant.identity) === visitorId ? room.localParticipant : [...room.remoteParticipants.values()].find((participant) => identityId(participant.identity) === visitorId);
     return (p?.getTrackPublication(source)?.track as VideoTrack | undefined) ?? null;
   }
 
@@ -288,10 +312,13 @@ export class VoiceSession implements VoiceClient {
   }
 
   private async enableMic(room: Room): Promise<void> {
+    if (this.room !== room) return;
     try {
       await room.localParticipant.setMicrophoneEnabled(true, this.micOptions());
+      if (this.room !== room) { this.stopTracks(room); return; }
       this.set({ listenOnly: false });
     } catch (err) {
+      if (this.room !== room) { this.stopTracks(room); return; }
       this.set({ listenOnly: true });
       this.host.onProblem((err as Error).name === 'NotFoundError' ? 'mic_missing' : 'mic_denied');
     }
@@ -354,7 +381,7 @@ export class VoiceSession implements VoiceClient {
   }
 
   private applyVolumesFor(p: RemoteParticipant): void {
-    const v = this.snap.deafened ? 0 : this.host.volumeOf(p.identity);
+    const v = this.snap.deafened ? 0 : this.host.volumeOf(identityId(p.identity));
     p.setVolume(Math.min(v, 1), sdk.Track.Source.Microphone);
     p.setVolume(Math.min(v, 1), sdk.Track.Source.ScreenShareAudio);
     for (const pub of p.audioTrackPublications.values()) {
@@ -396,8 +423,8 @@ export class VoiceSession implements VoiceClient {
     const people = everyone
       .filter((p) => p.identity)
       .map<VoicePerson>((p) => ({
-        id: p.identity,
-        name: p.name || p.identity,
+        id: identityId(p.identity),
+        name: p.name || identityId(p.identity),
         local: p === local,
         muted: !p.isMicrophoneEnabled,
         deafened: isDeafened(p),
@@ -415,7 +442,7 @@ export class VoiceSession implements VoiceClient {
     const q = local.connectionQuality;
     this.set({
       people,
-      speakers: room.activeSpeakers.map((p) => p.identity),
+      speakers: room.activeSpeakers.map((p) => identityId(p.identity)),
       muted: !local.isMicrophoneEnabled,
       sharing: local.isScreenShareEnabled,
       camera: local.isCameraEnabled,
@@ -431,7 +458,7 @@ export class VoiceSession implements VoiceClient {
     for (const p of everyone) {
       const pub = p.getTrackPublication(sdk.Track.Source.Microphone) as LocalTrackPublication | undefined;
       const mst = pub?.track?.mediaStreamTrack;
-      if (mst && !pub?.isMuted) wanted.set(p.identity, mst);
+      if (mst && !pub?.isMuted) wanted.set(identityId(p.identity), mst);
     }
     for (const [id, meter] of this.meters) {
       if (wanted.get(id)?.id !== meter.trackId) {
@@ -449,6 +476,10 @@ export class VoiceSession implements VoiceClient {
     }
   }
 
+  private stopTracks(room: Room): void {
+    for (const publication of room.localParticipant.trackPublications?.values() ?? []) publication.track?.stop();
+  }
+
   private teardownRoom(): void {
     const room = this.room;
     this.room = null;
@@ -456,6 +487,7 @@ export class VoiceSession implements VoiceClient {
     this.meters.clear();
     this.sinkHost.replaceChildren();
     if (room) {
+      this.stopTracks(room);
       room.removeAllListeners();
       void room.disconnect();
     }
@@ -464,9 +496,11 @@ export class VoiceSession implements VoiceClient {
   private close(): void {
     this.operation++;
     this.moving = false;
+    this.joining = null;
+    this.grantId = null;
     this.teardownRoom();
     this.knownShares.clear();
-    this.snap = idleVoice;
+    this.snap = { ...idleVoice, pendingLeave: this.leaves.count };
     this.host.onChange(this.snap);
   }
 

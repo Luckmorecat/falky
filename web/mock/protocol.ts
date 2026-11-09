@@ -21,6 +21,7 @@ export interface MockFaults {
   micDenied: boolean;
   shareFailure: boolean;
   voiceReconnecting: boolean;
+  leaveUnavailable: boolean;
 }
 export interface MockState {
   instanceId: string;
@@ -44,4 +45,4 @@ export type MockAction =
   | { type: 'faults'; faults: Partial<MockFaults> }
   | { type: 'name-conflict'; active: boolean }
   | { type: 'revoke' }
-  | { type: 'voice-leave'; generation: number };
+  | { type: 'voice-leave'; generation: number; grantId?: string };

@@ -21,7 +21,7 @@ func restartVoice(t *testing.T, p publicServer) publicServer {
 	t.Helper()
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }))
 	t.Cleanup(upstream.Close)
-	p.voice = voice.New(p.livekit, p.identity, p.rooms, voice.Config{URL: testLiveKitURL, APIKey: testLiveKitKey, APISecret: testLiveKitSecret, RoomCap: testRoomCap})
+	p.voice = voice.New(p.livekit, p.identity, p.rooms, voice.Config{URL: testLiveKitURL, APIKey: testLiveKitKey, APISecret: testLiveKitSecret, RoomCap: testRoomCap}, voice.WithDB(p.db))
 	p.lifecycle = &Lifecycle{}
 	handlers := New(Deps{Identity: p.identity, Voice: p.voice, Rooms: p.rooms, Live: p.events.Hub, Logger: p.events.Logger, Lifecycle: p.lifecycle, PublicOrigin: testOrigin, LiveKitAPIURL: upstream.URL, Metrics: platform.NewMetrics().Handler(), EnterLimit: platform.NewLimiter(100, time.Hour, time.Now)})
 	p.srv = httptest.NewTLSServer(handlers.Public)
@@ -81,7 +81,7 @@ func TestGuestVoiceRestartCannotRestoreRevokedOrUpgradedGuest(t *testing.T) {
 					t.Fatal(err)
 				}
 				p = restartVoice(t, p)
-				checkVoiceValidation(t, p, account.Token, 403)
+				checkVoiceValidation(t, p, account.Token, 200)
 			}
 			checkVoiceValidation(t, p, creds.Token, 403)
 		})
@@ -194,10 +194,10 @@ func TestGuestHTTPRoomMoveOverridesOrdinaryAndRestoredGrants(t *testing.T) {
 			assert(current.Token, true)
 			p.livekit.AddParticipant(second.ID, guest.Id)
 			sameRoom := join(second.ID)
-			assert(current.Token, true)
+			assert(current.Token, false)
 			assert(sameRoom.Token, true)
-			if got := p.livekit.Removed(); len(got) != 1 {
-				t.Fatal("same-room guest rejoin removed existing media")
+			if got := p.livekit.Removed(); len(got) != 2 {
+				t.Fatal("same-room guest rejoin must remove old media")
 			}
 			newest := join(third.ID)
 			assert(old.Token, false)
@@ -207,7 +207,7 @@ func TestGuestHTTPRoomMoveOverridesOrdinaryAndRestoredGrants(t *testing.T) {
 	}
 }
 
-func TestLegacyGuestJoinReplacesRestoredRoomBinding(t *testing.T) {
+func TestGuestExplicitJoinReplacesPersistedRoomBinding(t *testing.T) {
 	p := startPublic(t, 100)
 	first, second := p.createRoom(t, "First"), p.createRoom(t, "Second")
 	client := p.browser(t)
@@ -215,12 +215,12 @@ func TestLegacyGuestJoinReplacesRestoredRoomBinding(t *testing.T) {
 	old := joinedVoice(t, client, first.ID)
 	p = restartVoice(t, p)
 	checkVoiceValidation(t, p, old.Token, 200)
-	visitor, err := p.identity.Visitor(t.Context(), guest.Id)
+	session, err := p.identity.GuestSession(t.Context(), guest.Id)
 	if err != nil {
 		t.Fatal(err)
 	}
 	p.lifecycle.Lock()
-	current, err := p.voice.Join(t.Context(), visitor, second.ID)
+	current, err := p.voice.JoinSession(t.Context(), session, second.ID, false)
 	p.lifecycle.Unlock()
 	if err != nil {
 		t.Fatal(err)

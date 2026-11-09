@@ -96,11 +96,12 @@ export async function startMockServer(options: { port?: number; scenario?: strin
       return storeAttachment(roomId, ownerId, `photo-${seed + i}.svg`, fixtureImage(seed + i, w!, h!), 'posted');
     });
   }
+  let voiceGrantId: string | null = null;
   const state: MockState = {
     instanceId, generation: 1, revision: 1, scenario: scenarioName(options.scenario ?? 'populated'), scenarios,
     visitor: null, voiceRoomId: null,
     rooms: roomIds.map((roomId, i) => ({ id: roomId, name: ['Lounge', 'Games', 'Quiet'][i]!, occupancy: [] })),
-    peers: {}, faults: { send: 'none', colourSave: 'none', colourDelayMs: 0, colourResponseDelayMs: 0, delayMs: 0, liveDisconnected: false, roomFull: null, micDenied: false, shareFailure: false, voiceReconnecting: false },
+    peers: {}, faults: { send: 'none', colourSave: 'none', colourDelayMs: 0, colourResponseDelayMs: 0, delayMs: 0, liveDisconnected: false, roomFull: null, micDenied: false, shareFailure: false, voiceReconnecting: false, leaveUnavailable: false },
     accessLink: '/#k=mock-access-link',
   };
   if (state.scenario === 'entry') state.visitor = null;
@@ -184,7 +185,7 @@ export async function startMockServer(options: { port?: number; scenario?: strin
       else attachments.delete(attachmentId);
     }
     for (const room of state.rooms) room.occupancy = (state.peers[room.id] ?? []).map(({ visitorId, name }) => ({ visitorId, name }));
-    state.faults = { send: 'none', colourSave: 'none', colourDelayMs: 0, colourResponseDelayMs: 0, delayMs: 0, liveDisconnected: false, roomFull: null, micDenied: false, shareFailure: false, voiceReconnecting: false };
+    state.faults = { send: 'none', colourSave: 'none', colourDelayMs: 0, colourResponseDelayMs: 0, delayMs: 0, liveDisconnected: false, roomFull: null, micDenied: false, shareFailure: false, voiceReconnecting: false, leaveUnavailable: false };
     requests.clear();
     conflictName = null;
     accessSecret = 'mock-access-link';
@@ -258,8 +259,8 @@ export async function startMockServer(options: { port?: number; scenario?: strin
           else if (key === 'colourSave' && ['none', 'fail'].includes(String(value))) state.faults.colourSave = value as MockState['faults']['colourSave'];
           else if (key === 'send' && ['none', 'fail', 'lost-response'].includes(String(value))) state.faults.send = value as MockState['faults']['send'];
           else if (key === 'roomFull' && (value === null || state.rooms.some((room) => room.id === value))) state.faults.roomFull = value as string | null;
-          else if (['liveDisconnected', 'micDenied', 'shareFailure', 'voiceReconnecting'].includes(key) && typeof value === 'boolean') {
-            state.faults[key as 'micDenied' | 'shareFailure' | 'voiceReconnecting' | 'liveDisconnected'] = value;
+          else if (['liveDisconnected', 'micDenied', 'shareFailure', 'voiceReconnecting', 'leaveUnavailable'].includes(key) && typeof value === 'boolean') {
+            state.faults[key as 'micDenied' | 'shareFailure' | 'voiceReconnecting' | 'liveDisconnected' | 'leaveUnavailable'] = value;
           } else throw new Refused(400, 'invalid_request', 'Invalid fault value');
         }
         if (state.faults.liveDisconnected) for (const socket of sockets.clients) socket.close(4000, 'Scripted disconnect');
@@ -268,7 +269,7 @@ export async function startMockServer(options: { port?: number; scenario?: strin
         changeColour(input.visitorId, input.palette);
       } else if (input.type === 'voice-leave') {
         if (input.generation !== state.generation) throw new Refused(409, 'invalid_request', 'Mock generation changed');
-        state.voiceRoomId = null;
+        if (!input.grantId || input.grantId === voiceGrantId) state.voiceRoomId = null;
         occupancy();
       } else if (input.type === 'participants') {
         if (!state.rooms.some((room) => room.id === input.roomId)) throw new Refused(404, 'room_not_found', 'No such room');
@@ -394,6 +395,12 @@ export async function startMockServer(options: { port?: number; scenario?: strin
       return json(res, 200, state.visitor);
     }
     if (url.pathname === '/api/rooms' && req.method === 'GET') return json(res, 200, { rooms: state.rooms } satisfies Schema['RoomList']);
+    if (url.pathname === '/api/voice/leave' && req.method === 'POST') {
+      if (state.faults.leaveUnavailable) throw new Refused(503, 'voice_unavailable', 'Leave cannot reach the server');
+      if (typeof input.grantId !== 'string' || !input.grantId) throw new Refused(400, 'bad_request', 'Missing grant');
+      if (input.grantId === voiceGrantId) { state.voiceRoomId = null; voiceGrantId = null; occupancy(); state.revision++; }
+      return json(res, 200, { revoked: true });
+    }
     const voice = /^\/api\/rooms\/([^/]+)\/voice$/.exec(url.pathname);
     if (voice && req.method === 'POST') {
       const roomId = voice[1]!;
@@ -401,11 +408,12 @@ export async function startMockServer(options: { port?: number; scenario?: strin
       if (state.visitor.nameTaken) throw new Refused(409, 'name_taken', 'Rename before joining voice');
       if (state.faults.roomFull === roomId && state.voiceRoomId !== roomId) throw new Refused(409, 'room_full', 'The room is full');
       state.voiceRoomId = roomId;
+      voiceGrantId = state.visitor.id + '.' + id();
       occupancy();
       state.revision++;
       // Syntactically JWT-shaped; consumed only by the dev-only voice adapter.
       const jwt = (value: unknown) => Buffer.from(JSON.stringify(value)).toString('base64url');
-      return json(res, 200, { url: publicOrigin.replace('http', 'ws') + '/rtc', token: `${jwt({ alg: 'none', typ: 'JWT' })}.${jwt({ sub: state.visitor.id, room: roomId, mock: true })}.mock` } satisfies Schema['VoiceCredentials']);
+      return json(res, 200, { grantId: voiceGrantId, url: publicOrigin.replace('http', 'ws') + '/rtc', token: `${jwt({ alg: 'none', typ: 'JWT' })}.${jwt({ sub: voiceGrantId, room: roomId, mock: true })}.mock` } satisfies Schema['VoiceCredentials']);
     }
     if (url.pathname === '/api/attachments/limits' && req.method === 'GET') return json(res, 200, attachmentLimits);
     const upload = /^\/api\/rooms\/([^/]+)\/attachments$/.exec(url.pathname);

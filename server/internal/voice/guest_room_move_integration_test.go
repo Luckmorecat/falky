@@ -74,7 +74,7 @@ func TestGuardedLiveKitGuestRoomMovesReplaceOrdinaryAndRestoredBindings(t *testi
 			}
 			var oldParticipant voice.Participant
 			for _, participant := range listed {
-				if participant.Room == f.room && participant.Identity == guest.ID {
+				if participant.Room == f.room && participant.Identity == old.GrantID {
 					oldParticipant = participant
 				}
 			}
@@ -84,8 +84,8 @@ func TestGuardedLiveKitGuestRoomMovesReplaceOrdinaryAndRestoredBindings(t *testi
 			join(f.room)
 			select {
 			case <-first.disconnected:
-				t.Fatal("same-room guest rejoin closed existing media")
-			default:
+			case <-time.After(2 * time.Second):
+				t.Fatal("same-room explicit guest rejoin did not close old media")
 			}
 			current := join(second.ID)
 			listed, err = liveKitClient().Participants(t.Context())
@@ -97,11 +97,6 @@ func TestGuardedLiveKitGuestRoomMovesReplaceOrdinaryAndRestoredBindings(t *testi
 					t.Fatal("room move returned before removing old media")
 				}
 			}
-			select {
-			case <-first.disconnected:
-			case <-time.After(2 * time.Second):
-				t.Fatal("old room client stayed connected")
-			}
 			refusedAtGuard(t, f, old.Token)
 			inSecond := connect(t, current)
 			if err := f.voice.ReceiveWebhook(signed(t, voicetest.Joined(oldParticipant), devKey, devSecret)); err != nil {
@@ -111,8 +106,8 @@ func TestGuardedLiveKitGuestRoomMovesReplaceOrdinaryAndRestoredBindings(t *testi
 			join(second.ID)
 			select {
 			case <-inSecond.disconnected:
-				t.Fatal("old-room cleanup or same-room rejoin closed new media")
-			default:
+			case <-time.After(2 * time.Second):
+				t.Fatal("same-room explicit guest rejoin did not close old media")
 			}
 			newest := join(third.ID)
 			waitForParticipants(t, liveKitClient(), second.ID)

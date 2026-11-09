@@ -19,6 +19,7 @@ import (
 	"github.com/oklog/ulid/v2"
 
 	"github.com/kisshot/falky/server/internal/identity"
+	"github.com/kisshot/falky/server/internal/platform"
 	"github.com/kisshot/falky/server/internal/rooms"
 )
 
@@ -28,7 +29,7 @@ import (
 const TokenLifetime = 10 * time.Minute
 
 // LiveKit is the LiveKit server, as voice uses it. Rooms are named by room ID
-// and participants by visitor ID.
+// and participants by immutable grant transport identity.
 type LiveKit interface {
 	// Participants lists the participants of every room.
 	Participants(ctx context.Context) ([]Participant, error)
@@ -43,7 +44,7 @@ type LiveKit interface {
 type Participant struct {
 	// Room is the room's ID.
 	Room string
-	// Identity is the visitor's ID.
+	// Identity is the immutable transport identity, prefixed by the app identity.
 	Identity string
 	// SID is LiveKit's ID of this one connection to the room's voice: a
 	// second tab of the visitor has another.
@@ -68,6 +69,8 @@ type Rooms interface {
 
 // Credentials are what a client connects to a room's voice with.
 type Credentials struct {
+	// GrantID is the immutable transport to target with an explicit Leave.
+	GrantID string
 	// URL is where the client reaches LiveKit.
 	URL string
 	// Token admits the visitor to the room's voice for TokenLifetime.
@@ -98,6 +101,7 @@ type Config struct {
 // Service lets visitors join rooms' voice and keeps the view of who is in
 // each room's voice.
 type Service struct {
+	db       *platform.DB
 	livekit  LiveKit
 	visitors Visitors
 	rooms    Rooms
@@ -108,8 +112,10 @@ type Service struct {
 
 	// publishing holds each change to the view, from reading what changed
 	// until it has published, so changes apply and publish one at a time.
-	publishing sync.Mutex
+	publishing operationGate
 
+	// storeMu prevents hydration from restoring a cached pre-revocation snapshot.
+	storeMu    operationGate
 	mu         sync.Mutex
 	joining    sync.Mutex
 	grants     map[string]*voiceGrant
@@ -169,38 +175,34 @@ func New(lk LiveKit, visitors Visitors, rs Rooms, cfg Config, opts ...Option) *S
 // with ErrRoomFull when the room already has RoomCap participants other than
 // the visitor (a second connection of the visitor replaces the first, so it
 // takes no place), or with an ErrUnavailable. The caller checks that the room
-// exists and that the visitor may join it.
+// exists and that the visitor may join it. Services using WithDB require
+// JoinSession instead, because durable grants need an exact session binding.
 func (s *Service) Join(ctx context.Context, visitor identity.Visitor, roomID string) (Credentials, error) {
 	return s.join(ctx, identity.Session{Visitor: visitor, Kind: identity.Guest}, roomID, false, false)
 }
 
 // JoinSession binds voice to the exact browser session. Its caller holds the
-// lifecycle gate through session validation and issuance.
+// lifecycle gate through session validation and issuance. Every explicit call
+// replaces prior permission with a fresh transport, including in the same room.
 func (s *Service) JoinSession(ctx context.Context, session identity.Session, roomID string, confirm bool) (Credentials, error) {
 	return s.join(ctx, session, roomID, confirm, true)
 }
 
 func (s *Service) join(ctx context.Context, session identity.Session, roomID string, confirm, bound bool) (Credentials, error) {
+	if s.db != nil && (!bound || session.ID == "") {
+		return Credentials{}, identity.ErrNoVisitor
+	}
 	s.joining.Lock()
 	defer s.joining.Unlock()
 	visitor := session.Visitor
-	s.mu.Lock()
-	old := s.grants[s.current[visitor.ID]]
-	s.mu.Unlock()
-	sameBinding := old != nil && !old.revoked && old.room == roomID &&
-		old.session.ID == session.ID && old.session.Kind == session.Kind &&
-		old.session.Generation == session.Generation && old.session.Visitor.ID == visitor.ID
-	if old != nil && !old.revoked && session.Kind == identity.Account && old.session.ID != session.ID && !confirm {
+	old, err := s.activeGrant(ctx, visitor.ID)
+	if err != nil {
+		return Credentials{}, err
+	}
+	if old != nil && session.Kind == identity.Account && old.session.ID != session.ID && !confirm {
 		return Credentials{}, ErrTransferRequired
 	}
-	transport := visitor.ID
-	if session.Kind == identity.Account {
-		if sameBinding {
-			transport = old.transport
-		} else {
-			transport += "." + ulid.Make().String()
-		}
-	}
+	transport := visitor.ID + "." + ulid.Make().String()
 	participants, err := s.livekit.Participants(ctx)
 	if err != nil {
 		return Credentials{}, fmt.Errorf("%w: list participants: %w", ErrUnavailable, err)
@@ -220,42 +222,48 @@ func (s *Service) join(ctx context.Context, session identity.Session, roomID str
 	if others >= s.cfg.RoomCap {
 		return Credentials{}, ErrRoomFull
 	}
-	replacing := old != nil && (!sameBinding || old.transport != transport || !bound)
-	if replacing {
-		s.fence(old)
-		defer s.closeGrant(ctx, old)
+	grants, err := s.allGrants(ctx)
+	if err != nil {
+		return Credentials{}, err
+	}
+	var previous []*voiceGrant
+	for _, g := range grants {
+		if g.session.Visitor.ID == visitor.ID {
+			if err := s.fence(ctx, g); err != nil {
+				return Credentials{}, err
+			}
+			previous = append(previous, g)
+		}
+	}
+	for _, g := range previous {
+		s.closeGrant(ctx, g)
+	}
+	for _, g := range previous {
+		if err := s.removeGrant(ctx, g); err != nil {
+			return Credentials{}, fmt.Errorf("%w: remove previous grant: %w", ErrUnavailable, err)
+		}
 	}
 	for _, p := range elsewhere {
+		if old != nil && p.Identity == old.transport && p.Room == old.room {
+			continue
+		}
 		if err := s.livekit.RemoveParticipant(ctx, p.Room, p.Identity); err != nil {
 			return Credentials{}, fmt.Errorf("%w: remove from room %s: %w", ErrUnavailable, p.Room, err)
 		}
-	}
-	if replacing {
-		s.retire(old)
 	}
 	token, err := s.token(identity.Visitor{ID: transport, Name: visitor.Name, Colour: visitor.Colour}, roomID)
 	if err != nil {
 		return Credentials{}, err
 	}
-	s.mu.Lock()
-	s.issued[visitor.ID] = roomID
-	if bound {
-		g := &voiceGrant{session: session, transport: transport, room: roomID, sockets: make(map[*signalConnection]struct{})}
-		if sameBinding && old.transport == transport {
-			g = old
-		}
-		if g.expiry == nil && !session.ExpiresAt.IsZero() {
-			s.expireAt(g)
-		}
-		s.grants[transport] = g
-		s.current[visitor.ID] = transport
+	g := &voiceGrant{session: session, transport: transport, room: roomID, sockets: make(map[*signalConnection]struct{})}
+	if err := s.saveGrant(ctx, g); err != nil {
+		return Credentials{}, err
 	}
-	s.mu.Unlock()
 	connectionURL := s.cfg.URL
-	if session.Kind == identity.Account && s.guardedURL != "" {
+	if s.guardedURL != "" {
 		connectionURL = s.guardedURL
 	}
-	return Credentials{URL: connectionURL, Token: token}, nil
+	return Credentials{URL: connectionURL, Token: token, GrantID: transport}, nil
 }
 
 // token mints the token visitor joins the voice of the room roomID with: the

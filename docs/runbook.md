@@ -525,15 +525,37 @@ Edit this instance's `.env` and private saved copy with the new
 ./compose.sh exec falky /falky link show
 ```
 
-Both the server and LiveKit restart, briefly interrupting voice. Account browsers
-must obtain fresh voice credentials after a backend restart because account voice grants
-are process-local and fail closed; account sessions persist. Never copy
-credentials or a database from production to development.
+Both the server and LiveKit restart, briefly interrupting voice. Both account and
+guest browsers can reconnect using a valid original or LiveKit-refreshed JWT,
+provided its exact persisted grant and authoritative session/room/name binding
+remain valid. Missing/revoked grants are never synthesized from old tokens.
+Never copy credentials or a database from production to development.
 
-Guests can reuse valid original or LiveKit-refreshed voice JWTs after a backend
-restart while their unique persisted guest session and guest-link generation
-remain current. Logout, guest-link rotation or account upgrade refuse that
-restoration; room/name checks and newer room choices still apply.
+Migration `0010_voice_grants.sql` records durable voice permissions and cleanup
+work independently of session deletion. It does not record occupancy. The first
+upgrade cannot backfill historical in-memory permissions: unknown participants
+and old tokens fail closed, and everyone must explicitly rejoin voice once.
+Existing browser sessions and original 90-day account/400-day guest deadlines
+remain unchanged. Subsequent backend restarts preserve exact valid grants.
+
+One internal scheduler owns heartbeat (20 seconds), maintenance (startup and every
+30 seconds), and attachment cleanup (60 seconds). Each job runs independently and
+skips overlapping triggers; no external cron or new deployment service is needed.
+Maintenance closes expired/invalid local live and signalling access before slow
+LiveKit work, retries persisted exact-transport removals even when participants
+are absent, then reconciles occupancy. Failed cleanup survives restart and session
+deletion; successful obsolete work is retired. Established session expiry closes
+at the next maintenance pass, normally within 30 seconds; requests and reconnects
+reject expired sessions immediately. Shutdown cancels and joins jobs before
+closing their dependencies.
+
+Explicit browser Leave stops local media immediately and saves its exact grant
+in browser storage until `POST /api/voice/leave` acknowledges durable revocation.
+The pending notice can remain while offline or after logout/expiry: 401 alone
+does not confirm revocation. Reload/reachability retries the old target without
+blocking or revoking a newer Join. Once acknowledged, failed external cleanup is
+the backend's maintenance responsibility. Ordinary SDK Leave, reload and temporary
+network disconnection preserve valid permission.
 
 ### Accounts, invitations and recovery
 
@@ -599,7 +621,7 @@ The current frontend provides the legacy guest flow; these backend invitation
 and recovery links do not add account UI. Client integration must implement the
 [account/WebAuthn API](accounts.md), including five-minute context-bound
 ceremonies, same-origin mutations, recovery-code storage and explicit confirmed
-voice transfer at `POST /api/rooms/{id}/voice`. Account transport IDs map to the
+voice transfer at `POST /api/rooms/{id}/voice`. Both guest and account transport IDs map to the
 permanent prefix before their dot; public occupancy already uses permanent IDs.
 
 The additive `0007_accounts.sql` migration retains existing IDs, guest history

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { dismissNotice, setChatOpen } from '../app/controller';
 import { shortcuts } from '../app/shortcuts';
 import { useApp } from '../app/store';
@@ -36,6 +36,18 @@ export function Main() {
   const drawer = useDrawerLayout();
   const room = useApp((s) => s.rooms.find((r) => r.id === s.viewedRoomId) ?? null);
   const voiceState = useApp((s) => s.voice);
+  const pendingNotice = useRef<HTMLDivElement>(null);
+  const [pendingHeight, setPendingHeight] = useState(0);
+  const pendingLeave = voiceState.pendingLeave > 0;
+  useLayoutEffect(() => {
+    const element = pendingNotice.current;
+    if (!element) { setPendingHeight(0); return; }
+    const measure = () => setPendingHeight(element.getBoundingClientRect().height + 12);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [pendingLeave]);
   const voiceRoomName = useApp((s) => s.rooms.find((r) => r.id === s.voice.roomId)?.name);
   const chatOpen = useApp((s) => s.chatOpen);
   const roomsOpen = useApp((s) => s.roomsOpen);
@@ -67,7 +79,8 @@ export function Main() {
               : inVoiceElsewhere ? <span>{t.inOtherRoom(voiceRoomName)}</span>
                 : <span>{room.occupancy.length ? t.notInVoice : t.nobodyInVoice}</span>}
         />
-        {room ? <Stage room={room} background={background} /> : <div className="stage" />}
+        {pendingLeave && <div ref={pendingNotice} className="banner pending-leave pending-leave-inline" role="status">{t.voiceLeavePending}</div>}
+        {room ? <Stage room={room} background={background} reservedHeight={pendingHeight} /> : <div className="stage" />}
         <div className="dock-space" />
         <Dock room={room} />
       </div>

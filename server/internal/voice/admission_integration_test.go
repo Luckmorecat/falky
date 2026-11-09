@@ -5,6 +5,7 @@ package voice_test
 import (
 	"context"
 	"encoding/base64"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -113,50 +114,72 @@ func TestGuardedLiveKitAdmissionAndRevocationShareCompleteHandshakeFence(t *test
 	refusedAtGuard(t, f, creds.Token)
 }
 
-func TestGuardedLiveKitCancelledHandshakeReleasesGateAndRemovesParticipant(t *testing.T) {
-	f := newGuardedVoice(t)
-	guard, entered, release := heldGuard(t, f)
-	defer release()
-	account, _ := f.enroll(t)
-	f.gate.Lock()
-	creds, err := f.voice.JoinSession(t.Context(), account.Session, f.room, false)
-	f.gate.Unlock()
-	if err != nil {
-		t.Fatal(err)
-	}
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	done := make(chan struct{})
-	go func() {
-		ws, res, _ := websocket.Dial(ctx, guard.URL+"/rtc?protocol=15&access_token="+url.QueryEscape(creds.Token), nil)
-		if ws != nil {
-			_ = ws.CloseNow()
+func TestGuardedLiveKitCancelledHandshakeClosesOnlyFailedAttemptAndAllowsRetry(t *testing.T) {
+	for _, kind := range []identity.Kind{identity.Guest, identity.Account} {
+		for _, immediate := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/immediate=%t", kind, immediate), func(t *testing.T) {
+				f := newGuardedVoice(t)
+				guard, entered, release := heldGuard(t, f)
+				defer release()
+				session := guardedSession(t, f, kind)
+				f.gate.Lock()
+				creds, err := f.voice.JoinSession(t.Context(), session, f.room, false)
+				f.gate.Unlock()
+				if err != nil {
+					t.Fatal(err)
+				}
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				done := make(chan struct{})
+				go func() {
+					ws, res, _ := websocket.Dial(ctx, guard.URL+"/rtc?protocol=15&access_token="+url.QueryEscape(creds.Token), nil)
+					if ws != nil {
+						_ = ws.CloseNow()
+					}
+					if res != nil && res.Body != nil {
+						_ = res.Body.Close()
+					}
+					close(done)
+				}()
+				select {
+				case <-entered:
+				case <-time.After(2 * time.Second):
+					t.Fatal("upstream handshake not reached")
+				}
+				cancel()
+				<-done
+				gateFree := make(chan struct{})
+				go func() {
+					f.gate.Lock()
+					defer f.gate.Unlock()
+					close(gateFree)
+				}()
+				select {
+				case <-gateFree:
+				case <-time.After(2 * time.Second):
+					t.Fatal("cancelled handshake held lifecycle gate")
+				}
+				if !immediate {
+					release()
+					waitForParticipants(t, liveKitClient(), f.room)
+				}
+				// No new Join: the original exact grant remains valid. Closing the old
+				// source after this reconnect must not remove its replacement participant.
+				creds.URL = "ws" + strings.TrimPrefix(f.public.URL, "http")
+				client := connect(t, creds)
+				release()
+				waitForParticipants(t, liveKitClient(), f.room, creds.GrantID)
+				if err := f.voice.Refresh(t.Context()); err != nil {
+					t.Fatal(err)
+				}
+				select {
+				case <-client.disconnected:
+					t.Fatal("failed source cleanup removed successful retry")
+				case <-time.After(100 * time.Millisecond):
+				}
+			})
 		}
-		if res != nil && res.Body != nil {
-			_ = res.Body.Close()
-		}
-		close(done)
-	}()
-	select {
-	case <-entered:
-	case <-time.After(2 * time.Second):
-		t.Fatal("upstream handshake not reached")
 	}
-	cancel()
-	<-done
-	gateFree := make(chan struct{})
-	go func() {
-		f.gate.Lock()
-		defer f.gate.Unlock()
-		close(gateFree)
-	}()
-	select {
-	case <-gateFree:
-	case <-time.After(2 * time.Second):
-		t.Fatal("cancelled handshake held lifecycle gate")
-	}
-	release()
-	waitForParticipants(t, liveKitClient(), f.room)
 }
 
 func TestGuardedLiveKitRejectsChangedRoomSignatureAndOldGuestAfterUpgrade(t *testing.T) {

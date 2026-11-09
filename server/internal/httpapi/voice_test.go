@@ -14,6 +14,7 @@ import (
 	"github.com/livekit/protocol/livekit"
 
 	"github.com/kisshot/falky/server/internal/api"
+	"github.com/kisshot/falky/server/internal/identity/passkeytest"
 	"github.com/kisshot/falky/server/internal/voice"
 )
 
@@ -60,7 +61,7 @@ func TestJoiningVoiceReturnsATokenForThatRoomOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Verify: %v", err)
 	}
-	if grants.Identity != bob.Id || grants.Name != "Bob" {
+	if !strings.HasPrefix(grants.Identity, bob.Id+".") || grants.Name != "Bob" {
 		t.Errorf("identity, name = %q, %q, want %q, Bob", grants.Identity, grants.Name, bob.Id)
 	}
 	if until := time.Until(claims.ExpiresAt.Time); until < 9*time.Minute || until > 10*time.Minute {
@@ -159,4 +160,41 @@ func TestTheLiveKitSecretIsNeitherAnsweredNorLogged(t *testing.T) {
 	if strings.Contains(p.logs.String(), creds.Token) {
 		t.Error("the logs contain a voice token")
 	}
+}
+
+func TestExplicitLeaveIsDurableAcknowledgedAndCannotRevokeReplacement(t *testing.T) {
+	p := startPublic(t, 10)
+	room := p.createRoom(t, "Voice")
+	client, browser := p.browserWithHTTP(t)
+	p.enter(t, client, "Bob")
+	old := joinedVoice(t, client, room.ID)
+	current := joinedVoice(t, client, room.ID)
+	if old.GrantId == current.GrantId || current.GrantId == "" {
+		t.Fatal("explicit joins must allocate distinct grants")
+	}
+	accountRequest(t, p, browser, "POST", "/api/voice/leave", map[string]any{"grantId": old.GrantId}, "", 200)
+	p = restartVoice(t, p)
+	checkVoiceValidation(t, p, current.Token, 200)
+	p.livekit.Fail(errors.New("media removal unavailable"))
+	accountRequest(t, p, browser, "POST", "/api/voice/leave", map[string]any{"grantId": current.GrantId}, "", 200)
+	p.livekit.Fail(nil)
+	p = restartVoice(t, p)
+	checkVoiceValidation(t, p, current.Token, 403)
+	accountRequest(t, p, browser, "POST", "/api/voice/leave", map[string]any{"grantId": current.GrantId}, "", 200)
+}
+
+func TestLeaveRequiresCurrentExactSessionAndAccountOrigin(t *testing.T) {
+	p := startPublic(t, 100)
+	room := p.createRoom(t, "Voice")
+	first, firstHTTP := p.browserWithHTTP(t)
+	key := passkeytest.New(t)
+	enrollAccount(t, p, firstHTTP, "Account", key)
+	creds := joinedVoice(t, first, room.ID)
+	_, secondHTTP := loginAccountBrowser(t, p, key)
+	accountRequest(t, p, secondHTTP, "POST", "/api/voice/leave", map[string]any{"grantId": creds.GrantId}, testOrigin, 403)
+	accountRequest(t, p, firstHTTP, "POST", "/api/voice/leave", map[string]any{"grantId": creds.GrantId}, "", 403)
+	accountRequest(t, p, firstHTTP, "POST", "/api/voice/leave", map[string]any{"grantId": creds.GrantId}, testOrigin, 200)
+	// A logged-out cookie cannot acknowledge even an already revoked target.
+	accountRequest(t, p, firstHTTP, "POST", "/api/accounts/logout", map[string]any{}, testOrigin, 200)
+	accountRequest(t, p, firstHTTP, "POST", "/api/voice/leave", map[string]any{"grantId": creds.GrantId}, testOrigin, 401)
 }

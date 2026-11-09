@@ -23,6 +23,13 @@ Recovery enrolls a verified replacement passkey before atomically replacing old
 credentials, sessions and recovery proofs. Public RTC admission shares the
 session lifecycle with live updates: self-hosted LiveKit removal alone cannot
 invalidate an already signed token. Distinct transport grants map to the lasting
-identity; process-local grants fail closed after restart rather than extending
-voice authorization independently of account state. The operational and API
+identity for guests and accounts. Exact grants are persisted independently of
+occupancy and session deletion so valid original/refreshed JWTs reconnect after
+restart and failed revocation cleanup remains retryable. Admission always
+revalidates the original session deadline and current access policy; a missing
+or revoked grant is never reconstructed from a token alone. Every explicit Join
+creates a fresh transport; exact-grant Leave cannot revoke a later replacement.
+The first deployment requires one explicit rejoin because old process-local
+permissions cannot be safely backfilled. Maintenance closes established expired
+access on its next pass, while new requests and reconnects fail immediately. The operational and API
 contracts are recorded in [accounts](../accounts.md) and the [runbook](../runbook.md).

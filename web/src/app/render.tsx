@@ -10,7 +10,7 @@ import { Main } from '../ui/Main';
 import { Entry } from '../ui/Screens';
 import { Message } from '../ui/Message';
 
-function App() {
+function Screen() {
   const phase = useApp((s) => s.phase);
   // Words are read when rendering, so a new language needs only this render.
   useApp((s) => s.settings.language);
@@ -63,6 +63,15 @@ function App() {
     case 'ready':
       return <Main />;
   }
+}
+
+function App() {
+  const phase = useApp((s) => s.phase);
+  const pendingLeave = useApp((s) => s.voice.pendingLeave);
+  useApp((s) => s.settings.language);
+  return <><Screen />{phase !== 'ready' && pendingLeave > 0 && (
+    <div className="float-top pending-leave-outside"><div className="banner pending-leave" role="status">{t.voiceLeavePending}</div></div>
+  )}</>;
 }
 
 // A new access link pasted into this tab changes only the fragment.

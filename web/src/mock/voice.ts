@@ -1,3 +1,4 @@
+import { PendingLeaves } from '../voice/pendingLeaves';
 import { api, ApiError } from '../api/client';
 import { idleVoice, type VoiceHost, type VoiceSnapshot, type VoiceClient, type ShareTrack } from '../voice/types';
 import { SyntheticShare } from './share';
@@ -8,6 +9,9 @@ export async function preloadVoice(): Promise<void> {}
 
 /** Simulates media only. Joining and room moves still use the public HTTP API. */
 export class VoiceSession implements VoiceClient {
+  private grantId: string | null = null;
+  private joining: { leaveRequested: boolean } | null = null;
+  private readonly leaves: PendingLeaves;
   private tracks = new Map<string, SyntheticShare>();
   private cameraPicture: SyntheticShare | null = null;
   private snap: VoiceSnapshot = idleVoice;
@@ -18,6 +22,7 @@ export class VoiceSession implements VoiceClient {
   private readonly unsubscribe: () => void;
 
   constructor(private readonly host: VoiceHost) {
+    this.leaves = new PendingLeaves(() => this.set({ pendingLeave: this.leaves.count }));
     this.unsubscribe = subscribeMockState(() => this.refresh());
   }
   get snapshot(): VoiceSnapshot { return this.snap; }
@@ -27,23 +32,29 @@ export class VoiceSession implements VoiceClient {
     const initial = mockState();
     if (!initial) { this.host.onProblem('join_failed'); return; }
     const operation = ++this.operation;
+    const intent = { leaveRequested: false };
+    this.joining = intent;
     const generation = initial.generation;
     const previous = this.snap;
     const startMuted = previous.status === 'idle' ? this.host.joinMuted() : previous.muted && !previous.listenOnly;
     this.pending = true;
     this.set({ status: 'joining', joiningRoomId: roomId });
     try {
-      await api.joinVoice(roomId);
+      const creds = await api.joinVoice(roomId);
+      if (operation === this.operation) this.grantId = creds.grantId;
       if (operation !== this.operation) {
-        await this.release(generation);
+        if (intent.leaveRequested) await this.leaves.add(creds.grantId);
+        else await this.release(generation, creds.grantId);
         return;
       }
       const state = await refreshMockState();
       if (operation !== this.operation) {
-        await this.release(generation);
+        if (intent.leaveRequested) await this.leaves.add(creds.grantId);
+        else await this.release(generation, creds.grantId);
         return;
       }
       if (state.instanceId !== initial.instanceId || state.generation !== generation) return;
+      this.joining = null;
       this.generation = generation;
       this.set({ status: 'connected', roomId, joiningRoomId: null, joinedAt: performance.now(), muted: startMuted || previous.deafened, deafened: previous.deafened, listenOnly: false, sharing: false });
       if (!startMuted && !previous.deafened) this.enableMic();
@@ -51,7 +62,7 @@ export class VoiceSession implements VoiceClient {
       this.refresh();
     } catch (error) {
       if (operation !== this.operation) return;
-      this.snap = previous;
+      this.snap = { ...previous, pendingLeave: this.leaves.count };
       this.host.onChange(this.snap);
       const code = error instanceof ApiError ? error.code : 'network';
       this.host.onProblem(code === 'room_full' || code === 'voice_unavailable' || code === 'name_taken' || code === 'visitor_required' ? code : 'join_failed');
@@ -61,17 +72,19 @@ export class VoiceSession implements VoiceClient {
   }
 
   async leave(): Promise<void> {
-    const generation = this.generation;
     if (this.snap.status !== 'idle') this.host.onSound('leave');
+    if (this.joining) this.joining.leaveRequested = true;
+    const pending = this.grantId ? this.leaves.add(this.grantId) : Promise.resolve();
     this.close();
-    if (generation !== null) await this.release(generation);
+    await pending;
   }
   end(): void {
     const generation = this.generation;
+    const grantId = this.grantId;
     this.close();
-    if (generation !== null) void this.release(generation);
+    if (generation !== null && grantId) void this.release(generation, grantId);
   }
-  dispose(): void { this.end(); this.unsubscribe(); }
+  dispose(): void { this.end(); this.unsubscribe(); this.leaves.dispose(); }
 
   async toggleMute(): Promise<void> {
     if (!this.snap.roomId) return;
@@ -155,16 +168,18 @@ export class VoiceSession implements VoiceClient {
     this.set({ people, status: state.faults.voiceReconnecting ? 'reconnecting' : 'connected', quality: 'unknown' });
     this.set({ speakers: people.filter((p) => this.level(p.id) > 0.1).map((p) => p.id) });
   }
-  private async release(generation: number): Promise<void> {
-    await mockAction({ type: 'voice-leave', generation }).catch(() => {});
+  private async release(generation: number, grantId: string): Promise<void> {
+    await mockAction({ type: 'voice-leave', generation, grantId }).catch(() => {});
   }
   private close(): void {
     this.operation++;
     this.generation = null;
+    this.grantId = null;
+    this.joining = null;
     for (const track of this.tracks.values()) track.stop();
     this.tracks.clear();
     this.stopCamera();
-    this.snap = idleVoice;
+    this.snap = { ...idleVoice, pendingLeave: this.leaves.count };
     this.host.onChange(this.snap);
   }
   private stopCamera(): void {

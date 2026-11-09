@@ -142,7 +142,7 @@ func TestJoinIssuesATokenForThatRoomOnly(t *testing.T) {
 	}
 
 	grants, expires := decodeToken(t, creds.Token)
-	if grants.Identity != bob.ID || grants.Name != bob.Name {
+	if !strings.HasPrefix(grants.Identity, bob.ID+".") || grants.Name != bob.Name {
 		t.Errorf("identity, name = %q, %q, want %q, %q", grants.Identity, grants.Name, bob.ID, bob.Name)
 	}
 	if until := time.Until(expires); until < voice.TokenLifetime-time.Minute || until > voice.TokenLifetime {
@@ -198,14 +198,14 @@ func TestJoiningAnotherRoomRemovesTheVisitorFromThePreviousOne(t *testing.T) {
 	}
 }
 
-func TestJoiningTheSameRoomAgainRemovesNoOne(t *testing.T) {
+func TestJoiningTheSameRoomAgainRemovesTheOldTransport(t *testing.T) {
 	s, lk := newService(8)
 	lk.AddParticipant(roomA, bob.ID)
 	if _, err := s.Join(t.Context(), bob, roomA); err != nil {
 		t.Fatalf("Join: %v", err)
 	}
-	if got := lk.Removed(); len(got) != 0 {
-		t.Errorf("removed = %+v, want no one", got)
+	if got := lk.Removed(); len(got) != 1 {
+		t.Errorf("removed = %+v, want old transport", got)
 	}
 }
 

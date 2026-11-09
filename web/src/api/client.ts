@@ -35,13 +35,14 @@ export class ApiError extends Error {
   }
 }
 
-async function call<T>(method: string, path: string, body?: unknown): Promise<T> {
+async function call<T>(method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
   let res: Response;
   try {
     res = await fetch(path, {
       method,
       headers: body === undefined ? undefined : { 'Content-Type': 'application/json' },
       body: body === undefined ? undefined : JSON.stringify(body),
+      signal,
     });
   } catch {
     throw new ApiError(0, 'network', 'the server cannot be reached');
@@ -94,6 +95,14 @@ function uploadAttachment(roomId: string, file: File, onProgress: (sent: number)
   });
 }
 
+async function leaveVoice(grantId: string): Promise<{ revoked: boolean }> {
+  const request = new AbortController();
+  const timeout = setTimeout(() => request.abort(), 10_000);
+  try {
+    return await call('POST', '/api/voice/leave', { grantId }, request.signal);
+  } finally { clearTimeout(timeout); }
+}
+
 export const api = {
   enter: (secret: string, name: string) => call<Visitor>('POST', '/api/enter', { secret, name }),
   me: () => call<Visitor>('GET', '/api/me'),
@@ -117,4 +126,5 @@ export const api = {
   cancelAttachment: (id: string) => call<void>('DELETE', `/api/attachments/${encodeURIComponent(id)}`),
   upload: uploadAttachment,
   joinVoice: (roomId: string) => call<VoiceCredentials>('POST', `/api/rooms/${encodeURIComponent(roomId)}/voice`),
+  leaveVoice,
 };

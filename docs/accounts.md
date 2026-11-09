@@ -116,7 +116,7 @@ for accounts and 400 days absolute for guests**, without sliding renewal.
 Cookie lifetimes match those deadlines. Logout revokes that session only.
 Session resolution rejects expired, revoked, old-generation and disabled access
 on API, attachments, live updates and RTC admission. Idle live and voice
-connections end at the session deadline as well.
+connections close at the next maintenance pass after the session deadline (normally within 30 seconds). New requests and reconnects fail immediately at the authoritative database deadline; restarting never extends it.
 
 An account can have several labeled passkeys. IDs identify individual credentials;
 labels default to `Passkey` and are limited to 128 bytes. A credential belongs to
@@ -163,7 +163,7 @@ Main shares one lifecycle gate across HTTP/operator mutations, final live
 registration, voice issuance and RTC admission. Successful mutation responses
 await selective live/voice enforcement. Recovery preserves its new session while
 ending all old access; logout affects one session; guest-link rotation affects
-only guests. Absolute expiry also ends idle live and voice connections. A
+only guests. Absolute expiry is enforced on established idle live and voice connections by maintenance (normally within 30 seconds), and immediately on requests and reconnects. A
 committed mutation finishes enforcement with an independent ten-second deadline,
 even if its HTTP/operator caller disconnects. Cancellation before the identity
 transaction commits still applies normally. A
@@ -172,34 +172,51 @@ identity transaction or falsely report successful media removal. Grants are
 already fenced and live access closed; inspect logs and restore LiveKit
 connectivity before retrying repair/reconciliation.
 
-`POST /api/rooms/{id}/voice` returns voice credentials. Another account session
-gets `409 voice_transfer_required` until it sends `{"confirmTransfer":true}`;
-unconfirmed attempts leave the first participant intact. Account voice requires
-exact configured Origin (`403 origin_forbidden` otherwise), including nonbrowser
-clients. Guests retain omitted-body/no-Origin behavior. Same owning session can
-reconnect. Confirmed transfer fences old grants and removes old media before
-returning replacement credentials; other chat sessions remain active.
+`POST /api/rooms/{id}/voice` returns `{url, token, grantId}`. Every explicit Join,
+for either session kind, creates a fresh durable grant and a never-reused transport,
+even for the same session and room. Automatic SDK reconnect uses the existing exact
+grant. Another account session gets `409 voice_transfer_required` until it sends
+`{"confirmTransfer":true}`; unconfirmed attempts leave the first participant intact.
+Account Join and Leave require exact configured Origin (`403 origin_forbidden`
+otherwise), including nonbrowser clients. Guests retain omitted-body/no-Origin Join
+behavior. Room-full refusal occurs before replacing the old grant. Confirmed
+transfer fences the old grant and removes required old media before returning
+replacement credentials; other chat sessions remain active. Failed required removal
+returns an error without issuing new credentials, and remains retryable.
 
-Newly issued voice tokens last ten minutes; admission also requires a current
-session/grant, so token expiry is not the revocation mechanism. An account's
-signed immutable LiveKit transport identity is
-`<permanent ID>.<opaque grant nonce>`. SDK consumers must map its prefix before
-the dot to the permanent identity; guest transport IDs remain their permanent
-IDs. Occupancy exposes permanent IDs. Metadata/attributes, including deafened,
-are editable and never authorization inputs. Actual LiveKit-refreshed JWTs work
-only while the bound session/generation/room grant remains current. Account
-voice grants are process-local and fail closed: after a backend restart obtain fresh account
-voice credentials; persistent accounts and sessions survive. Reconciliation
-removes unknown account transports and unbound bare account participants.
+Newly issued voice tokens last ten minutes. A valid original or genuinely
+LiveKit-refreshed JWT reconnects after backend restart for **both guests and
+accounts**, only through its exact persisted active grant. The grant binds the
+immutable session ID, permanent identity, kind, generation, room and transport.
+Admission revalidates authoritative session expiry, account/guest policy and
+room/name authorization. It never restores a missing or revoked grant from a JWT,
+identity or session alone. JWT age, absent participants and disconnected sockets
+do not revoke a valid grant. SDK Leave, reload, tab closure, temporary network loss
+and failed connection setup are not intentional durable Leave.
 
-Authorized guests may reconnect after a backend restart with a still-valid
-original or LiveKit-refreshed JWT. The guard recovers only a unique persisted
-guest session under the current guest-link generation, with no account record,
-then revalidates that session and the room/name authorization under the same
-lifecycle gate. Ambiguous guest-token state fails closed. Guest logout, link
-rotation and account upgrade prevent restoration. A current issued-room choice
-still fences earlier room tokens; restoration records its room in the new
-process. No account or nonce-bearing transport uses this guest-only lookup.
+Both kinds use signed immutable LiveKit transport identities
+`<permanent ID>.<opaque grant nonce>`. SDK transport operations keep the full
+identity; people, occupancy, tracks, cameras, screen shares, meters, speakers and
+volume preferences use the permanent prefix before the dot. Metadata/attributes,
+including deafened, are editable and never authorization inputs. Durable grants
+are permission, not occupancy; LiveKit owns actual participation and media.
+
+`POST /api/voice/leave` takes `{"grantId":"<exact transport>"}` under the owning
+cookie session. It is idempotent and never resolves a stale target to a newer
+grant. `200 {"revoked":true}` acknowledges durable revocation even if immediate
+media cleanup failed; backend maintenance retains and retries that cleanup across
+session deletion and restart. The browser stops local media immediately, persists
+exact-grant pending intent before sending, retries after reload/reachability, and
+shows pending server confirmation independently of any newer Join. Only durable
+acknowledgement clears pending intent. A lost response or `401 visitor_required`
+is not proof of revocation: the unresolved old target stays pending without
+blocking new joins. Late Join credentials canceled by explicit Leave are queued
+too; access ending or SDK disconnection does not create explicit Leave intent.
+
+On the first upgrade to durable grants there is no safe backfill for historical
+process-local permissions. Unknown participants/tokens are refused and removed;
+each participant must explicitly rejoin voice once. Browser sessions and their
+original deadlines survive the upgrade.
 
 Both RTC entry points accept only GET `/rtc`, `/rtc/v1`, `/rtc/validate` and
 `/rtc/v1/validate`. They verify JWT issuer/signature/strict expiry, room-join scope,
@@ -208,13 +225,13 @@ Stale/invalid access returns 403; an internal lookup failure returns 503.
 Responses carry `X-Falky-RTC-Guard: 1` and `no-store`; management/API paths do not
 proxy. The gate covers the first upstream Join/Reconnect response and socket
 registration, then releases for streaming. Handshake/validation and normal
-enforcement are bounded at ten seconds; failed-handshake cleanup at two seconds.
-Revocation fences first, awaits removal of the exact transport, then closes its
-signalling sockets. Distinct transports prevent late old cleanup from removing
+enforcement retain bounded operation deadlines. Failed setup closes only its
+upstream socket and relies on LiveKit connection lifecycle, so an old handshake
+cannot management-remove a replacement. Revocation is persisted first and all
+affected local live/signalling sockets close before external media removal. Distinct transports prevent late old cleanup from removing
 the new participant.
 
-Account URLs always use the guarded public origin. `FALKY_LIVEKIT_URL` retains
-legacy guest configuration; it cannot redirect account credentials around the
-guard. Raw LiveKit signalling/API must remain private to the trusted application
+Both guest and account URLs always use the guarded public origin.
+`FALKY_LIVEKIT_URL` cannot redirect returned credentials around the guard. Raw LiveKit signalling/API must remain private to the trusted application
 network or development loopback. Exposing upstream 7880 bypasses admission.
 See the runbook for packaged routing and the future rollout transition.

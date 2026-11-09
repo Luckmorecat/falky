@@ -541,11 +541,31 @@ export interface paths {
          * Join a room's voice.
          * @description Returns the LiveKit URL and a token to connect to the room's voice with a LiveKit SDK. A visitor is a participant in one room at most: the server first removes them from any other room's voice. Joining the room again, say from a second tab, is allowed even when the room is full, and the new connection replaces the earlier one. For accounts, a different browser session must explicitly send confirmTransfer=true; otherwise voice_transfer_required leaves the first participant intact. Guest callers may continue omitting the request body. Account requests require this server's exact configured Origin header.
          *
-         *     The token admits the visitor to this room only, under their visitor ID as participant identity for guests and their name as display name. Account transport identities append an opaque grant nonce after a dot; occupancy continues to expose the permanent visitor ID. Account clients map a transport identity to that ID by taking its prefix before the dot. Account credentials always use this server's guarded public signalling origin. Restarting Falky requires fresh account voice credentials. Guests may reuse a valid original or LiveKit-refreshed JWT after a backend restart while exactly one persisted guest session and its guest link generation remain current. Guest logout, link rotation or account upgrade prevent restoration; room and name authorization still apply. A newer room choice fences earlier room tokens. It may publish the microphone, a camera, a screen share and the screen share's audio, subscribe to the other participants, and update the participant's own attributes, but not send data messages. It expires 10 minutes after it is issued, so connect right away; once connected, LiveKit renews it.
+         *     Both guests and accounts receive a fresh immutable transport identity on every explicit Join, even for the same room and session. Its prefix before the dot is the permanent identity ID; occupancy exposes that permanent ID. All credentials use guarded public signalling. Valid original and LiveKit refreshed JWTs reconnect after restart only through their exact persisted active grant and current browser session, expiry, kind, generation, room and name authorization. Unknown pre-upgrade grants fail closed and require one explicit rejoin; browser sessions and their deadlines survive migration. Temporary disconnection, page exit and SDK Leave preserve the grant. Explicit Leave uses the returned grantId. A newer Join fences the older grant. The token may publish the microphone, a camera, a screen share and the screen share's audio, subscribe to the other participants, and update the participant's own attributes, but not send data messages. It expires 10 minutes after it is issued, so connect right away; once connected, LiveKit renews it.
          *
          *     Muted is the state of the microphone track. Deafened is the participant attribute `deafened`: a client sets it to `"true"` while it plays no one's audio, and also mutes its microphone, then sets it to `"false"` again; an absent attribute means not deafened. The other participants see it through the SDK, for example with `room.localParticipant.setAttributes({ deafened: 'true' })` in `livekit-client`.
          */
         post: operations["joinVoice"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/voice/leave": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Durably revoke an exact voice grant.
+         * @description Requires a current browser session. Accounts require the exact configured Origin. Targets only grantId owned by this exact session, kind, identity and generation; it never targets a later replacement. A missing or already cleaned grant succeeds idempotently. A present grant owned by another session returns 403 grant_forbidden. HTTP 200 acknowledges durable revocation, even when LiveKit removal is still pending: the backend retries cleanup. Any non-200 response or lost acknowledgement requires retaining the exact pending leave. A 401 after expiry, logout or session replacement does not acknowledge durable revocation; retain unresolved intent without blocking new joins. Stop local media immediately before making this request.
+         */
+        post: operations["leaveVoice"];
         delete?: never;
         options?: never;
         head?: never;
@@ -561,7 +581,7 @@ export interface paths {
         };
         /**
          * Open the live-update WebSocket.
-         * @description Upgrades to a WebSocket over which the server sends live updates, each an `Event` as one JSON text message. The connection carries events from the server only: messages from the client are ignored, though one over 32 KiB closes the connection with close code 1009. The upgrade's `Origin` must be the server's public origin. The server pings every 20 seconds and closes a connection that does not answer within 10 seconds. Each connection has a bounded queue of events waiting to be sent; a client that lets it fill up is disconnected with close code 4000. Replacing the guest access link sends `access.revoked` and closes only old guest connections with code 4001; account connections survive. Logout closes only that browser session; recovery closes old account sessions while preserving its new session; disablement closes that account's sessions. Revoked or expired sessions close with code 4001 and cannot reconnect without current authorization. Account revocation does not send the guest-link replacement event. Name changes, including displaced guests, use retryable close 1001 so clients refresh their identity through GET /api/me. Shutdown also closes with code 1001. Events are not replayed: after a retryable disconnection a client reconnects first and then catches up through the other operations, reading each room's messages with `after` set to the last message ID it saw and the room list again. Events that arrive while it catches up may repeat what it reads; it keeps one message per message ID. It also refreshes every previously visible attachment through GET /api/attachments/{id}: catching up only new messages cannot recover missed attachments.expired events.
+         * @description Upgrades to a WebSocket over which the server sends live updates, each an `Event` as one JSON text message. The connection carries events from the server only: messages from the client are ignored, though one over 32 KiB closes the connection with close code 1009. The upgrade's `Origin` must be the server's public origin. The server pings every 20 seconds and closes a connection that does not answer within 10 seconds. Each connection has a bounded queue of events waiting to be sent; a client that lets it fill up is disconnected with close code 4000. Replacing the guest access link sends `access.revoked` and closes only old guest connections with code 4001; account connections survive. Logout closes only that browser session; recovery closes old account sessions while preserving its new session; disablement closes that account's sessions. Revoked sessions close promptly with code 4001; established expired connections close at the next maintenance pass (normally within 30 seconds). Requests and reconnects reject expired sessions immediately using their original authoritative database deadline, without restart extension. Closed sessions cannot reconnect without current authorization. Account revocation does not send the guest-link replacement event. Name changes, including displaced guests, use retryable close 1001 so clients refresh their identity through GET /api/me. Shutdown also closes with code 1001. Events are not replayed: after a retryable disconnection a client reconnects first and then catches up through the other operations, reading each room's messages with `after` set to the last message ID it saw and the room list again. Events that arrive while it catches up may repeat what it reads; it keeps one message per message ID. It also refreshes every previously visible attachment through GET /api/attachments/{id}: catching up only new messages cannot recover missed attachments.expired events.
          *
          *     A visitor is connected while they have at least one of these connections open. A connected guest holds their name against other guests; account registration or rename may claim it and assign the guest a replacement. Account names stay reserved even while offline or disabled and cannot be taken by another visitor.
          */
@@ -1230,6 +1250,11 @@ export interface components {
         };
         /** @description What a client connects to a room's voice with. */
         VoiceCredentials: {
+            /**
+             * @description Immutable exact grant target for Leave; also the LiveKit transport identity.
+             * @example 01JBX6Z8Q3M5W2K7R9T4V1C0DE.01JBX8C4N2F6H8K0P3R5T7W9YZ
+             */
+            grantId: string;
             /**
              * @description Where to reach LiveKit, a `wss://` URL (`ws://` when run locally); pass it to the SDK as is.
              * @example wss://falky.example
@@ -2758,6 +2783,64 @@ export interface operations {
             };
             /** @description The server cannot reach LiveKit (`voice_unavailable`); try again later. The visitor may already have been disconnected from another room's voice. */
             503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    leaveVoice: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Exact immutable grant to revoke. */
+        requestBody: {
+            content: {
+                "application/json": {
+                    /**
+                     * @description The immutable grantId returned by Join.
+                     * @example 01JBX6Z8Q3M5W2K7R9T4V1C0DE.01JBX8C4N2F6H8K0P3R5T7W9YZ
+                     */
+                    grantId: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Durable revocation acknowledged; media cleanup may still be pending. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /**
+                         * @description Durable permission has been revoked or the grant was already absent.
+                         * @example true
+                         * @enum {boolean}
+                         */
+                        revoked: true;
+                    };
+                };
+            };
+            /** @description Missing or empty grantId (bad_request). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            401: components["responses"]["VisitorRequired"];
+            /** @description Wrong exact account Origin (origin_forbidden) or another session's grant (grant_forbidden). */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };

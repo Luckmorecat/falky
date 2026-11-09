@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 
 	"github.com/kisshot/falky/server/internal/identity"
 	"github.com/kisshot/falky/server/internal/realtime"
+	"github.com/kisshot/falky/server/internal/scheduler"
 )
 
 // change is one call of the hub's connected func.
@@ -22,10 +24,11 @@ type change struct {
 	connected bool
 }
 
-func TestAbsoluteSessionExpiryEndsIdleLiveConnection(t *testing.T) {
+func TestMaintenanceEndsIdleLiveConnectionUsingAuthoritativeValidation(t *testing.T) {
 	hub := realtime.New()
+	var expired atomic.Bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		hub.Serve(w, r, realtime.Subscriber{VisitorID: "account", Session: identity.Session{Visitor: identity.Visitor{ID: "account"}, ID: "session", Kind: identity.Account, ExpiresAt: time.Now().Add(50 * time.Millisecond)}})
+		hub.Serve(w, r, realtime.Subscriber{VisitorID: "account", Session: identity.Session{Visitor: identity.Visitor{ID: "account"}, ID: "session", Kind: identity.Account, ExpiresAt: time.Now().Add(10 * time.Millisecond)}, Authorized: func(context.Context) bool { return !expired.Load() }})
 	}))
 	t.Cleanup(srv.Close)
 	t.Cleanup(func() { _ = hub.Shutdown(context.Background()) })
@@ -39,7 +42,15 @@ func TestAbsoluteSessionExpiryEndsIdleLiveConnection(t *testing.T) {
 	defer func() { _ = ws.CloseNow() }()
 	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 	defer cancel()
-	_, _, err = ws.Read(ctx)
+	closed := make(chan error, 1)
+	go func() { _, _, err := ws.Read(ctx); closed <- err }()
+	time.Sleep(30 * time.Millisecond)
+	if err := ws.Ping(ctx); err != nil {
+		t.Fatalf("deadline created a per-connection expiry timer: %v", err)
+	}
+	expired.Store(true)
+	hub.ValidateSessions(ctx)
+	err = <-closed
 	if websocket.CloseStatus(err) != realtime.StatusRevoked {
 		t.Fatalf("idle expired connection = %v", err)
 	}
@@ -250,7 +261,14 @@ func TestAFailedUpgradeOpensNoConnection(t *testing.T) {
 
 func TestAConnectionThatMissesHeartbeatsIsClosed(t *testing.T) {
 	const interval, timeout = 50 * time.Millisecond, 50 * time.Millisecond
-	h := startHub(t, realtime.WithHeartbeat(interval, timeout))
+	h := startHub(t, realtime.WithPongTimeout(timeout))
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		scheduler.Run(ctx, scheduler.Job{Interval: interval, Run: h.hub.Heartbeat})
+	}()
+	t.Cleanup(func() { cancel(); <-done })
 
 	// A client that reads answers pings; one that never reads does not.
 	alive := h.dial(t, "bob")
@@ -281,10 +299,66 @@ func TestAConnectionThatMissesHeartbeatsIsClosed(t *testing.T) {
 	h.wantNoChange(t, 10*time.Millisecond)
 }
 
+func TestHeartbeatsReachAllPeersWhileSessionValidationIsBlocked(t *testing.T) {
+	validating, release := make(chan struct{}, 3), make(chan struct{})
+	opened := make(chan struct{}, 3)
+	hub := realtime.New(realtime.WithPongTimeout(500*time.Millisecond), realtime.WithConnectedFunc(func(string, bool) { opened <- struct{}{} }))
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hub.Serve(w, r, realtime.Subscriber{VisitorID: r.URL.Query().Get("id"), Authorized: func(ctx context.Context) bool {
+			validating <- struct{}{}
+			select {
+			case <-release:
+			case <-ctx.Done():
+			}
+			return true
+		}})
+	}))
+	t.Cleanup(srv.Close)
+	t.Cleanup(func() { _ = hub.Shutdown(context.Background()) })
+	pings := make(chan int, 3)
+	for i := range 3 {
+		ws, res, err := websocket.Dial(t.Context(), fmt.Sprintf("%s?id=%d", srv.URL, i), &websocket.DialOptions{OnPingReceived: func(context.Context, []byte) bool { pings <- i; return i == 0 }})
+		if res != nil && res.Body != nil {
+			_ = res.Body.Close()
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = ws.CloseNow() })
+		ws.CloseRead(t.Context())
+		<-opened
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	checked := make(chan struct{})
+	go func() { defer close(checked); hub.ValidateSessions(ctx) }()
+	defer func() { close(release); <-checked }()
+	<-validating
+	beat := make(chan struct{})
+	go func() { defer close(beat); hub.Heartbeat(ctx) }()
+	for range 3 {
+		select {
+		case <-pings:
+		case <-time.After(200 * time.Millisecond):
+			t.Fatal("heartbeat waited for validation or another peer's pong timeout")
+		}
+	}
+	select {
+	case <-checked:
+		t.Fatal("session validation unexpectedly finished")
+	default:
+	}
+	select {
+	case <-beat:
+	case <-time.After(time.Second):
+		t.Fatal("missed pongs were not bounded")
+	}
+}
+
 func TestAClientThatFallsBehindIsDisconnectedWhileOthersKeepReceiving(t *testing.T) {
 	// No heartbeat during the test: the slow client does not read, so it
 	// would not answer pings either.
-	h := startHub(t, realtime.WithQueueSize(4), realtime.WithHeartbeat(time.Hour, time.Hour))
+	h := startHub(t, realtime.WithQueueSize(4))
 	slow := h.dial(t, "slow")
 	h.wantChange(t, change{"slow", true}, time.Second)
 	fast := h.dial(t, "fast")
