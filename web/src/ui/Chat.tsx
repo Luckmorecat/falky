@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { type Ref, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { Attachment, Message, Room } from '../api/client';
 import { addFiles, discardMessage, loadOlder, markLatestRead, postMessage, retryMessage, setChatOpen } from '../app/controller';
 import { shortcuts } from '../app/shortcuts';
@@ -110,7 +110,7 @@ function PendingRow({ pending, continued, lead, name, palette }: { pending: Pend
  * sliding under the mouse cannot make it flicker. On a phone there is no hover,
  * so it opens over the page by a button.
  */
-export function Chat({ room }: { room: Room | null }) {
+export function Chat({ room, unreadCounterRef }: { room: Room | null; unreadCounterRef?: Ref<HTMLSpanElement> }) {
   const open = useApp((s) => s.chatOpen);
   const lang = useApp((s) => s.settings.language);
   const unread = useApp((s) => (s.viewedRoomId ? (s.chats[s.viewedRoomId]?.unread ?? 0) : 0));
@@ -506,7 +506,7 @@ export function Chat({ room }: { room: Room | null }) {
     </aside>
     {viewing && <Lightbox items={viewerItems} startId={viewing} onClose={closeViewer} />}
     <div className="chat-veil" aria-hidden="true"><i /><i /><i /><i /><b /><u /></div>
-    {unread > 0 && <div className="chat-hint" aria-hidden="true"><span className="badge">{unread > 99 ? '99+' : unread}</span></div>}
+    {unread > 0 && <div className="chat-hint" aria-hidden="true"><span ref={unreadCounterRef} className="badge">{unread > 99 ? '99+' : unread}</span></div>}
     </div>
   );
 }

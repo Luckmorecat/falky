@@ -1,7 +1,8 @@
-import { type Ref, useEffect, useImperativeHandle, useRef } from 'react';
+import { type Ref, type RefObject, useEffect, useImperativeHandle, useRef } from 'react';
 import { useApp } from '../app/store';
 import { createBackground } from '../fx/backgroundRenderer';
 import { createThemeWave } from '../fx/themeWave';
+import { createUnreadBeacon } from '../fx/unreadBeacon';
 import { effectsReduced, onTick } from '../fx/ticker';
 import type { VoiceSource } from '../fx/voiceField';
 
@@ -14,11 +15,19 @@ export interface LiveBackgroundHandle {
 }
 
 /** Screen-owned canvas; participant membership never resets the theme wave. */
-export function LiveBackground({ ref }: { ref: Ref<LiveBackgroundHandle> }) {
+export function LiveBackground({ ref, unreadTarget }: { ref: Ref<LiveBackgroundHandle>; unreadTarget: RefObject<HTMLElement | null> }) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const sources = useRef<VoiceSource[]>([]);
   const renderer = useRef<ReturnType<typeof createBackground>>(null);
   const enabled = useApp((s) => s.settings.liveBackground && !s.settings.fewerEffects);
+  const message = useApp((s) => {
+    const chat = s.viewedRoomId ? s.chats[s.viewedRoomId] : undefined;
+    if (s.chatOpen || !chat?.unread) return null;
+    const newest = chat.messages.findLast((m) => m.authorId !== s.visitor?.id);
+    return newest ? `${s.viewedRoomId}/${newest.id}` : null;
+  });
+  const unread = useRef({ message, target: unreadTarget });
+  unread.current = { message, target: unreadTarget };
   const wave = useRef<ReturnType<typeof createThemeWave> | null>(null);
   const layoutUntil = useRef(0);
 
@@ -37,6 +46,7 @@ export function LiveBackground({ ref }: { ref: Ref<LiveBackgroundHandle> }) {
     renderer.current = painter;
     wave.current ??= createThemeWave(document.documentElement.dataset.theme === 'light');
     layoutUntil.current = layoutTime() + 500;
+    const beacon = createUnreadBeacon();
     let time = 0;
     const stop = onTick((_now, dt) => {
       time += dt;
@@ -47,10 +57,12 @@ export function LiveBackground({ ref }: { ref: Ref<LiveBackgroundHandle> }) {
       }
       const reduced = effectsReduced();
       const theme = wave.current!.frame(document.documentElement.dataset.theme === 'light', dt, reduced);
-      painter.draw(time, 1.5, 480, reduced, theme);
+      const { message, target } = unread.current;
+      const frame = beacon.frame(message, dt, reduced);
+      painter.draw(time, 1.5, 480, reduced, theme, message && target.current ? { element: target.current, frame } : undefined);
     });
     return () => { stop(); painter.dispose(); renderer.current = null; };
   }, [enabled]);
 
-  return <canvas ref={canvas} className="live-background" aria-hidden="true" />;
+  return <canvas ref={canvas} className="live-background" data-beacon={enabled && message ? '' : undefined} aria-hidden="true" />;
 }

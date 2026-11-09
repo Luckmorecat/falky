@@ -7,7 +7,7 @@ import { chromiumOptions } from '../smoke/browser';
 import { launchMock } from '../smoke/launcher';
 import { setLanguage, t } from '../src/strings';
 
-const presets = ['room', 'chat', 'voice', 'screen-share', 'settings', 'profile', 'entry'] as const;
+const presets = ['room', 'chat', 'unread', 'voice', 'screen-share', 'settings', 'profile', 'entry'] as const;
 const { values } = parseArgs({ options: {
   preset: { type: 'string' }, scenario: { type: 'string' }, output: { type: 'string' },
   viewport: { type: 'string', default: '1440x1000' }, theme: { type: 'string', default: 'dark' },
@@ -27,7 +27,8 @@ async function main() {
   --full-page                  Capture the full page
   --gpu                        Request hardware GPU with full headless Chromium
 
-Each capture owns and closes a fresh mock server and browser. Screen-share uses
+Each capture owns and closes a fresh mock server and browser. Unread enables the
+live background and injects one message to show Beacon. Screen-share uses
 remote-share; entry uses entry; other presets use populated. --scenario alone
 captures its starting screen. Real hardware rendering depends on host support.
 Install once: pnpm exec playwright install chromium
@@ -67,18 +68,19 @@ Existing browser: PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/path/to/chromium`);
       handleSIGINT: false, handleSIGTERM: false, handleSIGHUP: false });
     cancellation.signal.throwIfAborted();
     const page = await browser.newPage({ viewport: { width, height }, locale: values.lang,
-      timezoneId: 'UTC', colorScheme: values.theme, reducedMotion: 'reduce', deviceScaleFactor: 1 });
+      timezoneId: 'UTC', colorScheme: values.theme, reducedMotion: preset === 'unread' ? 'no-preference' : 'reduce', deviceScaleFactor: 1 });
     page.setDefaultTimeout(15_000);
     page.setDefaultNavigationTimeout(15_000);
     const response = await page.request.post(`${app.url}/__mock/bootstrap`, { data: { scenario } });
     if (!response.ok()) throw new Error(`Mock bootstrap failed: ${response.status()}`);
     const state: MockState = await response.json();
-    await page.addInitScript(({ state, lang, theme }) => {
+    await page.addInitScript(({ state, lang, theme, unread }) => {
       localStorage.setItem(`falky.mock-generation.${state.instanceId}`, String(state.generation));
       const prefix = `falky.mock.${state.instanceId}.`;
       localStorage.setItem(prefix + 'language', lang);
       localStorage.setItem(prefix + 'theme', theme);
-    }, { state, lang: values.lang, theme: values.theme });
+      if (unread) localStorage.setItem(prefix + 'liveBackground', 'on');
+    }, { state, lang: values.lang, theme: values.theme, unread: preset === 'unread' });
     await page.goto(`${app.url}/?scenario=${scenario}`);
     if (preset === 'entry') {
       await expect(page.getByRole('textbox', { name: t.name, exact: true })).toBeVisible();
@@ -86,6 +88,15 @@ Existing browser: PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/path/to/chromium`);
       await expect(page.getByRole('button', { name: t.settings, exact: true })).toBeVisible();
       // Wait for initial history; ongoing mock polling means networkidle never applies.
       await page.locator('.feed .msg, .feed .empty-chat').first().waitFor({ state: 'attached' });
+      if (preset === 'unread') {
+        const injected = await page.request.post(`${app.url}/__mock/action`, { data: {
+          type: 'message', roomId: state.rooms[0]!.id, authorName: 'Sam', body: 'Ready when you are 👋',
+        } });
+        if (!injected.ok()) throw new Error('Mock message injection failed');
+        await expect(page.locator('.live-background')).toHaveAttribute('data-ready', 'true');
+        await expect(page.locator('.live-background')).toHaveAttribute('data-beacon', '');
+        await page.waitForTimeout(450);
+      }
       if (preset === 'chat') {
         // The chat button is hidden on wide screens; the app's shortcut works in both layouts.
         await page.keyboard.press('Slash');

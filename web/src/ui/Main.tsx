@@ -11,6 +11,7 @@ import { NameConflict } from './Screens';
 import { Rooms } from './Rooms';
 import { Stage } from './Stage';
 import { useShortcuts } from './useShortcuts';
+import { useDrawerLayout } from './useDrawerLayout';
 import { LiveBackground, type LiveBackgroundHandle } from './LiveBackground';
 
 function Clock({ joinedAt }: { joinedAt: number }) {
@@ -30,6 +31,9 @@ function Clock({ joinedAt }: { joinedAt: number }) {
 export function Main() {
   useShortcuts();
   const background = useRef<LiveBackgroundHandle>(null);
+  const chatButton = useRef<HTMLButtonElement>(null);
+  const unreadCounter = useRef<HTMLSpanElement>(null);
+  const drawer = useDrawerLayout();
   const room = useApp((s) => s.rooms.find((r) => r.id === s.viewedRoomId) ?? null);
   const voiceState = useApp((s) => s.voice);
   const voiceRoomName = useApp((s) => s.rooms.find((r) => r.id === s.voice.roomId)?.name);
@@ -52,7 +56,7 @@ export function Main() {
   return (
     <div className="screen room-screen">
       <span className="build-version">{import.meta.env.VITE_BUILD_VERSION}</span>
-      <LiveBackground ref={background} />
+      <LiveBackground ref={background} unreadTarget={drawer ? chatButton : unreadCounter} />
       <div className="topbar"><span className="mark">falky</span></div>
 
       <div className="main">
@@ -69,6 +73,7 @@ export function Main() {
       </div>
 
       <IconButton
+        ref={chatButton}
         className="chat-btn"
         aria-label={chatOpen ? t.closeChat : unread ? `${t.chat}: ${unread}` : t.chat}
         aria-expanded={chatOpen}
@@ -79,7 +84,7 @@ export function Main() {
         <span className="swap"><Icon name="chat" className="a" /><Icon name="x" className="b" /></span>
         {unread > 0 && <span className="badge">{unread > 99 ? '99+' : unread}</span>}
       </IconButton>
-      <Chat room={room} />
+      <Chat room={room} unreadCounterRef={unreadCounter} />
 
       <div className="float-top" aria-live="polite">
         {banner && <div className="banner"><span className="pulse" />{banner}</div>}

@@ -1,6 +1,7 @@
 /** Two passes on one canvas: a theme surface and a shared field of voice-reactive dots. */
 import { hexToRgb } from './orbRenderer';
 import { PALETTES } from './palette';
+import { UNREAD_BEACON_GLSL, type BeaconFrame } from './unreadBeacon';
 import { THEME_WAVE_GLSL, type ThemeFrame } from './themeWave';
 import { createVoiceField, HISTORY, SAMPLE_INTERVAL, type VoiceSource } from './voiceField';
 
@@ -11,6 +12,7 @@ attribute vec2 aPoint;
 uniform vec2 uSize;
 uniform float uTime, uDpr, uStrength, uSpread, uHistoryPhase;
 ${THEME_WAVE_GLSL}
+${UNREAD_BEACON_GLSL}
 uniform float uActive[${count}];
 uniform vec4 uVoices[${count}];
 uniform vec3 uColorsDark[${count}], uColorsLight[${count}];
@@ -87,13 +89,19 @@ void main() {
     color += mix(uColorsDark[i], uColorsLight[i], light) * force;
     energy += force;
   }
-  p += offset + themeOffset;
+  vec2 beaconOffset;
+  float beaconGlow;
+  unreadBeacon(aPoint, beaconOffset, beaconGlow);
+  p += offset + themeOffset + beaconOffset;
   float glow = clamp(energy, 0., 1.);
   vec3 ink = mix(mix(vec3(1.), vec3(0.), light), themeTint, activity * .75);
   float opacity = .09 + .03 * light + activity * .48;
   vColor = vec4(mix(ink, color / max(energy, .001), min(1., glow * 2.)), mix(opacity, .8, glow));
+  vec3 beaconInk = mix(vec3(.675, .906, .812), vec3(.094, .408, .337), light);
+  vColor.rgb = mix(vColor.rgb, beaconInk, min(1., beaconGlow * 2.));
+  vColor.a = max(vColor.a, beaconGlow * .85);
   gl_Position = vec4(p.x / uSize.x * 2. - 1., 1. - p.y / uSize.y * 2., 0., 1.);
-  gl_PointSize = (2.1 + glow * 2.8 + activity * 1.6) * uDpr;
+  gl_PointSize = (2.1 + glow * 2.8 + activity * 1.6 + min(1., beaconGlow) * 2.8) * uDpr;
 }`;
 }
 const fragment = `
@@ -124,7 +132,7 @@ void main() {
 export function createBackground(canvas: HTMLCanvasElement, initialSources: VoiceSource[]) {
   const gl = canvas.getContext('webgl', { alpha: true, antialias: false, depth: false, premultipliedAlpha: true, powerPreference: 'high-performance' });
   if (!gl) return null; // The CSS dots remain visible when WebGL isn't available.
-  const maxVoices = Math.floor(((gl.getParameter(gl.MAX_VERTEX_UNIFORM_VECTORS) as number) - 16) / 12);
+  const maxVoices = Math.floor(((gl.getParameter(gl.MAX_VERTEX_UNIFORM_VECTORS) as number) - 17) / 12);
   const build = (vertex: string, fragment: string) => {
     const program = gl.createProgram();
     if (!program) return null;
@@ -178,7 +186,9 @@ export function createBackground(canvas: HTMLCanvasElement, initialSources: Voic
   let points = 0;
   let geometryDirty = true;
   let measuredDpr = 0;
-  let drawn: { time: number; strength: number; spread: number; reduced: boolean; moving: boolean; theme: ThemeFrame } | undefined;
+  let beaconTarget: HTMLElement | undefined;
+  let beaconX = 0, beaconY = 0;
+  let drawn: { beaconPhase: number; beaconStrength: number; time: number; strength: number; spread: number; reduced: boolean; moving: boolean; theme: ThemeFrame } | undefined;
   const invalidate = () => { geometryDirty = true; };
   const resized = new ResizeObserver(invalidate);
   resized.observe(canvas);
@@ -195,7 +205,7 @@ export function createBackground(canvas: HTMLCanvasElement, initialSources: Voic
       program = nextProgram;
       count = nextCount;
       attribute = gl.getAttribLocation(program, 'aPoint');
-      uniforms = Object.fromEntries(['uSize', 'uTime', 'uDpr', 'uStrength', 'uSpread', 'uTheme', 'uThemeDirection', 'uThemeFromLight', 'uHistoryPhase', 'uActive[0]', 'uVoices[0]', 'uColorsDark[0]', 'uColorsLight[0]', 'uHistory[0]'].map((name) => [name, gl.getUniformLocation(nextProgram, name)]));
+      uniforms = Object.fromEntries(['uBeacon', 'uSize', 'uTime', 'uDpr', 'uStrength', 'uSpread', 'uTheme', 'uThemeDirection', 'uThemeFromLight', 'uHistoryPhase', 'uActive[0]', 'uVoices[0]', 'uColorsDark[0]', 'uColorsLight[0]', 'uHistory[0]'].map((name) => [name, gl.getUniformLocation(nextProgram, name)]));
       field = createVoiceField(count);
       colorsDark = new Float32Array(count * 3);
       colorsLight = new Float32Array(count * 3);
@@ -232,8 +242,15 @@ export function createBackground(canvas: HTMLCanvasElement, initialSources: Voic
     renderer,
     setSources,
     invalidateLayout: invalidate,
-    draw(time: number, strength: number, spread: number, reduced: boolean, theme: ThemeFrame) {
+    draw(time: number, strength: number, spread: number, reduced: boolean, theme: ThemeFrame,
+      beacon?: { element: HTMLElement; frame: BeaconFrame }) {
       if (gl.isContextLost()) { delete canvas.dataset.ready; return; }
+      if (beaconTarget !== beacon?.element) {
+        if (beaconTarget) resized.unobserve(beaconTarget);
+        beaconTarget = beacon?.element;
+        if (beaconTarget) resized.observe(beaconTarget);
+        geometryDirty = true;
+      }
       const { voices, history, active } = field;
       // Tiny soft points don't benefit from a full 2x/3x screen-sized buffer.
       const dpr = Math.min(devicePixelRatio || 1, 1.5);
@@ -255,6 +272,11 @@ export function createBackground(canvas: HTMLCanvasElement, initialSources: Voic
           gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(positions), gl.STATIC_DRAW);
           gl.viewport(0, 0, canvas.width, canvas.height);
         }
+        if (beaconTarget) {
+          const rect = beaconTarget.getBoundingClientRect();
+          beaconX = rect.left + rect.width / 2 - bounds.left;
+          beaconY = rect.top + rect.height / 2 - bounds.top;
+        }
         for (let i = 0; i < Math.min(sources.length, count); i++) {
           const rect = sources[i]!.element.getBoundingClientRect();
           voices[i * 4] = rect.left + rect.width / 2 - bounds.left;
@@ -265,10 +287,13 @@ export function createBackground(canvas: HTMLCanvasElement, initialSources: Voic
       if (!width || !height) return;
       const voice = field.update(time, sources);
       const themeChanged = drawn?.theme.progress !== theme.progress || drawn?.theme.direction !== theme.direction || drawn?.theme.fromLight !== theme.fromLight;
-      const moving = !reduced && strength > 0 && voice.moving;
+      const beaconPhase = beacon?.frame.phase ?? 0;
+      const beaconStrength = beacon?.frame.strength ?? 0;
+      const beaconChanged = drawn?.beaconStrength !== beaconStrength || (beaconStrength > 0 && drawn?.beaconPhase !== beaconPhase);
+      const moving = !reduced && ((strength > 0 && voice.moving) || beaconStrength > 0);
       // Keep the last frame while paused or silent, rather than clearing a
       // screen-sized buffer every frame just to draw the identical dot grid.
-      if (!layoutChanged && !themeChanged && drawn && drawn.strength === strength && drawn.spread === spread && drawn.reduced === reduced && drawn.moving === moving && (!moving || drawn.time === time)) return;
+      if (!layoutChanged && !themeChanged && !beaconChanged && drawn && drawn.strength === strength && drawn.spread === spread && drawn.reduced === reduced && drawn.moving === moving && (!moving || drawn.time === time)) return;
       gl.useProgram(surface);
       gl.bindBuffer(gl.ARRAY_BUFFER, surfaceBuffer);
       gl.enableVertexAttribArray(surfaceAttribute);
@@ -282,6 +307,7 @@ export function createBackground(canvas: HTMLCanvasElement, initialSources: Voic
       gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
       gl.enableVertexAttribArray(attribute);
       gl.vertexAttribPointer(attribute, 2, gl.FLOAT, false, 0, 0);
+      gl.uniform4f(uniforms.uBeacon!, beaconX, beaconY, beaconPhase, beaconStrength);
       gl.uniform2f(uniforms.uSize!, width, height);
       gl.uniform1f(uniforms.uTime!, time);
       gl.uniform1f(uniforms.uDpr!, dpr);
@@ -297,7 +323,7 @@ export function createBackground(canvas: HTMLCanvasElement, initialSources: Voic
       gl.uniform3fv(uniforms['uColorsLight[0]']!, colorsLight);
       gl.uniform4fv(uniforms['uHistory[0]']!, history);
       gl.drawArrays(gl.POINTS, 0, points);
-      drawn = { time, strength, spread, reduced, moving, theme };
+      drawn = { beaconPhase, beaconStrength, time, strength, spread, reduced, moving, theme };
     },
     clear() {
       field.clear();
