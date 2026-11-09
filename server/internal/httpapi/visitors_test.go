@@ -35,6 +35,7 @@ type publicServer struct {
 	identity    *identity.Service
 	rooms       *rooms.Service
 	voice       *voice.Service
+	lifecycle   *Lifecycle
 	livekit     *voicetest.LiveKit
 	events      Events
 	attachments *attachments.Store
@@ -152,7 +153,9 @@ func startPublicAttachments(t *testing.T, enterBurst, postBurst int, attachmentO
 	vs := voice.New(lk, ident, rs, voice.Config{
 		URL: testLiveKitURL, APIKey: testLiveKitKey, APISecret: testLiveKitSecret, RoomCap: testRoomCap,
 	}, voice.WithPublisher(events.OccupancyChanged))
+	lifecycle := &Lifecycle{}
 	h := New(Deps{
+		Lifecycle:   lifecycle,
 		Logger:      logger,
 		Health:      platform.NewHealth(logger),
 		Metrics:     platform.NewMetrics().Handler(),
@@ -181,7 +184,7 @@ func startPublicAttachments(t *testing.T, enterBurst, postBurst int, attachmentO
 	})
 	return publicServer{
 		srv: srv, internal: internal, secret: strings.TrimPrefix(link, testOrigin+"/#k="),
-		identity: ident, rooms: rs, attachments: store, voice: vs, livekit: lk, events: events, clock: clk, logs: logs,
+		identity: ident, rooms: rs, attachments: store, voice: vs, livekit: lk, events: events, clock: clk, logs: logs, lifecycle: lifecycle,
 	}
 }
 

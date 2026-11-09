@@ -19,6 +19,8 @@ type Config struct {
 	// PublicAddr is where the public listener (the API behind the reverse
 	// proxy) accepts connections.
 	PublicAddr string
+	// SignallingAddr optionally accepts guarded RTC only on a private listener.
+	SignallingAddr string
 	// InternalAddr is where the internal listener (health, metrics) accepts
 	// connections. It must not be reachable from outside the deployment.
 	InternalAddr string
@@ -52,6 +54,7 @@ type Config struct {
 // Environment variables read by LoadConfig.
 const (
 	EnvPublicAddr            = "FALKY_PUBLIC_ADDR"
+	EnvSignallingAddr        = "FALKY_SIGNALLING_ADDR"
 	EnvInternalAddr          = "FALKY_INTERNAL_ADDR"
 	EnvDBPath                = "FALKY_DB_PATH"
 	EnvAttachmentRoot        = "FALKY_ATTACHMENT_ROOT"
@@ -84,6 +87,7 @@ const defaultVoiceRoomCap = 8
 func LoadConfig(getenv func(string) string) (Config, error) {
 	cfg := Config{
 		PublicAddr:            valueOr(getenv(EnvPublicAddr), "127.0.0.1:8080"),
+		SignallingAddr:        getenv(EnvSignallingAddr),
 		InternalAddr:          valueOr(getenv(EnvInternalAddr), "127.0.0.1:9090"),
 		DBPath:                valueOr(getenv(EnvDBPath), "falky.db"),
 		SnapshotDir:           valueOr(getenv(EnvSnapshotDir), "snapshots"),
@@ -135,6 +139,9 @@ func LoadConfig(getenv func(string) string) (Config, error) {
 	}
 	if cfg.PublicAddr == cfg.InternalAddr {
 		return Config{}, errors.New(EnvPublicAddr + " and " + EnvInternalAddr + " must differ")
+	}
+	if cfg.SignallingAddr != "" && (cfg.SignallingAddr == cfg.PublicAddr || cfg.SignallingAddr == cfg.InternalAddr) {
+		return Config{}, errors.New(EnvSignallingAddr + " must differ from the API and internal listener")
 	}
 	return cfg, nil
 }

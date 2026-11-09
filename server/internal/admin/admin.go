@@ -74,14 +74,12 @@ func removeStale(ctx context.Context, path string) error {
 
 // Deps are what the admin handler serves from.
 type Deps struct {
-	Logger   *slog.Logger
-	Identity *identity.Service
-	Rooms    *rooms.Service
+	Lifecycle Lifecycle
+	Logger    *slog.Logger
+	Identity  *identity.Service
+	Rooms     *rooms.Service
 	// Voice is emptied once the access link is replaced.
 	Voice *voice.Service
-	// AccessRevoked tells every live-update connection that its visitor's
-	// access ended, and closes it, once the access link is replaced.
-	AccessRevoked func()
 	// DB is the database snapshots are taken of, into SnapshotDir.
 	DB          *platform.DB
 	SnapshotDir string
@@ -113,6 +111,7 @@ type errorBody struct {
 // Handler returns the handler to serve on the admin socket.
 func Handler(deps Deps) http.Handler {
 	mux := http.NewServeMux()
+	accountRoutes(mux, deps)
 	mux.HandleFunc("GET /link", func(w http.ResponseWriter, r *http.Request) {
 		link, err := deps.Identity.Link(r.Context())
 		if err != nil {
@@ -123,7 +122,13 @@ func Handler(deps Deps) http.Handler {
 		writeJSON(w, http.StatusOK, linkBody{Link: link})
 	})
 	mux.HandleFunc("POST /link/rotate", func(w http.ResponseWriter, r *http.Request) {
-		link, err := deps.Identity.Rotate(r.Context())
+		if deps.Lifecycle == nil {
+			writeJSON(w, http.StatusServiceUnavailable, errorBody{Error: "lifecycle enforcement unavailable"})
+			return
+		}
+		deps.Lifecycle.Lock()
+		defer deps.Lifecycle.Unlock()
+		link, effects, err := deps.Identity.RotateWithEffects(r.Context())
 		if err != nil {
 			deps.Logger.Error("admin: rotate access link", "error", err)
 			writeJSON(w, http.StatusInternalServerError, errorBody{Error: "cannot rotate the access link"})
@@ -131,10 +136,8 @@ func Handler(deps Deps) http.Handler {
 		}
 		// The new link is stored, so old cookies are already refused; what
 		// the visitors of the old link still have open ends now.
-		deps.AccessRevoked()
-		if err := deps.Voice.RemoveAll(r.Context()); err != nil {
-			deps.Logger.Error("admin: voice not emptied after rotating the access link; "+
-				"the next refresh removes its participants", "error", err)
+		if adminAccountError(w, deps.Lifecycle.Apply(r.Context(), effects)) {
+			return
 		}
 		deps.Logger.Info("access link rotated")
 		writeJSON(w, http.StatusOK, linkBody{Link: link})

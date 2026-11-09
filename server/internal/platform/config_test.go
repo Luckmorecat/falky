@@ -33,6 +33,18 @@ func TestLoadConfigDefaultsToLoopback(t *testing.T) {
 	}
 }
 
+func TestOptionalSignallingListener(t *testing.T) {
+	cfg, err := LoadConfig(env(map[string]string{"FALKY_SIGNALLING_ADDR": ":7880"}))
+	if err != nil || cfg.SignallingAddr != ":7880" {
+		t.Fatalf("signalling listener = %+v, %v", cfg, err)
+	}
+	for _, addr := range []string{"127.0.0.1:8080", "127.0.0.1:9090"} {
+		if _, err := LoadConfig(env(map[string]string{"FALKY_SIGNALLING_ADDR": addr})); err == nil {
+			t.Fatalf("conflicting listener %q accepted", addr)
+		}
+	}
+}
+
 func TestLoadConfigReadsEnvironment(t *testing.T) {
 	cfg, err := LoadConfig(env(map[string]string{
 		EnvPublicAddr:       ":8080",

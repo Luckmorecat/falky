@@ -195,7 +195,32 @@ func (s *Service) keepOrRemove(ctx context.Context, p Participant) (identity.Vis
 // mayStay returns the visitor p is when they may stay in their room's voice,
 // and otherwise why not.
 func (s *Service) mayStay(ctx context.Context, p Participant) (v identity.Visitor, refusal string, err error) {
-	v, err = s.visitors.Visitor(ctx, p.Identity)
+	s.mu.Lock()
+	g := s.grants[p.Identity]
+	revoked := g != nil && g.revoked
+	s.mu.Unlock()
+	if g != nil && s.validate != nil {
+		if revoked || g.room != p.Room {
+			return identity.Visitor{}, "voice grant revoked", nil
+		}
+		var session identity.Session
+		session, err = s.validate(ctx, g.session)
+		v = session.Visitor
+	} else if strings.Contains(p.Identity, ".") {
+		return identity.Visitor{}, "unknown account voice grant", nil
+	} else {
+		v, err = s.visitors.Visitor(ctx, p.Identity)
+		// An old guest JWT must never turn into unbound account admission.
+		if g == nil && s.validate != nil {
+			if accounts, ok := s.visitors.(interface {
+				AccountInfo(context.Context, string) (identity.AccountInfo, error)
+			}); ok {
+				if _, accountErr := accounts.AccountInfo(ctx, p.Identity); accountErr == nil {
+					return identity.Visitor{}, "unbound account participant", nil
+				}
+			}
+		}
+	}
 	if errors.Is(err, identity.ErrNoVisitor) {
 		return identity.Visitor{}, "no current access", nil
 	}

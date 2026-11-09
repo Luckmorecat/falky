@@ -29,8 +29,7 @@ func (p publicServer) adminClient(t *testing.T) *admin.Client {
 	}
 	srv := &http.Server{
 		Handler: admin.Handler(admin.Deps{
-			Logger: p.events.Logger, Identity: p.identity, Rooms: p.rooms, Voice: p.voice,
-			AccessRevoked: p.events.AccessRevoked,
+			Logger: p.events.Logger, Identity: p.identity, Rooms: p.rooms, Lifecycle: p.lifecycle,
 		}),
 		ReadHeaderTimeout: time.Second,
 	}

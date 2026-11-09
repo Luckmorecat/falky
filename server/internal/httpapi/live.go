@@ -23,12 +23,13 @@ import (
 // server leaves out: it checks the Origin, the visitor cookie and that the
 // visitor may connect, then hands the connection to the hub.
 type live struct {
-	origin   string
-	resolve  visitorResolver
-	identity *identity.Service
-	rooms    *rooms.Service
-	hub      *realtime.Hub
-	logger   *slog.Logger
+	origin    string
+	resolve   visitorResolver
+	identity  *identity.Service
+	rooms     *rooms.Service
+	hub       *realtime.Hub
+	logger    *slog.Logger
+	lifecycle *Lifecycle
 }
 
 func (l live) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -36,10 +37,7 @@ func (l live) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "origin_forbidden", "live updates are only for pages of this server's origin")
 		return
 	}
-	// Taken before the cookie is checked, so that the hub refuses the
-	// connection if the link is replaced in between.
-	ticket := l.hub.Ticket()
-	visitor, ok := l.resolve.visitor(w, r)
+	session, ok := l.resolve.session(w, r)
 	if !ok {
 		return
 	}
@@ -47,6 +45,23 @@ func (l live) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_request", "not a WebSocket upgrade")
 		return
 	}
+	l.lifecycle.Lock()
+	locked := true
+	defer func() {
+		if locked {
+			l.lifecycle.Unlock()
+		}
+	}()
+	session, err := l.identity.ValidateSession(r.Context(), session)
+	if errors.Is(err, identity.ErrNoVisitor) {
+		writeError(w, http.StatusUnauthorized, visitorRequired.Code, visitorRequired.Message)
+		return
+	}
+	if err != nil {
+		errorWriter{logger: l.logger}.internal(w, r, err)
+		return
+	}
+	visitor := session.Visitor
 	disconnect, err := l.identity.Connect(r.Context(), visitor.ID)
 	if errors.Is(err, identity.ErrNameTaken) {
 		writeError(w, http.StatusConflict, yourNameTaken.Code, yourNameTaken.Message)
@@ -59,8 +74,11 @@ func (l live) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	opened := false
 	defer func() { disconnect(opened) }()
 	opened = l.hub.Serve(w, r, realtime.Subscriber{
-		VisitorID: visitor.ID,
-		Ticket:    ticket,
+		VisitorID:  visitor.ID,
+		Session:    session,
+		Ticket:     l.hub.Ticket(),
+		Registered: func() { locked = false; l.lifecycle.Unlock() },
+		Authorized: func(ctx context.Context) bool { _, err := l.identity.ValidateSession(ctx, session); return err == nil },
 		MayReceive: func(ctx context.Context, roomID string) bool {
 			err := l.rooms.Authorize(ctx, visitor, roomID, rooms.ReadMessages)
 			if err != nil && !errors.Is(err, rooms.ErrNotFound) && ctx.Err() == nil {

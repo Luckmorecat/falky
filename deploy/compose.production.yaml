@@ -27,7 +27,7 @@ services:
   falky:
     networks:
       default:
-        aliases: ["${FALKY_PROJECT_NAME:-falky}-api"]
+        aliases: ["${FALKY_PROJECT_NAME:-falky}-api", "${FALKY_PROJECT_NAME:-falky}-voice"]
     image: ${FALKY_IMAGE:?release image required}
     restart: unless-stopped
     environment:
@@ -35,6 +35,7 @@ services:
       FALKY_ATTACHMENT_ROOT: ${FALKY_ATTACHMENT_ROOT:-/data/attachments}
       FALKY_ATTACHMENT_POSTED_BYTES: ${FALKY_ATTACHMENT_POSTED_BYTES:-5000000000}
       FALKY_LIVEKIT_API_URL: http://livekit:7880
+      FALKY_SIGNALLING_ADDR: :7880
       FALKY_LIVEKIT_API_KEY: ${FALKY_LIVEKIT_API_KEY:?set FALKY_LIVEKIT_API_KEY in deploy/.env}
       FALKY_LIVEKIT_API_SECRET: ${FALKY_LIVEKIT_API_SECRET:?set FALKY_LIVEKIT_API_SECRET in deploy/.env}
     volumes:
@@ -55,9 +56,6 @@ services:
     logging: *logging
 
   livekit:
-    networks:
-      default:
-        aliases: ["${FALKY_PROJECT_NAME:-falky}-voice"]
     labels:
       win.lunari.falky.livekit-config: ${FALKY_LIVEKIT_CONFIG_SHA:?release config digest required}
     image: livekit/livekit-server:v1.13.11@sha256:25cd902de7cacbd5f1f779f6a6ac1eae20ba8f56b0935934ce6b0ab80d1e3d20

@@ -16,7 +16,9 @@ import (
 	"time"
 
 	"github.com/kisshot/falky/server/internal/admin"
+	"github.com/kisshot/falky/server/internal/httpapi"
 	"github.com/kisshot/falky/server/internal/identity"
+	"github.com/kisshot/falky/server/internal/identity/passkeytest"
 	"github.com/kisshot/falky/server/internal/platform"
 	"github.com/kisshot/falky/server/internal/rooms"
 	"github.com/kisshot/falky/server/internal/voice"
@@ -50,8 +52,8 @@ func newDeps(t *testing.T) admin.Deps {
 	rs := rooms.New(db)
 	return admin.Deps{
 		Logger: platform.NewLogger(io.Discard, 0), Identity: ident, Rooms: rs,
-		Voice: newVoice(voicetest.New(), ident, rs), AccessRevoked: func() {},
-		DB: db, SnapshotDir: filepath.Join(t.TempDir(), "snapshots"),
+		Voice: newVoice(voicetest.New(), ident, rs),
+		DB:    db, SnapshotDir: filepath.Join(t.TempDir(), "snapshots"),
 	}
 }
 
@@ -63,6 +65,9 @@ func newVoice(lk voice.LiveKit, ident *identity.Service, rs *rooms.Service) *voi
 // serve serves the admin handler on ln until the returned stop is called.
 func serve(t *testing.T, ln net.Listener, deps admin.Deps) (stop func()) {
 	t.Helper()
+	if deps.Lifecycle == nil {
+		deps.Lifecycle = &httpapi.Lifecycle{Enforce: httpapi.Enforcer(httpapi.Events{}, deps.Voice)}
+	}
 	srv := &http.Server{
 		Handler:           admin.Handler(deps),
 		ReadHeaderTimeout: time.Second,
@@ -295,8 +300,6 @@ func TestTheClientRotatesTheLinkAndEverythingOfTheOldOneEnds(t *testing.T) {
 	lk := voicetest.New()
 	inVoice := lk.AddParticipant("01JBX7A2K9D4F6H8M0P3R5T7VW", "01JBX6Z8Q3M5W2K7R9T4V1C0DE")
 	deps.Voice = newVoice(lk, deps.Identity, deps.Rooms)
-	revoked := 0
-	deps.AccessRevoked = func() { revoked++ }
 	old, err := deps.Identity.Link(t.Context())
 	if err != nil {
 		t.Fatalf("Link: %v", err)
@@ -314,15 +317,12 @@ func TestTheClientRotatesTheLinkAndEverythingOfTheOldOneEnds(t *testing.T) {
 	if current, err := deps.Identity.Link(t.Context()); err != nil || current != rotated {
 		t.Errorf("Link after RotateLink = %q, %v, want %q", current, err, rotated)
 	}
-	if revoked != 1 {
-		t.Errorf("AccessRevoked called %d times, want once", revoked)
-	}
 	if got := lk.Removed(); !slices.Equal(got, []voice.Participant{inVoice}) {
 		t.Errorf("removed from voice %+v, want %+v", got, inVoice)
 	}
 }
 
-func TestRotatingTheLinkSucceedsWhenVoiceCannotBeEmptied(t *testing.T) {
+func TestRotatingTheLinkReportsRequiredVoiceEnforcementFailure(t *testing.T) {
 	deps := newDeps(t)
 	lk := voicetest.New()
 	lk.Fail(errors.New("connection refused"))
@@ -336,14 +336,14 @@ func TestRotatingTheLinkSucceedsWhenVoiceCannotBeEmptied(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "admin.sock")
 	stop := serve(t, listen(t, path), deps)
 
-	rotated, err := admin.NewClient(path).RotateLink(t.Context())
-	if err != nil || rotated == old {
-		t.Errorf("RotateLink = %q, %v, want a new link (was %q)", rotated, err, old)
+	_, err = admin.NewClient(path).RotateLink(t.Context())
+	if err == nil {
+		t.Fatal("rotation reported success despite failed media enforcement")
+	}
+	if current, err := deps.Identity.Link(t.Context()); err != nil || current == old {
+		t.Fatalf("committed rotation missing: %v", err)
 	}
 	stop()
-	if !strings.Contains(logs.String(), "voice not emptied") {
-		t.Errorf("logs = %q, want the failure to empty voice", logs.String())
-	}
 }
 
 func TestTheClientTakesAnOwnerOnlySnapshotIntoTheSnapshotDirectory(t *testing.T) {
@@ -390,5 +390,81 @@ func TestTheClientTakesAnOwnerOnlySnapshotIntoTheSnapshotDirectory(t *testing.T)
 	}
 	if want := []rooms.Room{lounge}; !slices.Equal(got, want) {
 		t.Errorf("rooms in the snapshot = %+v, want %+v", got, want)
+	}
+}
+
+func TestOperatorInvitationLifecycleOverOwnerSocket(t *testing.T) {
+	deps := newDeps(t)
+	path := filepath.Join(t.TempDir(), "admin.sock")
+	serve(t, listen(t, path), deps)
+	c := admin.NewClient(path)
+	invite, err := c.CreateInvitation(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if invite.ID == "" || invite.Link == "" || invite.ExpiresAt.Sub(invite.CreatedAt).Round(time.Second) != 7*24*time.Hour {
+		t.Fatal("invalid invitation result")
+	}
+	invitations, err := c.Invitations(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(invitations) != 1 || invitations[0].ID != invite.ID || invitations[0].Token != "" || invitations[0].Link != "" {
+		t.Fatal("operator list leaked bearer or lost invitation")
+	}
+	if err := c.RevokeInvitation(t.Context(), invite.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := deps.Identity.BeginRegistration(t.Context(), identity.RegistrationInput{Invitation: invite.Token, Name: "Alice", BrowserContext: "browser"}); !errors.Is(err, identity.ErrInvalidProof) {
+		t.Fatal("revoked invitation remained usable")
+	}
+}
+
+func TestOperatorRecoveryIssuePreservesAccessAndDisableRejectsIt(t *testing.T) {
+	deps := newDeps(t)
+	path := filepath.Join(t.TempDir(), "admin.sock")
+	serve(t, listen(t, path), deps)
+	invite, err := deps.Identity.CreateInvitation(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ceremony, err := deps.Identity.BeginRegistration(t.Context(), identity.RegistrationInput{Invitation: invite.Token, Name: "Alice", BrowserContext: "browser"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := passkeytest.New(t)
+	account, err := deps.Identity.FinishRegistration(t.Context(), ceremony.ID, "browser", key.Registration(t, ceremony.Creation, "https://falky.example"), "Laptop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := admin.NewClient(path)
+	accounts, err := c.Accounts(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(accounts) != 1 || accounts[0].ID != account.Session.Visitor.ID {
+		t.Fatal("operator cannot find account ID")
+	}
+	grant, err := c.IssueRecovery(t.Context(), accounts[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if grant.Link == "" || time.Until(grant.ExpiresAt).Round(time.Minute) != 30*time.Minute {
+		t.Fatal("bad recovery link")
+	}
+	if _, err := deps.Identity.ResolveSession(t.Context(), account.Token); err != nil {
+		t.Fatal("issuing recovery revoked account")
+	}
+	if keys, err := deps.Identity.Passkeys(t.Context(), account.Token); err != nil || len(keys) != 1 {
+		t.Fatal("issuing recovery changed credentials")
+	}
+	if err := c.DisableAccount(t.Context(), accounts[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := deps.Identity.ResolveSession(t.Context(), account.Token); !errors.Is(err, identity.ErrNoVisitor) {
+		t.Fatal("disabled account session resolved")
+	}
+	if _, err := c.IssueRecovery(t.Context(), accounts[0].ID); err == nil {
+		t.Fatal("disabled account received recovery link")
 	}
 }

@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/livekit/protocol/livekit"
+	"github.com/livekit/protocol/logger"
 	lksdk "github.com/livekit/server-sdk-go/v2"
 	"github.com/oklog/ulid/v2"
 
@@ -48,6 +49,7 @@ var webhookTarget atomic.Pointer[voice.Service]
 // not reach the host, and clients reach the media ports LiveKit offers on
 // 127.0.0.1.
 func TestMain(m *testing.M) {
+	lksdk.SetLogger(logger.GetDiscardLogger())
 	code, err := runWithLiveKit(m)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "livekit:", err)

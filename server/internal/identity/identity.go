@@ -1,4 +1,4 @@
-// Package identity owns the access link and the visitors it admits.
+// Package identity owns persistent identities, guest access and passkey accounts.
 package identity
 
 import (
@@ -28,9 +28,8 @@ func Migrations() fs.FS {
 	return sub
 }
 
-// Service manages the access link and the visitors it admits. Which visitor
-// holds which name lives in the Service's memory, so the server uses one
-// Service for every request.
+// Service manages guest access and durable passkey accounts. Guest connected
+// name holds live in memory, so the server uses one Service for every request.
 type Service struct {
 	db           *platform.DB
 	origin       string
@@ -111,16 +110,35 @@ func (s *Service) linkTo(secret string) string {
 	return s.origin + "/#k=" + secret
 }
 
-// Rotate replaces the access link with one on a new random secret and
-// returns it. Rotating starts the next generation, which ends the access of
-// every visitor admitted so far: their cookies are refused from then on. It
-// also frees every name visitors held, so those of the new link can take any.
-// It fails with ErrNoLink before the link is created.
+// Rotate preserves the legacy guest-link entry point. Realtime callers should
+// use RotateWithEffects to enforce selective guest disconnection after commit.
 func (s *Service) Rotate(ctx context.Context) (string, error) {
+	link, _, err := s.RotateWithEffects(ctx)
+	return link, err
+}
+
+func (s *Service) RotateWithEffects(ctx context.Context) (string, Effects, error) {
 	secret := rand.Text()
+	var effects Effects
+	accounts := map[string]bool{}
 	s.reservations.mu.Lock()
 	defer s.reservations.mu.Unlock()
 	err := s.db.Write(ctx, func(tx *sql.Tx) error {
+		rows, err := tx.QueryContext(ctx, "SELECT visitor_id FROM accounts")
+		if err != nil {
+			return err
+		}
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				_ = rows.Close()
+				return err
+			}
+			accounts[id] = true
+		}
+		if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+			return err
+		}
 		res, err := tx.ExecContext(ctx, `UPDATE access
 			SET link_secret = ?, generation = generation + 1, rotated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
 			WHERE id = 1`, secret)
@@ -131,14 +149,21 @@ func (s *Service) Rotate(ctx context.Context) (string, error) {
 		if err == nil && n == 0 {
 			return ErrNoLink
 		}
-		return err
+		if err != nil {
+			return err
+		}
+		return tx.QueryRowContext(ctx, "SELECT generation FROM access WHERE id=1").Scan(&effects.GuestGeneration)
 	})
 	if errors.Is(err, ErrNoLink) {
-		return "", err
+		return "", Effects{}, err
 	}
 	if err != nil {
-		return "", fmt.Errorf("rotate access link: %w", err)
+		return "", Effects{}, fmt.Errorf("rotate access link: %w", err)
 	}
-	s.reservations.dropAll()
-	return s.linkTo(secret), nil
+	for key, hold := range s.reservations.held {
+		if !accounts[hold.visitorID] {
+			delete(s.reservations.held, key)
+		}
+	}
+	return s.linkTo(secret), effects, nil
 }
