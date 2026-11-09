@@ -31,5 +31,6 @@ or revoked grant is never reconstructed from a token alone. Every explicit Join
 creates a fresh transport; exact-grant Leave cannot revoke a later replacement.
 The first deployment requires one explicit rejoin because old process-local
 permissions cannot be safely backfilled. Maintenance closes established expired
-access on its next pass, while new requests and reconnects fail immediately. The operational and API
-contracts are recorded in [accounts](../accounts.md) and the [runbook](../runbook.md).
+access on its next pass, while new requests and reconnects fail immediately.
+The operational and API contracts are recorded in [OpenAPI](../../api/openapi.yaml)
+and the [runbook](../runbook.md).

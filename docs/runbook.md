@@ -619,7 +619,7 @@ transaction was rolled back or media removal succeeded.
 
 The current frontend provides the legacy guest flow; these backend invitation
 and recovery links do not add account UI. Client integration must implement the
-[account/WebAuthn API](accounts.md), including five-minute context-bound
+[account/WebAuthn API](../api/openapi.yaml), including five-minute context-bound
 ceremonies, same-origin mutations, recovery-code storage and explicit confirmed
 voice transfer at `POST /api/rooms/{id}/voice`. Both guest and account transport IDs map to the
 permanent prefix before their dot; public occupancy already uses permanent IDs.

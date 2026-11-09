@@ -8,8 +8,9 @@ OAPI_CODEGEN := go tool oapi-codegen -config internal/api/oapi-codegen.yaml
 # The client's types, generated from the same contract (relative to web/).
 WEB_API_GEN := src/api/schema.gen.ts
 WEB_API_FRESH := node_modules/.cache/schema.gen.ts
+SCHEMA_OUT ?= artifacts/schema
 
-.PHONY: check check-server check-web check-deploy fmt lint lint-api check-generated test test-integration smoke generate generate-web
+.PHONY: check check-server check-web check-deploy fmt lint lint-api check-generated test test-integration smoke generate generate-web schema
 
 # The complete application check gate. CI runs the two components in parallel.
 check:
@@ -82,3 +83,6 @@ generate:
 
 generate-web:
 	$(IN_WEB) pnpm run generate
+
+schema:
+	python3 server/scripts/schema.py --output "$(SCHEMA_OUT)"

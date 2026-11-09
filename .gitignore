@@ -1,6 +1,7 @@
 # Build output
 /server/bin/
 /server/falky
+/artifacts/schema/
 
 # Local SQLite databases
 *.db
