@@ -17,6 +17,7 @@ import (
 	"github.com/kisshot/falky/server/internal/identity"
 	"github.com/kisshot/falky/server/internal/realtime"
 	"github.com/kisshot/falky/server/internal/rooms"
+	"github.com/kisshot/falky/server/internal/voice"
 )
 
 // live serves GET /api/live, which the contract describes but the generated
@@ -113,7 +114,7 @@ func (e Events) RoomChanged(r rooms.Room) {
 
 // OccupancyChanged publishes occupancy.changed for the room roomID, whose
 // voice now has occupancy, to every visitor.
-func (e Events) OccupancyChanged(roomID string, occupancy []identity.Visitor) {
+func (e Events) OccupancyChanged(roomID string, occupancy []voice.Occupant) {
 	e.publish(api.EventTypeOccupancyChanged, "", func(p *api.Event_Payload) error {
 		return p.FromOccupancyChange(api.OccupancyChange{RoomId: roomID, Occupancy: participants(occupancy)})
 	})

@@ -133,7 +133,7 @@ test.describe('live background', () => {
     await page.getByRole('button', { name: 'Join', exact: true }).click();
     await expect(field).toHaveAttribute('data-ready', 'true');
     const lounge = (await state(page)).rooms[0]!.id;
-    await action(page, { type: 'participants', roomId: lounge, participants: Array.from({ length: 7 }, (_, i) => ({ visitorId: `01JBX6Z8Q3M5W2K7R9T4V1C0D${i}`, name: `Speaker ${i + 1}`, muted: false, deafened: false, sharing: false })) });
+    await action(page, { type: 'participants', roomId: lounge, participants: Array.from({ length: 7 }, (_, i) => ({ connectionId: `speaker.${i}`, visitorId: `01JBX6Z8Q3M5W2K7R9T4V1C0D${i}`, name: `Speaker ${i + 1}`, muted: false, deafened: false, sharing: false })) });
     await expect(page.locator('.grid .orb')).toHaveCount(8);
 
     const sourceError = () => field.evaluate((canvas: HTMLCanvasElement) => {

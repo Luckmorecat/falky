@@ -539,9 +539,9 @@ export interface paths {
         put?: never;
         /**
          * Join a room's voice.
-         * @description Returns the LiveKit URL and a token to connect to the room's voice with a LiveKit SDK. A visitor is a participant in one room at most: the server first removes them from any other room's voice. Joining the room again, say from a second tab, is allowed even when the room is full, and the new connection replaces the earlier one. For accounts, a different browser session must explicitly send confirmTransfer=true; otherwise voice_transfer_required leaves the first participant intact. Guest callers may continue omitting the request body. Account requests require this server's exact configured Origin header.
+         * @description Returns the LiveKit URL and a token to connect to the room's voice with a LiveKit SDK. Every explicit Join authorizes a fresh independent connection, including repeated joins from the same session. Other tabs and devices remain connected, in the same room or different rooms. Capacity counts connections, including other connections of this identity. Account requests require this server's exact configured Origin header.
          *
-         *     Both guests and accounts receive a fresh immutable transport identity on every explicit Join, even for the same room and session. Its prefix before the dot is the permanent identity ID; occupancy exposes that permanent ID. All credentials use guarded public signalling. Valid original and LiveKit refreshed JWTs reconnect after restart only through their exact persisted active grant and current browser session, expiry, kind, generation, room and name authorization. Unknown pre-upgrade grants fail closed and require one explicit rejoin; browser sessions and their deadlines survive migration. Temporary disconnection, page exit and SDK Leave preserve the grant. Explicit Leave uses the returned grantId. A newer Join fences the older grant. The token may publish the microphone, a camera, a screen share and the screen share's audio, subscribe to the other participants, and update the participant's own attributes, but not send data messages. It expires 10 minutes after it is issued, so connect right away; once connected, LiveKit renews it.
+         *     Both guests and accounts receive a fresh immutable transport identity on every explicit Join, even for the same room and session. Its prefix before the dot is the permanent identity ID. Occupancy exposes both connectionId (the transport identity) and visitorId (the permanent identity). All credentials use guarded public signalling. Valid original and LiveKit refreshed JWTs reconnect after restart only through their exact persisted active grant and current browser session, expiry, kind, generation, room and name authorization. Unknown pre-upgrade grants fail closed and require one explicit rejoin; browser sessions and their deadlines survive migration. Temporary disconnection, page exit and SDK Leave preserve the grant. Explicit Leave uses the returned grantId and affects only that connection. The token may publish the microphone, a camera, a screen share and the screen share's audio, subscribe to the other participants, and update the participant's own attributes, but not send data messages. It expires 10 minutes after it is issued, so connect right away; once connected, LiveKit renews it.
          *
          *     Muted is the state of the microphone track. Deafened is the participant attribute `deafened`: a client sets it to `"true"` while it plays no one's audio, and also mutes its microphone, then sets it to `"false"` again; an absent attribute means not deafened. The other participants see it through the SDK, for example with `room.localParticipant.setAttributes({ deafened: 'true' })` in `livekit-client`.
          */
@@ -1198,6 +1198,7 @@ export interface components {
              *         "name": "Lounge",
              *         "occupancy": [
              *           {
+             *             "connectionId": "01JBX6Z8Q3M5W2K7R9T4V1C0DE.01JBX8C4N2F6H8K0P3R5T7W9YZ",
              *             "visitorId": "01JBX6Z8Q3M5W2K7R9T4V1C0DE",
              *             "name": "Bob"
              *           }
@@ -1228,6 +1229,7 @@ export interface components {
              * @description The participants in the room's voice; empty when no one is in it.
              * @example [
              *       {
+             *         "connectionId": "01JBX6Z8Q3M5W2K7R9T4V1C0DE.01JBX8C4N2F6H8K0P3R5T7W9YZ",
              *         "visitorId": "01JBX6Z8Q3M5W2K7R9T4V1C0DE",
              *         "name": "Bob"
              *       }
@@ -1235,10 +1237,15 @@ export interface components {
              */
             occupancy: components["schemas"]["Participant"][];
         };
-        /** @description A visitor connected to a room's voice. */
+        /** @description One independent voice connection; an identity may have several. */
         Participant: {
             /**
-             * @description The participant's visitor ID.
+             * @description Immutable grant and LiveKit transport identity of this connection.
+             * @example 01JBX6Z8Q3M5W2K7R9T4V1C0DE.01JBX8C4N2F6H8K0P3R5T7W9YZ
+             */
+            connectionId: string;
+            /**
+             * @description The permanent identity ID of the person using this connection.
              * @example 01JBX6Z8Q3M5W2K7R9T4V1C0DE
              */
             visitorId: string;
@@ -1419,6 +1426,7 @@ export interface components {
              * @description The participants in the room's voice now, by name; empty when no one is in it.
              * @example [
              *       {
+             *         "connectionId": "01JBX6Z8Q3M5W2K7R9T4V1C0DE.01JBX8C4N2F6H8K0P3R5T7W9YZ",
              *         "visitorId": "01JBX6Z8Q3M5W2K7R9T4V1C0DE",
              *         "name": "Bob"
              *       }
@@ -2739,12 +2747,13 @@ export interface operations {
             };
             cookie?: never;
         };
-        /** @description Optional explicit account voice transfer confirmation; guests may omit the body. */
+        /** @description Optional legacy body; confirmation is no longer required or used. */
         requestBody?: {
             content: {
                 "application/json": {
                     /**
-                     * @description Explicitly transfer account voice from another browser session.
+                     * @deprecated
+                     * @description Ignored. Every Join creates an independent connection.
                      * @default false
                      */
                     confirmTransfer?: boolean;
@@ -2772,7 +2781,7 @@ export interface operations {
                 };
             };
             404: components["responses"]["RoomNotFound"];
-            /** @description The room's voice already has as many participants as it admits (`room_full`), or another connected guest holds this guest's name (`name_taken`; rename first). The visitor stays where they were. Account voice owned by another browser requires explicit confirmation (`voice_transfer_required`). */
+            /** @description The room's voice already has as many participants as it admits (`room_full`), or another connected guest holds this guest's name (`name_taken`; rename first). Existing connections are unchanged. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -2781,7 +2790,7 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
-            /** @description The server cannot reach LiveKit (`voice_unavailable`); try again later. The visitor may already have been disconnected from another room's voice. */
+            /** @description The server cannot reach LiveKit (`voice_unavailable`); try again later. Existing connections are unchanged. */
             503: {
                 headers: {
                     [name: string]: unknown;

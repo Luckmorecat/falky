@@ -80,7 +80,7 @@ func newMaintenanceVoice(t *testing.T) maintenanceVoice {
 	voices := voice.New(voicetest.New(), ident, rs, voice.Config{APIKey: testKey, APISecret: testSecret, RoomCap: 8}, voice.WithDB(db))
 	gate := &httpapi.Lifecycle{}
 	handlers := httpapi.New(httpapi.Deps{Identity: ident, Rooms: rs, Voice: voices, Lifecycle: gate, PublicOrigin: maintenanceOrigin, Logger: logger, Metrics: platform.NewMetrics().Handler()})
-	creds, err := voices.JoinSession(t.Context(), session, room.ID, false)
+	creds, err := voices.JoinSession(t.Context(), session, room.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -241,7 +241,7 @@ func TestCancelledVoiceOperationsPreserveExactGrantAndReusableGates(t *testing.T
 		{"remove all", f.voice.RemoveAll},
 		{"leave", func(ctx context.Context) error { return f.voice.Leave(ctx, f.session, f.creds.GrantID) }},
 		{"join", func(ctx context.Context) error {
-			_, err := f.voice.JoinSession(ctx, f.session, f.room, false)
+			_, err := f.voice.JoinSession(ctx, f.session, f.room)
 			return err
 		}},
 	}

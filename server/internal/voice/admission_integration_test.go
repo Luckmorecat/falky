@@ -70,7 +70,7 @@ func TestGuardedLiveKitAdmissionAndRevocationShareCompleteHandshakeFence(t *test
 	defer release()
 	f.public = guard
 	account, _ := f.enroll(t)
-	creds := f.join(t, account.Session, false)
+	creds := f.join(t, account.Session)
 	// The fixture's URL assertion uses the main listener; this additional
 	// guard exercises a deliberately delayed real upstream handshake.
 	creds.URL = "ws" + strings.TrimPrefix(guard.URL, "http")
@@ -123,7 +123,7 @@ func TestGuardedLiveKitCancelledHandshakeClosesOnlyFailedAttemptAndAllowsRetry(t
 				defer release()
 				session := guardedSession(t, f, kind)
 				f.gate.Lock()
-				creds, err := f.voice.JoinSession(t.Context(), session, f.room, false)
+				creds, err := f.voice.JoinSession(t.Context(), session, f.room)
 				f.gate.Unlock()
 				if err != nil {
 					t.Fatal(err)
@@ -185,7 +185,7 @@ func TestGuardedLiveKitCancelledHandshakeClosesOnlyFailedAttemptAndAllowsRetry(t
 func TestGuardedLiveKitRejectsChangedRoomSignatureAndOldGuestAfterUpgrade(t *testing.T) {
 	f := newGuardedVoice(t)
 	account, _ := f.enroll(t)
-	creds := f.join(t, account.Session, false)
+	creds := f.join(t, account.Session)
 	verifier, err := auth.ParseAPIToken(creds.Token)
 	if err != nil {
 		t.Fatal(err)
@@ -210,7 +210,7 @@ func TestGuardedLiveKitRejectsChangedRoomSignatureAndOldGuestAfterUpgrade(t *tes
 		t.Fatal(err)
 	}
 	f.gate.Lock()
-	old, err := f.voice.JoinSession(t.Context(), session, f.room, false)
+	old, err := f.voice.JoinSession(t.Context(), session, f.room)
 	f.gate.Unlock()
 	if err != nil {
 		t.Fatal(err)
@@ -236,13 +236,13 @@ func TestGuardedLiveKitRejectsChangedRoomSignatureAndOldGuestAfterUpgrade(t *tes
 		t.Fatal(err)
 	}
 	refusedAtGuard(t, f, old.Token)
-	connect(t, f.join(t, upgraded.Session, false))
+	connect(t, f.join(t, upgraded.Session))
 }
 
 func TestGuardedLiveKitSupportsBrowserV1Signalling(t *testing.T) {
 	f := newGuardedVoice(t)
 	account, _ := f.enroll(t)
-	creds := f.join(t, account.Session, false)
+	creds := f.join(t, account.Session)
 	request, err := proto.Marshal(&livekit.JoinRequest{ClientInfo: &livekit.ClientInfo{Protocol: 17, Sdk: livekit.ClientInfo_JS}, ConnectionSettings: &livekit.ConnectionSettings{AutoSubscribe: false}})
 	if err != nil {
 		t.Fatal(err)

@@ -1,0 +1,1 @@
+DROP INDEX voice_grants_active_identity;

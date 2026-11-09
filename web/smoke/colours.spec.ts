@@ -79,8 +79,8 @@ test('tabs with different loaded history agree on duplicate colours, live recolo
     await control(page, { type: 'colour', visitorId: robin.visitorId, palette: 'ruby' });
     for (const tab of [page, other]) {
       await authorColour(tab, 'Sam', '#d42a55'); await authorColour(tab, 'Robin', '#d42a55');
-      await expect.poll(() => base(tab, `[data-tile="${sam.visitorId}"]`)).toBe('#d42a55');
-      await expect.poll(() => base(tab, `[data-tile="${robin.visitorId}"]`)).toBe('#d42a55');
+      await expect.poll(() => base(tab, `[data-tile="${sam.connectionId}"]`)).toBe('#d42a55');
+      await expect.poll(() => base(tab, `[data-tile="${robin.connectionId}"]`)).toBe('#d42a55');
     }
     await control(page, { type: 'participants', roomId: fixture.rooms[0]!.id, participants: [] });
     await expect(page.locator('[data-tile]')).toHaveCount(0);

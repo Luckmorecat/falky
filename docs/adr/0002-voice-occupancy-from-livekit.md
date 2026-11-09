@@ -4,10 +4,14 @@ Who is connected to a room's voice is never stored in the database. LiveKit is t
 
 Durable voice grants are stored separately as authorization and pending cleanup
 work. An active grant does not imply a participant is connected; absence from
-LiveKit does not revoke permission. The in-memory view continues to use permanent
-identity IDs and SID-scoped participant events, while each explicit Join receives
-a never-reused transport target. Reconciliation and cleanup run through the
-internal maintenance job at startup and every 30 seconds.
+LiveKit does not revoke permission. Each explicit Join receives an independent,
+never-reused transport target, even within the same session. The view lists every
+connection separately with its stable `connectionId`, permanent `visitorId` and
+current name; reconnect SID changes do not change connection identity. Events
+remain SID-scoped so a late departure cannot remove a reconnected participant.
+Room capacity and occupancy count connections, including several of one identity.
+Reconciliation and cleanup run through the internal maintenance job at startup
+and every 30 seconds.
 
 ## Considered Options
 

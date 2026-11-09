@@ -36,7 +36,11 @@ type recorder struct {
 	changes []change
 }
 
-func (r *recorder) publish(room string, occupancy []identity.Visitor) {
+func (r *recorder) publish(room string, occupants []voice.Occupant) {
+	var occupancy []identity.Visitor
+	for _, o := range occupants {
+		occupancy = append(occupancy, o.Visitor)
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.changes = append(r.changes, change{room, occupancy})
@@ -104,7 +108,11 @@ func (f fixture) join(t *testing.T, v identity.Visitor, room string) voice.Parti
 
 func wantOccupancy(t *testing.T, s *voice.Service, room string, want ...identity.Visitor) {
 	t.Helper()
-	if got := s.Occupancy(room); !slices.Equal(got, want) {
+	var got []identity.Visitor
+	for _, o := range s.Occupancy(room) {
+		got = append(got, o.Visitor)
+	}
+	if !slices.Equal(got, want) {
 		t.Errorf("Occupancy(%s) = %+v, want %+v", room, got, want)
 	}
 }
@@ -194,13 +202,9 @@ func TestAJoinOfAParticipantWhoMayNotStayRemovesThemAndChangesNothing(t *testing
 			f.access.takeName(bob.ID)
 			return p
 		}},
-		{"issued another room", func(f fixture) voice.Participant {
-			f.join(t, bob, roomA)
-			if _, err := f.s.Join(t.Context(), bob, roomB); err != nil {
-				t.Fatalf("Join: %v", err)
-			}
-			// Back in the first room with the token they still hold.
-			return f.livekit.AddParticipant(roomA, bob.ID)
+		{"wrong grant room", func(f fixture) voice.Participant {
+			p := f.join(t, bob, roomB)
+			return f.livekit.AddParticipant(roomA, p.Identity)
 		}},
 		{"no such room", func(f fixture) voice.Participant { return f.join(t, bob, "01JBX7CCCCCCCCCCCCCCCCCCCC") }},
 	} {
@@ -220,7 +224,7 @@ func TestAJoinOfAParticipantWhoMayNotStayRemovesThemAndChangesNothing(t *testing
 	}
 }
 
-func TestAVisitorInTheirIssuedRoomIsKeptAndTheirSecondTabTakesNoPlace(t *testing.T) {
+func TestAReconnectKeepsItsConnectionWhenAnOlderSIDLeaves(t *testing.T) {
 	f := newFixture(bob)
 	first := f.join(t, bob, roomA)
 	f.receive(t, voicetest.Joined(first))
@@ -307,8 +311,7 @@ func TestTheRefreshAtStartupKeepsTheParticipantsWhoMayStayAndRemovesTheOthers(t 
 			t.Errorf("published %+v, want %+v", got, want)
 		}
 
-		// Carol moves to room B, which takes her out of room A, then returns
-		// to room A with the token she still holds.
+		// An identity string without a grant never authorizes a connection.
 		if _, err := f.s.Join(t.Context(), carol, roomB); err != nil {
 			t.Fatalf("Join: %v", err)
 		}
@@ -318,7 +321,7 @@ func TestTheRefreshAtStartupKeepsTheParticipantsWhoMayStayAndRemovesTheOthers(t 
 		if got := f.livekit.Removed(); !slices.Contains(got, returned) {
 			t.Errorf("removed %+v, want %+v among them", got, returned)
 		}
-		wantOccupancy(t, f.s, roomA)
+		wantOccupancy(t, f.s, roomA, carol)
 	})
 }
 

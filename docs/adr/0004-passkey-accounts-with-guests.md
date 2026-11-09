@@ -28,9 +28,20 @@ occupancy and session deletion so valid original/refreshed JWTs reconnect after
 restart and failed revocation cleanup remains retryable. Admission always
 revalidates the original session deadline and current access policy; a missing
 or revoked grant is never reconstructed from a token alone. Every explicit Join
-creates a fresh transport; exact-grant Leave cannot revoke a later replacement.
-The first deployment requires one explicit rejoin because old process-local
-permissions cannot be safely backfilled. Maintenance closes established expired
-access on its next pass, while new requests and reconnects fail immediately.
+creates a fresh independent transport without replacing any other grant, including
+grants in the same session or room. This lets one person use separate audio and
+screen-sharing connections without transferring ownership between browsers.
+Exact-grant Leave ends only that connection; logout ends all grants of that exact
+session, while recovery and disablement end all affected account sessions.
+Profiles remain owned by the lasting identity; media, participant presentation
+and playback volume belong to each connection. The browser explicitly retires
+its previous grant when switching rooms and any abandoned new setup grant.
+The deprecated `confirmTransfer` request field is accepted and ignored for older
+clients.
+The first deployment of durable grants (`0010`) requires one explicit rejoin
+because old process-local permissions cannot be safely backfilled. The independent
+connection migration (`0011`) retains those persisted grants. Maintenance closes
+established expired access on its next pass, while new requests and reconnects
+fail immediately.
 The operational and API contracts are recorded in [OpenAPI](../../api/openapi.yaml)
 and the [runbook](../runbook.md).

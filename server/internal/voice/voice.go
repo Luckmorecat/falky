@@ -1,5 +1,4 @@
-// Package voice issues the LiveKit tokens visitors join a room's voice with,
-// keeps each visitor a participant in at most one room, and keeps a view of
+// Package voice authorizes independent room connections and keeps a view of
 // each room's occupancy. LiveKit owns the media and who is a participant; the
 // server reaches it through a LiveKit, either the client of a real server or
 // a fake in tests, and learns of joins and leaves from LiveKit's webhooks and
@@ -85,8 +84,6 @@ var ErrRoomFull = errors.New("the room's voice is full")
 // says how.
 var ErrUnavailable = errors.New("voice is unavailable")
 
-var ErrTransferRequired = errors.New("confirm transfer of voice from the other session")
-
 // Config is how the Service issues tokens.
 type Config struct {
 	// URL is where clients reach LiveKit.
@@ -107,7 +104,7 @@ type Service struct {
 	rooms    Rooms
 	cfg      Config
 	keys     auth.KeyProvider
-	publish  func(roomID string, occupancy []identity.Visitor)
+	publish  func(roomID string, occupancy []Occupant)
 	logger   *slog.Logger
 
 	// publishing holds each change to the view, from reading what changed
@@ -119,15 +116,11 @@ type Service struct {
 	mu         sync.Mutex
 	joining    sync.Mutex
 	grants     map[string]*voiceGrant
-	current    map[string]string
 	admission  sync.Locker
 	validate   func(context.Context, identity.Session) (identity.Session, error)
 	guardedURL string
-	// issued holds, by visitor ID, the room ID of the last token issued to
-	// the visitor since the server started.
-	issued map[string]string
 	// view holds, by room ID, the participants of each room's voice by SID.
-	view map[string]map[string]identity.Visitor
+	view map[string]map[string]Occupant
 }
 
 // Option changes how New sets up the Service.
@@ -135,7 +128,7 @@ type Option func(*Service)
 
 // WithPublisher makes the Service hand each room's occupancy to publish once
 // it has changed, in the order the changes apply. publish must not block.
-func WithPublisher(publish func(roomID string, occupancy []identity.Visitor)) Option {
+func WithPublisher(publish func(roomID string, occupancy []Occupant)) Option {
 	return func(s *Service) { s.publish = publish }
 }
 
@@ -155,12 +148,10 @@ func New(lk LiveKit, visitors Visitors, rs Rooms, cfg Config, opts ...Option) *S
 		rooms:    rs,
 		cfg:      cfg,
 		keys:     auth.NewSimpleKeyProvider(cfg.APIKey, cfg.APISecret),
-		publish:  func(string, []identity.Visitor) {},
+		publish:  func(string, []Occupant) {},
 		logger:   slog.New(slog.DiscardHandler),
-		issued:   make(map[string]string),
-		view:     make(map[string]map[string]identity.Visitor),
+		view:     make(map[string]map[string]Occupant),
 		grants:   make(map[string]*voiceGrant),
-		current:  make(map[string]string),
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -168,88 +159,38 @@ func New(lk LiveKit, visitors Visitors, rs Rooms, cfg Config, opts ...Option) *S
 	return s
 }
 
-// Join returns the credentials visitor joins the voice of the room roomID
-// with. It first removes the visitor from every other room's voice, so they
-// are a participant in one room at most. It reads who is where from LiveKit's
-// listing rather than the view, which may lag behind by a webhook. It fails
-// with ErrRoomFull when the room already has RoomCap participants other than
-// the visitor (a second connection of the visitor replaces the first, so it
-// takes no place), or with an ErrUnavailable. The caller checks that the room
-// exists and that the visitor may join it. Services using WithDB require
-// JoinSession instead, because durable grants need an exact session binding.
+// Join authorizes a fresh independent connection. Services using WithDB require
+// JoinSession so every durable grant has an exact session binding.
 func (s *Service) Join(ctx context.Context, visitor identity.Visitor, roomID string) (Credentials, error) {
-	return s.join(ctx, identity.Session{Visitor: visitor, Kind: identity.Guest}, roomID, false, false)
+	return s.join(ctx, identity.Session{Visitor: visitor, Kind: identity.Guest}, roomID, false)
 }
 
-// JoinSession binds voice to the exact browser session. Its caller holds the
-// lifecycle gate through session validation and issuance. Every explicit call
-// replaces prior permission with a fresh transport, including in the same room.
-func (s *Service) JoinSession(ctx context.Context, session identity.Session, roomID string, confirm bool) (Credentials, error) {
-	return s.join(ctx, session, roomID, confirm, true)
+// JoinSession authorizes one new connection without changing any other grant.
+// Its caller holds the lifecycle gate through session validation and issuance.
+func (s *Service) JoinSession(ctx context.Context, session identity.Session, roomID string) (Credentials, error) {
+	return s.join(ctx, session, roomID, true)
 }
 
-func (s *Service) join(ctx context.Context, session identity.Session, roomID string, confirm, bound bool) (Credentials, error) {
+func (s *Service) join(ctx context.Context, session identity.Session, roomID string, bound bool) (Credentials, error) {
 	if s.db != nil && (!bound || session.ID == "") {
 		return Credentials{}, identity.ErrNoVisitor
 	}
 	s.joining.Lock()
 	defer s.joining.Unlock()
 	visitor := session.Visitor
-	old, err := s.activeGrant(ctx, visitor.ID)
-	if err != nil {
-		return Credentials{}, err
-	}
-	if old != nil && session.Kind == identity.Account && old.session.ID != session.ID && !confirm {
-		return Credentials{}, ErrTransferRequired
-	}
 	transport := visitor.ID + "." + ulid.Make().String()
 	participants, err := s.livekit.Participants(ctx)
 	if err != nil {
 		return Credentials{}, fmt.Errorf("%w: list participants: %w", ErrUnavailable, err)
 	}
-	others := 0
-	var elsewhere []Participant
+	count := 0
 	for _, p := range participants {
-		switch {
-		case s.logicalIdentity(p.Identity) != visitor.ID:
-			if p.Room == roomID {
-				others++
-			}
-		case p.Room != roomID || p.Identity != transport:
-			elsewhere = append(elsewhere, p)
+		if p.Room == roomID {
+			count++
 		}
 	}
-	if others >= s.cfg.RoomCap {
+	if count >= s.cfg.RoomCap {
 		return Credentials{}, ErrRoomFull
-	}
-	grants, err := s.allGrants(ctx)
-	if err != nil {
-		return Credentials{}, err
-	}
-	var previous []*voiceGrant
-	for _, g := range grants {
-		if g.session.Visitor.ID == visitor.ID {
-			if err := s.fence(ctx, g); err != nil {
-				return Credentials{}, err
-			}
-			previous = append(previous, g)
-		}
-	}
-	for _, g := range previous {
-		s.closeGrant(ctx, g)
-	}
-	for _, g := range previous {
-		if err := s.removeGrant(ctx, g); err != nil {
-			return Credentials{}, fmt.Errorf("%w: remove previous grant: %w", ErrUnavailable, err)
-		}
-	}
-	for _, p := range elsewhere {
-		if old != nil && p.Identity == old.transport && p.Room == old.room {
-			continue
-		}
-		if err := s.livekit.RemoveParticipant(ctx, p.Room, p.Identity); err != nil {
-			return Credentials{}, fmt.Errorf("%w: remove from room %s: %w", ErrUnavailable, p.Room, err)
-		}
 	}
 	token, err := s.token(identity.Visitor{ID: transport, Name: visitor.Name, Colour: visitor.Colour}, roomID)
 	if err != nil {
@@ -298,16 +239,6 @@ func (s *Service) token(visitor identity.Visitor, roomID string) (string, error)
 		return "", fmt.Errorf("mint voice token: %w", err)
 	}
 	return token, nil
-}
-
-// IssuedRoom returns the ID of the room whose voice the visitor visitorID was
-// last issued a token for, and false when they were issued none since the
-// server started.
-func (s *Service) IssuedRoom(visitorID string) (string, bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	room, ok := s.issued[visitorID]
-	return room, ok
 }
 
 // Check fails while LiveKit cannot be reached.

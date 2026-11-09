@@ -529,6 +529,9 @@ Both the server and LiveKit restart, briefly interrupting voice. Both account an
 guest browsers can reconnect using a valid original or LiveKit-refreshed JWT,
 provided its exact persisted grant and authoritative session/room/name binding
 remain valid. Missing/revoked grants are never synthesized from old tokens.
+Admission still validates JWT signatures and claims against the exact session,
+identity, kind, generation, room and absolute expiry, plus current name/access
+authorization.
 Never copy credentials or a database from production to development.
 
 Migration `0010_voice_grants.sql` records durable voice permissions and cleanup
@@ -537,6 +540,31 @@ upgrade cannot backfill historical in-memory permissions: unknown participants
 and old tokens fail closed, and everyone must explicitly rejoin voice once.
 Existing browser sessions and original 90-day account/400-day guest deadlines
 remain unchanged. Subsequent backend restarts preserve exact valid grants.
+
+Migration `0011_independent_voice_connections.sql` removes only the unique index
+that limited an identity to one active grant. Existing grants and cleanup work
+remain intact, and transport IDs remain unique. This upgrade needs no explicit
+rejoin for grants already persisted by `0010`.
+
+Every explicit `POST /api/rooms/{id}/voice` creates an independent grant. One
+identity can use several sessions, and each session can have several connections
+in the same or different rooms. Join does not evict or transfer another connection;
+the deprecated `confirmTransfer` field is accepted and ignored whether omitted,
+false or true. Reconnect reuses its exact existing grant rather than calling Join.
+Capacity counts every connection, including another of the joining identity;
+LiveKit's hard participant cap also covers racing admissions.
+
+REST and live occupancy list every connection separately with a stable
+`connectionId` (the returned `grantId` and LiveKit transport identity), permanent
+`visitorId` and current name. The room list and participant tiles retain separate
+entries even before the viewer joins. Profile appearance and colour belong to
+`visitorId`; media, microphone levels, active speakers and playback volume use
+`connectionId`. Only the exact local connection receives local controls and camera
+mirroring, so another connection of the same person can share its screen or camera
+independently. Playback preferences use `connectionVolume.<connectionId>`; legacy
+person-wide `volume.<visitorId>` preferences are ignored and new grants start at
+normal volume (1). Existing join-muted and audio defaults remain, with one local
+connection per app instance and no companion mode or device registry.
 
 One internal scheduler owns heartbeat (20 seconds), maintenance (startup and every
 30 seconds), and attachment cleanup (60 seconds). Each job runs independently and
@@ -556,6 +584,15 @@ does not confirm revocation. Reload/reachability retries the old target without
 blocking or revoking a newer Join. Once acknowledged, failed external cleanup is
 the backend's maintenance responsibility. Ordinary SDK Leave, reload and temporary
 network disconnection preserve valid permission.
+
+When switching rooms, the browser keeps its previous connection if the new Join
+is refused, including a full room. After successful admission it durably queues
+the captured previous exact grant for Leave and tears down that room, without
+waiting for external cleanup before connecting the new room. A canceled Join
+that returns credentials late, or canceled/failed media setup, durably queues the
+exact abandoned new grant. A stale completion cannot target a newer operation's
+grant, and pending cleanup cannot block an independent Join. Other app instances'
+connections remain authorized.
 
 ### Accounts, invitations and recovery
 
@@ -594,7 +631,9 @@ are supported. Management and code regeneration require a verified passkey proof
 in the same session within five minutes; last-key removal is refused. Removing
 one passkey blocks future sign-in/proof with that key, but normal existing
 sessions remain usable; recovery/disable ends the old sessions. Account cookies expire server-side
-after 90 days absolute; logout ends only that browser's session.
+after 90 days absolute; logout ends only that browser's exact session and all of
+its grants, preserving other sessions of the same account. Guest-link rotation
+ends affected guest sessions and all their grants, preserving accounts.
 
 Enrollment and recovery return ten high-entropy single-use recovery codes,
 plaintext only in the successful response; only their hashes are stored. Keep
@@ -624,9 +663,9 @@ transaction was rolled back or media removal succeeded.
 The current frontend provides the legacy guest flow; these backend invitation
 and recovery links do not add account UI. Client integration must implement the
 [account/WebAuthn API](../api/openapi.yaml), including five-minute context-bound
-ceremonies, same-origin mutations, recovery-code storage and explicit confirmed
-voice transfer at `POST /api/rooms/{id}/voice`. Both guest and account transport IDs map to the
-permanent prefix before their dot; public occupancy already uses permanent IDs.
+ceremonies, same-origin mutations and recovery-code storage. Voice uses the
+independent connection model above for both guests and accounts; no new account
+UI is included.
 
 The additive `0007_accounts.sql` migration retains existing IDs, guest history
 and ownership. `0008_identity_profiles.sql` renames the lasting identity table to

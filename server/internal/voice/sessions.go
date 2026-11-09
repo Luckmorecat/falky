@@ -27,13 +27,6 @@ func (s *Service) ConfigureAdmission(gate sync.Locker, validate func(context.Con
 	s.guardedURL = "ws" + strings.TrimPrefix(publicOrigin, "http")
 }
 
-func (s *Service) logicalIdentity(transport string) string {
-	// Identity IDs never contain dots. Voice grants append an opaque nonce;
-	// metadata and attributes remain freely editable and carry no authority.
-	id, _, _ := strings.Cut(transport, ".")
-	return id
-}
-
 func (s *Service) fence(ctx context.Context, g *voiceGrant) error {
 	if err := s.storeMu.lock(ctx); err != nil {
 		return err
@@ -83,9 +76,6 @@ func (s *Service) retire(ctx context.Context, g *voiceGrant) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.grants, g.transport)
-	if s.current[g.session.Visitor.ID] == g.transport {
-		delete(s.current, g.session.Visitor.ID)
-	}
 	return nil
 }
 
@@ -128,7 +118,7 @@ func (s *Service) FenceSessions(ctx context.Context, matches func(identity.Sessi
 
 // Leave acknowledges durable revocation, even if immediate media cleanup fails.
 // A missing target is already complete; a target owned by another browser is
-// refused. It never substitutes the identity's newer active grant.
+// refused. It never substitutes another connection of the identity.
 func (s *Service) Leave(ctx context.Context, session identity.Session, transport string) error {
 	g, err := s.grant(ctx, transport)
 	if err != nil {

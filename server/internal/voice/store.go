@@ -76,21 +76,6 @@ func (s *Service) grant(ctx context.Context, transport string) (*voiceGrant, err
 	return nil, nil
 }
 
-func (s *Service) activeGrant(ctx context.Context, identityID string) (*voiceGrant, error) {
-	grants, err := s.allGrants(ctx)
-	if err != nil {
-		return nil, err
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for _, g := range grants {
-		if g.session.Visitor.ID == identityID && !g.revoked {
-			return g, nil
-		}
-	}
-	return nil, nil
-}
-
 func (s *Service) saveGrant(ctx context.Context, g *voiceGrant) error {
 	if err := s.storeMu.lock(ctx); err != nil {
 		return err
@@ -107,7 +92,5 @@ func (s *Service) saveGrant(ctx context.Context, g *voiceGrant) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.grants[g.transport] = g
-	s.current[g.session.Visitor.ID] = g.transport
-	s.issued[g.session.Visitor.ID] = g.room
 	return nil
 }

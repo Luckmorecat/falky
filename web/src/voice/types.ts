@@ -3,7 +3,10 @@ import type { ShareSettings } from './share';
 import type { ShareStatsTrack } from './shareStats';
 
 export interface VoicePerson {
+  /** Immutable connection identity. */
   id: string;
+  /** Permanent person identity for profiles and appearance. */
+  visitorId: string;
   name: string;
   local: boolean;
   muted: boolean;
@@ -25,7 +28,7 @@ export interface VoiceSnapshot {
   /** When this room's voice was joined, on the performance clock. */
   joinedAt: number;
   people: VoicePerson[];
-  /** Visitor IDs of who is talking now. */
+  /** Connection IDs of who is talking now. */
   speakers: string[];
   muted: boolean;
   deafened: boolean;
@@ -58,7 +61,7 @@ export interface VoiceHost {
   joinMuted(): boolean;
   shareSettings(): ShareSettings;
   cameraSettings(): CameraSettings;
-  volumeOf(visitorId: string): number;
+  volumeOf(connectionId: string): number;
 }
 
 /** Only the presentation and diagnostics surface used by Stage. */
@@ -75,12 +78,12 @@ export interface VoiceClient {
   toggleMute(): Promise<void>;
   toggleDeafen(): Promise<void>;
   toggleShare(): Promise<void>;
-  shareTrack(visitorId: string): ShareTrack | null;
+  shareTrack(connectionId: string): ShareTrack | null;
   toggleCamera(): Promise<void>;
   restartCamera(): Promise<void>;
   setCamera(deviceId: string): Promise<void>;
-  cameraTrack(visitorId: string): ShareTrack | null;
-  level(visitorId: string): number;
+  cameraTrack(connectionId: string): ShareTrack | null;
+  level(connectionId: string): number;
   applyVolumes(): void;
   setMic(deviceId: string): Promise<void>;
   setSpeaker(deviceId: string): Promise<void>;

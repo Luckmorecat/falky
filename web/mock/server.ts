@@ -99,15 +99,17 @@ export async function startMockServer(options: { port?: number; scenario?: strin
   let voiceGrantId: string | null = null;
   const state: MockState = {
     instanceId, generation: 1, revision: 1, scenario: scenarioName(options.scenario ?? 'populated'), scenarios,
-    visitor: null, voiceRoomId: null,
+    visitor: null, voiceRoomId: null, voiceGrants: {},
     rooms: roomIds.map((roomId, i) => ({ id: roomId, name: ['Lounge', 'Games', 'Quiet'][i]!, occupancy: [] })),
     peers: {}, faults: { send: 'none', colourSave: 'none', colourDelayMs: 0, colourResponseDelayMs: 0, delayMs: 0, liveDisconnected: false, roomFull: null, micDenied: false, shareFailure: false, voiceReconnecting: false, leaveUnavailable: false },
     accessLink: '/#k=mock-access-link',
   };
   if (state.scenario === 'entry') state.visitor = null;
-  const sam = { visitorId: id(), name: 'Sam', muted: false, deafened: false, sharing: state.scenario === 'remote-share' };
-  state.peers[roomIds[0]!] = [sam, { visitorId: id(), name: 'Robin', muted: true, deafened: false, sharing: false }];
-  state.rooms[0]!.occupancy = state.peers[roomIds[0]!]!.map(({ visitorId, name }) => ({ visitorId, name }));
+  const samId = id();
+  const robinId = id();
+  const sam = { connectionId: samId + '.' + id(), visitorId: samId, name: 'Sam', muted: false, deafened: false, sharing: state.scenario === 'remote-share' };
+  state.peers[roomIds[0]!] = [sam, { connectionId: robinId + '.' + id(), visitorId: robinId, name: 'Robin', muted: true, deafened: false, sharing: false }];
+  state.rooms[0]!.occupancy = state.peers[roomIds[0]!]!.map(({ connectionId, visitorId, name }) => ({ connectionId, visitorId, name }));
   let conflictName: string | null = null;
   let accessSecret = 'mock-access-link';
   const requests = new Map<string, Schema['Message']>();
@@ -130,8 +132,10 @@ export async function startMockServer(options: { port?: number; scenario?: strin
   }
   function occupancy() {
     for (const room of state.rooms) {
-      const next = (state.peers[room.id] ?? []).map(({ visitorId, name }) => ({ visitorId, name }));
-      if (state.voiceRoomId === room.id && state.visitor) next.push({ visitorId: state.visitor.id, name: state.visitor.name });
+      const next = (state.peers[room.id] ?? []).map(({ connectionId, visitorId, name }) => ({ connectionId, visitorId, name }));
+      if (state.visitor) for (const [connectionId, roomId] of Object.entries(state.voiceGrants)) {
+        if (roomId === room.id) next.push({ connectionId, visitorId: state.visitor.id, name: state.visitor.name });
+      }
       if (JSON.stringify(next) !== JSON.stringify(room.occupancy)) {
         room.occupancy = next;
         publish('occupancy.changed', { roomId: room.id, occupancy: next }, room.id);
@@ -148,7 +152,7 @@ export async function startMockServer(options: { port?: number; scenario?: strin
     const trimmed = input.trim();
     if (!trimmed || [...trimmed].length > 32 || /[\p{Cc}\p{Cf}]/u.test(trimmed)) throw new Refused(400, 'invalid_name', 'Name must have 1–32 characters and no controls');
     if (conflictName === trimmed.toLowerCase()) throw new Refused(409, 'name_taken', 'That name is held by another visitor');
-    if (Object.values(state.peers).flat().some((peer) => peer.name.trim().toLowerCase() === trimmed.toLowerCase())) throw new Refused(409, 'name_taken', 'That name is held by another visitor');
+    if (Object.values(state.peers).flat().some((peer) => peer.visitorId !== state.visitor?.id && peer.name.trim().toLowerCase() === trimmed.toLowerCase())) throw new Refused(409, 'name_taken', 'That name is held by another visitor');
     return trimmed;
   }
   for (const room of state.rooms) messages.set(room.id, []);
@@ -176,15 +180,24 @@ export async function startMockServer(options: { port?: number; scenario?: strin
     for (const history of fixtureMessages.values()) for (const message of history) assignColour(message.authorId);
     state.visitor = scenario === 'entry' ? null : visitor('Alex');
     state.voiceRoomId = null;
+    state.voiceGrants = {};
+    voiceGrantId = null;
     state.peers = scenario === 'quiet' ? {} : structuredClone(fixturePeers);
     for (const peers of Object.values(state.peers)) for (const peer of peers) peer.sharing = scenario === 'remote-share' && peer.name === 'Sam';
+    if (scenario === 'same-person' && state.visitor) {
+      const self = state.visitor;
+      state.peers[roomIds[0]!] = [
+        { connectionId: self.id + '.' + id(), visitorId: self.id, name: self.name, muted: false, deafened: false, sharing: true, camera: true },
+        { connectionId: self.id + '.' + id(), visitorId: self.id, name: self.name, muted: true, deafened: false, sharing: false, camera: false },
+      ];
+    }
     messages.clear();
     for (const [roomId, history] of fixtureMessages) messages.set(roomId, scenario === 'quiet' ? [] : structuredClone(history));
     for (const [attachmentId, stored] of attachments) {
       if (fixtureAttachmentIds.has(attachmentId)) stored.meta.availability = 'posted';
       else attachments.delete(attachmentId);
     }
-    for (const room of state.rooms) room.occupancy = (state.peers[room.id] ?? []).map(({ visitorId, name }) => ({ visitorId, name }));
+    for (const room of state.rooms) room.occupancy = (state.peers[room.id] ?? []).map(({ connectionId, visitorId, name }) => ({ connectionId, visitorId, name }));
     state.faults = { send: 'none', colourSave: 'none', colourDelayMs: 0, colourResponseDelayMs: 0, delayMs: 0, liveDisconnected: false, roomFull: null, micDenied: false, shareFailure: false, voiceReconnecting: false, leaveUnavailable: false };
     requests.clear();
     conflictName = null;
@@ -269,7 +282,9 @@ export async function startMockServer(options: { port?: number; scenario?: strin
         changeColour(input.visitorId, input.palette);
       } else if (input.type === 'voice-leave') {
         if (input.generation !== state.generation) throw new Refused(409, 'invalid_request', 'Mock generation changed');
-        if (!input.grantId || input.grantId === voiceGrantId) state.voiceRoomId = null;
+        if (typeof input.grantId === 'string') delete state.voiceGrants[input.grantId];
+        else state.voiceGrants = {};
+        if (!input.grantId || input.grantId === voiceGrantId) { state.voiceRoomId = null; voiceGrantId = null; }
         occupancy();
       } else if (input.type === 'participants') {
         if (!state.rooms.some((room) => room.id === input.roomId)) throw new Refused(404, 'room_not_found', 'No such room');
@@ -278,16 +293,16 @@ export async function startMockServer(options: { port?: number; scenario?: strin
         const ids = new Set<string>();
         for (const raw of peers) {
           const peer = raw as Record<string, unknown> | null;
-          if (!peer || typeof peer.visitorId !== 'string' || !validId.test(peer.visitorId) || peer.visitorId === state.visitor?.id || ids.has(peer.visitorId) ||
+          if (!peer || typeof peer.visitorId !== 'string' || !validId.test(peer.visitorId) || typeof peer.connectionId !== 'string' || !peer.connectionId || ids.has(peer.connectionId) ||
             typeof peer.name !== 'string' || !peer.name.trim() || [...peer.name.trim()].length > 32 || /[\p{Cc}\p{Cf}]/u.test(peer.name) ||
             ['muted', 'deafened', 'sharing'].some((key) => typeof peer[key] !== 'boolean')) throw new Refused(400, 'invalid_request', 'Invalid scripted participant');
-          ids.add(peer.visitorId);
+          ids.add(peer.connectionId);
           assignColour(peer.visitorId);
         }
-        for (const room of state.rooms) state.peers[room.id] = (state.peers[room.id] ?? []).filter((peer) => !ids.has(peer.visitorId));
+        for (const room of state.rooms) state.peers[room.id] = (state.peers[room.id] ?? []).filter((peer) => !ids.has(peer.connectionId));
         state.peers[input.roomId as string] = peers.map((raw) => {
           const peer = raw as MockState['peers'][string][number];
-          return { visitorId: peer.visitorId, name: peer.name.trim(), muted: peer.muted || peer.deafened, deafened: peer.deafened, sharing: peer.sharing };
+          return { connectionId: peer.connectionId, visitorId: peer.visitorId, camera: peer.camera ?? false, name: peer.name.trim(), muted: peer.muted || peer.deafened, deafened: peer.deafened, sharing: peer.sharing };
         });
         occupancy();
       } else if (input.type === 'name-conflict') {
@@ -297,6 +312,7 @@ export async function startMockServer(options: { port?: number; scenario?: strin
           state.visitor.nameTaken = input.active;
           if (input.active) {
             state.voiceRoomId = null;
+            state.voiceGrants = {};
             occupancy();
             for (const socket of sockets.clients) socket.close(4000, 'Name taken');
           }
@@ -306,6 +322,7 @@ export async function startMockServer(options: { port?: number; scenario?: strin
         for (const socket of sockets.clients) socket.close(4001, 'Access revoked');
         state.visitor = null;
         state.voiceRoomId = null;
+        state.voiceGrants = {};
         token = randomBytes(24).toString('hex');
         accessSecret = `mock-access-${state.generation}-${state.revision}`;
         state.accessLink = `${publicOrigin}/#k=${accessSecret}`;
@@ -355,6 +372,7 @@ export async function startMockServer(options: { port?: number; scenario?: strin
       if (input.secret !== accessSecret) throw new Refused(403, 'invalid_link', 'The access link is invalid');
       const chosen = name(input.name);
       state.voiceRoomId = null;
+      state.voiceGrants = {};
       for (const socket of sockets.clients) socket.close(4000, 'Visitor entered again');
       state.visitor = visitor(chosen);
       occupancy();
@@ -389,6 +407,9 @@ export async function startMockServer(options: { port?: number; scenario?: strin
     if (url.pathname === '/api/me' && req.method === 'GET') return json(res, 200, state.visitor);
     if (url.pathname === '/api/me' && req.method === 'PATCH') {
       state.visitor.name = name(input.name);
+      for (const peers of Object.values(state.peers)) for (const peer of peers) {
+        if (peer.visitorId === state.visitor.id) peer.name = state.visitor.name;
+      }
       state.visitor.nameTaken = false;
       occupancy();
       state.revision++;
@@ -398,7 +419,9 @@ export async function startMockServer(options: { port?: number; scenario?: strin
     if (url.pathname === '/api/voice/leave' && req.method === 'POST') {
       if (state.faults.leaveUnavailable) throw new Refused(503, 'voice_unavailable', 'Leave cannot reach the server');
       if (typeof input.grantId !== 'string' || !input.grantId) throw new Refused(400, 'bad_request', 'Missing grant');
-      if (input.grantId === voiceGrantId) { state.voiceRoomId = null; voiceGrantId = null; occupancy(); state.revision++; }
+      delete state.voiceGrants[input.grantId];
+      if (input.grantId === voiceGrantId) { state.voiceRoomId = null; voiceGrantId = null; }
+      occupancy(); state.revision++;
       return json(res, 200, { revoked: true });
     }
     const voice = /^\/api\/rooms\/([^/]+)\/voice$/.exec(url.pathname);
@@ -406,9 +429,10 @@ export async function startMockServer(options: { port?: number; scenario?: strin
       const roomId = voice[1]!;
       if (!state.rooms.some((room) => room.id === roomId)) throw new Refused(404, 'room_not_found', 'No such room');
       if (state.visitor.nameTaken) throw new Refused(409, 'name_taken', 'Rename before joining voice');
-      if (state.faults.roomFull === roomId && state.voiceRoomId !== roomId) throw new Refused(409, 'room_full', 'The room is full');
+      if (state.faults.roomFull === roomId) throw new Refused(409, 'room_full', 'The room is full');
       state.voiceRoomId = roomId;
       voiceGrantId = state.visitor.id + '.' + id();
+      state.voiceGrants[voiceGrantId] = roomId;
       occupancy();
       state.revision++;
       // Syntactically JWT-shaped; consumed only by the dev-only voice adapter.

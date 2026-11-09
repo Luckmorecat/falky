@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"io"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/fstest"
 	"time"
 
 	"github.com/kisshot/falky/server/internal/identity"
@@ -59,7 +61,7 @@ func TestDurableGrantSurvivesDatabaseReopenAndUnknownTokensFailClosed(t *testing
 	lk := voicetest.New()
 	cfg := voice.Config{APIKey: testKey, APISecret: testSecret, RoomCap: 8}
 	s := voice.New(lk, ident, rs, cfg, voice.WithDB(db))
-	creds, err := s.JoinSession(t.Context(), session, room.ID, false)
+	creds, err := s.JoinSession(t.Context(), session, room.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,7 +131,7 @@ func TestCleanupRetriesAfterDeletedSessionAndDatabaseRestartEvenWhenListingIsEmp
 	lk := &retryLiveKit{LiveKit: voicetest.New()}
 	cfg := voice.Config{APIKey: testKey, APISecret: testSecret, RoomCap: 8}
 	s := voice.New(lk, ident, rs, cfg, voice.WithDB(db))
-	creds, err := s.JoinSession(t.Context(), session, room.ID, false)
+	creds, err := s.JoinSession(t.Context(), session, room.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -192,13 +194,17 @@ func (lk *retryLiveKit) RemoveParticipant(ctx context.Context, room, transport s
 	return lk.LiveKit.RemoveParticipant(ctx, room, transport)
 }
 
-func TestVoiceMigrationEnforcesOneActiveGrantWithoutSessionCascade(t *testing.T) {
+func TestVoiceMigrationUpgradesExistingGrantsWithoutSessionCascade(t *testing.T) {
 	db, err := platform.OpenDB(t.Context(), filepath.Join(t.TempDir(), "constraints.db"), platform.NewLogger(io.Discard, 0))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = db.Close() }()
-	ms, err := platform.LoadMigrations(identity.Migrations(), voice.Migrations())
+	legacy, err := fs.ReadFile(voice.Migrations(), "0010_voice_grants.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ms, err := platform.LoadMigrations(identity.Migrations(), fstest.MapFS{"0010_voice_grants.sql": &fstest.MapFile{Data: legacy}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -215,8 +221,26 @@ func TestVoiceMigrationEnforcesOneActiveGrantWithoutSessionCascade(t *testing.T)
 		t.Fatal(err)
 	}
 	if err := insert("identity.second", 0); err == nil {
-		t.Fatal("database admitted two active grants for one identity")
+		t.Fatal("legacy schema admitted two active grants")
 	}
+	ms, err = platform.LoadMigrations(identity.Migrations(), voice.Migrations())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n, err := db.Migrate(t.Context(), ms); err != nil || n != 1 {
+		t.Fatalf("forward upgrade: %d %v", n, err)
+	}
+	if err := insert("identity.second", 0); err != nil {
+		t.Fatal("new schema refused independent grant:", err)
+	}
+	var count int
+	if err := db.Read().QueryRowContext(t.Context(), "SELECT count(*) FROM voice_grants WHERE transport='identity.first' AND revoked=0").Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatal("upgrade lost existing grant")
+	}
+
 	if err := insert("identity.pending", 1); err != nil {
 		t.Fatal("revoked cleanup must survive a deleted session:", err)
 	}
@@ -230,11 +254,11 @@ func TestCleanupContinuesAfterIndividualFailureAndLateLeaveCannotHitReplacement(
 	acc := newAccess(bob, alice)
 	s := voice.New(lk, acc, acc, voice.Config{APIKey: testKey, APISecret: testSecret, RoomCap: 8})
 	session := identity.Session{ID: "bob-session", Kind: identity.Guest, Visitor: bob, Generation: 1}
-	old, err := s.JoinSession(t.Context(), session, roomA, false)
+	old, err := s.JoinSession(t.Context(), session, roomA)
 	if err != nil {
 		t.Fatal(err)
 	}
-	other, err := s.JoinSession(t.Context(), identity.Session{ID: "alice-session", Kind: identity.Guest, Visitor: alice, Generation: 1}, roomA, false)
+	other, err := s.JoinSession(t.Context(), identity.Session{ID: "alice-session", Kind: identity.Guest, Visitor: alice, Generation: 1}, roomA)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -246,7 +270,7 @@ func TestCleanupContinuesAfterIndividualFailureAndLateLeaveCannotHitReplacement(
 		t.Fatal("one failure starved another record")
 	}
 	lk.failedTransport = ""
-	replacement, err := s.JoinSession(t.Context(), session, roomA, false)
+	replacement, err := s.JoinSession(t.Context(), session, roomA)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -272,26 +296,29 @@ func TestCleanupContinuesAfterIndividualFailureAndLateLeaveCannotHitReplacement(
 	}
 }
 
-func TestFailedReplacementRemovalNeverIssuesCredentialsEvenOnRetry(t *testing.T) {
+func TestFailedOldCleanupDoesNotGateIndependentCredentials(t *testing.T) {
 	for _, kind := range []identity.Kind{identity.Guest, identity.Account} {
 		t.Run(string(kind), func(t *testing.T) {
 			lk := &retryLiveKit{LiveKit: voicetest.New()}
 			acc := newAccess(bob)
 			s := voice.New(lk, acc, acc, voice.Config{APIKey: testKey, APISecret: testSecret, RoomCap: 8})
 			session := identity.Session{ID: "browser", Kind: kind, Visitor: bob, Generation: 1}
-			first, err := s.JoinSession(t.Context(), session, roomA, false)
+			first, err := s.JoinSession(t.Context(), session, roomA)
 			if err != nil {
 				t.Fatal(err)
 			}
 			lk.failedTransport = first.GrantID
+			if err := s.Leave(t.Context(), session, first.GrantID); err != nil {
+				t.Fatal(err)
+			}
 			for range 2 {
-				creds, err := s.JoinSession(t.Context(), session, roomA, false)
-				if !errors.Is(err, voice.ErrUnavailable) || creds.Token != "" {
-					t.Fatalf("failed removal returned credentials: %+v %v", creds, err)
+				creds, err := s.JoinSession(t.Context(), session, roomA)
+				if err != nil || creds.Token == "" || creds.GrantID == first.GrantID {
+					t.Fatalf("independent Join blocked by cleanup: %+v %v", creds, err)
 				}
 			}
 			lk.failedTransport = ""
-			next, err := s.JoinSession(t.Context(), session, roomA, false)
+			next, err := s.JoinSession(t.Context(), session, roomA)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -306,11 +333,11 @@ func TestOneBlockedCleanupCannotStarveOtherRevokedGrants(t *testing.T) {
 	lk := &blockedRemoval{LiveKit: voicetest.New(), entered: make(chan struct{}), release: make(chan struct{}), otherRemoved: make(chan struct{})}
 	acc := newAccess(bob, alice)
 	s := voice.New(lk, acc, acc, voice.Config{APIKey: testKey, APISecret: testSecret, RoomCap: 8})
-	first, err := s.JoinSession(t.Context(), identity.Session{ID: "bob", Kind: identity.Guest, Visitor: bob}, roomA, false)
+	first, err := s.JoinSession(t.Context(), identity.Session{ID: "bob", Kind: identity.Guest, Visitor: bob}, roomA)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.JoinSession(t.Context(), identity.Session{ID: "alice", Kind: identity.Guest, Visitor: alice}, roomA, false); err != nil {
+	if _, err := s.JoinSession(t.Context(), identity.Session{ID: "alice", Kind: identity.Guest, Visitor: alice}, roomA); err != nil {
 		t.Fatal(err)
 	}
 	lk.target = first.GrantID

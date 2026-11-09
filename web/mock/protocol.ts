@@ -1,9 +1,11 @@
 /** Dev-only simulator protocol. Public API responses retain the generated contract. */
 import type { components } from '../src/api/schema.gen';
 export type Schema = components['schemas'];
-export const scenarios = ['populated', 'entry', 'quiet', 'remote-share'] as const;
+export const scenarios = ['populated', 'entry', 'quiet', 'remote-share', 'same-person'] as const;
 export type Scenario = (typeof scenarios)[number];
 export interface MockPeer {
+  connectionId: string;
+  camera?: boolean;
   visitorId: string;
   name: string;
   muted: boolean;
@@ -31,6 +33,7 @@ export interface MockState {
   scenarios: readonly Scenario[];
   visitor: Schema['Visitor'] | null;
   voiceRoomId: string | null;
+  voiceGrants: Record<string, string>;
   rooms: Schema['Room'][];
   peers: Record<string, MockPeer[]>;
   faults: MockFaults;

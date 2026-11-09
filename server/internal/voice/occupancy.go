@@ -27,24 +27,28 @@ var ErrUnverifiedWebhook = errors.New("webhook not signed with the LiveKit API k
 // LiveKit event.
 var ErrInvalidWebhook = errors.New("webhook is not a LiveKit event")
 
-// Occupancy returns the participants of the room roomID's voice, each visitor
-// once, ordered by name.
-func (s *Service) Occupancy(roomID string) []identity.Visitor {
+// Occupant identifies one connection and the person using it.
+type Occupant struct {
+	identity.Visitor
+	ConnectionID string
+}
+
+// Occupancy returns every connection, ordered by person name and connection ID.
+func (s *Service) Occupancy(roomID string) []Occupant {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.occupancyLocked(roomID)
 }
 
-// occupancyLocked is Occupancy for a caller that holds s.mu.
-func (s *Service) occupancyLocked(roomID string) []identity.Visitor {
-	var occupancy []identity.Visitor
+func (s *Service) occupancyLocked(roomID string) []Occupant {
+	var occupancy []Occupant
 	for _, v := range s.view[roomID] {
-		if !slices.ContainsFunc(occupancy, func(o identity.Visitor) bool { return o.ID == v.ID }) {
+		if !slices.ContainsFunc(occupancy, func(o Occupant) bool { return o.ConnectionID == v.ConnectionID }) {
 			occupancy = append(occupancy, v)
 		}
 	}
-	slices.SortFunc(occupancy, func(a, b identity.Visitor) int {
-		return cmp.Or(strings.Compare(identity.NameKey(a.Name), identity.NameKey(b.Name)), strings.Compare(a.ID, b.ID))
+	slices.SortFunc(occupancy, func(a, b Occupant) int {
+		return cmp.Or(strings.Compare(identity.NameKey(a.Name), identity.NameKey(b.Name)), strings.Compare(a.ConnectionID, b.ConnectionID))
 	})
 	return occupancy
 }
@@ -113,7 +117,7 @@ func (s *Service) Refresh(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("%w: list participants: %w", ErrUnavailable, err)
 	}
-	view := make(map[string]map[string]identity.Visitor)
+	view := make(map[string]map[string]Occupant)
 	for _, p := range listed {
 		v, ok, err := s.keepOrRemove(ctx, p)
 		if err != nil {
@@ -221,22 +225,19 @@ func (s *Service) mayStay(ctx context.Context, p Participant) (v identity.Visito
 	case err != nil:
 		return identity.Visitor{}, "", err
 	}
-	if room, ok := s.IssuedRoom(v.ID); ok && room != p.Room {
-		return identity.Visitor{}, "issued another room", nil
-	}
 	return v, "", nil
 }
 
 // put adds the participant p, who is the visitor v, to view.
-func put(view map[string]map[string]identity.Visitor, p Participant, v identity.Visitor) {
+func put(view map[string]map[string]Occupant, p Participant, v identity.Visitor) {
 	if view[p.Room] == nil {
-		view[p.Room] = make(map[string]identity.Visitor)
+		view[p.Room] = make(map[string]Occupant)
 	}
-	view[p.Room][p.SID] = v
+	view[p.Room][p.SID] = Occupant{Visitor: v, ConnectionID: p.Identity}
 }
 
 // drop removes the participant p from view.
-func drop(view map[string]map[string]identity.Visitor, p Participant) {
+func drop(view map[string]map[string]Occupant, p Participant) {
 	delete(view[p.Room], p.SID)
 	if len(view[p.Room]) == 0 {
 		delete(view, p.Room)
@@ -248,12 +249,12 @@ func drop(view map[string]map[string]identity.Visitor, p Participant) {
 // publish in the order they apply.
 func (s *Service) change(apply func(), roomIDs ...string) {
 	s.mu.Lock()
-	before := make([][]identity.Visitor, len(roomIDs))
+	before := make([][]Occupant, len(roomIDs))
 	for i, id := range roomIDs {
 		before[i] = s.occupancyLocked(id)
 	}
 	apply()
-	after := make([][]identity.Visitor, len(roomIDs))
+	after := make([][]Occupant, len(roomIDs))
 	for i, id := range roomIDs {
 		after[i] = s.occupancyLocked(id)
 	}

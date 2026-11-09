@@ -102,7 +102,7 @@ func TestSignedWebhooksKeepTheOccupancyListedAndSentLive(t *testing.T) {
 	creds := joinedVoice(t, b, lounge.ID)
 	inVoice := p.livekit.AddParticipant(lounge.ID, creds.GrantId)
 	p.applied(t, voicetest.Joined(inVoice))
-	want := []api.Participant{{VisitorId: bob.Id, Name: "Bob"}}
+	want := []api.Participant{{ConnectionId: creds.GrantId, VisitorId: bob.Id, Name: "Bob"}}
 	if got := nextOccupancy(t, next); got.RoomId != lounge.ID || !slices.Equal(got.Occupancy, want) {
 		t.Errorf("occupancy.changed = %+v, want Bob in the lounge", got)
 	}
@@ -116,6 +116,47 @@ func TestSignedWebhooksKeepTheOccupancyListedAndSentLive(t *testing.T) {
 	}
 	if got := occupancy(t, watcher, lounge.ID); len(got) != 0 {
 		t.Errorf("lounge occupancy = %+v, want none", got)
+	}
+}
+
+func TestOccupancyListsEveryConnectionOfOneSessionAndRetiresOnlyOne(t *testing.T) {
+	p := startPublic(t, 100)
+	room := p.createRoom(t, "Voice")
+	client := p.browser(t)
+	bob := p.enter(t, client, "Bob")
+	watcher, watcherHTTP := p.browserWithHTTP(t)
+	p.enter(t, watcher, "Ann")
+	ws := p.connectLive(t, watcherHTTP)
+	next := func() api.Event { return nextEvent(t, ws) }
+	one := joinedVoice(t, client, room.ID)
+	two := joinedVoice(t, client, room.ID)
+	first := p.livekit.AddParticipant(room.ID, one.GrantId)
+	second := p.livekit.AddParticipant(room.ID, two.GrantId)
+	p.applied(t, voicetest.Joined(first))
+	nextOccupancy(t, next)
+	p.applied(t, voicetest.Joined(second))
+	want := []api.Participant{{ConnectionId: one.GrantId, VisitorId: bob.Id, Name: "Bob"}, {ConnectionId: two.GrantId, VisitorId: bob.Id, Name: "Bob"}}
+	slices.SortFunc(want, func(a, b api.Participant) int { return strings.Compare(a.ConnectionId, b.ConnectionId) })
+	if got := nextOccupancy(t, next); got.RoomId != room.ID || !slices.Equal(got.Occupancy, want) {
+		t.Fatalf("live connection occupancy = %+v, want %+v", got, want)
+	}
+	if got := occupancy(t, client, room.ID); !slices.Equal(got, want) {
+		t.Fatalf("REST connection occupancy = %+v, want %+v", got, want)
+	}
+	// A reconnect changes SID while its public connection ID stays stable.
+	reconnected := p.livekit.AddParticipant(room.ID, two.GrantId)
+	p.applied(t, voicetest.Joined(reconnected))
+	p.applied(t, voicetest.Left(second))
+	if got := occupancy(t, client, room.ID); !slices.Equal(got, want) {
+		t.Fatalf("old SID changed connections = %+v", got)
+	}
+	p.applied(t, voicetest.Left(first))
+	want = []api.Participant{{ConnectionId: two.GrantId, VisitorId: bob.Id, Name: "Bob"}}
+	if got := nextOccupancy(t, next); !slices.Equal(got.Occupancy, want) {
+		t.Fatalf("live exact leave occupancy = %+v", got)
+	}
+	if got := occupancy(t, client, room.ID); !slices.Equal(got, want) {
+		t.Fatalf("REST exact leave occupancy = %+v", got)
 	}
 }
 
@@ -198,7 +239,7 @@ func TestAParticipantStaysWhileAnotherVisitorOnlyReservesTheirNameAndIsRemovedOn
 	if got := p.livekit.Removed(); len(got) != 0 {
 		t.Errorf("removed %+v while bob is only reserved, want no one", got)
 	}
-	if got, want := occupancy(t, b, lounge.ID), []api.Participant{{VisitorId: bob.Id, Name: "Bob"}}; !slices.Equal(got, want) {
+	if got, want := occupancy(t, b, lounge.ID), []api.Participant{{ConnectionId: creds.GrantId, VisitorId: bob.Id, Name: "Bob"}}; !slices.Equal(got, want) {
 		t.Errorf("lounge occupancy = %+v, want %+v", got, want)
 	}
 

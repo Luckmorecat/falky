@@ -37,7 +37,7 @@ func TestGuardedLiveKitOriginalAndRefreshedJWTResumeAfterBackendRestart(t *testi
 			f := newGuardedVoice(t)
 			session := guardedSession(t, f, kind)
 			f.gate.Lock()
-			creds, err := f.voice.JoinSession(t.Context(), session, f.room, false)
+			creds, err := f.voice.JoinSession(t.Context(), session, f.room)
 			f.gate.Unlock()
 			if err != nil {
 				t.Fatal(err)

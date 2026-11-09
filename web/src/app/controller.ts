@@ -48,7 +48,7 @@ function knownVisitorIds(): string[] {
     ...(s.visitor ? [s.visitor.id] : []),
     ...Object.keys(s.colours),
     ...s.rooms.flatMap((r) => r.occupancy.map((p) => p.visitorId)),
-    ...s.voice.people.map((p) => p.id),
+    ...s.voice.people.map((p) => p.visitorId),
     ...Object.values(s.chats).flatMap((c) => c.messages.map((m) => m.authorId)),
   ])];
 }
@@ -705,7 +705,7 @@ export async function enableNotifications(): Promise<boolean> {
   return permission === 'granted';
 }
 
-export function setParticipantVolume(visitorId: string, value: number): void {
-  prefs.setVolume(visitorId, value);
+export function setParticipantVolume(connectionId: string, value: number): void {
+  prefs.setVolume(connectionId, value);
   voice.applyVolumes();
 }

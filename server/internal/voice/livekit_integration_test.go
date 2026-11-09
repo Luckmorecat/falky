@@ -213,6 +213,8 @@ func tryConnect(creds voice.Credentials) (voiceClient, error) {
 // in room.
 func waitForParticipants(t *testing.T, lk *voice.Client, room string, want ...string) {
 	t.Helper()
+	want = slices.Clone(want)
+	slices.Sort(want)
 	var got []string
 	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(100 * time.Millisecond) {
 		all, err := lk.Participants(t.Context())
@@ -252,26 +254,19 @@ func TestLiveKitAcceptsTheTokenAndListsTheParticipant(t *testing.T) {
 	}
 }
 
-func TestJoiningAnotherRoomRemovesTheParticipantFromLiveKit(t *testing.T) {
+func TestJoiningAnotherRoomKeepsTheParticipantInLiveKit(t *testing.T) {
 	s, lk := liveKitService(8, newAccess()), liveKitClient()
 	first, second := ulid.Make().String(), ulid.Make().String()
 	bob := newVisitor("Bob")
-
 	inFirst := connect(t, joined(t, s, bob, first))
+	connect(t, joined(t, s, bob, second))
 	waitForParticipants(t, lk, first, bob.ID)
-	toSecond := joined(t, s, bob, second)
-	// Removed before the token for the second room was returned.
-	waitForParticipants(t, lk, first)
+	waitForParticipants(t, lk, second, bob.ID)
 	select {
 	case reason := <-inFirst.disconnected:
-		if reason != lksdk.ParticipantRemoved {
-			t.Errorf("disconnected because %q, want removed", reason)
-		}
-	case <-time.After(5 * time.Second):
-		t.Error("the client in the first room was not disconnected")
+		t.Fatalf("independent Join disconnected first: %s", reason)
+	default:
 	}
-	connect(t, toSecond)
-	waitForParticipants(t, lk, second, bob.ID)
 }
 
 func TestRemovingAnAbsentParticipantSucceeds(t *testing.T) {
@@ -296,8 +291,9 @@ func TestLiveKitAdmitsNoMoreThanTheCap(t *testing.T) {
 		t.Errorf("Join of the full room = %v, want ErrRoomFull", err)
 	}
 
-	// A second tab of Alice's replaces her first connection.
-	connect(t, joined(t, s, alice, room))
+	if _, err := s.Join(t.Context(), alice, room); !errors.Is(err, voice.ErrRoomFull) {
+		t.Fatalf("same-person connection bypassed cap: %v", err)
+	}
 	waitForParticipants(t, liveKitClient(), room, alice.ID)
 }
 
@@ -347,7 +343,11 @@ func waitForOccupancy(t *testing.T, s *voice.Service, room string, want ...ident
 	t.Helper()
 	var got []identity.Visitor
 	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(50 * time.Millisecond) {
-		if got = s.Occupancy(room); slices.Equal(got, want) {
+		got = got[:0]
+		for _, o := range s.Occupancy(room) {
+			got = append(got, o.Visitor)
+		}
+		if slices.Equal(got, want) {
 			return
 		}
 	}
@@ -404,7 +404,7 @@ func TestTheRefreshReadsLiveKitsListingAndRemovesWhoMayNotStay(t *testing.T) {
 	if err := s.Refresh(t.Context()); err != nil {
 		t.Fatalf("Refresh: %v", err)
 	}
-	if got := s.Occupancy(room); !slices.Equal(got, []identity.Visitor{bob}) {
+	if got := s.Occupancy(room); len(got) != 1 || got[0].Visitor != bob {
 		t.Errorf("occupancy = %+v, want Bob", got)
 	}
 	waitForParticipants(t, lk, room, bob.ID)

@@ -11,7 +11,7 @@ export function subscribeMockState(listener: (state: MockState) => void): () => 
 async function request(path: string, body?: unknown): Promise<MockState> {
   const response = await fetch(`/__mock/${path}`, {
     cache: 'no-store',
-    ...(body === undefined ? {} : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }),
+    ...(body === undefined ? {} : { method: 'POST', keepalive: true, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }),
   });
   if (!response.ok) throw new Error(`Mock control ${path}: ${response.status}`);
   const next = await response.json() as MockState;

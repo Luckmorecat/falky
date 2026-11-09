@@ -32,7 +32,7 @@ afterEach(async () => {
 });
 
 async function render(props: Partial<TileProps> = {}) {
-  await act(async () => root.render(createElement(Tile, { id: 'sam', name: 'Sam', adjustable: true, ...props })));
+  await act(async () => root.render(createElement(Tile, { id: 'sam.connection', visitorId: 'sam', name: 'Sam', adjustable: true, ...props })));
 }
 
 it('shows a saved zero volume as muted for you without applying microphone-mute styling', async () => {
@@ -63,10 +63,10 @@ it('adds the badge at zero and removes it as soon as volume rises, preserving th
   await act(async () => {
     for (let i = 0; i < 20; i++) orb.dispatchEvent(new WheelEvent('wheel', { bubbles: true, cancelable: true, deltaY: 120 }));
   });
-  expect(setParticipantVolume).toHaveBeenLastCalledWith('sam', 0);
+  expect(setParticipantVolume).toHaveBeenLastCalledWith('sam.connection', 0);
   expect(container.querySelectorAll('.t-flag')).toHaveLength(2);
   await act(async () => { orb.dispatchEvent(new WheelEvent('wheel', { bubbles: true, cancelable: true, deltaY: -120 })); });
-  expect(setParticipantVolume).toHaveBeenLastCalledWith('sam', .05);
+  expect(setParticipantVolume).toHaveBeenLastCalledWith('sam.connection', .05);
   expect(container.querySelector('.locally-muted')).toBeNull();
   expect(container.querySelector('.dim')).not.toBeNull();
   expect(container.querySelectorAll('.t-flag')).toHaveLength(1);

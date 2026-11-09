@@ -59,3 +59,12 @@ describe('screen share bitrate preference', () => {
     expect(prefs.settings().shareMbps).toBe('0');
   });
 });
+
+it('keeps playback volume on the selected connection and ignores legacy person volume', () => {
+  localStorage.setItem('falky.volume.sam', '0');
+  expect(prefs.volume('sam.mac')).toBe(1);
+  prefs.setVolume('sam.mac', 0.4);
+  expect(prefs.volume('sam.mac')).toBe(0.4);
+  expect(prefs.volume('sam.windows')).toBe(1);
+  expect(prefs.volume('sam')).toBe(1);
+});

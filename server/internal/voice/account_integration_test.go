@@ -104,11 +104,11 @@ func (f guardedVoice) login(t *testing.T, key *passkeytest.Authenticator) identi
 	return e
 }
 
-func (f guardedVoice) join(t *testing.T, session identity.Session, confirm bool) voice.Credentials {
+func (f guardedVoice) join(t *testing.T, session identity.Session) voice.Credentials {
 	t.Helper()
 	f.gate.Lock()
 	defer f.gate.Unlock()
-	c, err := f.voice.JoinSession(t.Context(), session, f.room, confirm)
+	c, err := f.voice.JoinSession(t.Context(), session, f.room)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,51 +136,112 @@ func refusedAtGuard(t *testing.T, f guardedVoice, token string) {
 	}
 }
 
-func TestGuardedLiveKitTransferRecoveryDisableAndStaleTokens(t *testing.T) {
+func TestGuardedLiveKitIndependentMediaLeaveLogoutRecoveryAndDisable(t *testing.T) {
 	f := newGuardedVoice(t)
 	account, key := f.enroll(t)
 	second := f.login(t, key)
-	old := f.join(t, account.Session, false)
-	firstClient := connect(t, old)
-	track, err := lksdk.NewLocalTrack(webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus})
-	if err != nil {
-		t.Fatal(err)
+	one, two, three := f.join(t, account.Session), f.join(t, account.Session), f.join(t, second.Session)
+	firstClient, secondClient, thirdClient := connect(t, one), connect(t, two), connect(t, three)
+	publish := func(client voiceClient, mime string, source livekit.TrackSource, data []byte) {
+		track, err := lksdk.NewLocalTrack(webrtc.RTPCodecCapability{MimeType: mime})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = track.Close() })
+		publication, err := client.room.LocalParticipant.PublishTrack(track, &lksdk.TrackPublicationOptions{Name: source.String(), Source: source})
+		if err != nil || publication.SID() == "" {
+			t.Fatalf("publish %s: %v", source, err)
+		}
+		sending, stop := context.WithCancel(t.Context())
+		done := make(chan error, 1)
+		go func() {
+			ticker := time.NewTicker(20 * time.Millisecond)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-sending.Done():
+					done <- nil
+					return
+				case <-ticker.C:
+					if err := track.WriteSample(media.Sample{Data: data, Duration: 20 * time.Millisecond}, nil); err != nil {
+						done <- err
+						return
+					}
+				}
+			}
+		}()
+		t.Cleanup(func() {
+			stop()
+			if err := <-done; err != nil {
+				t.Errorf("write media: %v", err)
+			}
+		})
 	}
-	defer func() { _ = track.Close() }()
-	publication, err := firstClient.room.LocalParticipant.PublishTrack(track, &lksdk.TrackPublicationOptions{Name: "Microphone", Source: livekit.TrackSource_MICROPHONE})
-	if err != nil {
-		t.Fatal(err)
+	publish(firstClient, webrtc.MimeTypeOpus, livekit.TrackSource_MICROPHONE, []byte{0xf8, 0xff, 0xfe})
+	publish(secondClient, webrtc.MimeTypeVP8, livekit.TrackSource_SCREEN_SHARE, []byte{0x10, 0x00})
+	publish(thirdClient, webrtc.MimeTypeVP8, livekit.TrackSource_CAMERA, []byte{0x10, 0x00})
+	api := lksdk.NewRoomServiceClient(fmt.Sprintf("http://127.0.0.1:%d", liveKitPort), devKey, devSecret)
+	for _, expected := range []struct {
+		grant  string
+		source livekit.TrackSource
+	}{{one.GrantID, livekit.TrackSource_MICROPHONE}, {two.GrantID, livekit.TrackSource_SCREEN_SHARE}, {three.GrantID, livekit.TrackSource_CAMERA}} {
+		var participant *livekit.ParticipantInfo
+		for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+			var err error
+			participant, err = api.GetParticipant(t.Context(), &livekit.RoomParticipantIdentity{Room: f.room, Identity: expected.grant})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(participant.Tracks) == 1 && participant.Tracks[0].Source == expected.source {
+				break
+			}
+		}
+		if len(participant.Tracks) != 1 || participant.Tracks[0].Source != expected.source {
+			t.Fatalf("independent publication for %s: %v", expected.grant, participant.Tracks)
+		}
 	}
-	if publication.SID() == "" {
-		t.Fatal("microphone track not published")
-	}
-	if err := track.WriteSample(media.Sample{Data: []byte{0xf8, 0xff, 0xfe}, Duration: 20 * time.Millisecond}, nil); err != nil {
-		t.Fatal(err)
-	}
-	oldID := firstClient.room.LocalParticipant.Identity()
-	if oldID == account.Session.Visitor.ID {
-		t.Fatal("account transport has no fence")
-	}
-	f.gate.Lock()
-	_, err = f.voice.JoinSession(t.Context(), second.Session, f.room, false)
-	f.gate.Unlock()
-	if !errors.Is(err, voice.ErrTransferRequired) {
-		t.Fatalf("unconfirmed transfer = %v", err)
-	}
-	waitForParticipants(t, liveKitClient(), f.room, oldID)
-	current := f.join(t, second.Session, true)
-	select {
-	case <-firstClient.disconnected:
-	case <-time.After(2 * time.Second):
-		t.Fatal("transfer did not disconnect old media")
-	}
-	refusedAtGuard(t, f, old.Token)
-	newClient := connect(t, current)
 	if err := f.voice.Refresh(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	if got := f.voice.Occupancy(f.room); len(got) != 1 || got[0].ID != account.Session.Visitor.ID {
-		t.Fatalf("logical occupancy = %v", got)
+	occupants := f.voice.Occupancy(f.room)
+	if len(occupants) != 3 {
+		t.Fatalf("connection occupancy = %v", occupants)
+	}
+	for _, o := range occupants {
+		if o.ID != account.Session.Visitor.ID || o.ConnectionID == "" {
+			t.Fatalf("connection/person binding = %v", o)
+		}
+	}
+	if err := f.voice.Leave(t.Context(), account.Session, one.GrantID); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-firstClient.disconnected:
+	case <-time.After(2 * time.Second):
+		t.Fatal("exact Leave did not close its media")
+	}
+	refusedAtGuard(t, f, one.Token)
+	waitForParticipants(t, liveKitClient(), f.room, two.GrantID, three.GrantID)
+	f.gate.Lock()
+	effects, err := f.ident.Logout(t.Context(), account.Token)
+	if err == nil {
+		err = f.gate.Apply(t.Context(), effects)
+	}
+	f.gate.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-secondClient.disconnected:
+	case <-time.After(2 * time.Second):
+		t.Fatal("logout did not close same-session media")
+	}
+	refusedAtGuard(t, f, two.Token)
+	waitForParticipants(t, liveKitClient(), f.room, three.GrantID)
+	select {
+	case <-thirdClient.disconnected:
+		t.Fatal("logout closed other session")
+	default:
 	}
 	ceremony, err := f.ident.BeginRecovery(t.Context(), account.Session.Visitor.ID, account.RecoveryCodes[0], "recovery")
 	if err != nil {
@@ -197,15 +258,15 @@ func TestGuardedLiveKitTransferRecoveryDisableAndStaleTokens(t *testing.T) {
 		t.Fatal(err)
 	}
 	select {
-	case <-newClient.disconnected:
+	case <-thirdClient.disconnected:
 	case <-time.After(2 * time.Second):
-		t.Fatal("recovery did not disconnect old media")
+		t.Fatal("recovery did not close remaining old media")
 	}
-	refusedAtGuard(t, f, current.Token)
-	fresh := f.join(t, recovered.Session, false)
-	finalClient := connect(t, fresh)
+	refusedAtGuard(t, f, three.Token)
+	fresh, other := f.join(t, recovered.Session), f.join(t, recovered.Session)
+	finalClient, otherClient := connect(t, fresh), connect(t, other)
 	f.gate.Lock()
-	effects, err := f.ident.DisableAccount(t.Context(), account.Session.Visitor.ID)
+	effects, err = f.ident.DisableAccount(t.Context(), account.Session.Visitor.ID)
 	if err == nil {
 		err = f.gate.Apply(t.Context(), effects)
 	}
@@ -213,19 +274,22 @@ func TestGuardedLiveKitTransferRecoveryDisableAndStaleTokens(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	select {
-	case <-finalClient.disconnected:
-	case <-time.After(2 * time.Second):
-		t.Fatal("disable did not disconnect media")
+	for _, client := range []voiceClient{finalClient, otherClient} {
+		select {
+		case <-client.disconnected:
+		case <-time.After(2 * time.Second):
+			t.Fatal("disable did not close all media")
+		}
 	}
 	refusedAtGuard(t, f, fresh.Token)
+	refusedAtGuard(t, f, other.Token)
 	waitForParticipants(t, liveKitClient(), f.room)
 }
 
 func TestGuardedLiveKitAcceptsRefreshedTokenOnlyForCurrentImmutableGrant(t *testing.T) {
 	f := newGuardedVoice(t)
 	account, key := f.enroll(t)
-	creds := f.join(t, account.Session, false)
+	creds := f.join(t, account.Session)
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
 	ws, response, err := websocket.Dial(ctx, f.public.URL+"/rtc?protocol=15&auto_subscribe=0&access_token="+url.QueryEscape(creds.Token), nil)
@@ -277,7 +341,16 @@ func TestGuardedLiveKitAcceptsRefreshedTokenOnlyForCurrentImmutableGrant(t *test
 	// An actually refreshed LiveKit JWT (not a re-signed fixture) reconnects.
 	connect(t, voice.Credentials{URL: creds.URL, Token: refreshed})
 	second := f.login(t, key)
-	connect(t, f.join(t, second.Session, true))
+	connect(t, f.join(t, second.Session))
+	req := httptest.NewRequestWithContext(t.Context(), "GET", "/rtc/validate?access_token="+url.QueryEscape(refreshed), nil)
+	res := httptest.NewRecorder()
+	f.voice.Signalling(fmt.Sprintf("http://127.0.0.1:%d", liveKitPort)).ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("independent Join invalidated refreshed token: %d", res.Code)
+	}
+	if err := f.voice.Leave(t.Context(), account.Session, creds.GrantID); err != nil {
+		t.Fatal(err)
+	}
 	refusedAtGuard(t, f, refreshed)
 }
 
@@ -309,7 +382,7 @@ func TestGuardedLiveKitMaintenanceEndsExpiredIdleMediaWithoutHTTPRequest(t *test
 					t.Fatal(err)
 				}
 			}
-			creds := f.join(t, session, false)
+			creds := f.join(t, session)
 			if kind == identity.Guest {
 				// Production routes the legacy guest URL through this guard.
 				creds.URL = "ws" + strings.TrimPrefix(f.public.URL, "http")

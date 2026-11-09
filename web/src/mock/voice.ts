@@ -10,70 +10,78 @@ export async function preloadVoice(): Promise<void> {}
 /** Simulates media only. Joining and room moves still use the public HTTP API. */
 export class VoiceSession implements VoiceClient {
   private grantId: string | null = null;
-  private joining: { leaveRequested: boolean } | null = null;
+  private admittingGrant: string | null = null;
   private readonly leaves: PendingLeaves;
   private tracks = new Map<string, SyntheticShare>();
-  private cameraPicture: SyntheticShare | null = null;
+  private cameras = new Map<string, SyntheticShare>();
   private snap: VoiceSnapshot = idleVoice;
   private mutedBeforeDeaf = false;
   private operation = 0;
-  private pending = false;
   private generation: number | null = null;
   private readonly unsubscribe: () => void;
+  private readonly pagehide = () => this.end();
 
   constructor(private readonly host: VoiceHost) {
     this.leaves = new PendingLeaves(() => this.set({ pendingLeave: this.leaves.count }));
     this.unsubscribe = subscribeMockState(() => this.refresh());
+    window.addEventListener('pagehide', this.pagehide);
   }
   get snapshot(): VoiceSnapshot { return this.snap; }
 
   async join(roomId: string): Promise<void> {
-    if (this.pending) return;
+    if (this.snap.status === 'joining') return;
     const initial = mockState();
     if (!initial) { this.host.onProblem('join_failed'); return; }
     const operation = ++this.operation;
-    const intent = { leaveRequested: false };
-    this.joining = intent;
     const generation = initial.generation;
     const previous = this.snap;
     const startMuted = previous.status === 'idle' ? this.host.joinMuted() : previous.muted && !previous.listenOnly;
-    this.pending = true;
     this.set({ status: 'joining', joiningRoomId: roomId });
+    const previousGrant = this.grantId;
+    let issuedGrant: string | null = null;
     try {
       const creds = await api.joinVoice(roomId);
-      if (operation === this.operation) this.grantId = creds.grantId;
+      issuedGrant = creds.grantId;
+      if (operation === this.operation) {
+        this.grantId = creds.grantId;
+        this.admittingGrant = creds.grantId;
+      }
       if (operation !== this.operation) {
-        if (intent.leaveRequested) await this.leaves.add(creds.grantId);
-        else await this.release(generation, creds.grantId);
+        await this.leaves.add(creds.grantId);
         return;
       }
+      if (previousGrant) void this.leaves.add(previousGrant);
       const state = await refreshMockState();
       if (operation !== this.operation) {
-        if (intent.leaveRequested) await this.leaves.add(creds.grantId);
-        else await this.release(generation, creds.grantId);
+        await this.leaves.add(creds.grantId);
         return;
       }
-      if (state.instanceId !== initial.instanceId || state.generation !== generation) return;
-      this.joining = null;
+      if (state.instanceId !== initial.instanceId || state.generation !== generation) { void this.leaves.add(creds.grantId); this.close(); return; }
+      this.admittingGrant = null;
       this.generation = generation;
       this.set({ status: 'connected', roomId, joiningRoomId: null, joinedAt: performance.now(), muted: startMuted || previous.deafened, deafened: previous.deafened, listenOnly: false, sharing: false });
       if (!startMuted && !previous.deafened) this.enableMic();
       this.host.onSound('join');
       this.refresh();
     } catch (error) {
+      if (issuedGrant) void this.leaves.add(issuedGrant);
       if (operation !== this.operation) return;
+      if (issuedGrant) {
+        this.close();
+        this.host.onProblem('media_failed');
+        return;
+      }
+      this.grantId = previousGrant;
+      this.admittingGrant = null;
       this.snap = { ...previous, pendingLeave: this.leaves.count };
       this.host.onChange(this.snap);
       const code = error instanceof ApiError ? error.code : 'network';
       this.host.onProblem(code === 'room_full' || code === 'voice_unavailable' || code === 'name_taken' || code === 'visitor_required' ? code : 'join_failed');
-    } finally {
-      this.pending = false;
     }
   }
 
   async leave(): Promise<void> {
     if (this.snap.status !== 'idle') this.host.onSound('leave');
-    if (this.joining) this.joining.leaveRequested = true;
     const pending = this.grantId ? this.leaves.add(this.grantId) : Promise.resolve();
     this.close();
     await pending;
@@ -81,10 +89,11 @@ export class VoiceSession implements VoiceClient {
   end(): void {
     const generation = this.generation;
     const grantId = this.grantId;
+    if (this.admittingGrant) void this.leaves.add(this.admittingGrant);
     this.close();
     if (generation !== null && grantId) void this.release(generation, grantId);
   }
-  dispose(): void { this.end(); this.unsubscribe(); this.leaves.dispose(); }
+  dispose(): void { this.end(); this.unsubscribe(); this.leaves.dispose(); window.removeEventListener('pagehide', this.pagehide); }
 
   async toggleMute(): Promise<void> {
     if (!this.snap.roomId) return;
@@ -118,9 +127,7 @@ export class VoiceSession implements VoiceClient {
   }
   async restartCamera(): Promise<void> {}
   async setCamera(_deviceId: string): Promise<void> {}
-  cameraTrack(visitorId: string): ShareTrack | null {
-    return visitorId === mockState()?.visitor?.id ? this.cameraPicture : null;
-  }
+  cameraTrack(connectionId: string): ShareTrack | null { return this.cameras.get(connectionId) ?? null; }
   applyVolumes(): void {}
   async setMic(_deviceId: string): Promise<void> {}
   async setSpeaker(_deviceId: string): Promise<void> {}
@@ -141,11 +148,11 @@ export class VoiceSession implements VoiceClient {
   private refresh(): void {
     const state = mockState();
     if (!state || !this.snap.roomId || this.snap.status === 'joining') return;
-    if (state.generation !== this.generation || !state.visitor || state.voiceRoomId !== this.snap.roomId) { this.close(); return; }
+    if (state.generation !== this.generation || !state.visitor || state.voiceGrants[this.grantId ?? ''] !== this.snap.roomId) { this.close(); return; }
     const self = state.visitor;
     const people = [
-      { id: self.id, name: self.name, local: true, muted: this.snap.muted, deafened: this.snap.deafened, sharing: this.snap.sharing, shareTrackId: '', camera: this.snap.camera, cameraTrackId: '' },
-      ...(state.peers[this.snap.roomId] ?? []).map((p) => ({ id: p.visitorId, name: p.name, local: false, muted: p.muted, deafened: p.deafened, sharing: p.sharing, shareTrackId: '', camera: false, cameraTrackId: '' })),
+      { id: this.grantId!, visitorId: self.id, name: self.name, local: true, muted: this.snap.muted, deafened: this.snap.deafened, sharing: this.snap.sharing, shareTrackId: '', camera: this.snap.camera, cameraTrackId: '' },
+      ...[...(state.peers[this.snap.roomId] ?? []), ...Object.entries(state.voiceGrants).filter(([connectionId, roomId]) => connectionId !== this.grantId && roomId === this.snap.roomId).map(([connectionId]) => ({ connectionId, visitorId: self.id, name: self.name, muted: false, deafened: false, sharing: false, camera: false }))].map((p) => ({ id: p.connectionId, visitorId: p.visitorId, name: p.name, local: false, muted: p.muted, deafened: p.deafened, sharing: p.sharing, shareTrackId: '', camera: p.camera ?? false, cameraTrackId: '' })),
     ];
     const sharing = new Set(people.filter((p) => p.sharing).map((p) => p.id));
     for (const [id, track] of this.tracks) {
@@ -161,10 +168,13 @@ export class VoiceSession implements VoiceClient {
       }
       person.shareTrackId = track.id;
     }
-    if (this.snap.camera) {
-      this.cameraPicture ??= new SyntheticShare(self.name);
-      people[0]!.cameraTrackId = this.cameraPicture.id;
-    } else this.stopCamera();
+    const cameras = new Set(people.filter((p) => p.camera).map((p) => p.id));
+    for (const [id, track] of this.cameras) if (!cameras.has(id)) { track.stop(); this.cameras.delete(id); }
+    for (const person of people) if (person.camera) {
+      let track = this.cameras.get(person.id);
+      if (!track) { track = new SyntheticShare(person.name); this.cameras.set(person.id, track); }
+      person.cameraTrackId = track.id;
+    }
     this.set({ people, status: state.faults.voiceReconnecting ? 'reconnecting' : 'connected', quality: 'unknown' });
     this.set({ speakers: people.filter((p) => this.level(p.id) > 0.1).map((p) => p.id) });
   }
@@ -175,7 +185,7 @@ export class VoiceSession implements VoiceClient {
     this.operation++;
     this.generation = null;
     this.grantId = null;
-    this.joining = null;
+    this.admittingGrant = null;
     for (const track of this.tracks.values()) track.stop();
     this.tracks.clear();
     this.stopCamera();
@@ -183,8 +193,8 @@ export class VoiceSession implements VoiceClient {
     this.host.onChange(this.snap);
   }
   private stopCamera(): void {
-    this.cameraPicture?.stop();
-    this.cameraPicture = null;
+    for (const track of this.cameras.values()) track.stop();
+    this.cameras.clear();
   }
   private set(patch: Partial<VoiceSnapshot>): void {
     this.snap = { ...this.snap, ...patch };

@@ -200,9 +200,6 @@ func (s *Service) admit(r *http.Request) (*voiceGrant, error) {
 	if err != nil || claims.ExpiresAt == nil || !time.Now().Before(claims.ExpiresAt.Time) || grants.Video == nil || !grants.Video.RoomJoin || grants.Video.Room == "" || grants.Video.RoomAdmin || grants.Video.RoomCreate || grants.Video.RoomList || grants.Video.RoomRecord || grants.Video.IngressAdmin || grants.Video.Agent {
 		return nil, identity.ErrNoVisitor
 	}
-	if room, issued := s.IssuedRoom(s.logicalIdentity(grants.Identity)); issued && room != grants.Video.Room {
-		return nil, identity.ErrNoVisitor
-	}
 	g, err := s.grant(r.Context(), grants.Identity)
 	if err != nil {
 		return nil, err

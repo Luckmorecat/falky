@@ -17,7 +17,7 @@ import (
 	"github.com/kisshot/falky/server/internal/voice/voicetest"
 )
 
-func TestGuardedLiveKitGuestRoomMovesReplaceOrdinaryAndRestoredBindings(t *testing.T) {
+func TestGuardedLiveKitGuestJoinsKeepOrdinaryAndRestoredConnections(t *testing.T) {
 	for _, restored := range []bool{false, true} {
 		t.Run(fmt.Sprintf("restored=%t", restored), func(t *testing.T) {
 			f := newGuardedVoice(t)
@@ -33,7 +33,7 @@ func TestGuardedLiveKitGuestRoomMovesReplaceOrdinaryAndRestoredBindings(t *testi
 			if err != nil {
 				t.Fatal(err)
 			}
-			guest, cookie, err := f.ident.Enter(t.Context(), strings.TrimPrefix(link, "https://falky.example/#k="), "Guest")
+			_, cookie, err := f.ident.Enter(t.Context(), strings.TrimPrefix(link, "https://falky.example/#k="), "Guest")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -44,7 +44,7 @@ func TestGuardedLiveKitGuestRoomMovesReplaceOrdinaryAndRestoredBindings(t *testi
 			join := func(room string) voice.Credentials {
 				f.gate.Lock()
 				defer f.gate.Unlock()
-				creds, err := f.voice.JoinSession(t.Context(), session, room, false)
+				creds, err := f.voice.JoinSession(t.Context(), session, room)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -81,39 +81,34 @@ func TestGuardedLiveKitGuestRoomMovesReplaceOrdinaryAndRestoredBindings(t *testi
 			if oldParticipant.SID == "" {
 				t.Fatal("old guest media not listed")
 			}
-			join(f.room)
-			select {
-			case <-first.disconnected:
-			case <-time.After(2 * time.Second):
-				t.Fatal("same-room explicit guest rejoin did not close old media")
-			}
+			sameRoom := join(f.room)
+			connect(t, sameRoom)
+			waitForParticipants(t, liveKitClient(), f.room, old.GrantID, sameRoom.GrantID)
 			current := join(second.ID)
-			listed, err = liveKitClient().Participants(t.Context())
-			if err != nil {
-				t.Fatal(err)
-			}
-			for _, participant := range listed {
-				if participant.Room == f.room {
-					t.Fatal("room move returned before removing old media")
-				}
-			}
-			refusedAtGuard(t, f, old.Token)
 			inSecond := connect(t, current)
+			waitForParticipants(t, liveKitClient(), second.ID, current.GrantID)
 			if err := f.voice.ReceiveWebhook(signed(t, voicetest.Joined(oldParticipant), devKey, devSecret)); err != nil {
 				t.Fatal(err)
 			}
-			waitForParticipants(t, liveKitClient(), second.ID, guest.ID)
-			join(second.ID)
-			select {
-			case <-inSecond.disconnected:
-			case <-time.After(2 * time.Second):
-				t.Fatal("same-room explicit guest rejoin did not close old media")
-			}
 			newest := join(third.ID)
-			waitForParticipants(t, liveKitClient(), second.ID)
-			refusedAtGuard(t, f, current.Token)
 			connect(t, newest)
-			waitForParticipants(t, liveKitClient(), third.ID, guest.ID)
+			waitForParticipants(t, liveKitClient(), f.room, old.GrantID, sameRoom.GrantID)
+			waitForParticipants(t, liveKitClient(), second.ID, current.GrantID)
+			waitForParticipants(t, liveKitClient(), third.ID, newest.GrantID)
+			for _, client := range []voiceClient{first, inSecond} {
+				select {
+				case <-client.disconnected:
+					t.Fatal("independent Join closed older media")
+				default:
+				}
+			}
+			if err := f.voice.Leave(t.Context(), session, current.GrantID); err != nil {
+				t.Fatal(err)
+			}
+			refusedAtGuard(t, f, current.Token)
+			waitForParticipants(t, liveKitClient(), second.ID)
+			waitForParticipants(t, liveKitClient(), f.room, old.GrantID, sameRoom.GrantID)
+			waitForParticipants(t, liveKitClient(), third.ID, newest.GrantID)
 		})
 	}
 }

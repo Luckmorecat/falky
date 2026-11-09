@@ -112,7 +112,7 @@ Existing browser: PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/path/to/chromium`);
         await expect(page.getByText(t.voiceLeavePending, { exact: true })).toBeVisible();
       }
       if (preset === 'screen-share') {
-        if (scenario !== 'remote-share') await page.getByRole('button', { name: t.shareOn, exact: true }).click();
+        if (scenario !== 'remote-share' && scenario !== 'same-person') await page.getByRole('button', { name: t.shareOn, exact: true }).click();
         await page.locator('.share video').waitFor({ state: 'visible' });
         await page.waitForFunction(() => [...document.querySelectorAll('video')].some((video) => video.readyState >= 2 && video.videoWidth > 0));
       }

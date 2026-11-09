@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -155,49 +156,69 @@ func TestGuestRotationPreservesAccountLiveAndVoice(t *testing.T) {
 	a, accountHTTP := p.browserWithHTTP(t)
 	account := enrollAccount(t, p, accountHTTP, "Account", passkeytest.New(t))
 	b, guestHTTP := p.browserWithHTTP(t)
-	guest := p.enter(t, b, "Guest")
+	p.enter(t, b, "Guest")
 	accountLive, guestLive := p.connectLive(t, accountHTTP), p.connectLive(t, guestHTTP)
-	accountCreds := joinedVoice(t, a, room.ID)
-	verifier, err := auth.ParseAPIToken(accountCreds.Token)
-	if err != nil {
-		t.Fatal(err)
+	var accountParticipants []voice.Participant
+	for range 2 {
+		creds := joinedVoice(t, a, room.ID)
+		accountParticipants = append(accountParticipants, p.livekit.AddParticipant(room.ID, creds.GrantId))
 	}
-	_, grants, err := verifier.Verify(testLiveKitSecret)
-	if err != nil {
-		t.Fatal(err)
+	for range 2 {
+		creds := joinedVoice(t, b, room.ID)
+		p.livekit.AddParticipant(room.ID, creds.GrantId)
 	}
-	accountParticipant := p.livekit.AddParticipant(room.ID, grants.Identity)
-	joinedVoice(t, b, room.ID)
-	p.livekit.AddParticipant(room.ID, guest.Id)
 	if _, err := p.adminClient(t).RotateLink(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	readClosed(t, guestLive, realtime.StatusRevoked)
 	listed, err := p.livekit.Participants(t.Context())
-	if err != nil || len(listed) != 1 || listed[0] != accountParticipant {
+	if err != nil || !slices.Equal(listed, accountParticipants) {
 		t.Fatalf("rotation removed account voice: %v %v", listed, err)
 	}
 	accountRequest(t, p, accountHTTP, "GET", "/api/me", nil, "", 200)
 	p.createRoom(t, "Still available")
 	for event := nextEvent(t, accountLive); event.Type != api.EventTypeRoomChanged; event = nextEvent(t, accountLive) {
 	}
-	if got := p.voice.Occupancy(room.ID); len(got) != 1 || got[0].ID != account.Session.Visitor.ID {
+	if got := p.voice.Occupancy(room.ID); len(got) != 2 || got[0].ID != account.Session.Visitor.ID || got[1].ID != account.Session.Visitor.ID {
 		t.Fatalf("account occupancy = %v", got)
 	}
 }
 
 func TestRecoveryAndDisableEndOldLiveSessionsAndPreserveRecoverySession(t *testing.T) {
 	p := startPublic(t, 100)
-	_, first := p.browserWithHTTP(t)
+	firstAPI, first := p.browserWithHTTP(t)
 	key := passkeytest.New(t)
 	account := enrollAccount(t, p, first, "Account", key)
-	_, second := loginAccountBrowser(t, p, key)
+	secondAPI, second := loginAccountBrowser(t, p, key)
+	room := p.createRoom(t, "Voice")
+	var oldVoice []api.VoiceCredentials
+	for _, client := range []*api.ClientWithResponses{firstAPI, secondAPI} {
+		for range 2 {
+			creds := joinedVoice(t, client, room.ID)
+			oldVoice = append(oldVoice, creds)
+			p.livekit.AddParticipant(room.ID, creds.GrantId)
+		}
+	}
 	old := []*websocket.Conn{p.connectLive(t, first), p.connectLive(t, second)}
 	_, recovering := p.browserWithHTTP(t)
 	ceremony := beginAccount(t, p, recovering, "/api/accounts/recovery/begin", map[string]any{"accountId": account.Session.Visitor.ID, "proof": account.RecoveryCodes[0]})
 	finishEnrollment(t, p, recovering, ceremony, passkeytest.New(t), "recovery")
 	for _, ws := range old {
 		readClosed(t, ws, realtime.StatusRevoked)
+	}
+	p = restartVoice(t, p)
+	for _, creds := range oldVoice {
+		checkVoiceValidation(t, p, creds.Token, 403)
+	}
+	var freshVoice []api.VoiceCredentials
+	for range 2 {
+		raw, _ := accountRequest(t, p, recovering, "POST", "/api/rooms/"+room.ID+"/voice", nil, testOrigin, 200)
+		var creds api.VoiceCredentials
+		if err := json.Unmarshal(raw, &creds); err != nil {
+			t.Fatal(err)
+		}
+		freshVoice = append(freshVoice, creds)
+		p.livekit.AddParticipant(room.ID, creds.GrantId)
 	}
 	fresh := p.connectLive(t, recovering)
 	p.createRoom(t, "Recovered")
@@ -208,6 +229,9 @@ func TestRecoveryAndDisableEndOldLiveSessionsAndPreserveRecoverySession(t *testi
 		t.Fatal(err)
 	}
 	readClosed(t, fresh, realtime.StatusRevoked)
+	for _, creds := range freshVoice {
+		checkVoiceValidation(t, p, creds.Token, 403)
+	}
 }
 
 func TestAccountRenameRefreshesOwnerAndDisplacedGuestWithCurrentVoiceNames(t *testing.T) {
@@ -251,7 +275,7 @@ func TestAccountRenameRefreshesOwnerAndDisplacedGuestWithCurrentVoiceNames(t *te
 	p.connectLive(t, accountHTTP)
 }
 
-func TestAccountVoiceTransferRequiresExplicitPublicConfirmation(t *testing.T) {
+func TestLegacyConfirmationValuesAllPreserveIndependentAccountConnections(t *testing.T) {
 	p := startPublic(t, 100)
 	room := p.createRoom(t, "Voice")
 	firstAPI, first := p.browserWithHTTP(t)
@@ -259,23 +283,20 @@ func TestAccountVoiceTransferRequiresExplicitPublicConfirmation(t *testing.T) {
 	enrollAccount(t, p, first, "Account", key)
 	_, second := loginAccountBrowser(t, p, key)
 	old := joinedVoice(t, firstAPI, room.ID)
-	verifier, err := auth.ParseAPIToken(old.Token)
-	if err != nil {
-		t.Fatal(err)
-	}
-	participant := p.livekit.AddParticipant(room.ID, verifier.Identity())
-	raw, _ := accountRequest(t, p, second, "POST", "/api/rooms/"+room.ID+"/voice", nil, testOrigin, 409)
-	if !strings.Contains(string(raw), "voice_transfer_required") {
-		t.Fatalf("unconfirmed error = %s", raw)
-	}
-	listed, _ := p.livekit.Participants(t.Context())
-	if len(listed) != 1 || listed[0] != participant {
-		t.Fatal("unconfirmed public join displaced owner")
-	}
-	accountRequest(t, p, second, "POST", "/api/rooms/"+room.ID+"/voice", map[string]any{"confirmTransfer": true}, testOrigin, 200)
-	listed, _ = p.livekit.Participants(t.Context())
-	if len(listed) != 0 {
-		t.Fatal("confirmed public transfer left stale media")
+	participant := p.livekit.AddParticipant(room.ID, old.GrantId)
+	for _, body := range []any{nil, map[string]any{"confirmTransfer": false}, map[string]any{"confirmTransfer": true}} {
+		raw, _ := accountRequest(t, p, second, "POST", "/api/rooms/"+room.ID+"/voice", body, testOrigin, 200)
+		var creds api.VoiceCredentials
+		if err := json.Unmarshal(raw, &creds); err != nil {
+			t.Fatal(err)
+		}
+		if creds.GrantId == old.GrantId {
+			t.Fatal("Join reused transport")
+		}
+		listed, _ := p.livekit.Participants(t.Context())
+		if len(listed) != 1 || listed[0] != participant {
+			t.Fatal("legacy confirmation displaced independent media")
+		}
 	}
 }
 

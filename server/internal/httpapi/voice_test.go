@@ -92,22 +92,22 @@ func TestJoiningVoiceNeedsAVisitorAndAnExistingRoom(t *testing.T) {
 	wantError(t, "JoinVoice of an unknown room", res.StatusCode(), res.Body, http.StatusNotFound, "room_not_found")
 }
 
-func TestJoiningAnotherRoomsVoiceRemovesTheVisitorFromThePreviousOne(t *testing.T) {
+func TestJoiningAnotherRoomsVoicePreservesThePreviousConnection(t *testing.T) {
 	p := startPublic(t, 10)
 	lounge, games := p.createRoom(t, "Lounge"), p.createRoom(t, "Games")
 	b := p.browser(t)
-	bob := p.enter(t, b, "Bob")
+	p.enter(t, b, "Bob")
 
-	joinedVoice(t, b, lounge.ID)
-	inLounge := p.livekit.AddParticipant(lounge.ID, bob.Id)
+	old := joinedVoice(t, b, lounge.ID)
+	p.livekit.AddParticipant(lounge.ID, old.GrantId)
 	joinedVoice(t, b, games.ID)
-	want := []voice.Participant{inLounge}
+	var want []voice.Participant
 	if got := p.livekit.Removed(); !slices.Equal(got, want) {
 		t.Errorf("removed = %+v, want %+v", got, want)
 	}
 }
 
-func TestJoiningAFullRoomsVoiceIsRefusedUnlessTheVisitorIsInIt(t *testing.T) {
+func TestJoiningAFullRoomsVoiceCountsTheSamePersonsOtherConnection(t *testing.T) {
 	p := startPublic(t, 10)
 	lounge := p.createRoom(t, "Lounge")
 	for i := range testRoomCap - 1 {
@@ -122,8 +122,8 @@ func TestJoiningAFullRoomsVoiceIsRefusedUnlessTheVisitorIsInIt(t *testing.T) {
 	res := joinVoice(t, carol, lounge.ID)
 	wantError(t, "JoinVoice of a full room", res.StatusCode(), res.Body, http.StatusConflict, "room_full")
 
-	// A second tab of Bob's replaces his first connection.
-	joinedVoice(t, bob, lounge.ID)
+	res = joinVoice(t, bob, lounge.ID)
+	wantError(t, "JoinVoice of a full room by another connection of Bob", res.StatusCode(), res.Body, http.StatusConflict, "room_full")
 }
 
 func TestJoiningVoiceAnswersUnavailableWhileLiveKitIsUnreachable(t *testing.T) {
@@ -197,4 +197,33 @@ func TestLeaveRequiresCurrentExactSessionAndAccountOrigin(t *testing.T) {
 	// A logged-out cookie cannot acknowledge even an already revoked target.
 	accountRequest(t, p, firstHTTP, "POST", "/api/accounts/logout", map[string]any{}, testOrigin, 200)
 	accountRequest(t, p, firstHTTP, "POST", "/api/voice/leave", map[string]any{"grantId": creds.GrantId}, testOrigin, 401)
+}
+
+func TestIndependentAccountConnectionsSurviveOtherJoinsLeaveLogoutAndRestart(t *testing.T) {
+	p := startPublic(t, 100)
+	lounge, games := p.createRoom(t, "Lounge"), p.createRoom(t, "Games")
+	first, firstHTTP := p.browserWithHTTP(t)
+	key := passkeytest.New(t)
+	enrollAccount(t, p, firstHTTP, "Account", key)
+	second, secondHTTP := loginAccountBrowser(t, p, key)
+	one := joinedVoice(t, first, lounge.ID)
+	two := joinedVoice(t, first, lounge.ID)
+	three := joinedVoice(t, first, games.ID)
+	four := joinedVoice(t, second, lounge.ID)
+	p = restartVoice(t, p)
+	for _, creds := range []api.VoiceCredentials{one, two, three, four} {
+		checkVoiceValidation(t, p, creds.Token, 200)
+	}
+	accountRequest(t, p, firstHTTP, "POST", "/api/voice/leave", map[string]any{"grantId": one.GrantId}, testOrigin, 200)
+	checkVoiceValidation(t, p, one.Token, 403)
+	for _, creds := range []api.VoiceCredentials{two, three, four} {
+		checkVoiceValidation(t, p, creds.Token, 200)
+	}
+	accountRequest(t, p, firstHTTP, "POST", "/api/accounts/logout", map[string]any{}, testOrigin, 200)
+	for _, creds := range []api.VoiceCredentials{one, two, three} {
+		checkVoiceValidation(t, p, creds.Token, 403)
+	}
+	checkVoiceValidation(t, p, four.Token, 200)
+	accountRequest(t, p, secondHTTP, "POST", "/api/voice/leave", map[string]any{"grantId": four.GrantId}, testOrigin, 200)
+	checkVoiceValidation(t, p, four.Token, 403)
 }
