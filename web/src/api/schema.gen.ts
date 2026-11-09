@@ -810,7 +810,7 @@ export interface components {
             recoveryCodes: string[];
         };
         /**
-         * @description A new session and any freshly generated recovery codes.
+         * @description A new session and any freshly generated recovery codes. Once the identity change commits, these credentials are returned even if subsequent live or voice enforcement fails. Enforcement is attempted immediately, failures are logged, and maintenance retries pending enforcement and cleanup.
          * @example {
          *       "session": {
          *         "visitor": {

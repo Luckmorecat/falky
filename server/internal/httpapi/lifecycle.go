@@ -15,8 +15,8 @@ import (
 )
 
 // Lifecycle serializes access mutations with final live and voice admission.
-// Enforce runs after commit while the gate is held; it must finish all required
-// disconnects before returning. Configure it before serving either listener.
+// Enforce runs after commit while the gate is held; successful enforcement
+// finishes required disconnects before returning. Configure it before serving.
 type Lifecycle struct {
 	once    sync.Once
 	gate    chan struct{}
@@ -87,7 +87,8 @@ func (l *Lifecycle) Maintain(ctx context.Context, hub *realtime.Hub, voices *voi
 }
 
 // Enforcer binds postcommit effects to the same hub and voice service used by
-// admission. Required media removal errors propagate to the mutation caller.
+// admission. It returns media removal errors to the caller; enrollment handlers
+// preserve committed credentials, while other mutations propagate the errors.
 func Enforcer(events Events, voices *voice.Service) func(context.Context, identity.Effects) error {
 	return func(ctx context.Context, effects identity.Effects) error {
 		// The mutation is committed: a departing caller must not cancel its

@@ -612,9 +612,13 @@ and account-bound ceremonies, then returns a fresh session and codes. Old live
 updates and voice end; the recovered identity, reserved name and history remain.
 Disablement immediately ends that account's sessions/live/voice and rejects
 authentication/recovery while retaining the identity and name. It leaves the
-shared guest link untouched. A successful HTTP/CLI mutation awaits required
-voice removal; a postcommit enforcement error means persistent identity state
-already changed. Inspect logs and LiveKit connectivity; do not assume the
+shared guest link untouched. Registration, sign-in and recovery return their
+committed session cookie and any new recovery codes even if subsequent
+enforcement fails, so a media outage cannot discard these one-time credentials.
+Enforcement is still attempted immediately; failures are logged and maintenance
+retries pending fencing and cleanup. Other successful HTTP/CLI mutations await
+required voice removal; a postcommit enforcement error means persistent identity
+state already changed. Inspect logs and LiveKit connectivity; do not assume the
 transaction was rolled back or media removal succeeded.
 
 The current frontend provides the legacy guest flow; these backend invitation

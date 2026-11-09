@@ -256,7 +256,7 @@ type AccountCeremony struct {
 // Example: {}
 type AccountEmpty = map[string]interface{}
 
-// AccountEnrollment A new session and any freshly generated recovery codes.
+// AccountEnrollment A new session and any freshly generated recovery codes. Once the identity change commits, these credentials are returned even if subsequent live or voice enforcement fails. Enforcement is attempted immediately, failures are logged, and maintenance retries pending enforcement and cleanup.
 //
 // Example: {"recoveryCodes":["private-code"],"session":{"expiresAt":"2027-02-07T12:00:00Z","kind":"account","visitor":{"colour":{"palette":"sky","revision":1,"visitorId":"account-id"},"id":"account-id","name":"Alice","nameTaken":false}}}
 type AccountEnrollment struct {
