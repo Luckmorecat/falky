@@ -165,7 +165,7 @@ func TestSignedHTTPRecoveryEndsRealMediaAndPreservesNewLiveAndVoiceSession(t *te
 	recovering := newBrowser()
 	request(recovering, "POST", "/api/accounts/recovery/begin", map[string]any{"accountId": account.Session.Visitor.ID, "proof": account.Codes[0]}, &begin, 200)
 	recovered := finish(recovering, "recovery", begin)
-	if recovered.Session.Visitor.ID != account.Session.Visitor.ID || len(recovered.Codes) != 10 {
+	if recovered.Session.Visitor.ID != account.Session.Visitor.ID || len(recovered.Codes) != 1 {
 		t.Fatal("recovery changed identity or omitted replacement codes")
 	}
 	select {

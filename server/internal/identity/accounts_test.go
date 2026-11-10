@@ -28,9 +28,10 @@ func TestInvitationEnrollsRealPasskeyAndPreservesGuestIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Session.Visitor.ID != guest.ID || result.Session.Kind != identity.Account || len(result.RecoveryCodes) != 10 {
+	if result.Session.Visitor.ID != guest.ID || result.Session.Kind != identity.Account || len(result.RecoveryCodes) != 1 {
 		t.Fatalf("registration identity=%s kind=%s codes=%d", result.Session.Visitor.ID, result.Session.Kind, len(result.RecoveryCodes))
 	}
+	assertRecoveryPhrase(t, result.RecoveryCodes)
 	if _, err := f.ident.Resolve(t.Context(), token); err == nil {
 		t.Fatal("old guest cookie survived upgrade")
 	}
@@ -58,6 +59,7 @@ func enroll(t *testing.T, f fixture, name string) (identity.Enrollment, *passkey
 	if err != nil {
 		t.Fatal(err)
 	}
+	assertRecoveryPhrase(t, r.RecoveryCodes)
 	return r, k
 }
 
@@ -86,6 +88,12 @@ func TestDiscoverableLoginBindsBrowserAndRejectsReplay(t *testing.T) {
 	}
 	if loggedIn.Session.Visitor.ID != account.Session.Visitor.ID || loggedIn.Session.ID == account.Session.ID {
 		t.Fatal("login did not issue a distinct session for the account")
+	}
+	if len(loggedIn.RecoveryCodes) != 0 {
+		t.Fatal("ordinary sign-in issued a recovery phrase")
+	}
+	if _, err := f.ident.BeginRecovery(t.Context(), account.Session.Visitor.ID, account.RecoveryCodes[0], "browser"); err != nil {
+		t.Fatal("sign-in rotated the recovery phrase:", err)
 	}
 	if _, err := f.ident.FinishAuthentication(t.Context(), c.ID, "login-browser", response); !errors.Is(err, identity.ErrInvalidProof) {
 		t.Fatalf("replayed assertion = %v", err)
@@ -139,7 +147,7 @@ func TestRecoveryCommitsReplacementAndRevokesAllOldAccessOnce(t *testing.T) {
 		t.Fatalf("recovery winners=%d failures=%d", len(results), len(failures))
 	}
 	got := <-results
-	if got.Session.Visitor.ID != account.Session.Visitor.ID || got.Session.Generation <= account.Session.Generation || len(got.Effects.RevokedSessions) != 1 || len(got.RecoveryCodes) != 10 {
+	if got.Session.Visitor.ID != account.Session.Visitor.ID || got.Session.Visitor.Name != "Alice" || got.Session.Generation <= account.Session.Generation || len(got.Effects.RevokedSessions) != 1 || len(got.RecoveryCodes) != 1 {
 		t.Fatal("recovery lost identity, generation, revoked sessions, or fresh codes")
 	}
 	if _, err := f.ident.ResolveSession(t.Context(), account.Token); !errors.Is(err, identity.ErrNoVisitor) {
@@ -148,7 +156,7 @@ func TestRecoveryCommitsReplacementAndRevokesAllOldAccessOnce(t *testing.T) {
 	if _, err := f.ident.BeginRecovery(t.Context(), account.Session.Visitor.ID, grant.Token, "recovery-browser"); !errors.Is(err, identity.ErrInvalidProof) {
 		t.Fatalf("old grant = %v", err)
 	}
-	if _, err := f.ident.BeginRecovery(t.Context(), account.Session.Visitor.ID, account.RecoveryCodes[1], "recovery-browser"); !errors.Is(err, identity.ErrInvalidProof) {
+	if _, err := f.ident.BeginRecovery(t.Context(), account.Session.Visitor.ID, account.RecoveryCodes[0], "recovery-browser"); !errors.Is(err, identity.ErrInvalidProof) {
 		t.Fatalf("old code = %v", err)
 	}
 	login, err := f.ident.BeginAuthentication(t.Context(), "login")
@@ -260,6 +268,9 @@ func TestConcurrentPasskeyRemovalCannotRemoveTheLastCredential(t *testing.T) {
 	keys, err = f.ident.Passkeys(t.Context(), account.Token)
 	if err != nil || len(keys) != 1 {
 		t.Fatalf("remaining count=%d error=%v", len(keys), err)
+	}
+	if _, err := f.ident.BeginRecovery(t.Context(), account.Session.Visitor.ID, account.RecoveryCodes[0], "recovery"); err != nil {
+		t.Fatal("passkey management rotated the recovery phrase:", err)
 	}
 }
 

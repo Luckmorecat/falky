@@ -359,13 +359,14 @@ func (s *Service) replaceCodes(ctx context.Context, tx *sql.Tx, id string, gener
 	if _, err := tx.ExecContext(ctx, "DELETE FROM account_recovery_proofs WHERE identity_id=? AND kind='code'", id); err != nil {
 		return nil, err
 	}
-	codes := make([]string, 10)
-	for i := range codes {
-		codes[i] = opaque()
-		if _, err := tx.ExecContext(ctx, "INSERT INTO account_recovery_proofs(token_hash,identity_id,kind,generation) VALUES(?,?,'code',?)", hashToken(codes[i]), id, generation); err != nil {
-			return nil, err
-		}
+	phrase, err := newRecoveryPhrase()
+	if err != nil {
+		return nil, err
 	}
+	if _, err := tx.ExecContext(ctx, "INSERT INTO account_recovery_proofs(token_hash,identity_id,kind,generation) VALUES(?,?,'code',?)", hashToken(phrase), id, generation); err != nil {
+		return nil, err
+	}
+	codes := []string{phrase}
 	return codes, nil
 }
 

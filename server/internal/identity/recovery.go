@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/go-webauthn/webauthn/webauthn"
@@ -35,9 +36,9 @@ func (s *Service) IssueRecovery(ctx context.Context, accountID string) (Recovery
 	return g, nil
 }
 
-func (s *Service) recoveryProof(ctx context.Context, tx *sql.Tx, accountID string, hash []byte) error {
+func (s *Service) recoveryProof(ctx context.Context, tx *sql.Tx, accountID string, hash []byte, kind string) error {
 	var valid bool
-	err := tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM account_recovery_proofs p JOIN accounts a ON a.identity_id=p.identity_id AND a.generation=p.generation AND a.disabled=0 WHERE p.identity_id=? AND p.token_hash=? AND (p.expires_at IS NULL OR p.expires_at>?))", accountID, hash, s.now().Unix()).Scan(&valid)
+	err := tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM account_recovery_proofs p JOIN accounts a ON a.identity_id=p.identity_id AND a.generation=p.generation AND a.disabled=0 WHERE p.identity_id=? AND p.token_hash=? AND (?='' OR p.kind=?) AND (p.expires_at IS NULL OR p.expires_at>?))", accountID, hash, kind, kind, s.now().Unix()).Scan(&valid)
 	if err != nil {
 		return err
 	}
@@ -53,7 +54,14 @@ func (s *Service) BeginRecovery(ctx context.Context, accountID, proof, browser s
 	}
 	var c Ceremony
 	err := s.db.Write(ctx, func(tx *sql.Tx) error {
-		if err := s.recoveryProof(ctx, tx, accountID, hashToken(proof)); err != nil {
+		// Only saved phrases accept formatting changes; operator bearers stay exact.
+		matched := hashToken(strings.ToLower(strings.Join(strings.Fields(proof), " ")))
+		if err := s.recoveryProof(ctx, tx, accountID, matched, "code"); errors.Is(err, ErrInvalidProof) {
+			matched = hashToken(proof)
+			if err := s.recoveryProof(ctx, tx, accountID, matched, "operator"); err != nil {
+				return err
+			}
+		} else if err != nil {
 			return err
 		}
 		u, _, err := s.user(ctx, tx, accountID)
@@ -69,7 +77,7 @@ func (s *Service) BeginRecovery(ctx context.Context, accountID, proof, browser s
 			return err
 		}
 		c = Ceremony{ID: opaque(), ExpiresAt: s.now().Add(CeremonyTTL), Creation: options}
-		return s.storeCeremony(ctx, tx, c, browser, "recover", u, "", hashToken(proof), data)
+		return s.storeCeremony(ctx, tx, c, browser, "recover", u, "", matched, data)
 	})
 	return c, err
 }
@@ -81,7 +89,7 @@ func (s *Service) FinishRecovery(ctx context.Context, id, browser string, respon
 		if err != nil {
 			return err
 		}
-		if err = s.recoveryProof(ctx, tx, c.id, c.proof); err != nil {
+		if err = s.recoveryProof(ctx, tx, c.id, c.proof, ""); err != nil {
 			return err
 		}
 		u, generation, err := s.user(ctx, tx, c.id)

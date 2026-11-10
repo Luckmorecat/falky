@@ -214,7 +214,7 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Replace recovery codes after recent verification.
+         * Replace the recovery phrase after recent verification.
          * @description Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
          */
         post: operations["regenerateRecoveryCodes"];
@@ -666,18 +666,18 @@ export interface components {
          * @description Proof authorizing replacement enrollment for one account.
          * @example {
          *       "accountId": "opaque-value",
-         *       "proof": "opaque-value"
+         *       "proof": "acid acorn acre acts afar affix aged agent agile aging agony ahead"
          *     }
          */
         RecoveryBegin: {
             /**
-             * @description Permanent account identity ID.
+             * @description Permanent account identity ID from session.visitor.id, separate from the proof.
              * @example opaque-value
              */
             accountId: string;
             /**
-             * @description One recovery code or thirty-minute operator recovery bearer.
-             * @example opaque-value
+             * @description Twelve-word recovery phrase (case-insensitive; whitespace is collapsed), or exact, case-sensitive thirty-minute operator recovery bearer. Phrase word order and spelling must match.
+             * @example acid acorn acre acts afar affix aged agent agile aging agony ahead
              */
             proof: string;
         };
@@ -773,24 +773,24 @@ export interface components {
             expiresAt?: string;
         };
         /**
-         * @description New private codes shown once after successful generation.
+         * @description One new private recovery phrase shown once after successful generation.
          * @example {
          *       "recoveryCodes": [
-         *         "private-code"
+         *         "acid acorn acre acts afar affix aged agent agile aging agony ahead"
          *       ]
          *     }
          */
         RecoveryCodes: {
             /**
-             * @description Ten new high-entropy single-use codes. Store privately; plaintext is never retrievable.
+             * @description One twelve-word recovery phrase, shown once. Words are independently and uniformly selected from EFF short wordlist 1, with repeats allowed (about 124 bits). Only its SHA-256 digest is stored; plaintext is never retrievable.
              * @example [
-             *       "private-code"
+             *       "acid acorn acre acts afar affix aged agent agile aging agony ahead"
              *     ]
              */
             recoveryCodes: string[];
         };
         /**
-         * @description A new session and any freshly generated recovery codes.
+         * @description A new session and any freshly generated recovery phrase.
          * @example {
          *       "session": {
          *         "visitor": {
@@ -807,16 +807,16 @@ export interface components {
          *         "expiresAt": "2027-02-07T12:00:00Z"
          *       },
          *       "recoveryCodes": [
-         *         "private-code"
+         *         "acid acorn acre acts afar affix aged agent agile aging agony ahead"
          *       ]
          *     }
          */
         AccountEnrollment: {
             session: components["schemas"]["AccountSession"];
             /**
-             * @description Fresh registration/recovery codes only; empty on sign-in.
+             * @description Exactly one fresh twelve-word recovery phrase on registration or recovery; empty on sign-in.
              * @example [
-             *       "private-code"
+             *       "acid acorn acre acts afar affix aged agent agile aging agony ahead"
              *     ]
              */
             recoveryCodes: string[];
@@ -1591,7 +1591,7 @@ export interface operations {
                      *         "expiresAt": "2027-02-07T12:00:00Z"
                      *       },
                      *       "recoveryCodes": [
-                     *         "private-code"
+                     *         "acid acorn acre acts afar affix aged agent agile aging agony ahead"
                      *       ]
                      *     }
                      */
@@ -1687,9 +1687,7 @@ export interface operations {
                      *         "kind": "account",
                      *         "expiresAt": "2027-02-07T12:00:00Z"
                      *       },
-                     *       "recoveryCodes": [
-                     *         "private-code"
-                     *       ]
+                     *       "recoveryCodes": []
                      *     }
                      */
                     "application/json": components["schemas"]["AccountEnrollment"];
@@ -1886,7 +1884,7 @@ export interface operations {
                 /**
                  * @example {
                  *       "accountId": "account-id",
-                 *       "proof": "private-recovery-proof"
+                 *       "proof": "acid acorn acre acts afar affix aged agent agile aging agony ahead"
                  *     }
                  */
                 "application/json": components["schemas"]["RecoveryBegin"];
@@ -1965,7 +1963,7 @@ export interface operations {
                      *         "expiresAt": "2027-02-07T12:00:00Z"
                      *       },
                      *       "recoveryCodes": [
-                     *         "private-code"
+                     *         "acid acorn acre acts afar affix aged agent agile aging agony ahead"
                      *       ]
                      *     }
                      */
@@ -2001,7 +1999,7 @@ export interface operations {
                     /**
                      * @example {
                      *       "recoveryCodes": [
-                     *         "private-code"
+                     *         "acid acorn acre acts afar affix aged agent agile aging agony ahead"
                      *       ]
                      *     }
                      */

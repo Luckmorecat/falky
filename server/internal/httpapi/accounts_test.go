@@ -111,7 +111,7 @@ func TestAccountFirstArrivalSignedEnrollmentAndLogin(t *testing.T) {
 	if err := json.Unmarshal(raw, &enrolled); err != nil {
 		t.Fatal(err)
 	}
-	if enrolled.Session.Visitor.ID == "" || len(enrolled.Codes) != 10 {
+	if enrolled.Session.Visitor.ID == "" || len(enrolled.Codes) != 1 {
 		t.Fatal("missing identity or recovery codes")
 	}
 	var found bool
@@ -246,6 +246,9 @@ func finishEnrollment(t *testing.T, p publicServer, c *http.Client, ceremony wir
 	if err := json.Unmarshal(raw, &result); err != nil {
 		t.Fatal(err)
 	}
+	if len(result.RecoveryCodes) != 1 || len(strings.Fields(result.RecoveryCodes[0])) != 12 {
+		t.Fatal("expected exactly one twelve-word recovery phrase")
+	}
 	return result
 }
 
@@ -348,7 +351,7 @@ func TestOwnerPasskeyManagementRequiresOwnRecentProof(t *testing.T) {
 	if err := json.Unmarshal(raw, &codes); err != nil {
 		t.Fatal(err)
 	}
-	if len(codes.Codes) != 10 {
+	if len(codes.Codes) != 1 || len(strings.Fields(codes.Codes[0])) != 12 {
 		t.Fatal("missing new recovery codes")
 	}
 }
@@ -370,11 +373,21 @@ func TestAccountRecoveryReplacesAccessAndExpiryRejectsStaleCookie(t *testing.T) 
 		t.Fatal(err)
 	}
 	accountRequest(t, p, a, "GET", "/api/me", nil, "", 200)
-	ceremony := beginAccount(t, p, recovering, "/api/accounts/recovery/begin", map[string]any{"accountId": id, "proof": grant.Token})
+	operatorCeremony := beginAccount(t, p, recovering, "/api/accounts/recovery/begin", map[string]any{"accountId": id, "proof": grant.Token})
+	accountRequest(t, p, recovering, "POST", "/api/accounts/recovery/begin", map[string]any{"accountId": id, "proof": " " + grant.Token + "\n"}, testOrigin, 403)
+	words := strings.Fields(account.RecoveryCodes[0])
+	accountRequest(t, p, recovering, "POST", "/api/accounts/recovery/begin", map[string]any{"accountId": id, "proof": strings.Join(words[1:], " ")}, testOrigin, 403)
+	formatted := " \t" + strings.ToUpper(strings.Join(words, " \t\n ")) + "\n "
+	ceremony := beginAccount(t, p, recovering, "/api/accounts/recovery/begin", map[string]any{"accountId": id, "proof": formatted})
 	replacement := finishEnrollment(t, p, recovering, ceremony, passkeytest.New(t), "recovery")
-	if replacement.Session.Visitor.ID != id || len(replacement.RecoveryCodes) != 10 {
+	if replacement.Session.Visitor.ID != id || len(replacement.RecoveryCodes) != 1 {
 		t.Fatal("recovery lost identity/codes")
 	}
+	var oldOptions protocol.CredentialCreation
+	if err := json.Unmarshal(operatorCeremony.Options, &oldOptions); err != nil {
+		t.Fatal(err)
+	}
+	accountRequest(t, p, recovering, "POST", "/api/accounts/recovery/finish", map[string]any{"ceremonyId": operatorCeremony.ID, "credential": json.RawMessage(passkeytest.New(t).Registration(t, &oldOptions, testOrigin))}, testOrigin, 403)
 	accountRequest(t, p, a, "GET", "/api/me", nil, "", 401)
 	accountRequest(t, p, a, "GET", "/api/accounts/passkeys", nil, "", 401)
 	accountRequest(t, p, a, "POST", "/api/accounts/recovery/begin", map[string]any{"accountId": id, "proof": account.RecoveryCodes[0]}, testOrigin, 403)

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -321,15 +322,13 @@ func TestDisableRejectsStaleSessionsAuthenticationRecoveryAndKeepsGuestLink(t *t
 func TestRecoveryCodesAreStoredAsHashesAndRegenerationInvalidatesOldProofs(t *testing.T) {
 	f := newFixture(t, filepath.Join(t.TempDir(), "falky.db"))
 	account, _ := enroll(t, f, "Alice")
+	assertRecoveryPhrase(t, account.RecoveryCodes)
 	rows, err := f.db.Read().QueryContext(t.Context(), "SELECT token_hash FROM account_recovery_proofs WHERE identity_id=?", account.Session.Visitor.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := map[[32]byte]bool{}
 	for _, code := range account.RecoveryCodes {
-		if len(code) < 40 {
-			t.Fatal("recovery code has insufficient entropy")
-		}
 		want[sha256.Sum256([]byte(code))] = true
 	}
 	var count int
@@ -346,16 +345,20 @@ func TestRecoveryCodesAreStoredAsHashesAndRegenerationInvalidatesOldProofs(t *te
 	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
 		t.Fatal(err)
 	}
-	if count != 10 {
+	if count != 1 {
 		t.Fatalf("stored recovery digests=%d", count)
 	}
-	pending, err := f.ident.BeginRecovery(t.Context(), account.Session.Visitor.ID, account.RecoveryCodes[0], "browser")
+	pending, err := f.ident.BeginRecovery(t.Context(), account.Session.Visitor.ID, " \t"+strings.ToUpper(account.RecoveryCodes[0])+"\n", "browser")
 	if err != nil {
 		t.Fatal(err)
 	}
 	fresh, err := f.ident.RegenerateRecoveryCodes(t.Context(), account.Token)
 	if err != nil {
 		t.Fatal(err)
+	}
+	assertRecoveryPhrase(t, fresh)
+	if _, err := f.ident.BeginRecovery(t.Context(), account.Session.Visitor.ID, account.RecoveryCodes[0], "browser"); !errors.Is(err, identity.ErrInvalidProof) {
+		t.Fatalf("old phrase after regeneration = %v", err)
 	}
 	key := passkeytest.New(t)
 	if _, err := f.ident.FinishRecovery(t.Context(), pending.ID, "browser", key.Registration(t, pending.Creation, "https://falky.example"), ""); !errors.Is(err, identity.ErrInvalidProof) {
