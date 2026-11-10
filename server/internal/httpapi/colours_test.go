@@ -100,11 +100,7 @@ func TestColourSaveCannotTargetAnotherVisitorAndHistoricalRecoveryKeepsAccessRev
 	if got := me(t, ann); got.Colour != av.Colour {
 		t.Fatalf("targeted another visitor: %+v", got)
 	}
-	link, err := p.identity.Rotate(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	p.secret = strings.TrimPrefix(link, testOrigin+"/#k=")
+	p.revokeAll(t)
 	fresh := p.browser(t)
 	p.enter(t, fresh, "Fresh")
 	historical, err := fresh.LookupVisitorColoursWithResponse(t.Context(), api.VisitorColourLookup{VisitorIds: []string{bv.Id, av.Id}})
@@ -180,7 +176,7 @@ func TestAllocationCountsActualConnectedVisitorsOnceAcrossTabsAndFailedUpgrades(
 		t.Fatalf("closing one tab lost membership: %+v", remaining.Colour)
 	}
 	closeLive(t, second)
-	reused := p.enterOnceFree(t, p.browser(t), "Visitor 0")
+	reused := p.enter(t, p.browser(t), "Visitor reused")
 	if reused.Colour.Palette != api.PaletteNameSky || candidateCount.Load() != 1 {
 		t.Fatalf("last close did not free connected palette: %+v", reused.Colour)
 	}

@@ -4,13 +4,13 @@
 #
 #   cp deploy/.env.example deploy/.env   # then fill it in
 #   docker compose -f deploy/compose.yaml up -d --build
-#   docker compose -f deploy/compose.yaml exec falky /falky link show
+#   docker compose -f deploy/compose.yaml exec falky /falky password set
 #
 # docs/runbook.md covers running it: health, operator commands, snapshots and
 # restoring them, logs.
 #
 # `make smoke` then checks a local stack end to end through Caddy (see
-# server/cmd/smoke). It replaces the access link: run it only on a stack
+# server/cmd/smoke). It replaces the access password: run it only on a stack
 # nobody uses.
 #
 # Only Caddy's ports and LiveKit's media ports are published. The server's

@@ -1,498 +1,287 @@
 package httpapi
 
 import (
-	"bytes"
+	"crypto/sha256"
+	"database/sql"
 	"encoding/json"
-	"io"
+	"fmt"
 	"net/http"
-	"net/url"
-	"strings"
 	"testing"
-	"time"
 
-	"github.com/go-webauthn/webauthn/protocol"
 	"github.com/kisshot/falky/server/internal/api"
-	"github.com/kisshot/falky/server/internal/identity/passkeytest"
+	"github.com/kisshot/falky/server/internal/realtime"
 )
 
-type accountResponse struct {
-	Header  http.Header
-	Cookies []*http.Cookie
-}
-
-func accountRequest(t *testing.T, p publicServer, c *http.Client, method, path string, body any, origin string, want int) ([]byte, accountResponse) {
+func decodeAs[T any](t *testing.T, raw []byte) T {
 	t.Helper()
-	var b []byte
-	if body != nil {
-		var err error
-		b, err = json.Marshal(body)
-		if err != nil {
-			t.Fatal(err)
-		}
+	var v T
+	if err := json.Unmarshal(raw, &v); err != nil {
+		t.Fatalf("decode %s: %v", raw, err)
 	}
-	req, err := http.NewRequestWithContext(t.Context(), method, p.srv.URL+path, bytes.NewReader(b))
-	if err != nil {
-		t.Fatal(err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	if origin != "" {
-		req.Header.Set("Origin", origin)
-	}
-	res, err := c.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() {
-		if err := res.Body.Close(); err != nil {
-			t.Error(err)
-		}
-	}()
-	raw, err := io.ReadAll(res.Body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if res.StatusCode != want {
-		t.Fatalf("%s %s status %d, want %d", method, path, res.StatusCode, want)
-	}
-	return raw, accountResponse{Header: res.Header, Cookies: res.Cookies()}
+	return v
 }
 
-type wireCeremony struct {
-	ID      string          `json:"id"`
-	Options json.RawMessage `json:"options"`
-}
-
-func beginAccount(t *testing.T, p publicServer, c *http.Client, path string, body any) wireCeremony {
-	t.Helper()
-	raw, res := accountRequest(t, p, c, "POST", path, body, testOrigin, 200)
-	found := false
-	for _, cookie := range res.Cookies {
-		if cookie.Name == ceremonyCookie {
-			found = true
-			if !cookie.Secure || !cookie.HttpOnly || cookie.SameSite != http.SameSiteStrictMode || cookie.Path != "/" || cookie.Domain != "" || cookie.MaxAge < 300 || len(cookie.Value) != 52 {
-				t.Fatal("unsafe browser context cookie")
-			}
+func cookieNamed(cookies []*http.Cookie, name string) *http.Cookie {
+	for _, c := range cookies {
+		if c.Name == name {
+			return c
 		}
 	}
-	if !found {
-		t.Fatal("missing browser context cookie")
-	}
-	var ceremony wireCeremony
-	if err := json.Unmarshal(raw, &ceremony); err != nil {
-		t.Fatal(err)
-	}
-	return ceremony
+	return nil
 }
 
-func TestAccountFirstArrivalSignedEnrollmentAndLogin(t *testing.T) {
+func TestTheAccessPasswordSetsAPassCookie(t *testing.T) {
 	p := startPublic(t, 100)
-	_, browser := p.browserWithHTTP(t)
-	invite, err := p.identity.CreateInvitation(t.Context())
-	if err != nil {
-		t.Fatal(err)
+	_, c := p.browserWithHTTP(t)
+	raw, _ := accountRequest(t, p, c, http.MethodGet, "/api/access", nil, "", http.StatusOK)
+	if got := decodeAs[api.Access](t, raw); !got.PasswordSet || got.Passed || got.GuestName != "" {
+		t.Fatalf("access before the password = %+v", got)
 	}
-	begin := beginAccount(t, p, browser, "/api/accounts/registration/begin", map[string]any{"invitation": invite.Token, "name": "Alice"})
-	var options protocol.CredentialCreation
-	if err := json.Unmarshal(begin.Options, &options); err != nil {
-		t.Fatal(err)
+	accountRequest(t, p, c, http.MethodPost, "/api/access", map[string]any{"password": testAccessPassword}, "", http.StatusForbidden)
+	raw, _ = accountRequest(t, p, c, http.MethodPost, "/api/access", map[string]any{"password": "wrong"}, testOrigin, http.StatusForbidden)
+	wantError(t, "a wrong access password", http.StatusForbidden, raw, http.StatusForbidden, "invalid_access_password")
+	raw, res := accountRequest(t, p, c, http.MethodPost, "/api/access", map[string]any{"password": testAccessPassword}, testOrigin, http.StatusOK)
+	if got := decodeAs[api.Access](t, raw); !got.Passed {
+		t.Fatalf("access after the password = %+v", got)
 	}
-	key := passkeytest.New(t)
-	signed := key.Registration(t, &options, testOrigin)
-	finish := map[string]any{"ceremonyId": begin.ID, "credential": json.RawMessage(signed), "label": "Laptop"}
-	raw, res := accountRequest(t, p, browser, "POST", "/api/accounts/registration/finish", finish, testOrigin, 200)
-	var enrolled struct {
-		Session struct {
-			Visitor struct {
-				ID string `json:"id"`
-			} `json:"visitor"`
-		} `json:"session"`
-		Codes []string `json:"recoveryCodes"`
+	cookie := cookieNamed(res.Cookies, accessCookie)
+	if cookie == nil || !cookie.HttpOnly || !cookie.Secure || cookie.SameSite != http.SameSiteStrictMode || cookie.Path != "/api" {
+		t.Fatalf("access cookie = %+v", cookie)
 	}
-	if err := json.Unmarshal(raw, &enrolled); err != nil {
-		t.Fatal(err)
-	}
-	if enrolled.Session.Visitor.ID == "" || len(enrolled.Codes) != 1 {
-		t.Fatal("missing identity or recovery codes")
-	}
-	var found bool
-	for _, cookie := range res.Cookies {
-		if cookie.Name == cookieName {
-			found = true
-			if !cookie.Secure || !cookie.HttpOnly || cookie.SameSite != http.SameSiteStrictMode || cookie.MaxAge != 90*24*60*60 {
-				t.Fatal("unsafe account cookie")
-			}
-		}
-	}
-	if !found {
-		t.Fatal("missing account cookie")
-	}
-	accountRequest(t, p, browser, "POST", "/api/accounts/registration/finish", finish, testOrigin, 403)
-	_, second := p.browserWithHTTP(t)
-	login := beginAccount(t, p, second, "/api/accounts/authentication/begin", map[string]any{})
-	var assertion protocol.CredentialAssertion
-	if err := json.Unmarshal(login.Options, &assertion); err != nil {
-		t.Fatal(err)
-	}
-	accountRequest(t, p, second, "POST", "/api/accounts/authentication/finish", map[string]any{"ceremonyId": login.ID, "credential": json.RawMessage(key.Assertion(t, &assertion, testOrigin))}, testOrigin, 200)
-	me, _ := accountRequest(t, p, second, "GET", "/api/me", nil, "", 200)
-	var visitor struct {
-		ID string `json:"id"`
-	}
-	if err := json.Unmarshal(me, &visitor); err != nil {
-		t.Fatal(err)
-	}
-	if visitor.ID != enrolled.Session.Visitor.ID {
-		t.Fatal("login changed identity")
-	}
-	target, err := url.Parse(p.srv.URL)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, staleBrowser := p.browserWithHTTP(t)
-	staleBrowser.Jar.SetCookies(target, browser.Jar.Cookies(target))
-	accountRequest(t, p, browser, "POST", "/api/accounts/logout", map[string]any{}, testOrigin, 200)
-	accountRequest(t, p, staleBrowser, "GET", "/api/me", nil, "", 401)
-	accountRequest(t, p, browser, "GET", "/api/me", nil, "", 401)
-	accountRequest(t, p, second, "GET", "/api/me", nil, "", 200)
-}
-
-func TestAccountCeremoniesRejectForeignBrowserOriginPurposeAndReplay(t *testing.T) {
-	p := startPublic(t, 100)
-	_, a := p.browserWithHTTP(t)
-	_, b := p.browserWithHTTP(t)
-	invite, err := p.identity.CreateInvitation(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	body := map[string]any{"invitation": invite.Token, "name": "Alice"}
-	accountRequest(t, p, a, "POST", "/api/accounts/registration/begin", body, "https://foreign.example", 403)
-	accountRequest(t, p, a, "POST", "/api/accounts/registration/begin", body, "", 403)
-	ceremony := beginAccount(t, p, a, "/api/accounts/registration/begin", body)
-	var options protocol.CredentialCreation
-	if err := json.Unmarshal(ceremony.Options, &options); err != nil {
-		t.Fatal(err)
-	}
-	key := passkeytest.New(t)
-	finish := map[string]any{"ceremonyId": ceremony.ID, "credential": json.RawMessage(key.Registration(t, &options, testOrigin))}
-	accountRequest(t, p, b, "POST", "/api/accounts/registration/finish", finish, testOrigin, 403)
-	beginAccount(t, p, b, "/api/accounts/authentication/begin", map[string]any{})
-	accountRequest(t, p, b, "POST", "/api/accounts/registration/finish", finish, testOrigin, 403)
-	accountRequest(t, p, a, "POST", "/api/accounts/authentication/finish", finish, testOrigin, 403)
-	wrongOrigin := map[string]any{"ceremonyId": ceremony.ID, "credential": json.RawMessage(key.Registration(t, &options, "https://foreign.example"))}
-	accountRequest(t, p, a, "POST", "/api/accounts/registration/finish", wrongOrigin, testOrigin, 403)
-	accountRequest(t, p, a, "GET", "/api/accounts/session", nil, "", 401)
-	accountRequest(t, p, a, "POST", "/api/accounts/registration/finish", finish, testOrigin, 200)
-	accountRequest(t, p, a, "POST", "/api/accounts/registration/finish", finish, testOrigin, 403)
-	for _, entry := range []string{invite.Token, string(finish["credential"].(json.RawMessage))} {
-		if strings.Contains(p.logs.String(), entry) {
-			t.Fatal("bearer or credential leaked in logs")
-		}
-	}
-}
-
-func TestAccountHTTPBodyAndAttemptBounds(t *testing.T) {
-	p := startPublic(t, 100)
-	_, browser := p.browserWithHTTP(t)
-	req, err := http.NewRequestWithContext(t.Context(), "POST", p.srv.URL+"/api/accounts/authentication/begin", strings.NewReader(strings.Repeat("x", maxRequestBody+1)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	req.Header.Set("Origin", testOrigin)
-	req.Header.Set("Content-Type", "application/json")
-	res, err := browser.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_ = res.Body.Close()
-	if res.StatusCode != 400 && res.StatusCode != 413 {
-		t.Fatalf("oversized body status %d", res.StatusCode)
-	}
-	for i := 0; i < 19; i++ {
-		beginAccount(t, p, browser, "/api/accounts/authentication/begin", map[string]any{})
-	}
-	accountRequest(t, p, browser, "POST", "/api/accounts/authentication/begin", map[string]any{}, testOrigin, 429)
-}
-
-type enrolledAccount struct {
-	Session struct {
-		Visitor struct {
-			ID string `json:"id"`
-		} `json:"visitor"`
-	} `json:"session"`
-	RecoveryCodes []string `json:"recoveryCodes"`
-}
-
-func enrollAccount(t *testing.T, p publicServer, c *http.Client, name string, key *passkeytest.Authenticator) enrolledAccount {
-	t.Helper()
-	invite, err := p.identity.CreateInvitation(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	ceremony := beginAccount(t, p, c, "/api/accounts/registration/begin", map[string]any{"invitation": invite.Token, "name": name})
-	return finishEnrollment(t, p, c, ceremony, key, "registration")
-}
-
-func finishEnrollment(t *testing.T, p publicServer, c *http.Client, ceremony wireCeremony, key *passkeytest.Authenticator, purpose string) enrolledAccount {
-	t.Helper()
-	var options protocol.CredentialCreation
-	if err := json.Unmarshal(ceremony.Options, &options); err != nil {
-		t.Fatal(err)
-	}
-	raw, res := accountRequest(t, p, c, "POST", "/api/accounts/"+purpose+"/finish", map[string]any{"ceremonyId": ceremony.ID, "credential": json.RawMessage(key.Registration(t, &options, testOrigin))}, testOrigin, 200)
 	if res.Header.Get("Cache-Control") != "no-store" {
-		t.Fatal("credential response can be cached")
+		t.Fatal("an access response can be cached")
 	}
-	var result enrolledAccount
-	if err := json.Unmarshal(raw, &result); err != nil {
-		t.Fatal(err)
+	raw, _ = accountRequest(t, p, c, http.MethodGet, "/api/access", nil, "", http.StatusOK)
+	if got := decodeAs[api.Access](t, raw); !got.Passed {
+		t.Fatalf("access is not remembered: %+v", got)
 	}
-	if len(result.RecoveryCodes) != 1 || len(strings.Fields(result.RecoveryCodes[0])) != 12 {
-		t.Fatal("expected exactly one twelve-word recovery phrase")
-	}
-	return result
 }
 
-func TestAccountUpgradeRetainsIdentityAndRejectsGuestOnlyEnrollment(t *testing.T) {
+func TestAccessPasswordAttemptsAreLimitedPerClient(t *testing.T) {
+	p := startPublic(t, 2)
+	b := p.browser(t)
+	from := forwardedFor("203.0.113.7")
+	for i := range 3 {
+		res, err := b.PassAccessWithResponse(t.Context(), api.PassAccessJSONRequestBody{Password: "wrong"}, from)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want, code := http.StatusForbidden, "invalid_access_password"
+		if i == 2 {
+			want, code = http.StatusTooManyRequests, "rate_limited"
+		}
+		wantError(t, fmt.Sprintf("attempt %d", i+1), res.StatusCode(), res.Body, want, code)
+	}
+	res, err := b.PassAccessWithResponse(t.Context(), api.PassAccessJSONRequestBody{Password: testAccessPassword}, forwardedFor("203.0.113.8"))
+	if err != nil || res.StatusCode() != http.StatusOK {
+		t.Fatalf("another client = %v, %v", res.StatusCode(), err)
+	}
+}
+
+func TestRegisteringNeedsThePassAndValidDetails(t *testing.T) {
 	p := startPublic(t, 100)
-	b, c := p.browserWithHTTP(t)
-	guest := p.enter(t, b, "Guest")
+	p.enter(t, p.browser(t), "Ann")
+	_, c := p.browserWithHTTP(t)
+	raw, _ := accountRequest(t, p, c, http.MethodPost, "/api/accounts/register", map[string]any{"login": "!", "password": "", "name": ""}, testOrigin, http.StatusForbidden)
+	wantError(t, "register without a pass", http.StatusForbidden, raw, http.StatusForbidden, "access_required")
+	accountRequest(t, p, c, http.MethodPost, "/api/access", map[string]any{"password": testAccessPassword}, testOrigin, http.StatusOK)
+	for _, tc := range []struct {
+		login, password, name string
+		status                int
+		code                  string
+	}{
+		{"x", testPassword, "Bob", 400, "invalid_login"},
+		{"bob", "short", "Bob", 400, "invalid_password"},
+		{"bob", testPassword, " ", 400, "invalid_name"},
+		{"ANN", testPassword, "Bob", 409, "login_taken"},
+		{"bob", testPassword, "ann", 409, "name_taken"},
+	} {
+		raw, _ := accountRequest(t, p, c, http.MethodPost, "/api/accounts/register", map[string]any{"login": tc.login, "password": tc.password, "name": tc.name}, testOrigin, tc.status)
+		wantError(t, "register "+tc.code, tc.status, raw, tc.status, tc.code)
+	}
+	raw, res := accountRequest(t, p, c, http.MethodPost, "/api/accounts/register", map[string]any{"login": "bob", "password": testPassword, "name": "Bob"}, testOrigin, http.StatusOK)
+	enrolled := decodeAs[api.AccountEnrollment](t, raw)
+	if enrolled.Session.Kind != api.AccountSessionKindAccount || enrolled.Session.Visitor.Name != "Bob" {
+		t.Fatalf("enrollment = %+v", enrolled)
+	}
+	session := cookieNamed(res.Cookies, cookieName)
+	if session == nil || !session.HttpOnly || !session.Secure || session.SameSite != http.SameSiteStrictMode || session.Path != "/api" {
+		t.Fatalf("session cookie = %+v", session)
+	}
+	raw, _ = accountRequest(t, p, c, http.MethodGet, "/api/accounts/session", nil, "", http.StatusOK)
+	if got := decodeAs[api.AccountSession](t, raw); got.Visitor.Id != enrolled.Session.Visitor.Id {
+		t.Fatalf("session = %+v", got)
+	}
+}
+
+func TestSigningInSaysNothingAboutWhichPartIsWrong(t *testing.T) {
+	p := startPublic(t, 3)
+	p.enter(t, p.browser(t), "Ann")
+	_, c := p.browserWithHTTP(t)
+	raw, _ := accountRequest(t, p, c, http.MethodPost, "/api/accounts/login", map[string]any{"login": "ann", "password": testPassword}, testOrigin, http.StatusForbidden)
+	wantError(t, "login without a pass", http.StatusForbidden, raw, http.StatusForbidden, "access_required")
+	accountRequest(t, p, c, http.MethodPost, "/api/access", map[string]any{"password": testAccessPassword}, testOrigin, http.StatusOK)
+	for _, body := range []map[string]any{{"login": "ann", "password": "wrong password"}, {"login": "nobody", "password": testPassword}} {
+		raw, _ := accountRequest(t, p, c, http.MethodPost, "/api/accounts/login", body, testOrigin, http.StatusUnauthorized)
+		wantError(t, "login", http.StatusUnauthorized, raw, http.StatusUnauthorized, "invalid_credentials")
+	}
+	accountRequest(t, p, c, http.MethodPost, "/api/accounts/login", map[string]any{"login": "Ann", "password": testPassword}, testOrigin, http.StatusOK)
+	// The limit per login holds whatever address the attempts come from.
+	raw, _ = accountRequest(t, p, c, http.MethodPost, "/api/accounts/login", map[string]any{"login": "ann", "password": testPassword}, testOrigin, http.StatusTooManyRequests)
+	wantError(t, "login over the limit", http.StatusTooManyRequests, raw, http.StatusTooManyRequests, "rate_limited")
+}
+
+func TestChangingThePasswordKeepsThisSessionAndEndsTheOthers(t *testing.T) {
+	p := startPublic(t, 100)
+	_, here := p.browserWithHTTP(t)
+	registerAccount(t, p, here, "Ann")
+	_, there := loginAccountBrowser(t, p, "ann")
+	elsewhere := p.connectLive(t, there)
+	raw, _ := accountRequest(t, p, here, http.MethodPut, "/api/accounts/password", map[string]any{"currentPassword": "wrong password", "newPassword": "a new password"}, testOrigin, http.StatusForbidden)
+	wantError(t, "a wrong current password", http.StatusForbidden, raw, http.StatusForbidden, "invalid_credentials")
+	raw, _ = accountRequest(t, p, here, http.MethodPut, "/api/accounts/password", map[string]any{"currentPassword": testPassword, "newPassword": "short"}, testOrigin, http.StatusBadRequest)
+	wantError(t, "a short new password", http.StatusBadRequest, raw, http.StatusBadRequest, "invalid_password")
+	accountRequest(t, p, here, http.MethodPut, "/api/accounts/password", map[string]any{"currentPassword": testPassword, "newPassword": "a new password"}, testOrigin, http.StatusOK)
+	readClosed(t, elsewhere, realtime.StatusRevoked)
+	accountRequest(t, p, here, http.MethodGet, "/api/accounts/session", nil, "", http.StatusOK)
+	accountRequest(t, p, there, http.MethodGet, "/api/accounts/session", nil, "", http.StatusUnauthorized)
+}
+
+func TestRecoveringSetsANewPasswordAndSignsIn(t *testing.T) {
+	p := startPublic(t, 100)
+	_, old := p.browserWithHTTP(t)
+	account := registerAccount(t, p, old, "Ann")
+	code := p.recoveryCode(t, "ann")
+	_, c := p.browserWithHTTP(t)
+	accountRequest(t, p, c, http.MethodPost, "/api/access", map[string]any{"password": testAccessPassword}, testOrigin, http.StatusOK)
+	raw, _ := accountRequest(t, p, c, http.MethodPost, "/api/accounts/recovery", map[string]any{"account": "ann", "proof": "not the code", "password": "a new password"}, testOrigin, http.StatusForbidden)
+	wantError(t, "a wrong code", http.StatusForbidden, raw, http.StatusForbidden, "invalid_proof")
+	raw, _ = accountRequest(t, p, c, http.MethodPost, "/api/accounts/recovery", map[string]any{"account": "ann", "proof": code, "password": "a new password"}, testOrigin, http.StatusOK)
+	recovered := decodeAs[api.AccountEnrollment](t, raw)
+	if recovered.Session.Visitor.Id != account.Session.Visitor.ID {
+		t.Fatalf("recovery = %+v", recovered)
+	}
+	accountRequest(t, p, old, http.MethodGet, "/api/accounts/session", nil, "", http.StatusUnauthorized)
+	accountRequest(t, p, c, http.MethodGet, "/api/accounts/session", nil, "", http.StatusOK)
+}
+
+func TestALegacyGuestRegistersWithoutThePassAndKeepsItsHistory(t *testing.T) {
+	p := startPublic(t, 100)
 	room := p.createRoom(t, "Lounge")
-	message := posted(t, b, room.ID, "before-upgrade", "Guest message")
-	draft := uploadDraft(t, p, c, room.ID, "before.txt", []byte("guest draft"))
-	accountRequest(t, p, c, "POST", "/api/accounts/registration/begin", map[string]any{"invitation": p.secret, "name": "Alice"}, testOrigin, 403)
-	invite, err := p.identity.CreateInvitation(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	ceremony := beginAccount(t, p, c, "/api/accounts/registration/begin", map[string]any{"invitation": invite.Token, "name": "Alice"})
-	var options protocol.CredentialCreation
-	if err := json.Unmarshal(ceremony.Options, &options); err != nil {
-		t.Fatal(err)
-	}
-	bad := passkeytest.New(t)
-	bad.CorruptSignature = true
-	accountRequest(t, p, c, "POST", "/api/accounts/registration/finish", map[string]any{"ceremonyId": ceremony.ID, "credential": json.RawMessage(bad.Registration(t, &options, testOrigin))}, testOrigin, 403)
-	raw, _ := accountRequest(t, p, c, "GET", "/api/me", nil, "", 200)
-	var before struct {
-		ID string `json:"id"`
-	}
-	if err := json.Unmarshal(raw, &before); err != nil {
-		t.Fatal(err)
-	}
-	if before.ID != guest.Id {
-		t.Fatal("failed enrollment changed guest")
-	}
-	enrolled := finishEnrollment(t, p, c, ceremony, passkeytest.New(t), "registration")
-	if enrolled.Session.Visitor.ID != guest.Id {
-		t.Fatal("upgrade lost identity")
-	}
-	postedMessageForAttachments(t, b, room.ID, "after-upgrade", api.PostMessageRequest{Body: "Owned draft", RequestKey: "after-upgrade", AttachmentIds: []string{draft.Id}})
-	messages := history(t, b, room.ID, api.ListMessagesParams{})
-	if len(messages) != 2 || messages[1].Id != message.Id || messages[1].AuthorId != guest.Id || messages[1].AuthorName != "Guest" || messages[0].AuthorId != guest.Id {
-		t.Fatal("upgrade lost message ownership or name snapshot")
-	}
-	status, _, content := attachmentRequest(t, p, c, "GET", "/api/attachments/"+draft.Id+"/content", "", nil)
-	if status != 200 || string(content) != "guest draft" {
-		t.Fatal("upgrade lost attachment ownership")
-	}
-}
-
-func TestOwnerPasskeyManagementRequiresOwnRecentProof(t *testing.T) {
-	p := startPublic(t, 100)
-	_, a := p.browserWithHTTP(t)
-	_, b := p.browserWithHTTP(t)
-	key := passkeytest.New(t)
-	enrollAccount(t, p, a, "Alice", key)
-	enrollAccount(t, p, b, "Bob", passkeytest.New(t))
-	ceremony := beginAccount(t, p, a, "/api/accounts/passkeys/begin", map[string]any{})
-	var options protocol.CredentialCreation
-	if err := json.Unmarshal(ceremony.Options, &options); err != nil {
-		t.Fatal(err)
-	}
-	second := passkeytest.New(t)
-	body := map[string]any{"ceremonyId": ceremony.ID, "credential": json.RawMessage(second.Registration(t, &options, testOrigin)), "label": "Phone"}
-	accountRequest(t, p, b, "POST", "/api/accounts/passkeys/finish", body, testOrigin, 403)
-	raw, _ := accountRequest(t, p, a, "POST", "/api/accounts/passkeys/finish", body, testOrigin, 200)
-	var passkey struct {
-		ID string `json:"id"`
-	}
-	if err := json.Unmarshal(raw, &passkey); err != nil {
-		t.Fatal(err)
-	}
-	accountRequest(t, p, b, "DELETE", "/api/accounts/passkeys/"+passkey.ID, nil, testOrigin, 403)
-	accountRequest(t, p, a, "DELETE", "/api/accounts/passkeys/"+passkey.ID, nil, testOrigin, 200)
-	raw, _ = accountRequest(t, p, a, "GET", "/api/accounts/passkeys", nil, "", 200)
-	var keys struct {
-		Passkeys []struct {
-			ID string `json:"id"`
-		} `json:"passkeys"`
-	}
-	if err := json.Unmarshal(raw, &keys); err != nil {
-		t.Fatal(err)
-	}
-	if len(keys.Passkeys) != 1 {
-		t.Fatal("wrong credential count")
-	}
-	accountRequest(t, p, a, "DELETE", "/api/accounts/passkeys/"+keys.Passkeys[0].ID, nil, testOrigin, 409)
-	p.clock.Advance(6 * time.Minute)
-	accountRequest(t, p, a, "POST", "/api/accounts/recovery-codes", map[string]any{}, testOrigin, 403)
-	reauth := beginAccount(t, p, a, "/api/accounts/reauthentication/begin", map[string]any{})
-	var assertion protocol.CredentialAssertion
-	if err := json.Unmarshal(reauth.Options, &assertion); err != nil {
-		t.Fatal(err)
-	}
-	proof := map[string]any{"ceremonyId": reauth.ID, "credential": json.RawMessage(key.Assertion(t, &assertion, testOrigin))}
-	accountRequest(t, p, b, "POST", "/api/accounts/reauthentication/finish", proof, testOrigin, 403)
-	accountRequest(t, p, a, "POST", "/api/accounts/reauthentication/finish", proof, testOrigin, 200)
-	raw, _ = accountRequest(t, p, a, "POST", "/api/accounts/recovery-codes", map[string]any{}, testOrigin, 200)
-	var codes struct {
-		Codes []string `json:"recoveryCodes"`
-	}
-	if err := json.Unmarshal(raw, &codes); err != nil {
-		t.Fatal(err)
-	}
-	if len(codes.Codes) != 1 || len(strings.Fields(codes.Codes[0])) != 12 {
-		t.Fatal("missing new recovery codes")
-	}
-}
-
-func TestAccountRecoveryReplacesAccessAndExpiryRejectsStaleCookie(t *testing.T) {
-	p := startPublic(t, 100)
-	_, a := p.browserWithHTTP(t)
-	_, recovering := p.browserWithHTTP(t)
-	account := enrollAccount(t, p, a, "Alice", passkeytest.New(t))
-	id := account.Session.Visitor.ID
-	expiredGrant, err := p.identity.IssueRecovery(t.Context(), id)
-	if err != nil {
-		t.Fatal(err)
-	}
-	p.clock.Advance(31 * time.Minute)
-	accountRequest(t, p, a, "POST", "/api/accounts/recovery/begin", map[string]any{"accountId": id, "proof": expiredGrant.Token}, testOrigin, 403)
-	grant, err := p.identity.IssueRecovery(t.Context(), id)
-	if err != nil {
-		t.Fatal(err)
-	}
-	accountRequest(t, p, a, "GET", "/api/me", nil, "", 200)
-	operatorCeremony := beginAccount(t, p, recovering, "/api/accounts/recovery/begin", map[string]any{"accountId": id, "proof": grant.Token})
-	accountRequest(t, p, recovering, "POST", "/api/accounts/recovery/begin", map[string]any{"accountId": id, "proof": " " + grant.Token + "\n"}, testOrigin, 403)
-	words := strings.Fields(account.RecoveryCodes[0])
-	accountRequest(t, p, recovering, "POST", "/api/accounts/recovery/begin", map[string]any{"accountId": id, "proof": strings.Join(words[1:], " ")}, testOrigin, 403)
-	formatted := " \t" + strings.ToUpper(strings.Join(words, " \t\n ")) + "\n "
-	ceremony := beginAccount(t, p, recovering, "/api/accounts/recovery/begin", map[string]any{"accountId": id, "proof": formatted})
-	replacement := finishEnrollment(t, p, recovering, ceremony, passkeytest.New(t), "recovery")
-	if replacement.Session.Visitor.ID != id || len(replacement.RecoveryCodes) != 1 {
-		t.Fatal("recovery lost identity/codes")
-	}
-	var oldOptions protocol.CredentialCreation
-	if err := json.Unmarshal(operatorCeremony.Options, &oldOptions); err != nil {
-		t.Fatal(err)
-	}
-	accountRequest(t, p, recovering, "POST", "/api/accounts/recovery/finish", map[string]any{"ceremonyId": operatorCeremony.ID, "credential": json.RawMessage(passkeytest.New(t).Registration(t, &oldOptions, testOrigin))}, testOrigin, 403)
-	accountRequest(t, p, a, "GET", "/api/me", nil, "", 401)
-	accountRequest(t, p, a, "GET", "/api/accounts/passkeys", nil, "", 401)
-	accountRequest(t, p, a, "POST", "/api/accounts/recovery/begin", map[string]any{"accountId": id, "proof": account.RecoveryCodes[0]}, testOrigin, 403)
-	accountRequest(t, p, a, "POST", "/api/accounts/recovery/begin", map[string]any{"accountId": id, "proof": grant.Token}, testOrigin, 403)
-	p.clock.Advance(90 * 24 * time.Hour)
-	accountRequest(t, p, recovering, "GET", "/api/me", nil, "", 401)
-	for _, code := range append(account.RecoveryCodes, replacement.RecoveryCodes...) {
-		if strings.Contains(p.logs.String(), code) {
-			t.Fatal("recovery code logged")
-		}
-	}
-}
-
-func TestAccountHTTPRejectsTrailingJSONAndForeignContentType(t *testing.T) {
-	p := startPublic(t, 100)
-	_, browser := p.browserWithHTTP(t)
-	for _, input := range []struct{ body, content string }{{"{} {}", "application/json"}, {"{}", "text/plain"}, {"null", "application/json"}} {
-		req, err := http.NewRequestWithContext(t.Context(), "POST", p.srv.URL+"/api/accounts/authentication/begin", strings.NewReader(input.body))
-		if err != nil {
-			t.Fatal(err)
-		}
-		req.Header.Set("Origin", testOrigin)
-		req.Header.Set("Content-Type", input.content)
-		res, err := browser.Do(req)
-		if err != nil {
-			t.Fatal(err)
-		}
-		_ = res.Body.Close()
-		if res.StatusCode != 400 {
-			t.Fatalf("body %q content %q status %d, want 400", input.body, input.content, res.StatusCode)
-		}
-	}
-}
-
-func TestInvitationConcurrentHTTPRedemptionHasOneWinnerAndExpiry(t *testing.T) {
-	p := startPublic(t, 100)
-	_, a := p.browserWithHTTP(t)
-	_, b := p.browserWithHTTP(t)
-	invite, err := p.identity.CreateInvitation(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	ca := beginAccount(t, p, a, "/api/accounts/registration/begin", map[string]any{"invitation": invite.Token, "name": "Alice"})
-	cb := beginAccount(t, p, b, "/api/accounts/registration/begin", map[string]any{"invitation": invite.Token, "name": "Bob"})
-	bodies := make([][]byte, 2)
-	for i, ceremony := range []wireCeremony{ca, cb} {
-		var options protocol.CredentialCreation
-		if err := json.Unmarshal(ceremony.Options, &options); err != nil {
-			t.Fatal(err)
-		}
-		bodies[i], err = json.Marshal(map[string]any{"ceremonyId": ceremony.ID, "credential": json.RawMessage(passkeytest.New(t).Registration(t, &options, testOrigin))})
-		if err != nil {
-			t.Fatal(err)
-		}
-	}
-	statuses := make(chan int, 2)
-	for i, c := range []*http.Client{a, b} {
-		go func() {
-			req, err := http.NewRequestWithContext(t.Context(), "POST", p.srv.URL+"/api/accounts/registration/finish", bytes.NewReader(bodies[i]))
-			if err != nil {
-				statuses <- 0
-				return
+	author := p.browser(t)
+	p.enter(t, author, "Ann")
+	id, token := "01JBX6Z8Q3M5W2K7R9T4V1C0DE", "legacy-guest-cookie"
+	sum := sha256.Sum256([]byte(token))
+	now := p.clock.Now().Unix()
+	if err := p.db.Write(t.Context(), func(tx *sql.Tx) error {
+		for _, stmt := range []struct {
+			query string
+			args  []any
+		}{
+			{"INSERT INTO access (id, link_secret, generation, rotated_at) VALUES (1, 'old link', 1, '2026-11-01')", nil},
+			{"INSERT INTO identities (id, name, created_at) VALUES (?, 'Bob', '2026-11-01')", []any{id}},
+			{"INSERT INTO sessions (id, token_hash, identity_id, generation, created_at, expires_at) VALUES ('guest', ?, ?, 1, ?, ?)", []any{sum[:], id, now, now + 3600}},
+			{"INSERT INTO messages (id, room_id, author_id, author_name, body, request_key, created_at) VALUES ('01JBX6Z8Q3M5W2K7R9T4V1C0DF', ?, ?, 'Bob', 'from before', 'k', '2026-11-01T00:00:00.000Z')", []any{room.ID, id}},
+		} {
+			if _, err := tx.ExecContext(t.Context(), stmt.query, stmt.args...); err != nil {
+				return err
 			}
-			req.Header.Set("Origin", testOrigin)
-			req.Header.Set("Content-Type", "application/json")
-			res, err := c.Do(req)
-			if err != nil {
-				statuses <- 0
-				return
-			}
-			_ = res.Body.Close()
-			statuses <- res.StatusCode
-		}()
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
 	}
-	first, second := <-statuses, <-statuses
-	if first+second != 603 || (first != 200 && second != 200) {
-		t.Fatalf("redemption statuses %d/%d", first, second)
+	if err := p.identity.InitializeColours(t.Context()); err != nil {
+		t.Fatal(err)
 	}
-	expired, err := p.identity.CreateInvitation(t.Context())
+	_, c := p.browserWithHTTP(t)
+	c.Jar.SetCookies(mustURL(t, p.srv.URL+"/api"), []*http.Cookie{{Name: cookieName, Value: token, Path: "/api"}})
+	accountRequest(t, p, c, http.MethodGet, "/api/me", nil, "", http.StatusUnauthorized)
+	raw, _ := accountRequest(t, p, c, http.MethodGet, "/api/access", nil, "", http.StatusOK)
+	if got := decodeAs[api.Access](t, raw); got.Passed || got.GuestName != "Bob" {
+		t.Fatalf("access of a legacy guest = %+v", got)
+	}
+	raw, _ = accountRequest(t, p, c, http.MethodPost, "/api/accounts/register", map[string]any{"login": "bob", "password": testPassword, "name": "Bob"}, testOrigin, http.StatusOK)
+	if got := decodeAs[api.AccountEnrollment](t, raw); got.Session.Visitor.Id != id {
+		t.Fatalf("the account did not keep the guest's identity: %+v", got.Session.Visitor)
+	}
+	raw, _ = accountRequest(t, p, c, http.MethodGet, "/api/rooms/"+room.ID+"/messages", nil, "", http.StatusOK)
+	if got := decodeAs[api.MessageList](t, raw); len(got.Messages) != 1 || got.Messages[0].AuthorId != id {
+		t.Fatalf("history = %+v", got)
+	}
+}
+
+func TestAccountsCreateAndRenameRoomsEveryoneSees(t *testing.T) {
+	p := startPublic(t, 100)
+	ann, annHTTP := p.browserWithHTTP(t)
+	p.enter(t, ann, "Ann")
+	watcher := p.connectLive(t, annHTTP)
+	bob := p.browser(t)
+	p.enter(t, bob, "Bob")
+
+	created, err := bob.CreateRoomWithResponse(t.Context(), api.RoomNameRequest{Name: "  Lounge "})
+	if err != nil || created.StatusCode() != http.StatusCreated || created.JSON201 == nil || created.JSON201.Name != "Lounge" || len(created.JSON201.Occupancy) != 0 {
+		t.Fatalf("CreateRoom = %v %s, %v", created.StatusCode(), created.Body, err)
+	}
+	if event := nextEvent(t, watcher); event.Type != api.EventTypeRoomChanged {
+		t.Fatalf("event after creating = %+v", event)
+	}
+	for name, code := range map[string]string{"lounge": "room_name_taken", "": "invalid_name"} {
+		res, err := ann.CreateRoomWithResponse(t.Context(), api.RoomNameRequest{Name: name})
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := http.StatusConflict
+		if code == "invalid_name" {
+			want = http.StatusBadRequest
+		}
+		wantError(t, "CreateRoom("+name+")", res.StatusCode(), res.Body, want, code)
+	}
+	games, err := ann.CreateRoomWithResponse(t.Context(), api.RoomNameRequest{Name: "Games"})
+	if err != nil || games.JSON201 == nil {
+		t.Fatalf("CreateRoom(Games) = %v, %v", games, err)
+	}
+	nextEvent(t, watcher)
+
+	renamed, err := ann.RenameRoomWithResponse(t.Context(), created.JSON201.Id, api.RoomNameRequest{Name: "Living room"})
+	if err != nil || renamed.StatusCode() != http.StatusOK || renamed.JSON200 == nil || renamed.JSON200.Name != "Living room" {
+		t.Fatalf("RenameRoom = %v %s, %v", renamed.StatusCode(), renamed.Body, err)
+	}
+	if event := nextEvent(t, watcher); event.Type != api.EventTypeRoomChanged {
+		t.Fatalf("event after renaming = %+v", event)
+	}
+	res, err := ann.RenameRoomWithResponse(t.Context(), created.JSON201.Id, api.RoomNameRequest{Name: "GAMES"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	p.clock.Advance(7 * 24 * time.Hour)
-	accountRequest(t, p, a, "POST", "/api/accounts/registration/begin", map[string]any{"invitation": expired.Token, "name": "Expired"}, testOrigin, 403)
+	wantError(t, "renaming to another room's name", res.StatusCode(), res.Body, http.StatusConflict, "room_name_taken")
+	missing, err := ann.RenameRoomWithResponse(t.Context(), "01JBX6ZZZZZZZZZZZZZZZZZZZZ", api.RoomNameRequest{Name: "Nowhere"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantError(t, "renaming an unknown room", missing.StatusCode(), missing.Body, http.StatusNotFound, "room_not_found")
+
+	anonymous, err := p.browser(t).CreateRoomWithResponse(t.Context(), api.RoomNameRequest{Name: "Sneaky"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantError(t, "creating without a session", anonymous.StatusCode(), anonymous.Body, http.StatusUnauthorized, "visitor_required")
 }
 
-func TestDisabledStaleAccountRejectedAcrossPublicResolvers(t *testing.T) {
+func TestRoomsStopAtTheLimit(t *testing.T) {
 	p := startPublic(t, 100)
-	_, a := p.browserWithHTTP(t)
-	key := passkeytest.New(t)
-	account := enrollAccount(t, p, a, "Alice", key)
-	login := beginAccount(t, p, a, "/api/accounts/authentication/begin", map[string]any{})
-	var assertion protocol.CredentialAssertion
-	if err := json.Unmarshal(login.Options, &assertion); err != nil {
+	for i := range maxRooms - 1 {
+		p.createRoom(t, fmt.Sprintf("Room %d", i))
+	}
+	b := p.browser(t)
+	p.enter(t, b, "Ann")
+	last, err := b.CreateRoomWithResponse(t.Context(), api.RoomNameRequest{Name: "The last one"})
+	if err != nil || last.StatusCode() != http.StatusCreated {
+		t.Fatalf("the last room = %v, %v", last.StatusCode(), err)
+	}
+	over, err := b.CreateRoomWithResponse(t.Context(), api.RoomNameRequest{Name: "One too many"})
+	if err != nil {
 		t.Fatal(err)
 	}
-	signed := key.Assertion(t, &assertion, testOrigin)
-	if _, err := p.identity.DisableAccount(t.Context(), account.Session.Visitor.ID); err != nil {
-		t.Fatal(err)
-	}
-	for _, path := range []string{"/api/me", "/api/rooms", "/api/attachments/limits", "/api/live"} {
-		accountRequest(t, p, a, "GET", path, nil, testOrigin, 401)
-	}
-	accountRequest(t, p, a, "POST", "/api/accounts/authentication/finish", map[string]any{"ceremonyId": login.ID, "credential": json.RawMessage(signed)}, testOrigin, 403)
-	accountRequest(t, p, a, "POST", "/api/accounts/recovery/begin", map[string]any{"accountId": account.Session.Visitor.ID, "proof": account.RecoveryCodes[0]}, testOrigin, 403)
-	guest, _ := p.browserWithHTTP(t)
-	p.enter(t, guest, "Visitor")
+	wantError(t, "a room over the limit", over.StatusCode(), over.Body, http.StatusConflict, "room_limit")
 }

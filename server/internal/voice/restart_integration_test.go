@@ -32,7 +32,7 @@ func restartGuardedVoice(t *testing.T, f guardedVoice) guardedVoice {
 }
 
 func TestGuardedLiveKitOriginalAndRefreshedJWTResumeAfterBackendRestart(t *testing.T) {
-	for _, kind := range []identity.Kind{identity.Guest, identity.Account} {
+	for _, kind := range []identity.Kind{identity.Account} {
 		t.Run(string(kind), func(t *testing.T) {
 			f := newGuardedVoice(t)
 			session := guardedSession(t, f, kind)
@@ -61,7 +61,7 @@ func TestGuardedLiveKitOriginalAndRefreshedJWTResumeAfterBackendRestart(t *testi
 				t.Fatal(err)
 			}
 			if got := joined.GetJoin().GetParticipant().GetIdentity(); got != creds.GrantID {
-				t.Fatalf("guest transport = %s, want exact grant transport", got)
+				t.Fatalf("transport = %s, want exact grant transport", got)
 			}
 			api := lksdk.NewRoomServiceClient(fmt.Sprintf("http://127.0.0.1:%d", liveKitPort), devKey, devSecret)
 			if _, err := api.UpdateParticipant(ctx, &livekit.UpdateParticipantRequest{Room: f.room, Identity: creds.GrantID, Permission: &livekit.ParticipantPermission{CanSubscribe: true, CanPublish: true, CanUpdateMetadata: true}}); err != nil {
@@ -71,7 +71,7 @@ func TestGuardedLiveKitOriginalAndRefreshedJWTResumeAfterBackendRestart(t *testi
 			for refreshed == "" {
 				_, data, err = ws.Read(ctx)
 				if err != nil {
-					t.Fatalf("guest JWT refresh not received: %v", err)
+					t.Fatalf("JWT refresh not received: %v", err)
 				}
 				var signal livekit.SignalResponse
 				if err := proto.Unmarshal(data, &signal); err != nil {
@@ -91,7 +91,7 @@ func TestGuardedLiveKitOriginalAndRefreshedJWTResumeAfterBackendRestart(t *testi
 					t.Fatal(err)
 				}
 				if got := f.voice.Occupancy(f.room); len(got) != 1 || got[0].ID != session.Visitor.ID {
-					t.Fatalf("restored guest occupancy = %v", got)
+					t.Fatalf("restored occupancy = %v", got)
 				}
 				client.room.Disconnect()
 			}
@@ -99,23 +99,8 @@ func TestGuardedLiveKitOriginalAndRefreshedJWTResumeAfterBackendRestart(t *testi
 	}
 }
 
-func guardedSession(t *testing.T, f guardedVoice, kind identity.Kind) identity.Session {
+func guardedSession(t *testing.T, f guardedVoice, _ identity.Kind) identity.Session {
 	t.Helper()
-	if kind == identity.Account {
-		account, _ := f.enroll(t)
-		return account.Session
-	}
-	link, err := f.ident.Link(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, cookie, err := f.ident.Enter(t.Context(), strings.TrimPrefix(link, "https://falky.example/#k="), "Guest")
-	if err != nil {
-		t.Fatal(err)
-	}
-	session, err := f.ident.ResolveSession(t.Context(), cookie)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return session
+	account, _ := f.enroll(t)
+	return account.Session
 }

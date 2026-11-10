@@ -13,9 +13,6 @@ import (
 // maxNameLength is the longest name, in characters, after trimming.
 const maxNameLength = 32
 
-// reservationTime is how long entering holds the name for the new visitor.
-const reservationTime = 60 * time.Second
-
 // ErrInvalidName reports a name that breaks the name rules; the wrapping error
 // says which.
 var ErrInvalidName = errors.New("invalid name")
@@ -104,17 +101,6 @@ func (n *reservations) takenBy(key, visitorID string, now time.Time) bool {
 func (n *reservations) takenByConnected(key, visitorID string) bool {
 	h, ok := n.held[key]
 	return ok && h.visitorID != visitorID && h.connections > 0
-}
-
-// reserve makes visitorID hold key until now plus reservationTime, and drops
-// lapsed holds. The caller holds n.mu.
-func (n *reservations) reserve(key, visitorID string, now time.Time) {
-	for k, h := range n.held {
-		if !h.inForce(now) {
-			delete(n.held, k)
-		}
-	}
-	n.held[key] = hold{visitorID: visitorID, until: now.Add(reservationTime)}
 }
 
 // move hands visitorID's hold, if it has one, from its old name to key. The

@@ -1,377 +1,377 @@
 package identity_test
 
 import (
-	"encoding/base64"
+	"crypto/sha256"
+	"database/sql"
 	"errors"
 	"path/filepath"
-	"sync"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/kisshot/falky/server/internal/identity"
-	"github.com/kisshot/falky/server/internal/identity/passkeytest"
 )
 
-func TestInvitationEnrollsRealPasskeyAndPreservesGuestIdentity(t *testing.T) {
-	f := newFixture(t, filepath.Join(t.TempDir(), "falky.db"))
-	guest, token := f.enter(t, "Alice")
-	invite, err := f.ident.CreateInvitation(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	ceremony, err := f.ident.BeginRegistration(t.Context(), identity.RegistrationInput{Invitation: invite.Token, GuestToken: token, Name: "Alice", BrowserContext: "browser-secret"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	key := passkeytest.New(t)
-	result, err := f.ident.FinishRegistration(t.Context(), ceremony.ID, "browser-secret", key.Registration(t, ceremony.Creation, "https://falky.example"), "Laptop")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.Session.Visitor.ID != guest.ID || result.Session.Kind != identity.Account || len(result.RecoveryCodes) != 1 {
-		t.Fatalf("registration identity=%s kind=%s codes=%d", result.Session.Visitor.ID, result.Session.Kind, len(result.RecoveryCodes))
-	}
-	assertRecoveryPhrase(t, result.RecoveryCodes)
-	if _, err := f.ident.Resolve(t.Context(), token); err == nil {
-		t.Fatal("old guest cookie survived upgrade")
-	}
-	if _, err := f.ident.Rotate(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	got, err := f.ident.Resolve(t.Context(), result.Token)
-	if err != nil || got.ID != guest.ID || got.Colour != guest.Colour {
-		t.Fatalf("account after guest rotation = %+v, %v", got, err)
-	}
-}
-
-func enroll(t *testing.T, f fixture, name string) (identity.Enrollment, *passkeytest.Authenticator) {
+func newTestFixture(t *testing.T) fixture {
 	t.Helper()
-	i, err := f.ident.CreateInvitation(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	c, err := f.ident.BeginRegistration(t.Context(), identity.RegistrationInput{Invitation: i.Token, Name: name, BrowserContext: "browser-secret"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	k := passkeytest.New(t)
-	r, err := f.ident.FinishRegistration(t.Context(), c.ID, "browser-secret", k.Registration(t, c.Creation, "https://falky.example"), "Laptop")
-	if err != nil {
-		t.Fatal(err)
-	}
-	assertRecoveryPhrase(t, r.RecoveryCodes)
-	return r, k
+	return newFixture(t, filepath.Join(t.TempDir(), "falky.db"))
 }
 
-func TestRegisteredNameRemainsReservedWhenGuestHoldsExpire(t *testing.T) {
-	f := newFixture(t, filepath.Join(t.TempDir(), "falky.db"))
-	enroll(t, f, "Alice")
-	if _, _, err := f.ident.Enter(t.Context(), f.secret, "ALICE"); !errors.Is(err, identity.ErrNameTaken) {
-		t.Fatalf("guest claimed registered name: %v", err)
-	}
-}
+func TestTheAccessPasswordAdmitsBrowsersUntilItChanges(t *testing.T) {
+	db := openDB(t, filepath.Join(t.TempDir(), "falky.db"))
+	c := &clock{now: time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC)}
+	ident := identity.New(db, "https://falky.example", cheap, identity.WithClock(c.Now))
+	ctx := t.Context()
 
-func TestDiscoverableLoginBindsBrowserAndRejectsReplay(t *testing.T) {
-	f := newFixture(t, filepath.Join(t.TempDir(), "falky.db"))
-	account, key := enroll(t, f, "Alice")
-	c, err := f.ident.BeginAuthentication(t.Context(), "login-browser")
+	if set, err := ident.AccessPasswordSet(ctx); err != nil || set {
+		t.Fatalf("AccessPasswordSet before setting = %v, %v; want false", set, err)
+	}
+	if _, err := ident.PassAccess(ctx, accessPassword); !errors.Is(err, identity.ErrAccessUnset) {
+		t.Fatalf("PassAccess before setting: %v, want ErrAccessUnset", err)
+	}
+	if err := ident.SetAccessPassword(ctx, "short"); !errors.Is(err, identity.ErrInvalidPassword) {
+		t.Fatalf("SetAccessPassword(short): %v, want ErrInvalidPassword", err)
+	}
+	if err := ident.SetAccessPassword(ctx, accessPassword); err != nil {
+		t.Fatal(err)
+	}
+	var stored string
+	if err := db.Read().QueryRowContext(ctx, "SELECT password_hash FROM access_password").Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(stored, "$argon2id$") || strings.Contains(stored, accessPassword) {
+		t.Fatalf("stored access password %q, want an Argon2id hash", stored)
+	}
+	if _, err := ident.PassAccess(ctx, accessPassword+"!"); !errors.Is(err, identity.ErrWrongAccessPassword) {
+		t.Fatalf("PassAccess(wrong): %v, want ErrWrongAccessPassword", err)
+	}
+	pass, err := ident.PassAccess(ctx, accessPassword)
 	if err != nil {
 		t.Fatal(err)
 	}
-	response := key.Assertion(t, c.Assertion, "https://falky.example")
-	if _, err := f.ident.FinishAuthentication(t.Context(), c.ID, "other-browser", response); !errors.Is(err, identity.ErrInvalidProof) {
-		t.Fatalf("cross-browser assertion = %v", err)
-	}
-	loggedIn, err := f.ident.FinishAuthentication(t.Context(), c.ID, "login-browser", response)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if loggedIn.Session.Visitor.ID != account.Session.Visitor.ID || loggedIn.Session.ID == account.Session.ID {
-		t.Fatal("login did not issue a distinct session for the account")
-	}
-	if len(loggedIn.RecoveryCodes) != 0 {
-		t.Fatal("ordinary sign-in issued a recovery phrase")
-	}
-	if _, err := f.ident.BeginRecovery(t.Context(), account.Session.Visitor.ID, account.RecoveryCodes[0], "browser"); err != nil {
-		t.Fatal("sign-in rotated the recovery phrase:", err)
-	}
-	if _, err := f.ident.FinishAuthentication(t.Context(), c.ID, "login-browser", response); !errors.Is(err, identity.ErrInvalidProof) {
-		t.Fatalf("replayed assertion = %v", err)
-	}
-}
-
-func TestRecoveryCommitsReplacementAndRevokesAllOldAccessOnce(t *testing.T) {
-	f := newFixture(t, filepath.Join(t.TempDir(), "falky.db"))
-	account, oldKey := enroll(t, f, "Alice")
-	grant, err := f.ident.IssueRecovery(t.Context(), account.Session.Visitor.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := f.ident.ResolveSession(t.Context(), account.Token); err != nil {
-		t.Fatal("issuing recovery revoked session")
-	}
-	c, err := f.ident.BeginRecovery(t.Context(), account.Session.Visitor.ID, account.RecoveryCodes[0], "recovery-browser")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := f.ident.FinishRecovery(t.Context(), c.ID, "recovery-browser", []byte(`{}`), "Replacement"); err == nil {
-		t.Fatal("invalid enrollment succeeded")
-	}
-	key := passkeytest.New(t)
-	response := key.Registration(t, c.Creation, "https://falky.example")
-	concurrent, err := f.ident.BeginRecovery(t.Context(), account.Session.Visitor.ID, account.RecoveryCodes[0], "recovery-browser")
-	if err != nil {
-		t.Fatal(err)
-	}
-	concurrentResponse := key.Registration(t, concurrent.Creation, "https://falky.example")
-	var wg sync.WaitGroup
-	results := make(chan identity.Enrollment, 2)
-	failures := make(chan error, 2)
-	for _, attempt := range []struct {
-		id       string
-		response []byte
-	}{{c.ID, response}, {concurrent.ID, concurrentResponse}} {
-		wg.Go(func() {
-			r, err := f.ident.FinishRecovery(t.Context(), attempt.id, "recovery-browser", attempt.response, "Replacement")
-			if err != nil {
-				failures <- err
-			} else {
-				results <- r
-			}
-		})
-	}
-	wg.Wait()
-	close(results)
-	close(failures)
-	if len(results) != 1 || len(failures) != 1 {
-		t.Fatalf("recovery winners=%d failures=%d", len(results), len(failures))
-	}
-	got := <-results
-	if got.Session.Visitor.ID != account.Session.Visitor.ID || got.Session.Visitor.Name != "Alice" || got.Session.Generation <= account.Session.Generation || len(got.Effects.RevokedSessions) != 1 || len(got.RecoveryCodes) != 1 {
-		t.Fatal("recovery lost identity, generation, revoked sessions, or fresh codes")
-	}
-	if _, err := f.ident.ResolveSession(t.Context(), account.Token); !errors.Is(err, identity.ErrNoVisitor) {
-		t.Fatalf("old session = %v", err)
-	}
-	if _, err := f.ident.BeginRecovery(t.Context(), account.Session.Visitor.ID, grant.Token, "recovery-browser"); !errors.Is(err, identity.ErrInvalidProof) {
-		t.Fatalf("old grant = %v", err)
-	}
-	if _, err := f.ident.BeginRecovery(t.Context(), account.Session.Visitor.ID, account.RecoveryCodes[0], "recovery-browser"); !errors.Is(err, identity.ErrInvalidProof) {
-		t.Fatalf("old code = %v", err)
-	}
-	login, err := f.ident.BeginAuthentication(t.Context(), "login")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := f.ident.FinishAuthentication(t.Context(), login.ID, "login", oldKey.Assertion(t, login.Assertion, "https://falky.example")); !errors.Is(err, identity.ErrInvalidProof) {
-		t.Fatalf("old key = %v", err)
-	}
-	if _, err := f.ident.FinishAuthentication(t.Context(), login.ID, "login", key.Assertion(t, login.Assertion, "https://falky.example")); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestSensitiveChangesRequireSessionSpecificRecentPasskeyProof(t *testing.T) {
-	f := newFixture(t, filepath.Join(t.TempDir(), "falky.db"))
-	account, key := enroll(t, f, "Alice")
-	login, err := f.ident.BeginAuthentication(t.Context(), "other-device")
-	if err != nil {
-		t.Fatal(err)
-	}
-	other, err := f.ident.FinishAuthentication(t.Context(), login.ID, "other-device", key.Assertion(t, login.Assertion, "https://falky.example"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	f.clock.Advance(identity.RecentProofTTL)
-	if _, err := f.ident.BeginAddPasskey(t.Context(), account.Token, "browser"); !errors.Is(err, identity.ErrRecentProof) {
-		t.Fatalf("add without proof = %v", err)
-	}
-	if _, err := f.ident.RegenerateRecoveryCodes(t.Context(), account.Token); !errors.Is(err, identity.ErrRecentProof) {
-		t.Fatalf("codes without proof = %v", err)
-	}
-	if err := f.ident.RemovePasskey(t.Context(), account.Token, base64.RawURLEncoding.EncodeToString(key.ID)); !errors.Is(err, identity.ErrRecentProof) {
-		t.Fatalf("remove without proof = %v", err)
-	}
-	c, err := f.ident.BeginReauthentication(t.Context(), account.Token, "browser")
-	if err != nil {
-		t.Fatal(err)
-	}
-	response := key.Assertion(t, c.Assertion, "https://falky.example")
-	if _, err := f.ident.FinishReauthentication(t.Context(), other.Token, c.ID, "browser", response); !errors.Is(err, identity.ErrInvalidProof) {
-		t.Fatalf("proof reused by another session = %v", err)
-	}
-	if _, err := f.ident.FinishAuthentication(t.Context(), c.ID, "browser", response); !errors.Is(err, identity.ErrInvalidProof) {
-		t.Fatalf("reauthentication used for login = %v", err)
-	}
-	if _, err := f.ident.FinishReauthentication(t.Context(), account.Token, c.ID, "browser", response); err != nil {
-		t.Fatal(err)
-	}
-	refreshed, err := f.ident.ResolveSession(t.Context(), account.Token)
-	if err != nil || !refreshed.ExpiresAt.Equal(account.Session.ExpiresAt) {
-		t.Fatalf("recent proof extended session expiry: %+v, %v", refreshed, err)
-	}
-	if _, err := f.ident.RegenerateRecoveryCodes(t.Context(), account.Token); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := f.ident.RegenerateRecoveryCodes(t.Context(), other.Token); !errors.Is(err, identity.ErrRecentProof) {
-		t.Fatalf("other session inherited proof = %v", err)
-	}
-}
-
-func TestConcurrentPasskeyRemovalCannotRemoveTheLastCredential(t *testing.T) {
-	f := newFixture(t, filepath.Join(t.TempDir(), "falky.db"))
-	account, first := enroll(t, f, "Alice")
-	add, err := f.ident.BeginAddPasskey(t.Context(), account.Token, "browser")
-	if err != nil {
-		t.Fatal(err)
-	}
-	second := passkeytest.New(t)
-	if _, err := f.ident.FinishAddPasskey(t.Context(), account.Token, add.ID, "browser", second.Registration(t, add.Creation, "https://falky.example"), "Phone"); err != nil {
-		t.Fatal(err)
-	}
-	keys, err := f.ident.Passkeys(t.Context(), account.Token)
-	if err != nil || len(keys) != 2 {
-		t.Fatalf("keys count=%d error=%v", len(keys), err)
-	}
-	login, err := f.ident.BeginAuthentication(t.Context(), "phone")
-	if err != nil {
-		t.Fatal(err)
-	}
-	phone, err := f.ident.FinishAuthentication(t.Context(), login.ID, "phone", second.Assertion(t, login.Assertion, "https://falky.example"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	results := make(chan error, 2)
-	var wg sync.WaitGroup
-	wg.Go(func() {
-		results <- f.ident.RemovePasskey(t.Context(), account.Token, base64.RawURLEncoding.EncodeToString(first.ID))
-	})
-	wg.Go(func() {
-		results <- f.ident.RemovePasskey(t.Context(), phone.Token, base64.RawURLEncoding.EncodeToString(second.ID))
-	})
-	wg.Wait()
-	close(results)
-	var successes, refusals int
-	for err := range results {
-		switch {
-		case err == nil:
-			successes++
-		case errors.Is(err, identity.ErrLastPasskey):
-			refusals++
-		default:
-			t.Fatal(err)
+	for _, token := range []string{"", "unknown"} {
+		if passed, err := ident.AccessPassed(ctx, token); err != nil || passed {
+			t.Fatalf("AccessPassed(%q) = %v, %v; want false", token, passed, err)
 		}
 	}
-	if successes != 1 || refusals != 1 {
-		t.Fatalf("removal successes=%d last-key refusals=%d", successes, refusals)
+	if passed, err := ident.AccessPassed(ctx, pass); err != nil || !passed {
+		t.Fatalf("AccessPassed(pass) = %v, %v; want true", passed, err)
 	}
-	keys, err = f.ident.Passkeys(t.Context(), account.Token)
-	if err != nil || len(keys) != 1 {
-		t.Fatalf("remaining count=%d error=%v", len(keys), err)
+
+	account := register(t, ident, pass, "Ann")
+	if err := ident.SetAccessPassword(ctx, "another shared secret"); err != nil {
+		t.Fatal(err)
 	}
-	if _, err := f.ident.BeginRecovery(t.Context(), account.Session.Visitor.ID, account.RecoveryCodes[0], "recovery"); err != nil {
-		t.Fatal("passkey management rotated the recovery phrase:", err)
+	if passed, _ := ident.AccessPassed(ctx, pass); passed {
+		t.Fatal("a pass for the old access password still admits")
+	}
+	if _, err := ident.Resolve(ctx, account.Token); err != nil {
+		t.Fatalf("changing the access password ended a signed-in session: %v", err)
+	}
+
+	next, err := ident.PassAccess(ctx, "another shared secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Advance(identity.AccessPassTTL)
+	if passed, _ := ident.AccessPassed(ctx, next); passed {
+		t.Fatal("an access pass outlived AccessPassTTL")
 	}
 }
 
-func TestOnlyCredentialOwnerCanManagePasskeysAndCredentialIDsCannotBeShared(t *testing.T) {
-	f := newFixture(t, filepath.Join(t.TempDir(), "falky.db"))
-	first, key := enroll(t, f, "Alice")
-	second, _ := enroll(t, f, "Bob")
-	if err := f.ident.RemovePasskey(t.Context(), second.Token, base64.RawURLEncoding.EncodeToString(key.ID)); !errors.Is(err, identity.ErrInvalidProof) {
-		t.Fatalf("foreign key removal = %v", err)
-	}
-	c, err := f.ident.BeginAddPasskey(t.Context(), first.Token, "browser")
-	if err != nil {
-		t.Fatal(err)
-	}
-	newKey := passkeytest.New(t)
-	response := newKey.Registration(t, c.Creation, "https://falky.example")
-	if _, err := f.ident.FinishAddPasskey(t.Context(), second.Token, c.ID, "browser", response, "Other account"); !errors.Is(err, identity.ErrInvalidProof) {
-		t.Fatalf("foreign enrollment = %v", err)
-	}
-	duplicate, err := f.ident.BeginAddPasskey(t.Context(), second.Token, "browser")
-	if err != nil {
-		t.Fatal(err)
-	}
-	duplicateKey := passkeytest.New(t)
-	duplicateKey.ID = append([]byte{}, key.ID...)
-	if _, err := f.ident.FinishAddPasskey(t.Context(), second.Token, duplicate.ID, "browser", duplicateKey.Registration(t, duplicate.Creation, "https://falky.example"), "Duplicate"); !errors.Is(err, identity.ErrCredentialExists) {
-		t.Fatalf("shared credential ID = %v", err)
+func TestRegisteringNeedsTheAccessPassBeforeAnythingElse(t *testing.T) {
+	f := newTestFixture(t)
+	_, err := f.ident.Register(t.Context(), identity.RegistrationInput{AccessToken: "forged", Login: "!", Password: "x", Name: ""})
+	if !errors.Is(err, identity.ErrAccessRequired) {
+		t.Fatalf("Register without a pass: %v, want ErrAccessRequired", err)
 	}
 }
 
-func TestAccountSessionHasNinetyDayAbsoluteExpiryAndLogoutIsSelective(t *testing.T) {
-	f := newFixture(t, filepath.Join(t.TempDir(), "falky.db"))
-	account, key := enroll(t, f, "Alice")
-	if account.Session.ExpiresAt.Sub(f.clock.Now()) != 90*24*time.Hour {
-		t.Fatal("wrong absolute session lifetime")
+func TestRegisteringChecksLoginPasswordAndName(t *testing.T) {
+	f := newTestFixture(t)
+	register(t, f.ident, f.pass, "Ann")
+	for _, tc := range []struct {
+		login, password, name string
+		want                  error
+	}{
+		{"ab", password, "Bob", identity.ErrInvalidLogin},
+		{"-bob", password, "Bob", identity.ErrInvalidLogin},
+		{"bob smith", password, "Bob", identity.ErrInvalidLogin},
+		{"боб", password, "Bob", identity.ErrInvalidLogin},
+		{strings.Repeat("b", identity.MaxLoginLength+1), password, "Bob", identity.ErrInvalidLogin},
+		{"bob", "seven77", "Bob", identity.ErrInvalidPassword},
+		{"bob", strings.Repeat("p", identity.MaxPasswordLength+1), "Bob", identity.ErrInvalidPassword},
+		{"bob", password, "   ", identity.ErrInvalidName},
+		{" ANN ", password, "Bob", identity.ErrLoginTaken},
+		{"bob", password, " ann ", identity.ErrNameTaken},
+	} {
+		_, err := f.ident.Register(t.Context(), identity.RegistrationInput{AccessToken: f.pass, Login: tc.login, Password: tc.password, Name: tc.name})
+		if !errors.Is(err, tc.want) {
+			t.Errorf("Register(%q, %q, %q): %v, want %v", tc.login, tc.password, tc.name, err, tc.want)
+		}
 	}
-	login, err := f.ident.BeginAuthentication(t.Context(), "other")
+	e, err := f.ident.Register(t.Context(), identity.RegistrationInput{AccessToken: f.pass, Login: " Bob.Smith_2 ", Password: "        ", Name: "Bob"})
+	if err != nil {
+		t.Fatalf("Register with a valid login and an eight-space password: %v", err)
+	}
+	if _, err := f.ident.Login(t.Context(), f.pass, "bob.smith_2", "        "); err != nil {
+		t.Fatalf("Login with the cleaned login: %v", err)
+	}
+	if e.Session.Visitor.Name != "Bob" {
+		t.Fatalf("name = %q, want Bob", e.Session.Visitor.Name)
+	}
+}
+
+func TestRegisteringSignsInAndStoresOnlyHashes(t *testing.T) {
+	f := newTestFixture(t)
+	e := register(t, f.ident, f.pass, "Ann")
+	if !ulidPattern.MatchString(e.Session.Visitor.ID) {
+		t.Fatalf("identity ID %q is not a ULID", e.Session.Visitor.ID)
+	}
+	if e.Session.Kind != identity.Account {
+		t.Fatalf("kind = %q, want account", e.Session.Kind)
+	}
+	if want := f.clock.Now().Add(identity.AccountSessionTTL).UTC(); !e.Session.ExpiresAt.Equal(want) {
+		t.Fatalf("expires %v, want %v", e.Session.ExpiresAt, want)
+	}
+	v, err := f.ident.Resolve(t.Context(), e.Token)
+	if err != nil || v.ID != e.Session.Visitor.ID {
+		t.Fatalf("Resolve = %+v, %v", v, err)
+	}
+
+	var stored, login string
+	if err := f.db.Read().QueryRowContext(t.Context(), "SELECT password_hash, login_key FROM accounts").Scan(&stored, &login); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(stored, "$argon2id$") || strings.Contains(stored, password) || login != "ann" {
+		t.Fatalf("stored %q for login %q, want an Argon2id hash for ann", stored, login)
+	}
+	sum := sha256.Sum256([]byte(e.Token))
+	var n int
+	if err := f.db.Read().QueryRowContext(t.Context(), "SELECT count(*) FROM sessions WHERE token_hash=?", sum[:]).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("sessions by token hash = %d, %v; want 1", n, err)
+	}
+}
+
+func TestSigningInNeedsThePassAndTheRightPassword(t *testing.T) {
+	f := newTestFixture(t)
+	ann := register(t, f.ident, f.pass, "Ann")
+	ctx := t.Context()
+
+	if _, err := f.ident.Login(ctx, "", "ann", password); !errors.Is(err, identity.ErrAccessRequired) {
+		t.Fatalf("Login without a pass: %v, want ErrAccessRequired", err)
+	}
+	for _, tc := range []struct{ login, password string }{{"ann", password + "x"}, {"nobody", password}, {"", ""}} {
+		if _, err := f.ident.Login(ctx, f.pass, tc.login, tc.password); !errors.Is(err, identity.ErrWrongCredentials) {
+			t.Fatalf("Login(%q, %q): %v, want ErrWrongCredentials", tc.login, tc.password, err)
+		}
+	}
+	signed, err := f.ident.Login(ctx, f.pass, "  ANN ", password)
 	if err != nil {
 		t.Fatal(err)
 	}
-	other, err := f.ident.FinishAuthentication(t.Context(), login.ID, "other", key.Assertion(t, login.Assertion, "https://falky.example"))
+	if signed.Session.Visitor.ID != ann.Session.Visitor.ID || signed.Token == ann.Token {
+		t.Fatalf("Login = %+v, want a new session of Ann", signed)
+	}
+
+	if _, err := f.ident.DisableAccount(ctx, "ann"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.ident.Resolve(ctx, signed.Token); !errors.Is(err, identity.ErrNoVisitor) {
+		t.Fatalf("a disabled account's session resolves: %v", err)
+	}
+	if _, err := f.ident.Login(ctx, f.pass, "ann", password+"x"); !errors.Is(err, identity.ErrWrongCredentials) {
+		t.Fatalf("Login(disabled, wrong password): %v, want ErrWrongCredentials", err)
+	}
+	if _, err := f.ident.Login(ctx, f.pass, "ann", password); !errors.Is(err, identity.ErrDisabled) {
+		t.Fatalf("Login(disabled): %v, want ErrDisabled", err)
+	}
+	if err := f.ident.EnableAccount(ctx, ann.Session.Visitor.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.ident.Login(ctx, f.pass, "ann", password); err != nil {
+		t.Fatalf("Login after enabling: %v", err)
+	}
+}
+
+func TestStoredHashesKeepTheirCost(t *testing.T) {
+	f := newTestFixture(t)
+	register(t, f.ident, f.pass, "Ann")
+	dearer := identity.New(f.db, "https://falky.example", identity.WithPasswordCost(identity.PasswordCost{Time: 2, MemoryKiB: 128}))
+	if _, err := dearer.Login(t.Context(), f.pass, "ann", password); err != nil {
+		t.Fatalf("Login after the cost changed: %v", err)
+	}
+}
+
+func TestChangingThePasswordEndsOnlyOtherSessions(t *testing.T) {
+	f := newTestFixture(t)
+	ctx := t.Context()
+	here := register(t, f.ident, f.pass, "Ann")
+	there, err := f.ident.Login(ctx, f.pass, "ann", password)
 	if err != nil {
 		t.Fatal(err)
 	}
-	effects, err := f.ident.Logout(t.Context(), account.Token)
+	if _, err := f.ident.ChangePassword(ctx, here.Token, password+"x", "a new password"); !errors.Is(err, identity.ErrWrongCredentials) {
+		t.Fatalf("ChangePassword(wrong current): %v, want ErrWrongCredentials", err)
+	}
+	if _, err := f.ident.ChangePassword(ctx, here.Token, password, "short"); !errors.Is(err, identity.ErrInvalidPassword) {
+		t.Fatalf("ChangePassword(short): %v, want ErrInvalidPassword", err)
+	}
+	if _, err := f.ident.ChangePassword(ctx, "unknown", password, "a new password"); !errors.Is(err, identity.ErrNoVisitor) {
+		t.Fatalf("ChangePassword(unknown session): %v, want ErrNoVisitor", err)
+	}
+	effects, err := f.ident.ChangePassword(ctx, here.Token, password, "a new password")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(effects.RevokedSessions) != 1 || effects.RevokedSessions[0].ID != account.Session.ID {
-		t.Fatal("logout effects do not select the session")
+	if len(effects.RevokedSessions) != 1 || effects.RevokedSessions[0].ID != there.Session.ID {
+		t.Fatalf("revoked %+v, want only the other session", effects.RevokedSessions)
 	}
-	if _, err := f.ident.ValidateSession(t.Context(), account.Session); !errors.Is(err, identity.ErrNoVisitor) {
-		t.Fatalf("logged out snapshot = %v", err)
+	if _, err := f.ident.Resolve(ctx, here.Token); err != nil {
+		t.Fatalf("the changing session ended: %v", err)
 	}
+	if _, err := f.ident.Resolve(ctx, there.Token); !errors.Is(err, identity.ErrNoVisitor) {
+		t.Fatalf("another session survived: %v", err)
+	}
+	if _, err := f.ident.Login(ctx, f.pass, "ann", password); !errors.Is(err, identity.ErrWrongCredentials) {
+		t.Fatalf("the old password still signs in: %v", err)
+	}
+	if _, err := f.ident.Login(ctx, f.pass, "ann", "a new password"); err != nil {
+		t.Fatalf("the new password does not sign in: %v", err)
+	}
+}
+
+func TestLogoutEndsOnlyItsSession(t *testing.T) {
+	f := newTestFixture(t)
+	ctx := t.Context()
+	one := register(t, f.ident, f.pass, "Ann")
+	two, err := f.ident.Login(ctx, f.pass, "ann", password)
+	if err != nil {
+		t.Fatal(err)
+	}
+	effects, err := f.ident.Logout(ctx, one.Token)
+	if err != nil || len(effects.RevokedSessions) != 1 || effects.RevokedSessions[0].ID != one.Session.ID {
+		t.Fatalf("Logout = %+v, %v", effects, err)
+	}
+	if _, err := f.ident.Resolve(ctx, one.Token); !errors.Is(err, identity.ErrNoVisitor) {
+		t.Fatalf("the logged-out session resolves: %v", err)
+	}
+	if _, err := f.ident.Resolve(ctx, two.Token); err != nil {
+		t.Fatalf("the other session ended: %v", err)
+	}
+	if _, err := f.ident.Logout(ctx, one.Token); !errors.Is(err, identity.ErrNoVisitor) {
+		t.Fatalf("Logout again: %v, want ErrNoVisitor", err)
+	}
+}
+
+func TestSessionsEndNinetyDaysAfterSigningIn(t *testing.T) {
+	f := newTestFixture(t)
+	e := register(t, f.ident, f.pass, "Ann")
 	f.clock.Advance(identity.AccountSessionTTL - time.Second)
-	if _, err := f.ident.ResolveSession(t.Context(), other.Token); err != nil {
-		t.Fatal(err)
+	if _, err := f.ident.Resolve(t.Context(), e.Token); err != nil {
+		t.Fatalf("a session ended early: %v", err)
 	}
 	f.clock.Advance(time.Second)
-	if _, err := f.ident.ResolveSession(t.Context(), other.Token); !errors.Is(err, identity.ErrNoVisitor) {
-		t.Fatalf("expired account session = %v", err)
+	if _, err := f.ident.Resolve(t.Context(), e.Token); !errors.Is(err, identity.ErrNoVisitor) {
+		t.Fatalf("a session outlived AccountSessionTTL: %v", err)
 	}
 }
 
-func TestRemovedProvingPasskeyInvalidatesFreshnessWithoutEndingSession(t *testing.T) {
-	f := newFixture(t, filepath.Join(t.TempDir(), "proof.db"))
-	account, first := enroll(t, f, "Account")
-	add, err := f.ident.BeginAddPasskey(t.Context(), account.Token, "laptop")
+// legacyGuest stores a guest with a session from before accounts replaced
+// guests, and returns its identity ID and cookie token.
+func legacyGuest(t *testing.T, f fixture, name string) (string, string) {
+	t.Helper()
+	id, token := "01JBX6Z8Q3M5W2K7R9T4V1C0DE", "legacy-guest-cookie"
+	sum := sha256.Sum256([]byte(token))
+	now := f.clock.Now().Unix()
+	err := f.db.Write(t.Context(), func(tx *sql.Tx) error {
+		for _, stmt := range []struct {
+			query string
+			args  []any
+		}{
+			{"INSERT INTO access (id, link_secret, generation, rotated_at) VALUES (1, 'old link', 2, '2026-11-01')", nil},
+			{"INSERT INTO identities (id, name, created_at) VALUES (?, ?, '2026-11-01')", []any{id, name}},
+			{"INSERT INTO sessions (id, token_hash, identity_id, generation, created_at, expires_at) VALUES ('guest-session', ?, ?, 2, ?, ?)", []any{sum[:], id, now, now + 3600}},
+		} {
+			if _, err := tx.ExecContext(t.Context(), stmt.query, stmt.args...); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	replacement := passkeytest.New(t)
-	if _, err := f.ident.FinishAddPasskey(t.Context(), account.Token, add.ID, "laptop", replacement.Registration(t, add.Creation, "https://falky.example"), "Replacement"); err != nil {
+	if err := f.ident.InitializeColours(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	login, err := f.ident.BeginAuthentication(t.Context(), "other")
+	return id, token
+}
+
+func TestALegacyGuestAdmitsNothingButRegisteringKeepsItsIdentity(t *testing.T) {
+	f := newTestFixture(t)
+	ctx := t.Context()
+	id, token := legacyGuest(t, f, "Bob")
+	if _, err := f.ident.Resolve(ctx, token); !errors.Is(err, identity.ErrNoVisitor) {
+		t.Fatalf("a guest session resolves: %v", err)
+	}
+	guest, err := f.ident.LegacyGuest(ctx, token)
+	if err != nil || guest.ID != id || guest.Name != "Bob" {
+		t.Fatalf("LegacyGuest = %+v, %v", guest, err)
+	}
+	e, err := f.ident.Register(ctx, identity.RegistrationInput{GuestToken: token, Login: "bob", Password: password, Name: "Bobby"})
+	if err != nil {
+		t.Fatalf("Register with the guest session and no pass: %v", err)
+	}
+	if e.Session.Visitor.ID != id || e.Session.Visitor.Name != "Bobby" {
+		t.Fatalf("account = %+v, want the guest's identity renamed", e.Session.Visitor)
+	}
+	if _, err := f.ident.LegacyGuest(ctx, token); !errors.Is(err, identity.ErrNoVisitor) {
+		t.Fatalf("the guest session outlived registering: %v", err)
+	}
+	if _, err := f.ident.Register(ctx, identity.RegistrationInput{GuestToken: token, Login: "bob2", Password: password, Name: "Bob 2"}); !errors.Is(err, identity.ErrAccessRequired) {
+		t.Fatalf("the guest session registered twice: %v", err)
+	}
+}
+
+func TestRenamingKeepsAccountNamesUnique(t *testing.T) {
+	f := newTestFixture(t)
+	ann, _ := f.enter(t, "Ann")
+	register(t, f.ident, f.pass, "Bob")
+	if _, err := f.ident.Rename(t.Context(), ann.ID, " BOB "); !errors.Is(err, identity.ErrNameTaken) {
+		t.Fatalf("Rename to another account's name: %v, want ErrNameTaken", err)
+	}
+	for _, name := range []string{"", "   ", strings.Repeat("x", 33), "a\u202eb"} {
+		if _, err := f.ident.Rename(t.Context(), ann.ID, name); !errors.Is(err, identity.ErrInvalidName) {
+			t.Fatalf("Rename(%q): %v, want ErrInvalidName", name, err)
+		}
+	}
+	renamed, err := f.ident.Rename(t.Context(), ann.ID, "  ann  ")
+	if err != nil || renamed.Name != "ann" {
+		t.Fatalf("Rename to a case change of the own name = %+v, %v", renamed, err)
+	}
+	if _, err := f.ident.Rename(t.Context(), "unknown", "Zed"); !errors.Is(err, identity.ErrNoVisitor) {
+		t.Fatalf("Rename(unknown): %v, want ErrNoVisitor", err)
+	}
+}
+
+func TestAConnectedAccountHoldsItsNameAcrossConnections(t *testing.T) {
+	f := newTestFixture(t)
+	ann, _ := f.enter(t, "Ann")
+	first, err := f.ident.Connect(t.Context(), ann.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	other, err := f.ident.FinishAuthentication(t.Context(), login.ID, "other", first.Assertion(t, login.Assertion, "https://falky.example"))
+	second, err := f.ident.Connect(t.Context(), ann.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	reauth, err := f.ident.BeginReauthentication(t.Context(), account.Token, "laptop")
-	if err != nil {
-		t.Fatal(err)
+	first(true)
+	second(true)
+	if f.ident.NameTaken(ann) {
+		t.Fatal("an account's own name is reported taken")
 	}
-	if _, err := f.ident.FinishReauthentication(t.Context(), account.Token, reauth.ID, "laptop", replacement.Assertion(t, reauth.Assertion, "https://falky.example")); err != nil {
-		t.Fatal(err)
-	}
-	if err := f.ident.RemovePasskey(t.Context(), account.Token, base64.RawURLEncoding.EncodeToString(first.ID)); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := f.ident.RegenerateRecoveryCodes(t.Context(), other.Token); !errors.Is(err, identity.ErrRecentProof) {
-		t.Fatalf("removed credential still justified sensitive action: %v", err)
-	}
-	resolved, err := f.ident.ResolveSession(t.Context(), other.Token)
-	if err != nil || resolved != other.Session {
-		t.Fatalf("credential removal ended ordinary session access: %+v, %v", resolved, err)
-	}
-	if _, err := f.ident.RegenerateRecoveryCodes(t.Context(), account.Token); err != nil {
-		t.Fatalf("remaining credential lost its recent proof: %v", err)
+	if _, err := f.ident.Connect(t.Context(), "unknown"); !errors.Is(err, identity.ErrNoVisitor) {
+		t.Fatalf("Connect(unknown): %v, want ErrNoVisitor", err)
 	}
 }

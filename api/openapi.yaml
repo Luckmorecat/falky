@@ -13,11 +13,11 @@ security:
   - visitorCookie: []
 tags:
   - name: accounts
-    description: Invitation-only passkey accounts and owner recovery.
+    description: The access password, password accounts and their recovery.
   - name: health
     description: Process and dependency health, on the internal listener.
   - name: visitors
-    description: Guest entry through the access link and the current guest or account identity.
+    description: The signed-in identity's name and colour.
   - name: rooms
     description: The rooms visitors talk in by voice and chat.
   - name: attachments
@@ -27,550 +27,315 @@ tags:
   - name: voice
     description: Who is in each room's voice, as LiveKit reports it, on the internal listener.
 paths:
-  /api/accounts/registration/begin:
-    post:
-      operationId: beginRegistration
-      tags:
-      - accounts
-      summary: Begin invitation-only enrollment.
-      description: Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client
-        attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires
-        that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive
-        changes require a verified passkey in this session within five minutes. All account responses prohibit
-        caching.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/RegistrationBegin'
-            example:
-              invitation: invitation-bearer
-              name: Alice
-        description: JSON input for beginRegistration.
-      responses:
-        '200':
-          description: Successful operation. Enrollment replaces the browser session; recovery codes appear
-            only when generated.
-          headers:
-            Set-Cookie:
-              description: Secure HttpOnly SameSite=Strict session or browser ceremony cookie, when needed.
-              schema:
-                type: string
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/AccountCeremony'
-              example: &id001
-                id: ceremony-id
-                expiresAt: '2026-11-09T12:05:00Z'
-                options:
-                  publicKey: {}
-        default:
-          $ref: '#/components/responses/Error'
+  /api/access:
+    get:
+      operationId: getAccess
       security: []
-  /api/accounts/registration/finish:
-    post:
-      operationId: finishRegistration
-      tags:
-      - accounts
-      summary: Complete verified invitation enrollment.
-      description: Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client
-        attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires
-        that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive
-        changes require a verified passkey in this session within five minutes. All account responses prohibit
-        caching.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/AccountFinish'
-            example: &id002
-              ceremonyId: ceremony-id
-              credential:
-                id: base64url-id
-                type: public-key
-                response: {}
-        description: JSON input for finishRegistration.
+      tags: [accounts]
+      summary: Say whether this browser may sign in or register.
+      description: >-
+        Reports whether the operator has set the access password, whether
+        this browser holds a current access pass (the `falky_access` cookie),
+        and, for a browser that still holds a guest session from before
+        accounts, the name that guest had: such a browser may register
+        without the access password and keeps the guest's history.
       responses:
-        '200':
-          description: Successful operation. Enrollment replaces the browser session; recovery codes appear
-            only when generated.
-          headers:
-            Set-Cookie:
-              description: Secure HttpOnly SameSite=Strict session or browser ceremony cookie, when needed.
-              schema:
-                type: string
+        "200":
+          description: The browser's access.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/AccountEnrollment'
-              example: &id003
-                session:
-                  visitor:
-                    id: account-id
-                    name: Alice
-                    nameTaken: false
-                    colour:
-                      visitorId: account-id
-                      palette: sky
-                      revision: 1
-                  kind: account
-                  expiresAt: '2027-02-07T12:00:00Z'
-                recoveryCodes:
-                - acid acorn acre acts afar affix aged agent agile aging agony ahead
+                $ref: "#/components/schemas/Access"
         default:
-          $ref: '#/components/responses/Error'
+          $ref: "#/components/responses/Error"
+    post:
+      operationId: passAccess
       security: []
-  /api/accounts/authentication/begin:
-    post:
-      operationId: beginAuthentication
-      tags:
-      - accounts
-      summary: Begin discoverable passkey sign-in.
-      description: Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client
-        attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires
-        that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive
-        changes require a verified passkey in this session within five minutes. All account responses prohibit
-        caching.
+      tags: [accounts]
+      summary: Give the access password.
+      description: >-
+        Checks the access password and sets the `falky_access` cookie
+        (`HttpOnly`, `Secure`, `SameSite=Strict`, for `/api`, 400 days), which
+        signing in, registering and recovering require. Changing the access
+        password ends every pass but no account session. Requires this
+        server's exact `Origin`; attempts are limited per client IP.
       requestBody:
+        description: The access password.
         required: true
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/AccountEmpty'
-            example: &id004 {}
-        description: JSON input for beginAuthentication.
+              $ref: "#/components/schemas/AccessRequest"
       responses:
-        '200':
-          description: Successful operation. Enrollment replaces the browser session; recovery codes appear
-            only when generated.
+        "200":
+          description: The password is right; the body is the browser's access now.
           headers:
             Set-Cookie:
-              description: Secure HttpOnly SameSite=Strict session or browser ceremony cookie, when needed.
+              description: The `falky_access` cookie.
               schema:
                 type: string
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/AccountCeremony'
-              example: *id001
+                $ref: "#/components/schemas/Access"
+        "403":
+          description: The access password is wrong (`invalid_access_password`).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "503":
+          description: The operator has not set the access password yet (`access_unset`).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         default:
-          $ref: '#/components/responses/Error'
+          $ref: "#/components/responses/Error"
+  /api/accounts/register:
+    post:
+      operationId: register
       security: []
-  /api/accounts/authentication/finish:
-    post:
-      operationId: finishAuthentication
-      tags:
-      - accounts
-      summary: Complete discoverable passkey sign-in.
-      description: Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client
-        attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires
-        that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive
-        changes require a verified passkey in this session within five minutes. All account responses prohibit
-        caching.
+      tags: [accounts]
+      summary: Create an account and sign in.
+      description: >-
+        Creates an account with a login, a password and the name others see,
+        and sets the session cookie. Requires the access pass, or a guest session from
+        before accounts, whose identity, history and colour the account then
+        keeps; without either it answers `access_required` before checking
+        anything else. Requires this server's exact `Origin`; attempts are
+        limited per client IP.
       requestBody:
+        description: The new account.
         required: true
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/AccountFinish'
-            example: *id002
-        description: JSON input for finishAuthentication.
+              $ref: "#/components/schemas/RegisterRequest"
       responses:
-        '200':
-          description: Successful operation. Enrollment replaces the browser session; recovery codes appear
-            only when generated.
+        "200":
+          description: Registered and signed in.
           headers:
             Set-Cookie:
-              description: Secure HttpOnly SameSite=Strict session or browser ceremony cookie, when needed.
+              description: The session cookie `falky_visitor`.
               schema:
                 type: string
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/AccountEnrollment'
-              example:
-                session:
-                  visitor:
-                    id: account-id
-                    name: Alice
-                    nameTaken: false
-                    colour:
-                      visitorId: account-id
-                      palette: sky
-                      revision: 1
-                  kind: account
-                  expiresAt: '2027-02-07T12:00:00Z'
-                recoveryCodes: []
+                $ref: "#/components/schemas/AccountEnrollment"
+        "400":
+          description: >-
+            The login (`invalid_login`), password (`invalid_password`) or name
+            (`invalid_name`) breaks its rules.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          $ref: "#/components/responses/AccessRequired"
+        "409":
+          description: Another account has this login (`login_taken`) or name (`name_taken`).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "429":
+          $ref: "#/components/responses/RateLimited"
         default:
-          $ref: '#/components/responses/Error'
+          $ref: "#/components/responses/Error"
+  /api/accounts/login:
+    post:
+      operationId: login
       security: []
-  /api/accounts/reauthentication/begin:
-    post:
-      operationId: beginReauthentication
-      tags:
-      - accounts
-      summary: Begin recent proof for this session.
-      description: Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client
-        attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires
-        that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive
-        changes require a verified passkey in this session within five minutes. All account responses prohibit
-        caching.
+      tags: [accounts]
+      summary: Sign in with a login and password.
+      description: >-
+        Requires the access pass. An unknown login and a wrong password both
+        answer `invalid_credentials`; attempts are limited per client IP and
+        per login. Requires this server's exact `Origin`.
       requestBody:
+        description: The login and password.
         required: true
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/AccountEmpty'
-            example: *id004
-        description: JSON input for beginReauthentication.
+              $ref: "#/components/schemas/LoginRequest"
       responses:
-        '200':
-          description: Successful operation. Enrollment replaces the browser session; recovery codes appear
-            only when generated.
+        "200":
+          description: Signed in.
           headers:
             Set-Cookie:
-              description: Secure HttpOnly SameSite=Strict session or browser ceremony cookie, when needed.
+              description: The session cookie `falky_visitor`.
               schema:
                 type: string
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/AccountCeremony'
-              example: *id001
-        default:
-          $ref: '#/components/responses/Error'
-  /api/accounts/reauthentication/finish:
-    post:
-      operationId: finishReauthentication
-      tags:
-      - accounts
-      summary: Verify a passkey for sensitive changes.
-      description: Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client
-        attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires
-        that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive
-        changes require a verified passkey in this session within five minutes. All account responses prohibit
-        caching.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/AccountFinish'
-            example: *id002
-        description: JSON input for finishReauthentication.
-      responses:
-        '200':
-          description: Successful operation. Enrollment replaces the browser session; recovery codes appear
-            only when generated.
-          headers:
-            Set-Cookie:
-              description: Secure HttpOnly SameSite=Strict session or browser ceremony cookie, when needed.
-              schema:
-                type: string
+                $ref: "#/components/schemas/AccountEnrollment"
+        "401":
+          description: The login or password is wrong (`invalid_credentials`).
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/AccountSession'
-              example: &id005
-                visitor:
-                  id: account-id
-                  name: Alice
-                  nameTaken: false
-                  colour:
-                    visitorId: account-id
-                    palette: sky
-                    revision: 1
-                kind: account
-                expiresAt: '2027-02-07T12:00:00Z'
-        default:
-          $ref: '#/components/responses/Error'
-  /api/accounts/passkeys/begin:
-    post:
-      operationId: beginAddPasskey
-      tags:
-      - accounts
-      summary: Begin enrollment of another passkey.
-      description: Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client
-        attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires
-        that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive
-        changes require a verified passkey in this session within five minutes. All account responses prohibit
-        caching.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/AccountEmpty'
-            example: *id004
-        description: JSON input for beginAddPasskey.
-      responses:
-        '200':
-          description: Successful operation. Enrollment replaces the browser session; recovery codes appear
-            only when generated.
-          headers:
-            Set-Cookie:
-              description: Secure HttpOnly SameSite=Strict session or browser ceremony cookie, when needed.
-              schema:
-                type: string
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: >-
+            No access pass (`access_required`), or the account is disabled
+            (`account_disabled`), which is only said once the password is right.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/AccountCeremony'
-              example: *id001
+                $ref: "#/components/schemas/Error"
+        "429":
+          $ref: "#/components/responses/RateLimited"
         default:
-          $ref: '#/components/responses/Error'
-  /api/accounts/passkeys/finish:
+          $ref: "#/components/responses/Error"
+  /api/accounts/recovery:
     post:
-      operationId: finishAddPasskey
-      tags:
-      - accounts
-      summary: Complete enrollment of another passkey.
-      description: Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client
-        attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires
-        that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive
-        changes require a verified passkey in this session within five minutes. All account responses prohibit
-        caching.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/AccountFinish'
-            example: *id002
-        description: JSON input for finishAddPasskey.
-      responses:
-        '200':
-          description: Successful operation. Enrollment replaces the browser session; recovery codes appear
-            only when generated.
-          headers:
-            Set-Cookie:
-              description: Secure HttpOnly SameSite=Strict session or browser ceremony cookie, when needed.
-              schema:
-                type: string
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/AccountPasskey'
-              example:
-                id: base64url-id
-                label: Laptop
-                createdAt: '2026-11-09T12:00:00Z'
-        default:
-          $ref: '#/components/responses/Error'
-  /api/accounts/recovery/begin:
-    post:
-      operationId: beginRecovery
-      tags:
-      - accounts
-      summary: Begin account-specific replacement enrollment.
-      description: Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client
-        attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires
-        that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive
-        changes require a verified passkey in this session within five minutes. All account responses prohibit
-        caching.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/RecoveryBegin'
-            example:
-              accountId: account-id
-              proof: acid acorn acre acts afar affix aged agent agile aging agony ahead
-        description: JSON input for beginRecovery.
-      responses:
-        '200':
-          description: Successful operation. Enrollment replaces the browser session; recovery codes appear
-            only when generated.
-          headers:
-            Set-Cookie:
-              description: Secure HttpOnly SameSite=Strict session or browser ceremony cookie, when needed.
-              schema:
-                type: string
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/AccountCeremony'
-              example: *id001
-        default:
-          $ref: '#/components/responses/Error'
+      operationId: recover
       security: []
-  /api/accounts/recovery/finish:
-    post:
-      operationId: finishRecovery
-      tags:
-      - accounts
-      summary: Complete recovery and revoke all old account access.
-      description: Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client
-        attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires
-        that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive
-        changes require a verified passkey in this session within five minutes. All account responses prohibit
-        caching.
+      tags: [accounts]
+      summary: Set a new password with an operator recovery code.
+      description: >-
+        Requires the access pass. With a code the operator issued (`falky
+        account recover`), sets a new password, and a new login when one is
+        given, ends every session of the account and signs this browser in. An account from before
+        passwords has no login and must be given one (`login_required`).
+        Requires this server's exact `Origin`; attempts are limited per
+        client IP.
       requestBody:
+        description: The proof and the new password.
         required: true
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/AccountFinish'
-            example: *id002
-        description: JSON input for finishRecovery.
+              $ref: "#/components/schemas/RecoveryRequest"
       responses:
-        '200':
-          description: Successful operation. Enrollment replaces the browser session; recovery codes appear
-            only when generated.
+        "200":
+          description: Recovered and signed in.
           headers:
             Set-Cookie:
-              description: Secure HttpOnly SameSite=Strict session or browser ceremony cookie, when needed.
+              description: The session cookie `falky_visitor`.
               schema:
                 type: string
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/AccountEnrollment'
-              example: *id003
+                $ref: "#/components/schemas/AccountEnrollment"
+        "400":
+          description: >-
+            The password (`invalid_password`) or login (`invalid_login`)
+            breaks its rules, or the account needs a login (`login_required`).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: >-
+            No access pass (`access_required`), or the account or code does
+            not match a current, enabled account (`invalid_proof`).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: Another account has this login (`login_taken`).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "429":
+          $ref: "#/components/responses/RateLimited"
         default:
-          $ref: '#/components/responses/Error'
-      security: []
-  /api/accounts/recovery-codes:
-    post:
-      operationId: regenerateRecoveryCodes
-      tags:
-      - accounts
-      summary: Replace the recovery phrase after recent verification.
-      description: Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client
-        attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires
-        that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive
-        changes require a verified passkey in this session within five minutes. All account responses prohibit
-        caching.
+          $ref: "#/components/responses/Error"
+  /api/accounts/password:
+    put:
+      operationId: changePassword
+      tags: [accounts]
+      summary: Change the password, given the current one.
+      description: >-
+        Ends every other session of the account; this one stays signed in.
+        Requires this server's exact `Origin`.
       requestBody:
+        description: The current and new passwords.
         required: true
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/AccountEmpty'
-            example: *id004
-        description: JSON input for regenerateRecoveryCodes.
+              $ref: "#/components/schemas/PasswordChange"
       responses:
-        '200':
-          description: Successful operation. Enrollment replaces the browser session; recovery codes appear
-            only when generated.
-          headers:
-            Set-Cookie:
-              description: Secure HttpOnly SameSite=Strict session or browser ceremony cookie, when needed.
-              schema:
-                type: string
+        "200":
+          description: Changed.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/RecoveryCodes'
-              example:
-                recoveryCodes:
-                - acid acorn acre acts afar affix aged agent agile aging agony ahead
+                $ref: "#/components/schemas/AccountEmpty"
+        "400":
+          description: The new password breaks its rules (`invalid_password`).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          $ref: "#/components/responses/VisitorRequired"
+        "403":
+          description: The current password is wrong (`invalid_credentials`).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         default:
-          $ref: '#/components/responses/Error'
+          $ref: "#/components/responses/Error"
   /api/accounts/logout:
     post:
       operationId: logout
-      tags:
-      - accounts
-      summary: Revoke the current browser session.
-      description: Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client
-        attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires
-        that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive
-        changes require a verified passkey in this session within five minutes. All account responses prohibit
-        caching.
+      tags: [accounts]
+      summary: End this browser's session.
+      description: >-
+        Ends this session, closes its live updates and voice, and clears the
+        session cookie. Requires this server's exact `Origin`.
       requestBody:
+        description: An empty object.
         required: true
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/AccountEmpty'
-            example: *id004
-        description: JSON input for logout.
+              $ref: "#/components/schemas/AccountEmpty"
       responses:
-        '200':
-          description: Successful operation. Enrollment replaces the browser session; recovery codes appear
-            only when generated.
+        "200":
+          description: Signed out.
           headers:
             Set-Cookie:
-              description: Secure HttpOnly SameSite=Strict session or browser ceremony cookie, when needed.
+              description: Clears the session cookie.
               schema:
                 type: string
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/AccountEmpty'
-              example: *id004
+                $ref: "#/components/schemas/AccountEmpty"
+        "401":
+          $ref: "#/components/responses/VisitorRequired"
         default:
-          $ref: '#/components/responses/Error'
+          $ref: "#/components/responses/Error"
   /api/accounts/session:
     get:
       operationId: getAccountSession
-      tags:
-      - accounts
-      summary: Read the current resolved session.
-      description: Owner-only current session cookie; credential deletion also requires recent verified
-        passkey proof and refuses the last credential. Mutations require exact configured Origin. Responses
-        prohibit caching.
+      tags: [accounts]
+      summary: Read the current session.
       responses:
-        '200':
-          description: Current owner result.
+        "200":
+          description: The current session.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/AccountSession'
-              example: *id005
+                $ref: "#/components/schemas/AccountSession"
+        "401":
+          $ref: "#/components/responses/VisitorRequired"
         default:
-          $ref: '#/components/responses/Error'
-  /api/accounts/passkeys:
-    get:
-      operationId: listPasskeys
-      tags:
-      - accounts
-      summary: List the owner’s passkeys.
-      description: Owner-only current session cookie; credential deletion also requires recent verified
-        passkey proof and refuses the last credential. Mutations require exact configured Origin. Responses
-        prohibit caching.
-      responses:
-        '200':
-          description: Current owner result.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/AccountPasskeys'
-              example:
-                passkeys: []
-        default:
-          $ref: '#/components/responses/Error'
-  /api/accounts/passkeys/{credentialId}:
-    delete:
-      operationId: removePasskey
-      tags:
-      - accounts
-      summary: Remove an owned passkey, retaining at least one.
-      description: Owner-only current session cookie; credential deletion also requires recent verified
-        passkey proof and refuses the last credential. Mutations require exact configured Origin. Responses
-        prohibit caching.
-      responses:
-        '200':
-          description: Current owner result.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/AccountEmpty'
-              example: *id004
-        default:
-          $ref: '#/components/responses/Error'
-      parameters:
-      - name: credentialId
-        in: path
-        required: true
-        description: Base64url credential identifier.
-        schema:
-          type: string
+          $ref: "#/components/responses/Error"
   /api/rooms/{id}/attachments:
     parameters:
     - $ref: '#/components/parameters/RoomId'
@@ -793,74 +558,15 @@ paths:
                 $ref: '#/components/schemas/Error'
         default:
           $ref: '#/components/responses/Error'
-  /api/enter:
-    post:
-      operationId: enter
-      security: []
-      tags: [visitors]
-      summary: Enter with the access link's secret and a name.
-      description: >-
-        Exchanges the secret from the access link (the `k` value in its URL
-        fragment) and a name for a new guest, and sets the visitor cookie.
-        Account names remain reserved even while offline or disabled and cannot
-        be claimed by guests. The guest's name is reserved against other guests
-        for 60 seconds; opening live updates (`GET /api/live`) holds it while
-        connected. Account registration or rename may claim a guest's name,
-        assigning that guest a replacement and refreshing connected clients.
-        Attempts are limited per client IP, whether they succeed or not.
-      requestBody:
-        description: The secret and the name to enter under.
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/EnterRequest"
-      responses:
-        "201":
-          description: Entered; the body is the new visitor.
-          headers:
-            Set-Cookie:
-              description: >-
-                The visitor cookie `falky_visitor`: `HttpOnly`, `Secure`,
-                `SameSite=Strict`, for `/api`. It is valid while the access
-                link it was issued under is the current one.
-              schema:
-                type: string
-                example: falky_visitor=6GQ3VQKXHVY4HRSMBJ2TQ5W7DA; Path=/api; Max-Age=34560000; HttpOnly; Secure; SameSite=Strict
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Visitor"
-        "400":
-          $ref: "#/components/responses/InvalidName"
-        "403":
-          description: The secret is not the current access link's (`invalid_link`). No cookie is set.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-        "409":
-          $ref: "#/components/responses/NameTaken"
-        "429":
-          description: Too many attempts from this client IP (`rate_limited`); try again later.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-        default:
-          $ref: "#/components/responses/Error"
   /api/me:
     get:
       operationId: getMe
       tags: [visitors]
       summary: Return the current visitor.
       description: >-
-        Returns the current guest or account identity. For guests, `nameTaken`
-        reports whether another connected guest holds their name; live updates
-        and voice then remain closed until they rename. Temporary guest entry
-        reservations do not count. Account names remain reserved offline.
-        Account name claims assign displaced guests replacement names rather
-        than marking an account's name as taken.
+        Returns the signed-in account's identity. Account names are unique
+        and stay reserved while the account is away or disabled, so
+        `nameTaken` is false.
       responses:
         "200":
           description: The current visitor.
@@ -877,11 +583,8 @@ paths:
       tags: [visitors]
       summary: Change the current visitor's name.
       description: >-
-        Renames the guest or account the cookie belongs to. A guest cannot
-        claim a name reserved by an account or held by another guest. An account
-        cannot claim another account's name, including an offline or disabled
-        account, but may claim a guest's name and assign that guest a replacement.
-        Changed identities receive a retryable live close (1001) to refresh
+        Renames the signed-in account. It cannot take another account's name,
+        including an offline or disabled account's. Changed identities receive a retryable live close (1001) to refresh
         their names, and current voice names are published in occupancy updates.
       requestBody:
         description: The new name.
@@ -980,7 +683,7 @@ paths:
       summary: List every room with its occupancy.
       description: >-
         Returns every room, in the order they were created, each with the
-        participants in its voice. The operator creates and renames rooms.
+        participants in its voice.
       responses:
         "200":
           description: Every room.
@@ -990,6 +693,83 @@ paths:
                 $ref: "#/components/schemas/RoomList"
         "401":
           $ref: "#/components/responses/VisitorRequired"
+        default:
+          $ref: "#/components/responses/Error"
+    post:
+      operationId: createRoom
+      tags: [rooms]
+      summary: Create a room.
+      description: >-
+        Any account may create a room, up to 50 rooms on the server and a few
+        per account each minute. Everyone connected receives `room.changed`.
+      requestBody:
+        description: The room name.
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RoomNameRequest"
+      responses:
+        "201":
+          description: Created; the body is the new, empty room.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Room"
+        "400":
+          $ref: "#/components/responses/InvalidName"
+        "401":
+          $ref: "#/components/responses/VisitorRequired"
+        "409":
+          description: >-
+            Another room has this name (`room_name_taken`), or the server has
+            as many rooms as it allows (`room_limit`).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/rooms/{id}:
+    parameters:
+      - $ref: "#/components/parameters/RoomId"
+    patch:
+      operationId: renameRoom
+      tags: [rooms]
+      summary: Rename a room.
+      description: >-
+        Any account may rename any room; a room may change the case of its own
+        name. Everyone connected receives `room.changed`.
+      requestBody:
+        description: The room name.
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RoomNameRequest"
+      responses:
+        "200":
+          description: Renamed; the body is the room.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Room"
+        "400":
+          $ref: "#/components/responses/InvalidName"
+        "401":
+          $ref: "#/components/responses/VisitorRequired"
+        "404":
+          $ref: "#/components/responses/RoomNotFound"
+        "409":
+          description: Another room has this name (`room_name_taken`).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "429":
+          $ref: "#/components/responses/RateLimited"
         default:
           $ref: "#/components/responses/Error"
   /api/rooms/{id}/messages:
@@ -1163,7 +943,7 @@ paths:
         Account requests require this server's exact configured Origin header.
 
 
-        Both guests and accounts receive a fresh immutable transport identity on
+        Every explicit Join receives a fresh immutable transport identity on
         every explicit Join, even for the same room and session. Its prefix before
         the dot is the permanent identity ID. Occupancy exposes both connectionId
         (the transport identity) and visitorId (the permanent identity).
@@ -1214,8 +994,7 @@ paths:
         "409":
           description: >-
             The room's voice already has as many participants as it admits
-            (`room_full`), or another connected guest holds this guest's
-            name (`name_taken`; rename first). Existing connections are unchanged.
+            (`room_full`). Existing connections are unchanged.
           content:
             application/json:
               schema:
@@ -1246,17 +1025,14 @@ paths:
         seconds and closes a connection that does not answer within 10
         seconds. Each connection has a bounded queue of events waiting to be
         sent; a client that lets it fill up is disconnected with close code
-        4000. Replacing the guest access link sends `access.revoked` and closes
-        only old guest connections with code 4001; account connections survive.
-        Logout closes only that browser session; recovery closes old account
+        4000. Logout closes only that browser session; recovery closes old account
         sessions while preserving its new session; disablement closes that
         account's sessions. Revoked sessions close promptly with code 4001;
         established expired connections close at the next maintenance pass
         (normally within 30 seconds). Requests and reconnects reject expired
         sessions immediately using their original authoritative database deadline,
-        without restart extension. Closed sessions cannot reconnect without current authorization. Account revocation
-        does not send the guest-link replacement event. Name changes, including
-        displaced guests, use retryable close 1001 so clients refresh their
+        without restart extension. Closed sessions cannot reconnect without current authorization.
+        Name changes use retryable close 1001 so clients refresh their
         identity through GET /api/me. Shutdown also closes with code 1001.
         Events are not replayed: after a retryable disconnection a client
         reconnects first and then catches up through the other operations,
@@ -1268,10 +1044,8 @@ paths:
 
 
         A visitor is connected while they have at least one of these
-        connections open. A connected guest holds their name against other
-        guests; account registration or rename may claim it and assign the
-        guest a replacement. Account names stay reserved even while offline
-        or disabled and cannot be taken by another visitor.
+        connections open. Account names stay reserved even while offline or
+        disabled and cannot be taken by another account.
       parameters:
         - name: Origin
           in: header
@@ -1295,9 +1069,8 @@ paths:
                 $ref: "#/components/schemas/Error"
         "409":
           description: >-
-            Another connected guest holds this guest's name
-            (`name_taken`), as `GET /api/me` reports; rename first. No
-            WebSocket is opened.
+            Another connection holds this identity's name (`name_taken`), as
+            `GET /api/me` reports; rename first. No WebSocket is opened.
           content:
             application/json:
               schema:
@@ -1362,10 +1135,9 @@ paths:
         every 30 seconds. A participant joined, left or failed to connect, or
         a room's voice closed; other events change nothing, and an event
         received again changes nothing more. A participant who may not be in
-        that room's voice is removed from it instead of entering the view: a
-        guest without current guest-link access, an account with a revoked,
-        expired or disabled session or stale voice grant, a guest whose name
-        another connected guest holds, or a participant in a room other than
+        that room's voice is removed from it instead of entering the view: an
+        account with a revoked, expired or disabled session or stale voice
+        grant, or a participant in a room other than
         their current voice grant. Public account admission is already fenced
         before reaching LiveKit; webhook/list reconciliation repairs the view.
         A change of occupancy is sent
@@ -1423,14 +1195,11 @@ components:
       in: cookie
       name: falky_visitor
       description: >-
-        The opaque `falky_visitor` cookie is set by guest entry or successful
-        account registration, authentication or recovery. Both kinds use
-        Secure, HttpOnly, SameSite=Strict and Path=/api. Guest cookies require
-        the current guest-link generation and expire server-side after 400 days;
-        account sessions expire server-side after 90 days and survive guest-link
-        rotation. Both deadlines are absolute and do not slide with activity. Missing,
-        unknown, logged-out, revoked or expired sessions and disabled accounts
-        are refused with 401 (`visitor_required`).
+        The opaque `falky_visitor` session cookie set by registering, signing
+        in or recovering: Secure, HttpOnly, SameSite=Strict, Path=/api. Sessions
+        expire server-side 90 days after signing in, whatever the activity.
+        Missing, unknown, signed-out, revoked or expired sessions and disabled
+        accounts are refused with 401 (`visitor_required`).
     liveKitSignature:
       type: apiKey
       in: header
@@ -1440,6 +1209,20 @@ components:
         signed with the LiveKit API secret, whose `sha256` claim is the
         base64 SHA-256 of the body.
   responses:
+    AccessRequired:
+      description: >-
+        This browser has not given the current access password
+        (`access_required`); give it with `POST /api/access` first.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    RateLimited:
+      description: Too many attempts (`rate_limited`); try again later.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
     Error:
       description: The request failed; the body says why.
       content:
@@ -1457,7 +1240,7 @@ components:
           schema:
             $ref: "#/components/schemas/Error"
     NameTaken:
-      description: The name is reserved by another account or held by another guest (`name_taken`).
+      description: Another account has this name (`name_taken`).
       content:
         application/json:
           schema:
@@ -1470,9 +1253,8 @@ components:
             $ref: "#/components/schemas/Error"
     VisitorRequired:
       description: >-
-        The request has no current guest or account session (`visitor_required`).
-        Guests may enter through the current guest link; accounts must obtain
-        a valid session through authentication, registration or recovery.
+        The request has no current account session (`visitor_required`);
+        sign in, register or recover first.
       content:
         application/json:
           schema:
@@ -1484,100 +1266,107 @@ components:
       properties: {}
       description: An empty operation input or successful result.
       example: {}
-    RegistrationBegin:
+    Access:
       type: object
       additionalProperties: false
-      required:
-      - invitation
-      - name
+      required: [passwordSet, passed]
       properties:
-        invitation:
+        passwordSet:
+          type: boolean
+          description: Whether the operator has set the access password; until then no one can enter.
+          example: true
+        passed:
+          type: boolean
+          description: Whether this browser holds a current access pass.
+          example: false
+        guestName:
           type: string
-          description: Single-use seven-day operator invitation bearer.
-          example: opaque-value
+          description: >-
+            Present when this browser still holds a guest session from before
+            accounts: that guest's name. Registering keeps the guest's history.
+          example: Bob
+      description: Whether this browser may sign in or register.
+    AccessRequest:
+      type: object
+      additionalProperties: false
+      required: [password]
+      properties:
+        password:
+          type: string
+          description: The access password the operator shares.
+          example: the shared access password
+      description: The access password.
+    Login:
+      type: string
+      description: >-
+        What an account signs in with: 3 to 32 latin letters, digits, dots,
+        dashes or underscores, starting with a letter or digit. Logins are
+        compared case-insensitively and never shown to others.
+      example: bob
+    Password:
+      type: string
+      description: A password of 8 to 128 characters; there are no composition rules.
+      example: correct horse battery staple
+    RegisterRequest:
+      type: object
+      additionalProperties: false
+      required: [login, password, name]
+      properties:
+        login:
+          $ref: "#/components/schemas/Login"
+        password:
+          $ref: "#/components/schemas/Password"
         name:
-          type: string
-          description: Chosen reserved account name.
-          example: opaque-value
-      description: Invitation bearer and chosen reserved account name.
-      example:
-        invitation: opaque-value
-        name: opaque-value
-    RecoveryBegin:
+          $ref: "#/components/schemas/Name"
+      description: The new account's login, password and the name others see.
+    LoginRequest:
       type: object
       additionalProperties: false
-      required:
-      - accountId
-      - proof
+      required: [login, password]
       properties:
-        accountId:
+        login:
+          $ref: "#/components/schemas/Login"
+        password:
+          $ref: "#/components/schemas/Password"
+      description: A login and password.
+    RecoveryRequest:
+      type: object
+      additionalProperties: false
+      required: [account, proof, password]
+      properties:
+        account:
           type: string
-          description: Permanent account identity ID from session.visitor.id, separate from the proof.
-          example: opaque-value
+          description: The account's login, or its ID as an operator recovery link carries it.
+          example: bob
         proof:
           type: string
-          description: Twelve-word recovery phrase (case-insensitive; whitespace is collapsed), or exact,
-            case-sensitive thirty-minute operator recovery bearer. Phrase word order and spelling must match.
-          example: acid acorn acre acts afar affix aged agent agile aging agony ahead
-      description: Proof authorizing replacement enrollment for one account.
-      example:
-        accountId: opaque-value
-        proof: acid acorn acre acts afar affix aged agent agile aging agony ahead
-    AccountFinish:
+          description: The operator recovery code, exactly as given; it works once, for 30 minutes.
+          example: 6GQ3VQKXHVY4HRSMBJ2TQ5W7DA6GQ3VQKXHVY4HRSMBJ2TQ5W7DA
+        password:
+          $ref: "#/components/schemas/Password"
+        login:
+          $ref: "#/components/schemas/Login"
+      description: >-
+        Proof of an account and its new password; `login`, when present,
+        becomes the account's login.
+    PasswordChange:
       type: object
       additionalProperties: false
-      required:
-      - ceremonyId
-      - credential
+      required: [currentPassword, newPassword]
       properties:
-        ceremonyId:
-          type: string
-          description: Opaque five-minute one-use ceremony ID.
-          example: opaque-value
-        credential:
-          type: object
-          additionalProperties: true
-          description: Standard browser WebAuthn JSON, with base64url binary fields.
-          example: &id001 {}
-        label:
-          type: string
-          description: Optional passkey label; defaults to Passkey.
-          maxLength: 128
-          example: opaque-value
-      description: A browser credential completing the bound ceremony.
-      example:
-        ceremonyId: opaque-value
-        credential: *id001
-        label: opaque-value
-    AccountCeremony:
+        currentPassword:
+          $ref: "#/components/schemas/Password"
+        newPassword:
+          $ref: "#/components/schemas/Password"
+      description: The current password and the one to change to.
+    RoomNameRequest:
       type: object
       additionalProperties: false
-      required:
-      - id
-      - expiresAt
-      - options
+      required: [name]
       properties:
-        id:
-          type: string
-          description: Opaque ceremony ID.
-          example: ceremony-id
-        expiresAt:
-          type: string
-          format: date-time
-          description: Absolute ceremony expiry.
-          example: '2026-11-09T12:05:00Z'
-        options:
-          type: object
-          additionalProperties: true
-          description: Standard WebAuthn publicKey creation or assertion envelope. UV and resident keys are
-            required.
-          example: &id002
-            publicKey: {}
-      description: A short-lived ceremony with standard WebAuthn options.
-      example:
-        id: ceremony-id
-        expiresAt: '2026-11-09T12:05:00Z'
-        options: *id002
+        name:
+          $ref: "#/components/schemas/Name"
+      description: A room's name; rooms follow the same name rules as people.
     AccountSession:
       type: object
       additionalProperties: false
@@ -1590,15 +1379,14 @@ components:
         kind:
           type: string
           enum:
-          - guest
           - account
-          description: Current identity kind.
+          description: Current identity kind; only accounts sign in.
           example: account
         expiresAt:
           x-go-type-skip-optional-pointer: false
           type: string
           format: date-time
-          description: Absolute server-side expiry for guest and account sessions; ordinary activity does not extend it.
+          description: Absolute server-side expiry, 90 days after signing in; ordinary activity does not extend it.
           example: '2027-02-07T12:00:00Z'
       description: Identity kind and absolute session lifetime.
       example:
@@ -1612,46 +1400,17 @@ components:
             revision: 1
         kind: account
         expiresAt: '2027-02-07T12:00:00Z'
-    RecoveryCodes:
-      type: object
-      additionalProperties: false
-      required:
-      - recoveryCodes
-      properties:
-        recoveryCodes:
-          type: array
-          items:
-            type: string
-          minItems: 1
-          maxItems: 1
-          description: One twelve-word recovery phrase, shown once. Words are independently and uniformly
-            selected from EFF short wordlist 1, with repeats allowed (about 124 bits). Only its SHA-256
-            digest is stored; plaintext is never retrievable.
-          example: &id003
-          - acid acorn acre acts afar affix aged agent agile aging agony ahead
-      description: One new private recovery phrase shown once after successful generation.
-      example:
-        recoveryCodes: *id003
     AccountEnrollment:
       type: object
       additionalProperties: false
       required:
       - session
-      - recoveryCodes
       properties:
         session:
           $ref: '#/components/schemas/AccountSession'
-        recoveryCodes:
-          type: array
-          items:
-            type: string
-          maxItems: 1
-          description: Exactly one fresh twelve-word recovery phrase on registration or recovery; empty on sign-in.
-          example: &id004
-          - acid acorn acre acts afar affix aged agent agile aging agony ahead
-      description: A new session and any freshly generated recovery phrase. Once the identity change commits,
-        these credentials are returned even if subsequent live or voice enforcement fails. Enforcement is
-        attempted immediately, failures are logged, and maintenance retries pending enforcement and cleanup.
+      description: A new session. Once the identity change commits, the session is returned even if
+        subsequent live or voice enforcement fails. Enforcement is attempted immediately, failures are
+        logged, and maintenance retries pending enforcement and cleanup.
       example:
         session:
           visitor:
@@ -1664,48 +1423,6 @@ components:
               revision: 1
           kind: account
           expiresAt: '2027-02-07T12:00:00Z'
-        recoveryCodes: *id004
-    AccountPasskey:
-      type: object
-      additionalProperties: false
-      required:
-      - id
-      - label
-      - createdAt
-      properties:
-        id:
-          type: string
-          description: Base64url credential ID.
-          example: base64url-id
-        label:
-          type: string
-          description: Owner-supplied label.
-          example: Laptop
-        createdAt:
-          type: string
-          format: date-time
-          description: Credential enrollment time.
-          example: '2026-11-09T12:00:00Z'
-      description: An individually identifiable credential belonging to the owner.
-      example:
-        id: base64url-id
-        label: Laptop
-        createdAt: '2026-11-09T12:00:00Z'
-    AccountPasskeys:
-      type: object
-      additionalProperties: false
-      required:
-      - passkeys
-      properties:
-        passkeys:
-          type: array
-          items:
-            $ref: '#/components/schemas/AccountPasskey'
-          description: This account’s credentials only.
-          example: &id005 []
-      description: The authenticated account’s passkeys.
-      example:
-        passkeys: *id005
     Attachment:
       type: object
       description: Private metadata. Availability is ready (owned draft), posted, expired, or cancelled. Metadata
@@ -1921,9 +1638,14 @@ components:
             Stable, machine-readable error code: `not_found` (no such route),
             `invalid_request` (the request does not match the contract),
             `internal` (the server failed), `visitor_required` (no valid
-            visitor cookie), `invalid_link` (wrong access link secret),
-            `invalid_name` (a name breaks the name rules), `name_taken`
-            (another visitor holds the name), `rate_limited` (too many
+            visitor cookie), `access_required` (give the access password
+            first), `invalid_access_password`, `access_unset` (no access
+            password yet), `invalid_credentials` (wrong login or password),
+            `account_disabled`, `invalid_login`, `login_taken`,
+            `login_required`, `invalid_password`, `invalid_proof` (wrong
+            or expired recovery code), `invalid_name` (a name breaks the name
+            rules), `name_taken` (another account has the name),
+            `room_name_taken`, `room_limit`, `rate_limited` (too many
             requests), `room_not_found` (no such room), `invalid_message` (a
             message body breaks the message rules), `request_key_reused`
             (a request key was already used for another message),
@@ -1964,7 +1686,7 @@ components:
       example: ok
     Visitor:
       type: object
-      description: A guest or passkey account with one permanent identity, retained through guest upgrade and recovery.
+      description: An account's permanent identity, kept through recovery and from the guest it may have been.
       required: [id, name, nameTaken, colour]
       properties:
         id:
@@ -1978,12 +1700,8 @@ components:
         nameTaken:
           type: boolean
           description: >-
-            Whether another connected guest holds this guest's name. Temporary
-            guest entry reservations do not count. Live updates and voice stay
-            closed to that guest until they rename; reading and posting remain
-            available. Account names are reserved offline and report false.
-            Account name claims give displaced guests replacement names and
-            refresh their clients instead of setting an account's nameTaken.
+            Kept for older clients: account names are unique, so it is
+            always false.
           example: false
         colour:
           $ref: "#/components/schemas/VisitorColour"
@@ -2042,17 +1760,6 @@ components:
           example: [{visitorId: 01JBX6Z8Q3M5W2K7R9T4V1C0DE, palette: sky, revision: 1}]
           items:
             $ref: "#/components/schemas/VisitorColour"
-    EnterRequest:
-      type: object
-      description: The access link's secret and the name to enter under.
-      required: [secret, name]
-      properties:
-        secret:
-          type: string
-          description: The `k` value from the access link's URL fragment.
-          example: 6GQ3VQKXHVY4HRSMBJ2TQ5W7DA
-        name:
-          $ref: "#/components/schemas/Name"
     RenameRequest:
       type: object
       description: The name the visitor changes to.
@@ -2304,7 +2011,7 @@ components:
         renamed (its payload is the `RoomChange`); `occupancy.changed`,
         someone joined or left a room's voice, or a participant's new name
         reached it (its payload is the `OccupancyChange`); `access.revoked`,
-        the guest link was replaced (its payload is the `AccessRevoked`), and
+        kept for older clients and no longer sent (its payload is the `AccessRevoked`), and
         the server closes the connection next; `visitor.colour.changed`, an explicit
         saved colour change (its payload is the `VisitorColour`) to all visitors;
         `attachments.expired`, posted files expired in this room (its payload is
@@ -2347,8 +2054,8 @@ components:
     AccessRevoked:
       type: object
       description: >-
-        Why guest-link access ended. The old guest cookie is refused; reentry
-        through the current guest link creates a new guest identity. This event
+        Why guest-link access ended, from before accounts replaced guests; the
+        server no longer sends it. This event
         is not sent for account logout, recovery, disablement or session expiry;
         those close only the affected sessions with code 4001.
       required: [reason]

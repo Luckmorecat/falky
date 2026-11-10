@@ -17,7 +17,6 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
-	"github.com/go-webauthn/webauthn/protocol"
 	"github.com/livekit/protocol/livekit"
 	lksdk "github.com/livekit/server-sdk-go/v2"
 	"github.com/pion/webrtc/v4"
@@ -25,7 +24,6 @@ import (
 
 	"github.com/kisshot/falky/server/internal/httpapi"
 	"github.com/kisshot/falky/server/internal/identity"
-	"github.com/kisshot/falky/server/internal/identity/passkeytest"
 	"github.com/kisshot/falky/server/internal/platform"
 	"github.com/kisshot/falky/server/internal/realtime"
 	"github.com/kisshot/falky/server/internal/rooms"
@@ -47,7 +45,10 @@ func TestSignedHTTPRecoveryEndsRealMediaAndPreservesNewLiveAndVoiceSession(t *te
 	if _, err := db.Migrate(t.Context(), migrations); err != nil {
 		t.Fatal(err)
 	}
-	ident := identity.New(db, origin)
+	ident := identity.New(db, origin, identity.WithPasswordCost(identity.PasswordCost{Time: 1, MemoryKiB: 64}))
+	if err := ident.SetAccessPassword(t.Context(), "shared secret phrase"); err != nil {
+		t.Fatal(err)
+	}
 	hub := realtime.New()
 	events := httpapi.Events{Hub: hub, Logger: logger}
 	rs := rooms.New(db, rooms.WithPublisher(events.RoomChanged))
@@ -98,23 +99,16 @@ func TestSignedHTTPRecoveryEndsRealMediaAndPreservesNewLiveAndVoiceSession(t *te
 			}
 		}
 	}
-	type ceremony struct {
-		ID      string                      `json:"id"`
-		Options protocol.CredentialCreation `json:"options"`
-	}
 	type enrollment struct {
 		Session struct {
 			Visitor struct{ ID string } `json:"visitor"`
 		} `json:"session"`
-		Codes []string `json:"recoveryCodes"`
 	}
-	finish := func(browser *http.Client, purpose string, begin ceremony) enrollment {
+	enroll := func(browser *http.Client, path string, body map[string]any) enrollment {
 		t.Helper()
-		key := passkeytest.New(t)
+		request(browser, "POST", "/api/access", map[string]any{"password": "shared secret phrase"}, nil, 200)
 		var result enrollment
-		request(browser, "POST", "/api/accounts/"+purpose+"/finish", map[string]any{
-			"ceremonyId": begin.ID, "credential": json.RawMessage(key.Registration(t, &begin.Options, origin)),
-		}, &result, 200)
+		request(browser, "POST", path, body, &result, 200)
 		return result
 	}
 	openLive := func(browser *http.Client) *websocket.Conn {
@@ -136,18 +130,12 @@ func TestSignedHTTPRecoveryEndsRealMediaAndPreservesNewLiveAndVoiceSession(t *te
 		if credentials.URL != "wss://falky.example" {
 			t.Fatal("account credentials bypass public origin")
 		}
-		// The SDK reaches the same guard over loopback; WebAuthn keeps its configured RP origin.
+		// The SDK reaches the same guard over loopback.
 		credentials.URL = "ws" + strings.TrimPrefix(guard.URL, "http")
 		return credentials
 	}
-	invite, err := ident.CreateInvitation(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
 	first := newBrowser()
-	var begin ceremony
-	request(first, "POST", "/api/accounts/registration/begin", map[string]any{"invitation": invite.Token, "name": "Account"}, &begin, 200)
-	account := finish(first, "registration", begin)
+	account := enroll(first, "/api/accounts/register", map[string]any{"login": "account", "password": "correct horse battery", "name": "Account"})
 	oldLive := openLive(first)
 	oldCredentials := join(first)
 	oldMedia := connect(t, oldCredentials)
@@ -163,10 +151,9 @@ func TestSignedHTTPRecoveryEndsRealMediaAndPreservesNewLiveAndVoiceSession(t *te
 		t.Fatal(err)
 	}
 	recovering := newBrowser()
-	request(recovering, "POST", "/api/accounts/recovery/begin", map[string]any{"accountId": account.Session.Visitor.ID, "proof": account.Codes[0]}, &begin, 200)
-	recovered := finish(recovering, "recovery", begin)
-	if recovered.Session.Visitor.ID != account.Session.Visitor.ID || len(recovered.Codes) != 1 {
-		t.Fatal("recovery changed identity or omitted replacement codes")
+	recovered := enroll(recovering, "/api/accounts/recovery", map[string]any{"account": "account", "proof": operatorCode(t, ident, "account"), "password": "a brand new password"})
+	if recovered.Session.Visitor.ID != account.Session.Visitor.ID {
+		t.Fatal("recovery changed identity")
 	}
 	select {
 	case <-oldMedia.disconnected:

@@ -3,24 +3,29 @@ package httpapi
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"io"
 	"mime"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/kisshot/falky/server/internal/api"
 	"github.com/kisshot/falky/server/internal/identity"
 	"github.com/kisshot/falky/server/internal/platform"
 )
 
-const ceremonyCookie = "__Host-falky-ceremony"
+// accessCookie holds a browser's access pass, which signing in, registering
+// and recovering require.
+const accessCookie = "falky_access"
 
+// accountProtection guards the access and account operations: their answers
+// are never cached, and changes need the exact origin, a JSON object body and
+// stay within the per-client attempt limit.
 func accountProtection(next http.Handler, origin string, limit *platform.Limiter) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/api/accounts/") {
+		if r.URL.Path == "/api/access" || strings.HasPrefix(r.URL.Path, "/api/accounts/") {
 			w.Header().Set("Cache-Control", "no-store")
 			w.Header().Set("Pragma", "no-cache")
 			if r.Method != http.MethodGet {
@@ -32,25 +37,22 @@ func accountProtection(next http.Handler, origin string, limit *platform.Limiter
 					writeError(w, 429, "rate_limited", "too many account attempts; try again later")
 					return
 				}
-				if r.Method == http.MethodPost {
-					media, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
-					if err != nil || media != "application/json" {
-						writeError(w, 400, "invalid_request", "account requests require application/json")
-						return
-					}
-					raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxRequestBody))
-					if err != nil {
-						writeError(w, 413, "invalid_request", "account request exceeds the body limit")
-						return
-					}
-					trimmed := bytes.TrimSpace(raw)
-					if len(trimmed) == 0 || trimmed[0] != '{' || !json.Valid(raw) {
-						writeError(w, 400, "invalid_request", "account requests require one JSON object")
-						return
-					}
-					r.Body = io.NopCloser(bytes.NewReader(raw))
+				media, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+				if err != nil || media != "application/json" {
+					writeError(w, 400, "invalid_request", "account requests require application/json")
+					return
 				}
-
+				raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxRequestBody))
+				if err != nil {
+					writeError(w, 413, "invalid_request", "account request exceeds the body limit")
+					return
+				}
+				trimmed := bytes.TrimSpace(raw)
+				if len(trimmed) == 0 || trimmed[0] != '{' || !json.Valid(raw) {
+					writeError(w, 400, "invalid_request", "account requests require one JSON object")
+					return
+				}
+				r.Body = io.NopCloser(bytes.NewReader(raw))
 			}
 		}
 		next.ServeHTTP(w, r)
@@ -61,22 +63,17 @@ func accountHTTP(ctx context.Context) (*http.Request, http.ResponseWriter) {
 	return ctx.Value(requestKey{}).(*http.Request), ctx.Value(writerKey{}).(http.ResponseWriter)
 }
 
-func browserContext(ctx context.Context, begin bool) string {
-	r, w := accountHTTP(ctx)
-	var value string
-	if c, err := r.Cookie(ceremonyCookie); err == nil && len(c.Value) == 52 {
-		value = c.Value
+func accountToken(ctx context.Context) string { r, _ := accountHTTP(ctx); return sessionToken(r) }
+
+func accessToken(ctx context.Context) string {
+	r, _ := accountHTTP(ctx)
+	if c, err := r.Cookie(accessCookie); err == nil {
+		return c.Value
 	}
-	if !begin {
-		return value
-	}
-	if value == "" {
-		value = rand.Text() + rand.Text()
-	}
-	http.SetCookie(w, &http.Cookie{Name: ceremonyCookie, Value: value, Path: "/", Secure: true, HttpOnly: true, SameSite: http.SameSiteStrictMode, MaxAge: 600})
-	return value
+	return ""
 }
 
+// accountError answers err, when there is one, and reports whether it did.
 func (s *server) accountError(ctx context.Context, err error) bool {
 	if err == nil {
 		return false
@@ -84,19 +81,36 @@ func (s *server) accountError(ctx context.Context, err error) bool {
 	_, w := accountHTTP(ctx)
 	switch {
 	case errors.Is(err, identity.ErrNoVisitor):
-		writeError(w, 401, "visitor_required", "a valid account session is required")
+		writeError(w, 401, visitorRequired.Code, visitorRequired.Message)
+	case errors.Is(err, identity.ErrAccessRequired):
+		writeError(w, 403, "access_required", "give the access password first")
+	case errors.Is(err, identity.ErrAccessUnset):
+		writeError(w, 503, "access_unset", "the server owner has not set the access password yet")
+	case errors.Is(err, identity.ErrWrongAccessPassword):
+		writeError(w, 403, "invalid_access_password", "the access password is wrong")
+	case errors.Is(err, identity.ErrWrongCredentials):
+		r, _ := accountHTTP(ctx)
+		status := 401
+		if r.URL.Path != "/api/accounts/login" {
+			status = 403
+		}
+		writeError(w, status, "invalid_credentials", "the login or password is wrong")
+	case errors.Is(err, identity.ErrDisabled):
+		writeError(w, 403, "account_disabled", "this account is disabled; ask the server owner")
+	case errors.Is(err, identity.ErrInvalidProof):
+		writeError(w, 403, "invalid_proof", "the account or recovery code does not match")
+	case errors.Is(err, identity.ErrInvalidLogin):
+		writeError(w, 400, "invalid_login", err.Error())
+	case errors.Is(err, identity.ErrLoginRequired):
+		writeError(w, 400, "login_required", err.Error())
+	case errors.Is(err, identity.ErrInvalidPassword):
+		writeError(w, 400, "invalid_password", err.Error())
 	case errors.Is(err, identity.ErrInvalidName):
 		writeError(w, 400, "invalid_name", err.Error())
+	case errors.Is(err, identity.ErrLoginTaken):
+		writeError(w, 409, "login_taken", "another account has this login")
 	case errors.Is(err, identity.ErrNameTaken):
-		writeError(w, 409, "name_taken", "an account already reserves this name")
-	case errors.Is(err, identity.ErrRecentProof):
-		writeError(w, 403, "recent_proof_required", "verify a passkey in this session first")
-	case errors.Is(err, identity.ErrLastPasskey):
-		writeError(w, 409, "last_passkey", "the last passkey cannot be removed")
-	case errors.Is(err, identity.ErrCredentialExists):
-		writeError(w, 409, "credential_exists", "credential cannot be enrolled")
-	case errors.Is(err, identity.ErrDisabled), errors.Is(err, identity.ErrInvalidProof):
-		writeError(w, 403, "invalid_proof", "the account proof is invalid or expired")
+		writeError(w, 409, "name_taken", "another account has this name")
 	default:
 		r, _ := accountHTTP(ctx)
 		errorWriter{logger: s.logger}.internal(w, r, err)
@@ -113,170 +127,110 @@ func (s *server) sessionBody(session identity.Session) api.AccountSession {
 	return body
 }
 
-func passkeyBody(p identity.Passkey) api.AccountPasskey {
-	return api.AccountPasskey{Id: p.ID, Label: p.Label, CreatedAt: p.CreatedAt}
+func sessionCookie(token string) string {
+	return (&http.Cookie{Name: cookieName, Value: token, Path: "/api", Secure: true, HttpOnly: true, SameSite: http.SameSiteStrictMode, MaxAge: cookieMaxAge}).String()
 }
 
-func ceremonyBody(c identity.Ceremony) (api.AccountCeremony, error) {
-	var options any = c.Creation
-	if c.Assertion != nil {
-		options = c.Assertion
-	}
-	raw, err := json.Marshal(options)
-	if err != nil {
-		return api.AccountCeremony{}, err
-	}
-	var result map[string]interface{}
-	err = json.Unmarshal(raw, &result)
-	return api.AccountCeremony{Id: c.ID, ExpiresAt: c.ExpiresAt, Options: result}, err
-}
-func accountToken(ctx context.Context) string { r, _ := accountHTTP(ctx); return sessionToken(r) }
-func credentialBody(body *api.AccountFinish) []byte {
-	raw, _ := json.Marshal(body.Credential)
-	return raw
-}
-
+// enrollment enforces e's effects and returns its body and session cookie.
 func (s *server) enrollment(ctx context.Context, e identity.Enrollment) (api.AccountEnrollment, string) {
 	if err := s.lifecycle.Apply(ctx, e.Effects); err != nil {
-		// Enrollment is committed and its one-time credentials cannot be regenerated.
+		// The account change is committed; its session must reach the browser.
 		s.logger.ErrorContext(ctx, "committed enrollment enforcement failed", "error", err)
 	}
-	codes := e.RecoveryCodes
-	if codes == nil {
-		codes = []string{}
-	}
-	cookie := (&http.Cookie{Name: cookieName, Value: e.Token, Path: "/api", Secure: true, HttpOnly: true, SameSite: http.SameSiteStrictMode, MaxAge: 90 * 24 * 60 * 60}).String()
-	return api.AccountEnrollment{Session: s.sessionBody(e.Session), RecoveryCodes: codes}, cookie
+	return api.AccountEnrollment{Session: s.sessionBody(e.Session)}, sessionCookie(e.Token)
 }
 
-func (s *server) BeginRegistration(ctx context.Context, req api.BeginRegistrationRequestObject) (api.BeginRegistrationResponseObject, error) {
-	guest := ""
-	if session, err := s.identity.ResolveSession(ctx, accountToken(ctx)); err == nil && session.Kind == identity.Guest {
-		guest = accountToken(ctx)
+func (s *server) access(ctx context.Context) (api.Access, error) {
+	set, err := s.identity.AccessPasswordSet(ctx)
+	if err != nil {
+		return api.Access{}, err
 	}
-	c, err := s.identity.BeginRegistration(ctx, identity.RegistrationInput{Invitation: req.Body.Invitation, Name: req.Body.Name, GuestToken: guest, BrowserContext: browserContext(ctx, true)})
+	passed, err := s.identity.AccessPassed(ctx, accessToken(ctx))
+	if err != nil {
+		return api.Access{}, err
+	}
+	body := api.Access{PasswordSet: set, Passed: passed}
+	if guest, err := s.identity.LegacyGuest(ctx, accountToken(ctx)); err == nil {
+		body.GuestName = guest.Name
+	} else if !errors.Is(err, identity.ErrNoVisitor) {
+		return api.Access{}, err
+	}
+	return body, nil
+}
+
+func (s *server) GetAccess(ctx context.Context, _ api.GetAccessRequestObject) (api.GetAccessResponseObject, error) {
+	body, err := s.access(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return api.GetAccess200JSONResponse(body), nil
+}
+
+func (s *server) PassAccess(ctx context.Context, req api.PassAccessRequestObject) (api.PassAccessResponseObject, error) {
+	token, err := s.identity.PassAccess(ctx, req.Body.Password)
 	if s.accountError(ctx, err) {
 		return nil, nil
 	}
-	body, err := ceremonyBody(c)
-	_, w := accountHTTP(ctx)
-	return api.BeginRegistration200JSONResponse{Body: body, Headers: api.BeginRegistration200ResponseHeaders{SetCookie: w.Header().Get("Set-Cookie")}}, err
-}
-
-func (s *server) BeginAuthentication(ctx context.Context, req api.BeginAuthenticationRequestObject) (api.BeginAuthenticationResponseObject, error) {
-	c, err := s.identity.BeginAuthentication(ctx, browserContext(ctx, true))
-	if s.accountError(ctx, err) {
-		return nil, nil
+	body, err := s.access(ctx)
+	if err != nil {
+		return nil, err
 	}
-	body, err := ceremonyBody(c)
-	_, w := accountHTTP(ctx)
-	return api.BeginAuthentication200JSONResponse{Body: body, Headers: api.BeginAuthentication200ResponseHeaders{SetCookie: w.Header().Get("Set-Cookie")}}, err
+	body.Passed = true
+	cookie := &http.Cookie{Name: accessCookie, Value: token, Path: "/api", Secure: true, HttpOnly: true, SameSite: http.SameSiteStrictMode, MaxAge: int(identity.AccessPassTTL / time.Second)}
+	return api.PassAccess200JSONResponse{Body: body, Headers: api.PassAccess200ResponseHeaders{SetCookie: cookie.String()}}, nil
 }
 
-func (s *server) BeginReauthentication(ctx context.Context, req api.BeginReauthenticationRequestObject) (api.BeginReauthenticationResponseObject, error) {
-	c, err := s.identity.BeginReauthentication(ctx, accountToken(ctx), browserContext(ctx, true))
-	if s.accountError(ctx, err) {
-		return nil, nil
-	}
-	body, err := ceremonyBody(c)
-	_, w := accountHTTP(ctx)
-	return api.BeginReauthentication200JSONResponse{Body: body, Headers: api.BeginReauthentication200ResponseHeaders{SetCookie: w.Header().Get("Set-Cookie")}}, err
-}
-
-func (s *server) BeginAddPasskey(ctx context.Context, req api.BeginAddPasskeyRequestObject) (api.BeginAddPasskeyResponseObject, error) {
-	c, err := s.identity.BeginAddPasskey(ctx, accountToken(ctx), browserContext(ctx, true))
-	if s.accountError(ctx, err) {
-		return nil, nil
-	}
-	body, err := ceremonyBody(c)
-	_, w := accountHTTP(ctx)
-	return api.BeginAddPasskey200JSONResponse{Body: body, Headers: api.BeginAddPasskey200ResponseHeaders{SetCookie: w.Header().Get("Set-Cookie")}}, err
-}
-
-func (s *server) BeginRecovery(ctx context.Context, req api.BeginRecoveryRequestObject) (api.BeginRecoveryResponseObject, error) {
-	c, err := s.identity.BeginRecovery(ctx, req.Body.AccountId, req.Body.Proof, browserContext(ctx, true))
-	if s.accountError(ctx, err) {
-		return nil, nil
-	}
-	body, err := ceremonyBody(c)
-	_, w := accountHTTP(ctx)
-	return api.BeginRecovery200JSONResponse{Body: body, Headers: api.BeginRecovery200ResponseHeaders{SetCookie: w.Header().Get("Set-Cookie")}}, err
-}
-
-func (s *server) FinishRegistration(ctx context.Context, req api.FinishRegistrationRequestObject) (api.FinishRegistrationResponseObject, error) {
+func (s *server) Register(ctx context.Context, req api.RegisterRequestObject) (api.RegisterResponseObject, error) {
 	s.lifecycle.Lock()
 	defer s.lifecycle.Unlock()
-	e, err := s.identity.FinishRegistration(ctx, req.Body.CeremonyId, browserContext(ctx, false), credentialBody(req.Body), req.Body.Label)
+	e, err := s.identity.Register(ctx, identity.RegistrationInput{
+		AccessToken: accessToken(ctx), GuestToken: accountToken(ctx),
+		Login: req.Body.Login, Password: req.Body.Password, Name: req.Body.Name,
+	})
 	if s.accountError(ctx, err) {
 		return nil, nil
 	}
 	body, cookie := s.enrollment(ctx, e)
-	return api.FinishRegistration200JSONResponse{Body: body, Headers: api.FinishRegistration200ResponseHeaders{SetCookie: cookie}}, nil
+	return api.Register200JSONResponse{Body: body, Headers: api.Register200ResponseHeaders{SetCookie: cookie}}, nil
 }
 
-func (s *server) FinishAuthentication(ctx context.Context, req api.FinishAuthenticationRequestObject) (api.FinishAuthenticationResponseObject, error) {
-	s.lifecycle.Lock()
-	defer s.lifecycle.Unlock()
-	e, err := s.identity.FinishAuthentication(ctx, req.Body.CeremonyId, browserContext(ctx, false), credentialBody(req.Body))
+func (s *server) Login(ctx context.Context, req api.LoginRequestObject) (api.LoginResponseObject, error) {
+	if s.loginLimit != nil && !s.loginLimit.Allow(strings.ToLower(strings.TrimSpace(req.Body.Login))) {
+		return api.Login429JSONResponse{RateLimitedJSONResponse: api.RateLimitedJSONResponse{Code: "rate_limited", Message: "too many attempts for this login; try again later"}}, nil
+	}
+	e, err := s.identity.Login(ctx, accessToken(ctx), req.Body.Login, req.Body.Password)
 	if s.accountError(ctx, err) {
 		return nil, nil
 	}
 	body, cookie := s.enrollment(ctx, e)
-	return api.FinishAuthentication200JSONResponse{Body: body, Headers: api.FinishAuthentication200ResponseHeaders{SetCookie: cookie}}, nil
+	return api.Login200JSONResponse{Body: body, Headers: api.Login200ResponseHeaders{SetCookie: cookie}}, nil
 }
 
-func (s *server) FinishRecovery(ctx context.Context, req api.FinishRecoveryRequestObject) (api.FinishRecoveryResponseObject, error) {
+func (s *server) Recover(ctx context.Context, req api.RecoverRequestObject) (api.RecoverResponseObject, error) {
 	s.lifecycle.Lock()
 	defer s.lifecycle.Unlock()
-	e, err := s.identity.FinishRecovery(ctx, req.Body.CeremonyId, browserContext(ctx, false), credentialBody(req.Body), req.Body.Label)
+	e, err := s.identity.Recover(ctx, identity.RecoveryInput{
+		AccessToken: accessToken(ctx), Account: req.Body.Account, Proof: req.Body.Proof,
+		Password: req.Body.Password, Login: req.Body.Login,
+	})
 	if s.accountError(ctx, err) {
 		return nil, nil
 	}
 	body, cookie := s.enrollment(ctx, e)
-	return api.FinishRecovery200JSONResponse{Body: body, Headers: api.FinishRecovery200ResponseHeaders{SetCookie: cookie}}, nil
+	return api.Recover200JSONResponse{Body: body, Headers: api.Recover200ResponseHeaders{SetCookie: cookie}}, nil
 }
 
-func (s *server) FinishReauthentication(ctx context.Context, req api.FinishReauthenticationRequestObject) (api.FinishReauthenticationResponseObject, error) {
-	session, err := s.identity.FinishReauthentication(ctx, accountToken(ctx), req.Body.CeremonyId, browserContext(ctx, false), credentialBody(req.Body))
+func (s *server) ChangePassword(ctx context.Context, req api.ChangePasswordRequestObject) (api.ChangePasswordResponseObject, error) {
+	s.lifecycle.Lock()
+	defer s.lifecycle.Unlock()
+	effects, err := s.identity.ChangePassword(ctx, accountToken(ctx), req.Body.CurrentPassword, req.Body.NewPassword)
 	if s.accountError(ctx, err) {
 		return nil, nil
 	}
-	return api.FinishReauthentication200JSONResponse{Body: s.sessionBody(session)}, nil
-}
-
-func (s *server) FinishAddPasskey(ctx context.Context, req api.FinishAddPasskeyRequestObject) (api.FinishAddPasskeyResponseObject, error) {
-	p, err := s.identity.FinishAddPasskey(ctx, accountToken(ctx), req.Body.CeremonyId, browserContext(ctx, false), credentialBody(req.Body), req.Body.Label)
-	if s.accountError(ctx, err) {
-		return nil, nil
+	if err := s.lifecycle.Apply(ctx, effects); err != nil {
+		return nil, err
 	}
-	return api.FinishAddPasskey200JSONResponse{Body: passkeyBody(p)}, nil
-}
-
-func (s *server) ListPasskeys(ctx context.Context, _ api.ListPasskeysRequestObject) (api.ListPasskeysResponseObject, error) {
-	keys, err := s.identity.Passkeys(ctx, accountToken(ctx))
-	if s.accountError(ctx, err) {
-		return nil, nil
-	}
-	result := make([]api.AccountPasskey, 0, len(keys))
-	for _, key := range keys {
-		result = append(result, passkeyBody(key))
-	}
-	return api.ListPasskeys200JSONResponse{Passkeys: result}, nil
-}
-
-func (s *server) RemovePasskey(ctx context.Context, req api.RemovePasskeyRequestObject) (api.RemovePasskeyResponseObject, error) {
-	if s.accountError(ctx, s.identity.RemovePasskey(ctx, accountToken(ctx), req.CredentialId)) {
-		return nil, nil
-	}
-	return api.RemovePasskey200JSONResponse{}, nil
-}
-
-func (s *server) RegenerateRecoveryCodes(ctx context.Context, _ api.RegenerateRecoveryCodesRequestObject) (api.RegenerateRecoveryCodesResponseObject, error) {
-	codes, err := s.identity.RegenerateRecoveryCodes(ctx, accountToken(ctx))
-	if s.accountError(ctx, err) {
-		return nil, nil
-	}
-	return api.RegenerateRecoveryCodes200JSONResponse{Body: api.RecoveryCodes{RecoveryCodes: codes}}, nil
+	return api.ChangePassword200JSONResponse{}, nil
 }
 
 func (s *server) GetAccountSession(ctx context.Context, _ api.GetAccountSessionRequestObject) (api.GetAccountSessionResponseObject, error) {

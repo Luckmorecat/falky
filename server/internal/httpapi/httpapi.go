@@ -48,9 +48,12 @@ type Deps struct {
 	Shutdown      context.Context
 	Voice         *voice.Service
 	LiveKitAPIURL string
-	// EnterLimit limits entering per client IP. Posting is limited by Chat,
-	// which knows whether it only repeats a stored message.
-	EnterLimit *platform.Limiter
+	// LoginLimit limits sign-in attempts per login, on top of AuthLimit's
+	// limit per client IP. Posting is limited by Chat, which knows whether it
+	// only repeats a stored message.
+	LoginLimit *platform.Limiter
+	// RoomLimit limits creating and renaming rooms per account.
+	RoomLimit *platform.Limiter
 	// Live is the hub GET /api/live connects to; the modules publish to it
 	// through Events.
 	Live *realtime.Hub
@@ -83,7 +86,8 @@ func New(deps Deps) Handlers {
 		rooms:        deps.Rooms,
 		chat:         deps.Chat,
 		voice:        deps.Voice,
-		enterLimit:   deps.EnterLimit,
+		loginLimit:   deps.LoginLimit,
+		roomLimit:    deps.RoomLimit,
 		publicOrigin: deps.PublicOrigin,
 		events:       Events{Hub: deps.Live, Logger: deps.Logger},
 	}
@@ -139,7 +143,8 @@ type server struct {
 	rooms        *rooms.Service
 	chat         *chat.Service
 	voice        *voice.Service
-	enterLimit   *platform.Limiter
+	loginLimit   *platform.Limiter
+	roomLimit    *platform.Limiter
 	publicOrigin string
 }
 

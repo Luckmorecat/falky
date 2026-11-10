@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"path/filepath"
 	"slices"
-	"strings"
 	"testing"
 	"time"
 
@@ -48,7 +47,7 @@ func (p publicServer) inVoice(t *testing.T, b *api.ClientWithResponses, v api.Vi
 	return participant
 }
 
-func TestRotatingTheLinkEndsEveryAccessOfTheOldOneWithinTwoSeconds(t *testing.T) {
+func TestDisablingAccountsEndsEveryAccessWithinTwoSeconds(t *testing.T) {
 	p := startPublic(t, 10)
 	lounge, games := p.createRoom(t, "Lounge"), p.createRoom(t, "Games")
 	bob, bobHTTP := p.browserWithHTTP(t)
@@ -61,30 +60,32 @@ func TestRotatingTheLinkEndsEveryAccessOfTheOldOneWithinTwoSeconds(t *testing.T)
 		nextOccupancy(t, func() api.Event { return nextEvent(t, ws) })
 		nextOccupancy(t, func() api.Event { return nextEvent(t, ws) })
 	}
-	oldSecret := p.secret
 
 	start := time.Now()
-	link, err := p.adminClient(t).RotateLink(t.Context())
-	if err != nil {
-		t.Fatalf("RotateLink: %v", err)
+	admin := p.adminClient(t)
+	for _, login := range []string{"bob", "ann"} {
+		if err := admin.DisableAccount(t.Context(), login); err != nil {
+			t.Fatalf("DisableAccount(%s): %v", login, err)
+		}
 	}
 	ctx, cancel := context.WithDeadline(t.Context(), start.Add(2*time.Second))
 	defer cancel()
 	for _, ws := range sockets {
-		_, data, err := ws.Read(ctx)
-		if err != nil || !strings.Contains(string(data), `"type":"access.revoked"`) ||
-			!strings.Contains(string(data), `"reason":"link_replaced"`) {
-			t.Errorf("live update after rotating = %s, %v; want access.revoked for a replaced link", data, err)
-		}
-		if _, _, err := ws.Read(ctx); websocket.CloseStatus(err) != realtime.StatusRevoked {
-			t.Errorf("read after access.revoked = %v, want close status %d", err, realtime.StatusRevoked)
+		for {
+			_, _, err := ws.Read(ctx)
+			if err != nil {
+				if websocket.CloseStatus(err) != realtime.StatusRevoked {
+					t.Errorf("live update after disabling = %v, want close status %d", err, realtime.StatusRevoked)
+				}
+				break
+			}
 		}
 	}
 	if got := p.livekit.Removed(); len(got) != len(inVoice) || !slices.Contains(got, inVoice[0]) || !slices.Contains(got, inVoice[1]) {
 		t.Errorf("removed from voice %+v, want %+v", got, inVoice)
 	}
 	if elapsed := time.Since(start); elapsed > 2*time.Second {
-		t.Errorf("rotation took %v, want at most two seconds", elapsed)
+		t.Errorf("disabling took %v, want at most two seconds", elapsed)
 	}
 
 	// Every old cookie is refused, on every endpoint.
@@ -110,35 +111,33 @@ func TestRotatingTheLinkEndsEveryAccessOfTheOldOneWithinTwoSeconds(t *testing.T)
 	status, body := p.upgradeRequest(t, bobHTTP, testOrigin)
 	wantError(t, "GET /api/live with an old cookie", status, body, http.StatusUnauthorized, "visitor_required")
 
-	// Entering takes the new secret, and makes a new visitor.
-	old, err := p.browser(t).EnterWithResponse(t.Context(), api.EnterRequest{Secret: oldSecret, Name: "Carol"})
-	if err != nil {
-		t.Fatalf("Enter: %v", err)
+	// A disabled account cannot sign in again until it is enabled.
+	_, again := p.browserWithHTTP(t)
+	accountRequest(t, p, again, "POST", "/api/access", map[string]any{"password": testAccessPassword}, testOrigin, http.StatusOK)
+	raw, _ := accountRequest(t, p, again, "POST", "/api/accounts/login", map[string]any{"login": "bob", "password": testPassword}, testOrigin, http.StatusForbidden)
+	wantError(t, "Login while disabled", http.StatusForbidden, raw, http.StatusForbidden, "account_disabled")
+	if err := admin.EnableAccount(t.Context(), "bob"); err != nil {
+		t.Fatal(err)
 	}
-	wantError(t, "Enter with the old secret", old.StatusCode(), old.Body, http.StatusForbidden, "invalid_link")
-	p.secret = strings.TrimPrefix(link, testOrigin+"/#k=")
-	again := p.browser(t)
-	if v := p.enter(t, again, "Bob"); v.Id == bobVisitor.Id {
-		t.Errorf("Enter with the new secret = %+v, want a new visitor", v)
-	}
+	accountRequest(t, p, again, "POST", "/api/accounts/login", map[string]any{"login": "bob", "password": testPassword}, testOrigin, http.StatusOK)
 	for _, room := range []string{lounge.ID, games.ID} {
-		if got := occupancy(t, again, room); len(got) != 0 {
-			t.Errorf("occupancy of %s after rotating = %+v, want none", room, got)
+		if got := p.voice.Occupancy(room); len(got) != 0 {
+			t.Errorf("occupancy of %s after disabling = %+v, want none", room, got)
 		}
 	}
 }
 
-func TestAfterARotationThatDidNotEmptyVoiceOldParticipantsAreRemovedByTheChecks(t *testing.T) {
+func TestAfterDisablingThatDidNotEmptyVoiceOldParticipantsAreRemovedByTheChecks(t *testing.T) {
 	p := startPublic(t, 10)
 	lounge := p.createRoom(t, "Lounge")
 	bob := p.browser(t)
 	bobVisitor := p.enter(t, bob, "Bob")
 	first := p.inVoice(t, bob, bobVisitor, lounge.ID)
 
-	// As when the server stops, or LiveKit fails, between storing the new
-	// link and emptying voice.
-	if _, err := p.identity.Rotate(t.Context()); err != nil {
-		t.Fatalf("Rotate: %v", err)
+	// As when the server stops, or LiveKit fails, between disabling the
+	// account and emptying voice.
+	if _, err := p.identity.DisableAccount(t.Context(), bobVisitor.Id); err != nil {
+		t.Fatalf("DisableAccount: %v", err)
 	}
 	// The refresh at startup, or the next one, removes Bob.
 	if err := p.voice.Refresh(t.Context()); err != nil {

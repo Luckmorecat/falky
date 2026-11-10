@@ -20,8 +20,12 @@ import (
 	"github.com/kisshot/falky/server/internal/api"
 )
 
-// cookieName is the visitor cookie the server sets on entering.
-const cookieName = "falky_visitor"
+// cookieName is the session cookie the server sets on registering or signing
+// in, and accessCookie the pass it sets for the access password.
+const (
+	cookieName   = "falky_visitor"
+	accessCookie = "falky_access"
+)
 
 // stack is the running Compose stack: its operator commands, and its public
 // origin, reached through Caddy.
@@ -66,7 +70,13 @@ func connect(ctx context.Context, compose, caPath string) (*stack, error) {
 // docker runs docker compose with args against the stack and returns its
 // output.
 func (st *stack) docker(ctx context.Context, args ...string) (string, error) {
+	return st.dockerWithInput(ctx, "", args...)
+}
+
+// dockerWithInput is docker that writes input to the command's stdin.
+func (st *stack) dockerWithInput(ctx context.Context, input string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, "docker", append([]string{"compose", "-f", st.compose}, args...)...)
+	cmd.Stdin = strings.NewReader(input)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	if err := cmd.Run(); err != nil {
@@ -94,9 +104,11 @@ func (st *stack) client(cookie *http.Cookie) (*api.ClientWithResponses, error) {
 		}))
 }
 
-// visitor is someone who entered, with the cookie the server gave them.
+// visitor is someone who registered, with their login and the session cookie
+// the server gave them.
 type visitor struct {
 	api.Visitor
+	login  string
 	cookie *http.Cookie
 	api    *api.ClientWithResponses
 }

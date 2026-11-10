@@ -29,7 +29,7 @@ func (*unreadBody) Close() error               { return nil }
 func TestUploadAuthorizesBeforeReadingMultipart(t *testing.T) {
 	p := startPublic(t, 10)
 	r := p.createRoom(t, "Lounge")
-	_, token, err := p.identity.Enter(t.Context(), p.secret, "Bob")
+	_, token, err := p.registerDirect(t, "Bob")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -243,9 +243,7 @@ func TestAttachmentContentRevalidation(t *testing.T) {
 	if status != 304 {
 		t.Fatalf("posted revalidation=%d", status)
 	}
-	if _, err := p.identity.Rotate(t.Context()); err != nil {
-		t.Fatal(err)
-	}
+	p.revokeAll(t)
 	status, headers, out = attachmentRequest(t, p, hc, "GET", draft.ContentUrl, "", nil, conditional)
 	wantError(t, "revoked conditional read", status, out, 401, "visitor_required")
 	if headers.Get("Cache-Control") != "no-store" || headers.Get("ETag") != "" {
@@ -453,14 +451,10 @@ func TestAttachmentAccessAfterLinkRotation(t *testing.T) {
 	posted := uploadDraft(t, p, hc, room.ID, "posted.txt", []byte("posted"))
 	draft := uploadDraft(t, p, hc, room.ID, "draft.txt", []byte("draft"))
 	postedMessageForAttachments(t, b, room.ID, "posted", api.PostMessageRequest{AttachmentIds: []string{posted.Id}})
-	link, err := p.identity.Rotate(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
+	p.revokeAll(t)
 	status, _, out := attachmentRequest(t, p, hc, "GET", posted.ContentUrl, "", nil)
 	wantError(t, "old cookie", status, out, 401, "visitor_required")
 	newBrowser, newHTTP := p.browserWithHTTP(t)
-	p.secret = strings.TrimPrefix(link, testOrigin+"/#k=")
 	p.enter(t, newBrowser, "New visitor")
 	status, _, out = attachmentRequest(t, p, newHTTP, "GET", posted.ContentUrl, "", nil)
 	if status != 200 || string(out) != "posted" {
@@ -518,7 +512,7 @@ func TestContentStreamsBoundAcrossHandlersAndCloseOnCompletion(t *testing.T) {
 	b, hc := p.browserWithHTTP(t)
 	p.enter(t, b, "Bob")
 	draft := uploadDraft(t, p, hc, room.ID, "file", []byte("content"))
-	_, token, err := p.identity.Enter(t.Context(), p.secret, "Reader")
+	_, token, err := p.registerDirect(t, "Reader")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -594,7 +588,7 @@ func (w *readDeadlineRecorder) SetReadDeadline(deadline time.Time) error {
 func TestMultipartHeaderAdmissionRejectsBeforeReading(t *testing.T) {
 	p := startPublic(t, 10)
 	room := p.createRoom(t, "Lounge")
-	_, token, err := p.identity.Enter(t.Context(), p.secret, "Bob")
+	_, token, err := p.registerDirect(t, "Bob")
 	if err != nil {
 		t.Fatal(err)
 	}

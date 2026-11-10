@@ -3,13 +3,16 @@ package httpapi
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -32,7 +35,6 @@ type publicServer struct {
 	db          *platform.DB
 	srv         *httptest.Server
 	internal    *httptest.Server
-	secret      string
 	identity    *identity.Service
 	rooms       *rooms.Service
 	voice       *voice.Service
@@ -124,16 +126,12 @@ func startPublicAttachments(t *testing.T, enterBurst, postBurst int, attachmentO
 		t.Fatalf("Migrate: %v", err)
 	}
 	clk := &clock{now: time.Now()}
-	ident := identity.New(db, testOrigin, append(identityOptions, identity.WithClock(clk.Now))...)
+	ident := identity.New(db, testOrigin, append([]identity.Option{cheapPasswords, identity.WithClock(clk.Now)}, identityOptions...)...)
 	if err := ident.InitializeColours(t.Context()); err != nil {
 		t.Fatalf("InitializeColours: %v", err)
 	}
-	if _, err := ident.EnsureLink(t.Context()); err != nil {
-		t.Fatalf("EnsureLink: %v", err)
-	}
-	link, err := ident.Link(t.Context())
-	if err != nil {
-		t.Fatalf("Link: %v", err)
+	if err := ident.SetAccessPassword(t.Context(), testAccessPassword); err != nil {
+		t.Fatalf("SetAccessPassword: %v", err)
 	}
 	logs := &syncBuffer{}
 	logger := platform.NewLogger(logs, 0)
@@ -168,7 +166,8 @@ func startPublicAttachments(t *testing.T, enterBurst, postBurst int, attachmentO
 			chat.WithAttachments(store),
 			chat.WithPostLimit(platform.NewLimiter(postBurst, time.Hour, func() time.Time { return start })),
 			chat.WithPublisher(events.MessageCreated)),
-		EnterLimit:   platform.NewLimiter(enterBurst, time.Hour, func() time.Time { return start }),
+		AuthLimit:    platform.NewLimiter(enterBurst, time.Hour, func() time.Time { return start }),
+		LoginLimit:   platform.NewLimiter(enterBurst, time.Hour, func() time.Time { return start }),
 		Live:         hub,
 		PublicOrigin: testOrigin,
 	})
@@ -184,7 +183,7 @@ func startPublicAttachments(t *testing.T, enterBurst, postBurst int, attachmentO
 		}
 	})
 	return publicServer{
-		db: db, srv: srv, internal: internal, secret: strings.TrimPrefix(link, testOrigin+"/#k="),
+		db: db, srv: srv, internal: internal,
 		identity: ident, rooms: rs, attachments: store, voice: vs, livekit: lk, events: events, clock: clk, logs: logs, lifecycle: lifecycle,
 	}
 }
@@ -208,7 +207,8 @@ func (p publicServer) browserWithHTTP(t *testing.T) (*api.ClientWithResponses, *
 		t.Fatalf("cookiejar: %v", err)
 	}
 	hc := &http.Client{Transport: p.srv.Client().Transport, Jar: jar}
-	c, err := api.NewClientWithResponses(p.srv.URL, api.WithHTTPClient(hc))
+	// A browser sends its page's origin, which account changes and voice require.
+	c, err := api.NewClientWithResponses(p.srv.URL, api.WithHTTPClient(hc), api.WithRequestEditorFn(sameOrigin))
 	if err != nil {
 		t.Fatalf("NewClientWithResponses: %v", err)
 	}
@@ -222,17 +222,90 @@ func forwardedFor(value string) api.RequestEditorFn {
 	}
 }
 
-// enter enters as name through b and fails the test unless it succeeds.
+// The access password every test server starts with, the password test
+// accounts register with, and a cheap hash cost that keeps tests fast.
+const (
+	testAccessPassword = "shared secret phrase"
+	testPassword       = "correct horse battery"
+)
+
+var cheapPasswords = identity.WithPasswordCost(identity.PasswordCost{Time: 1, MemoryKiB: 64})
+
+var notLogin = regexp.MustCompile(`[^a-z0-9]+`)
+
+// loginFor turns a test name into a valid login: "Visitor 3" is visitor-3.
+func loginFor(name string) string {
+	login := strings.Trim(notLogin.ReplaceAllString(strings.ToLower(name), "-"), "-")
+	for len(login) < identity.MinLoginLength {
+		login += "x"
+	}
+	return login
+}
+
+var clientCount atomic.Uint32
+
+// newClientIP is a forwarded address no other request of the test run used,
+// so the per-address limit on account requests never interferes.
+func newClientIP() api.RequestEditorFn {
+	n := clientCount.Add(1)
+	return forwardedFor(fmt.Sprintf("10.%d.%d.%d", n>>16&255, n>>8&255, n&255))
+}
+
+func sameOrigin(_ context.Context, req *http.Request) error {
+	req.Header.Set("Origin", testOrigin)
+	return nil
+}
+
+// passAccess gives the access password through b and fails the test unless
+// it is accepted.
+func (p publicServer) passAccess(t *testing.T, b *api.ClientWithResponses) {
+	t.Helper()
+	res, err := b.PassAccessWithResponse(t.Context(), api.PassAccessJSONRequestBody{Password: testAccessPassword}, sameOrigin, newClientIP())
+	if err != nil || res.StatusCode() != http.StatusOK {
+		t.Fatalf("PassAccess = %v %v", res.StatusCode(), err)
+	}
+}
+
+// registerDirect registers name on the identity service directly, without
+// HTTP, and returns the account's identity and session token.
+func (p publicServer) registerDirect(t *testing.T, name string) (identity.Visitor, string, error) {
+	t.Helper()
+	pass, err := p.identity.PassAccess(t.Context(), testAccessPassword)
+	if err != nil {
+		return identity.Visitor{}, "", err
+	}
+	e, err := p.identity.Register(t.Context(), identity.RegistrationInput{AccessToken: pass, Login: loginFor(name), Password: testPassword, Name: name})
+	return e.Session.Visitor, e.Token, err
+}
+
+// revokeAll disables every account, as the operator might, without
+// enforcing it on live updates or voice.
+func (p publicServer) revokeAll(t *testing.T) {
+	t.Helper()
+	accounts, err := p.identity.Accounts(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range accounts {
+		if _, err := p.identity.DisableAccount(t.Context(), a.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// enter gives the access password and registers name through b, with a login
+// made from it, and fails the test unless both succeed.
 func (p publicServer) enter(t *testing.T, b *api.ClientWithResponses, name string) api.Visitor {
 	t.Helper()
-	res, err := b.EnterWithResponse(t.Context(), api.EnterRequest{Secret: p.secret, Name: name})
+	p.passAccess(t, b)
+	res, err := b.RegisterWithResponse(t.Context(), api.RegisterJSONRequestBody{Login: loginFor(name), Password: testPassword, Name: name}, sameOrigin, newClientIP())
 	if err != nil {
-		t.Fatalf("Enter: %v", err)
+		t.Fatalf("Register: %v", err)
 	}
-	if res.StatusCode() != http.StatusCreated || res.JSON201 == nil {
-		t.Fatalf("Enter(%q) = %d %s, want 201", name, res.StatusCode(), res.Body)
+	if res.StatusCode() != http.StatusOK || res.JSON200 == nil {
+		t.Fatalf("Register(%q) = %d %s, want 200", name, res.StatusCode(), res.Body)
 	}
-	return *res.JSON201
+	return res.JSON200.Session.Visitor
 }
 
 func wantError(t *testing.T, what string, status int, body []byte, wantStatus int, wantCode string) {
@@ -242,142 +315,13 @@ func wantError(t *testing.T, what string, status int, body []byte, wantStatus in
 	}
 }
 
-func TestEnteringSetsTheVisitorCookieAndMeReturnsTheVisitor(t *testing.T) {
-	p := startPublic(t, 10)
-	b := p.browser(t)
-	res, err := b.EnterWithResponse(t.Context(), api.EnterRequest{Secret: p.secret, Name: " Bob "})
-	if err != nil {
-		t.Fatalf("Enter: %v", err)
-	}
-	if res.StatusCode() != http.StatusCreated || res.JSON201 == nil || res.JSON201.Name != "Bob" || res.JSON201.Id == "" {
-		t.Fatalf("Enter = %d %s, want 201 with a visitor named Bob", res.StatusCode(), res.Body)
-	}
-	cookies := res.HTTPResponse.Cookies()
-	if len(cookies) != 1 {
-		t.Fatalf("Enter set %d cookies, want 1", len(cookies))
-	}
-	c := cookies[0]
-	if c.Name != "falky_visitor" || c.Value == "" || !c.HttpOnly || !c.Secure ||
-		c.SameSite != http.SameSiteStrictMode || c.Path != "/api" || c.MaxAge <= 0 {
-		t.Errorf("cookie = %s, want falky_visitor, HttpOnly, Secure, SameSite=Strict, Path=/api, persistent", c)
-	}
-
-	me, err := b.GetMeWithResponse(t.Context())
-	if err != nil {
-		t.Fatalf("GetMe: %v", err)
-	}
-	if me.StatusCode() != http.StatusOK || me.JSON200 == nil || *me.JSON200 != *res.JSON201 {
-		t.Errorf("GetMe = %d %s, want 200 with %+v", me.StatusCode(), me.Body, *res.JSON201)
-	}
-}
-
-func TestEnteringWithAWrongSecretIsRefusedWithoutACookie(t *testing.T) {
-	p := startPublic(t, 10)
-	b := p.browser(t)
-	res, err := b.EnterWithResponse(t.Context(), api.EnterRequest{Secret: "wrong", Name: "Bob"})
-	if err != nil {
-		t.Fatalf("Enter: %v", err)
-	}
-	wantError(t, "Enter with a wrong secret", res.StatusCode(), res.Body, http.StatusForbidden, "invalid_link")
-	if len(res.HTTPResponse.Cookies()) != 0 {
-		t.Errorf("Enter with a wrong secret set cookies %v", res.HTTPResponse.Cookies())
-	}
-}
-
-func TestEnteringRefusesReservedAndInvalidNames(t *testing.T) {
-	p := startPublic(t, 10)
-	p.enter(t, p.browser(t), "Bob")
-
-	for name, want := range map[string]struct {
-		status int
-		code   string
-	}{
-		" bob ":                 {http.StatusConflict, "name_taken"},
-		"   ":                   {http.StatusBadRequest, "invalid_name"},
-		strings.Repeat("a", 33): {http.StatusBadRequest, "invalid_name"},
-		"Bo\u0007b":             {http.StatusBadRequest, "invalid_name"},
-	} {
-		res, err := p.browser(t).EnterWithResponse(t.Context(), api.EnterRequest{Secret: p.secret, Name: name})
-		if err != nil {
-			t.Fatalf("Enter: %v", err)
-		}
-		wantError(t, "Enter("+name+")", res.StatusCode(), res.Body, want.status, want.code)
-		if len(res.HTTPResponse.Cookies()) != 0 {
-			t.Errorf("refused Enter(%q) set cookies", name)
-		}
-	}
-}
-
-func TestEnteringIsLimitedPerForwardedClientIP(t *testing.T) {
-	p := startPublic(t, 2)
-	b := p.browser(t)
-	attempt := func(forwarded string) *api.EnterResponse {
-		t.Helper()
-		res, err := b.EnterWithResponse(t.Context(), api.EnterRequest{Secret: "wrong", Name: "Bob"}, forwardedFor(forwarded))
-		if err != nil {
-			t.Fatalf("Enter: %v", err)
-		}
-		return res
-	}
-
-	for range 2 {
-		if res := attempt("203.0.113.1"); res.StatusCode() != http.StatusForbidden {
-			t.Fatalf("attempt within the limit = %d %s, want 403", res.StatusCode(), res.Body)
-		}
-	}
-	res := attempt("203.0.113.1")
-	wantError(t, "attempt beyond the limit", res.StatusCode(), res.Body, http.StatusTooManyRequests, "rate_limited")
-
-	// The proxy appends the address it saw; earlier entries come from the
-	// client and do not choose the bucket.
-	res = attempt("198.51.100.7, 203.0.113.1")
-	wantError(t, "attempt with a spoofed first entry", res.StatusCode(), res.Body, http.StatusTooManyRequests, "rate_limited")
-
-	// Another client IP has its own limit, and the correct secret is limited
-	// the same way.
-	if res := attempt("203.0.113.2"); res.StatusCode() != http.StatusForbidden {
-		t.Errorf("first attempt from another IP = %d %s, want 403", res.StatusCode(), res.Body)
-	}
-	limited, err := b.EnterWithResponse(t.Context(), api.EnterRequest{Secret: p.secret, Name: "Bob"}, forwardedFor("203.0.113.1"))
-	if err != nil {
-		t.Fatalf("Enter: %v", err)
-	}
-	wantError(t, "correct secret beyond the limit", limited.StatusCode(), limited.Body, http.StatusTooManyRequests, "rate_limited")
-}
-
-func TestEnteringIsLimitedPerIPv6Network(t *testing.T) {
-	p := startPublic(t, 2)
-	b := p.browser(t)
-	attempt := func(forwarded string) int {
-		t.Helper()
-		res, err := b.EnterWithResponse(t.Context(), api.EnterRequest{Secret: "wrong", Name: "Bob"}, forwardedFor(forwarded))
-		if err != nil {
-			t.Fatalf("Enter: %v", err)
-		}
-		return res.StatusCode()
-	}
-
-	// One client usually holds a whole /64, so its addresses share a limit.
-	for _, ip := range []string{"2001:db8::1", "2001:db8::ffff:2"} {
-		if got := attempt(ip); got != http.StatusForbidden {
-			t.Fatalf("attempt from %s within the limit = %d, want 403", ip, got)
-		}
-	}
-	if got := attempt("2001:db8::3"); got != http.StatusTooManyRequests {
-		t.Errorf("attempt from the same /64 beyond the limit = %d, want 429", got)
-	}
-	if got := attempt("2001:db8:0:1::1"); got != http.StatusForbidden {
-		t.Errorf("attempt from another /64 = %d, want 403", got)
-	}
-}
-
 func TestOversizedRequestBodiesAreRefused(t *testing.T) {
 	p := startPublic(t, 10)
-	res, err := p.browser(t).EnterWithResponse(t.Context(), api.EnterRequest{Secret: p.secret, Name: strings.Repeat("a", 1<<20)})
+	res, err := p.browser(t).PassAccessWithResponse(t.Context(), api.PassAccessJSONRequestBody{Password: strings.Repeat("a", 1<<20)}, sameOrigin)
 	if err != nil {
-		t.Fatalf("Enter: %v", err)
+		t.Fatalf("PassAccess: %v", err)
 	}
-	wantError(t, "Enter with a 1 MiB name", res.StatusCode(), res.Body, http.StatusBadRequest, "invalid_request")
+	wantError(t, "PassAccess with a 1 MiB password", res.StatusCode(), res.Body, http.StatusRequestEntityTooLarge, "invalid_request")
 }
 
 func TestMeNeedsAValidVisitorCookie(t *testing.T) {

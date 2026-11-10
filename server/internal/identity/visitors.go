@@ -3,15 +3,12 @@ package identity
 import (
 	"context"
 	"crypto/sha256"
-	"crypto/subtle"
 	"database/sql"
 	"errors"
 	"fmt"
-
-	"github.com/oklog/ulid/v2"
 )
 
-// Visitor is the stable identity shared by guests and accounts.
+// Visitor is the stable identity that owns messages and attachments.
 type Visitor struct {
 	// ID is a ULID; it never changes.
 	ID     string
@@ -19,74 +16,11 @@ type Visitor struct {
 	Colour Colour
 }
 
-// ErrWrongSecret reports a secret that is not the current access link's.
-var ErrWrongSecret = errors.New("wrong access link secret")
-
-// ErrNoVisitor reports a token, or a visitor ID, that gives no access: unknown,
-// or issued under a link that has since been replaced.
+// ErrNoVisitor reports a token, or an identity ID, that gives no access:
+// unknown, logged out, expired, revoked or of a disabled account.
 var ErrNoVisitor = errors.New("no such visitor")
 
-// Enter admits a new visitor named name when secret is the current access
-// link's, and reserves the name for them. It returns the visitor and the
-// token their cookie holds; only the token's hash is stored.
-//
-// It fails with ErrWrongSecret, an ErrInvalidName, or ErrNameTaken. The secret
-// is checked first, so a caller without it learns nothing about names.
-func (s *Service) Enter(ctx context.Context, secret, name string) (Visitor, string, error) {
-	name, nameErr := CleanName(name)
-	key := NameKey(name)
-	v := Visitor{ID: ulid.Make().String(), Name: name}
-	var token string
-
-	s.reservations.mu.Lock()
-	defer s.reservations.mu.Unlock()
-	now := s.now()
-	err := s.db.Write(ctx, func(tx *sql.Tx) error {
-		var current string
-		if err := tx.QueryRowContext(ctx, "SELECT link_secret FROM access WHERE id = 1").
-			Scan(&current); err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				return ErrNoLink
-			}
-			return err
-		}
-		// Comparing the hashes takes the same time whatever the secrets are.
-		want, got := sha256.Sum256([]byte(current)), sha256.Sum256([]byte(secret))
-		if subtle.ConstantTimeCompare(want[:], got[:]) != 1 {
-			return ErrWrongSecret
-		}
-		if nameErr != nil {
-			return nameErr
-		}
-		if err := s.reservedName(ctx, tx, key, v.ID); err != nil {
-			return err
-		}
-		if s.reservations.takenBy(key, v.ID, now) {
-			return ErrNameTaken
-		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO identities (id, name, created_at)
-			VALUES (?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`, v.ID, v.Name); err != nil {
-			return err
-		}
-		var err error
-		v.Colour, err = s.allocateColour(ctx, tx, v.ID)
-		if err != nil {
-			return err
-		}
-		_, token, err = s.issueSession(ctx, tx, v.ID, Guest, nil)
-		return err
-	})
-	if err != nil {
-		if errors.Is(err, ErrWrongSecret) || errors.Is(err, ErrInvalidName) || errors.Is(err, ErrNameTaken) {
-			return Visitor{}, "", err
-		}
-		return Visitor{}, "", fmt.Errorf("enter: %w", err)
-	}
-	s.reservations.reserve(key, v.ID, now)
-	return v, token, nil
-}
-
-// Resolve returns the current identity for a valid guest or account cookie.
+// Resolve returns the identity of a current account session cookie.
 func (s *Service) Resolve(ctx context.Context, token string) (Visitor, error) {
 	session, err := s.ResolveSession(ctx, token)
 	return session.Visitor, err

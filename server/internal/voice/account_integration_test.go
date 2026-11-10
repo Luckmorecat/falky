@@ -25,7 +25,6 @@ import (
 
 	"github.com/kisshot/falky/server/internal/httpapi"
 	"github.com/kisshot/falky/server/internal/identity"
-	"github.com/kisshot/falky/server/internal/identity/passkeytest"
 	"github.com/kisshot/falky/server/internal/platform"
 	"github.com/kisshot/falky/server/internal/rooms"
 	"github.com/kisshot/falky/server/internal/voice"
@@ -61,10 +60,7 @@ func newGuardedVoiceWithOptions(t *testing.T, voiceOptions []voice.Option, optio
 	if _, err := db.Migrate(t.Context(), migrations); err != nil {
 		t.Fatal(err)
 	}
-	ident := identity.New(db, "https://falky.example", options...)
-	if _, err := ident.EnsureLink(t.Context()); err != nil {
-		t.Fatal(err)
-	}
+	ident := identity.New(db, "https://falky.example", append([]identity.Option{identity.WithPasswordCost(identity.PasswordCost{Time: 1, MemoryKiB: 64})}, options...)...)
 	rs := rooms.New(db)
 	room, err := rs.Create(t.Context(), "Voice")
 	if err != nil {
@@ -78,35 +74,16 @@ func newGuardedVoiceWithOptions(t *testing.T, voiceOptions []voice.Option, optio
 	return guardedVoice{db: db, ident: ident, voice: s, gate: gate, public: public, room: room.ID, rooms: rs}
 }
 
-func (f guardedVoice) enroll(t *testing.T) (identity.Enrollment, *passkeytest.Authenticator) {
+// enroll registers an account and returns it with its login.
+func (f guardedVoice) enroll(t *testing.T) (identity.Enrollment, string) {
 	t.Helper()
-	i, err := f.ident.CreateInvitation(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	c, err := f.ident.BeginRegistration(t.Context(), identity.RegistrationInput{Invitation: i.Token, Name: "Account", BrowserContext: "registration"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	key := passkeytest.New(t)
-	enrolled, err := f.ident.FinishRegistration(t.Context(), c.ID, "registration", key.Registration(t, c.Creation, "https://falky.example"), "Laptop")
-	if err != nil {
-		t.Fatal(err)
-	}
-	return enrolled, key
+	return registerAccount(t, f.ident)
 }
 
-func (f guardedVoice) login(t *testing.T, key *passkeytest.Authenticator) identity.Enrollment {
+// login signs login in again.
+func (f guardedVoice) login(t *testing.T, login string) identity.Enrollment {
 	t.Helper()
-	c, err := f.ident.BeginAuthentication(t.Context(), "second")
-	if err != nil {
-		t.Fatal(err)
-	}
-	e, err := f.ident.FinishAuthentication(t.Context(), c.ID, "second", key.Assertion(t, c.Assertion, "https://falky.example"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	return e
+	return signIn(t, f.ident, login)
 }
 
 func (f guardedVoice) join(t *testing.T, session identity.Session) voice.Credentials {
@@ -246,16 +223,9 @@ func TestGuardedLiveKitIndependentMediaDisconnectReconnectLogoutRecoveryAndDisab
 		t.Fatal("logout closed other session")
 	default:
 	}
-	ceremony, err := f.ident.BeginRecovery(t.Context(), account.Session.Visitor.ID, account.RecoveryCodes[0], "recovery")
-	if err != nil {
-		t.Fatal(err)
-	}
-	replacement := passkeytest.New(t)
 	f.gate.Lock()
-	recovered, err := f.ident.FinishRecovery(t.Context(), ceremony.ID, "recovery", replacement.Registration(t, ceremony.Creation, "https://falky.example"), "Replacement")
-	if err == nil {
-		err = f.gate.Apply(t.Context(), recovered.Effects)
-	}
+	recovered := recoverAccount(t, f.ident, key)
+	err = f.gate.Apply(t.Context(), recovered.Effects)
 	f.gate.Unlock()
 	if err != nil {
 		t.Fatal(err)
@@ -364,38 +334,15 @@ func TestGuardedLiveKitAcceptsRefreshedTokenOnlyForCurrentImmutableGrant(t *test
 }
 
 func TestGuardedLiveKitMaintenanceEndsExpiredIdleMediaWithoutHTTPRequest(t *testing.T) {
-	for _, kind := range []identity.Kind{identity.Guest, identity.Account} {
+	for _, kind := range []identity.Kind{identity.Account} {
 		t.Run(string(kind), func(t *testing.T) {
 			ttl := identity.AccountSessionTTL
-			if kind == identity.Guest {
-				ttl = identity.GuestSessionTTL
-			}
 			var clockMu sync.Mutex
 			offset := time.Duration(0)
 			f := newGuardedVoice(t, identity.WithClock(func() time.Time { clockMu.Lock(); defer clockMu.Unlock(); return time.Now().Add(offset) }))
-			var session identity.Session
-			if kind == identity.Account {
-				account, _ := f.enroll(t)
-				session = account.Session
-			} else {
-				link, err := f.ident.Link(t.Context())
-				if err != nil {
-					t.Fatal(err)
-				}
-				_, token, err := f.ident.Enter(t.Context(), strings.TrimPrefix(link, "https://falky.example/#k="), "Guest")
-				if err != nil {
-					t.Fatal(err)
-				}
-				session, err = f.ident.ResolveSession(t.Context(), token)
-				if err != nil {
-					t.Fatal(err)
-				}
-			}
+			account, _ := f.enroll(t)
+			session := account.Session
 			creds := f.join(t, session)
-			if kind == identity.Guest {
-				// Production routes the legacy guest URL through this guard.
-				creds.URL = "ws" + strings.TrimPrefix(f.public.URL, "http")
-			}
 			client := connect(t, creds)
 			clockMu.Lock()
 			offset = ttl

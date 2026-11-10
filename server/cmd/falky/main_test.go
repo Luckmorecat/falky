@@ -18,6 +18,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -26,7 +27,6 @@ import (
 	"github.com/kisshot/falky/server/internal/admin"
 	"github.com/kisshot/falky/server/internal/api"
 	"github.com/kisshot/falky/server/internal/platform"
-	"github.com/kisshot/falky/server/internal/realtime"
 )
 
 // syncBuffer is a bytes.Buffer safe for the server's goroutines to write to
@@ -238,15 +238,7 @@ func TestShutdownInterruptsBlockedMultipartReader(t *testing.T) {
 		t.Fatal(err)
 	}
 	stop, public := startServerOn(t, cfg, io.Discard)
-	_, link, _ := runLinkShow(t, env(vars))
-	c, err := api.NewClientWithResponses(public)
-	if err != nil {
-		t.Fatal(err)
-	}
-	entered, err := c.EnterWithResponse(t.Context(), api.EnterRequest{Secret: strings.TrimSpace(strings.Split(link, "#k=")[1]), Name: "Bob"})
-	if err != nil || entered.JSON201 == nil {
-		t.Fatalf("enter=%+v %v", entered, err)
-	}
+	cookie := enterServer(t, vars, public, "Bob")
 	_, room, _ := runCommand(t, env(vars), "room", "create", "Lounge")
 	conn, err := (&net.Dialer{}).DialContext(t.Context(), "tcp", strings.TrimPrefix(public, "http://"))
 	if err != nil {
@@ -256,7 +248,7 @@ func TestShutdownInterruptsBlockedMultipartReader(t *testing.T) {
 	if err := conn.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
 		t.Fatal(err)
 	}
-	_, err = fmt.Fprintf(conn, "POST /api/rooms/%s/attachments HTTP/1.1\r\nHost: localhost\r\nCookie: %s\r\nContent-Type: multipart/form-data; boundary=slow\r\nContent-Length: 1000000\r\nExpect: 100-continue\r\n\r\n", strings.TrimSpace(room), entered.HTTPResponse.Cookies()[0].String())
+	_, err = fmt.Fprintf(conn, "POST /api/rooms/%s/attachments HTTP/1.1\r\nHost: localhost\r\nCookie: %s\r\nContent-Type: multipart/form-data; boundary=slow\r\nContent-Length: 1000000\r\nExpect: 100-continue\r\n\r\n", strings.TrimSpace(room), cookie.String())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -279,15 +271,15 @@ func TestShutdownInterruptsBlockedMultipartReader(t *testing.T) {
 	}
 }
 
-func TestMigrateCommandIsIdempotentAndCreatesTheLinkOnce(t *testing.T) {
+func TestMigrateCommandIsIdempotentAndWarnsWithoutAnAccessPassword(t *testing.T) {
 	getenv := env(map[string]string{platform.EnvDBPath: filepath.Join(t.TempDir(), "falky.db")})
-	for i, wantCreated := range []bool{true, false} {
+	for i := range 2 {
 		var stdout, stderr bytes.Buffer
 		if code := run(t.Context(), []string{"migrate"}, getenv, nil, &stdout, &stderr); code != 0 {
 			t.Fatalf("migrate run %d: exit %d, stdout %q, stderr %q", i+1, code, stdout.String(), stderr.String())
 		}
-		if created := strings.Contains(stdout.String(), "access link created"); created != wantCreated {
-			t.Errorf("migrate run %d: link created = %v, want %v; logs %q", i+1, created, wantCreated, stdout.String())
+		if !strings.Contains(stdout.String(), "falky password set") {
+			t.Errorf("migrate run %d: logs %q, want a warning naming falky password set", i+1, stdout.String())
 		}
 	}
 }
@@ -337,54 +329,97 @@ func startServerWith(t *testing.T, cfg platform.Config, logs io.Writer, ls liste
 	return stop
 }
 
-// runLinkShow runs falky link show and returns its exit code and output.
-func runLinkShow(t *testing.T, getenv func(string) string) (code int, stdout, stderr string) {
+// runCommandWithInput is runCommand with stdin.
+func runCommandWithInput(t *testing.T, getenv func(string) string, stdin string, args ...string) (code int, stdout, stderr string) {
 	t.Helper()
-	return runCommand(t, getenv, "link", "show")
+	var out, errOut bytes.Buffer
+	code = run(t.Context(), args, getenv, strings.NewReader(stdin), &out, &errOut)
+	return code, out.String(), errOut.String()
 }
 
-func TestLinkShowPrintsTheSameLinkAcrossRestarts(t *testing.T) {
+const testAccessPassword = "shared secret phrase"
+
+var registered atomic.Uint32
+
+// enterServer sets the access password through falky password set, gives it
+// over HTTP at public and registers name, and returns the session cookie.
+func enterServer(t *testing.T, vars map[string]string, public, name string) *http.Cookie {
+	t.Helper()
+	cfg, err := platform.LoadConfig(env(vars))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code, out, errOut := runCommandWithInput(t, env(vars), testAccessPassword+"\n", "password", "set"); code != 0 {
+		t.Fatalf("password set = exit %d, %q, %q", code, out, errOut)
+	}
+	post := func(path string, cookie *http.Cookie, body string) []*http.Cookie {
+		t.Helper()
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, public+path, strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Origin", cfg.PublicOrigin)
+		req.Header.Set("X-Forwarded-For", fmt.Sprintf("10.0.0.%d", registered.Add(1)))
+		if cookie != nil {
+			req.AddCookie(cookie)
+		}
+		client := &http.Client{Transport: &http.Transport{DisableKeepAlives: true}}
+		res, err := client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = res.Body.Close()
+		if res.StatusCode != http.StatusOK {
+			t.Fatalf("POST %s = %d, want 200", path, res.StatusCode)
+		}
+		return res.Cookies()
+	}
+	var access *http.Cookie
+	for _, c := range post("/api/access", nil, `{"password":"`+testAccessPassword+`"}`) {
+		if c.Name == "falky_access" {
+			access = c
+		}
+	}
+	login := strings.ToLower(strings.ReplaceAll(name, " ", "-"))
+	for len(login) < 3 {
+		login += "x"
+	}
+	for _, c := range post("/api/accounts/register", access, `{"login":"`+login+`","password":"correct horse battery","name":"`+name+`"}`) {
+		if c.Name == "falky_visitor" {
+			return c
+		}
+	}
+	t.Fatal("registering set no session cookie")
+	return nil
+}
+
+func TestPasswordSetReadsStdinAndNeedsARunningServer(t *testing.T) {
 	dir := t.TempDir()
 	vars := map[string]string{
-		platform.EnvDBPath:       filepath.Join(dir, "falky.db"),
-		platform.EnvAdminSocket:  filepath.Join(dir, "admin.sock"),
-		platform.EnvPublicOrigin: "https://falky.example",
+		platform.EnvDBPath:      filepath.Join(dir, "falky.db"),
+		platform.EnvAdminSocket: filepath.Join(dir, "admin.sock"),
+	}
+	if code, out, stderr := runCommandWithInput(t, env(vars), testAccessPassword+"\n", "password", "set"); code == 0 || out != "" || !strings.Contains(stderr, "not running") {
+		t.Errorf("password set without a server = exit %d, %q, %q; want it to say the server is not running", code, out, stderr)
 	}
 	cfg, err := platform.LoadConfig(env(vars))
 	if err != nil {
-		t.Fatalf("LoadConfig: %v", err)
+		t.Fatal(err)
 	}
 	var logs syncBuffer
-	stop := startServer(t, cfg, &logs)
-
-	code, link, stderr := runLinkShow(t, env(vars))
-	if code != 0 || !strings.HasPrefix(link, "https://falky.example/#k=") || !strings.HasSuffix(link, "\n") {
-		t.Fatalf("link show = exit %d, stdout %q, stderr %q; want 0 and the link on one line", code, link, stderr)
-	}
-	if code, again, _ := runLinkShow(t, env(vars)); code != 0 || again != link {
-		t.Errorf("second link show = exit %d, %q, want 0, %q", code, again, link)
-	}
-
-	stop()
-	if _, err := os.Lstat(cfg.AdminSocket); !errors.Is(err, fs.ErrNotExist) {
-		t.Errorf("admin socket after shutdown: Lstat = %v, want it removed", err)
-	}
 	startServer(t, cfg, &logs)
-	if code, again, _ := runLinkShow(t, env(vars)); code != 0 || again != link {
-		t.Errorf("link show after restart = exit %d, %q, want 0, %q", code, again, link)
+	for input, want := range map[string]string{"": "no password", "short\n": "8 to 128"} {
+		if code, _, stderr := runCommandWithInput(t, env(vars), input, "password", "set"); code == 0 || !strings.Contains(stderr, want) {
+			t.Errorf("password set with %q = exit %d, %q; want an error saying %q", input, code, stderr, want)
+		}
 	}
-
-	secret := strings.TrimSpace(strings.TrimPrefix(link, "https://falky.example/#k="))
-	if strings.Contains(logs.String(), secret) {
-		t.Errorf("server logs contain the link secret: %q", logs.String())
+	code, out, stderr := runCommandWithInput(t, env(vars), testAccessPassword+"\r\n", "password", "set")
+	if code != 0 || !strings.Contains(out, "access password set") {
+		t.Fatalf("password set = exit %d, %q, %q", code, out, stderr)
 	}
-}
-
-func TestLinkShowFailsWhenNoServerIsRunning(t *testing.T) {
-	socket := filepath.Join(t.TempDir(), "admin.sock")
-	code, stdout, stderr := runLinkShow(t, env(map[string]string{platform.EnvAdminSocket: socket}))
-	if code == 0 || stdout != "" || !strings.Contains(stderr, "not running") || !strings.Contains(stderr, socket) {
-		t.Errorf("link show = exit %d, stdout %q, stderr %q; want non-zero, no link, and a message naming %s", code, stdout, stderr, socket)
+	if strings.Contains(logs.String(), testAccessPassword) || strings.Contains(out, testAccessPassword) {
+		t.Error("the access password appears in the output or logs")
 	}
 }
 
@@ -393,9 +428,12 @@ func TestRunRefusesUnknownCommands(t *testing.T) {
 		nil,
 		{"frobnicate"},
 		{"serve", "extra"},
-		{"link"},
-		{"link", "rotate", "extra"},
-		{"link", "show", "extra"},
+		{"link", "show"},
+		{"password"},
+		{"password", "set", "extra"},
+		{"account"},
+		{"account", "disable"},
+		{"invitation", "create"},
 		{"room"},
 		{"room", "create"},
 		{"room", "create", "Living", "room"},
@@ -429,8 +467,6 @@ func TestMessagesRoomsAndVisitorsSurviveARestart(t *testing.T) {
 		t.Fatalf("LoadConfig: %v", err)
 	}
 	stop, public := startServerOn(t, cfg, io.Discard)
-	_, link, _ := runLinkShow(t, env(vars))
-	secret := strings.TrimSpace(link[strings.Index(link, "#k=")+len("#k="):])
 	_, out, _ := runCommand(t, env(vars), "room", "create", "Lounge")
 	roomID := strings.TrimSpace(out)
 
@@ -438,18 +474,17 @@ func TestMessagesRoomsAndVisitorsSurviveARestart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClientWithResponses: %v", err)
 	}
-	entered, err := c.EnterWithResponse(t.Context(), api.EnterRequest{Secret: secret, Name: "Bob"})
-	if err != nil || entered.StatusCode() != http.StatusCreated || entered.JSON201 == nil {
-		t.Fatalf("Enter = %v, %v, want 201", entered, err)
-	}
-	cookies := entered.HTTPResponse.Cookies()
-	if len(cookies) != 1 {
-		t.Fatalf("Enter set %d cookies, want 1", len(cookies))
-	}
+	cookie := enterServer(t, vars, public, "Bob")
+	cookies := []*http.Cookie{cookie}
 	withCookie := func(_ context.Context, req *http.Request) error {
 		req.AddCookie(cookies[0])
 		return nil
 	}
+	beforeRes, err := c.GetMeWithResponse(t.Context(), withCookie)
+	if err != nil || beforeRes.JSON200 == nil {
+		t.Fatalf("GetMe before restart = %v, %v", beforeRes, err)
+	}
+	before := *beforeRes.JSON200
 	posted, err := c.PostMessageWithResponse(t.Context(), roomID, api.PostMessageRequest{RequestKey: "k1", Body: "hello"}, withCookie)
 	if err != nil || posted.StatusCode() != http.StatusCreated || posted.JSON201 == nil {
 		t.Fatalf("PostMessage = %v, %v, want 201", posted, err)
@@ -465,8 +500,8 @@ func TestMessagesRoomsAndVisitorsSurviveARestart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetMe: %v", err)
 	}
-	if me.StatusCode() != http.StatusOK || me.JSON200 == nil || *me.JSON200 != *entered.JSON201 {
-		t.Errorf("GetMe after restart = %d %s, want 200 with %+v", me.StatusCode(), me.Body, *entered.JSON201)
+	if me.StatusCode() != http.StatusOK || me.JSON200 == nil || *me.JSON200 != before {
+		t.Errorf("GetMe after restart = %d %s, want 200 with %+v", me.StatusCode(), me.Body, before)
 	}
 	rooms, err := c.ListRoomsWithResponse(t.Context(), withCookie)
 	if err != nil {
@@ -527,17 +562,11 @@ func TestRoomCommandsChangeTheRoomListAndTellConnectedVisitors(t *testing.T) {
 		t.Fatalf("LoadConfig: %v", err)
 	}
 	_, public := startServerOn(t, cfg, io.Discard)
-	_, link, _ := runLinkShow(t, env(vars))
-	secret := strings.TrimSpace(link[strings.Index(link, "#k=")+len("#k="):])
 	c, err := api.NewClientWithResponses(public)
 	if err != nil {
 		t.Fatalf("NewClientWithResponses: %v", err)
 	}
-	entered, err := c.EnterWithResponse(t.Context(), api.EnterRequest{Secret: secret, Name: "Bob"})
-	if err != nil || entered.StatusCode() != http.StatusCreated {
-		t.Fatalf("Enter = %v, %v, want 201", entered, err)
-	}
-	cookie := entered.HTTPResponse.Cookies()[0]
+	cookie := enterServer(t, vars, public, "Bob")
 	listRooms := func() []api.Room {
 		t.Helper()
 		res, err := c.ListRoomsWithResponse(t.Context(), func(_ context.Context, req *http.Request) error {
@@ -614,17 +643,7 @@ func TestServeClosesLiveConnectionsWhenItStops(t *testing.T) {
 		t.Fatalf("LoadConfig: %v", err)
 	}
 	stop, public := startServerOn(t, cfg, io.Discard)
-	_, link, _ := runLinkShow(t, env(vars))
-	secret := strings.TrimSpace(link[strings.Index(link, "#k=")+len("#k="):])
-	c, err := api.NewClientWithResponses(public)
-	if err != nil {
-		t.Fatalf("NewClientWithResponses: %v", err)
-	}
-	entered, err := c.EnterWithResponse(t.Context(), api.EnterRequest{Secret: secret, Name: "Bob"})
-	if err != nil || entered.StatusCode() != http.StatusCreated {
-		t.Fatalf("Enter = %v, %v, want 201", entered, err)
-	}
-	cookie := entered.HTTPResponse.Cookies()[0]
+	cookie := enterServer(t, vars, public, "Bob")
 	ws, _, err := websocket.Dial(t.Context(), public+"/api/live", &websocket.DialOptions{ //nolint:bodyclose // Dial closes the body on success
 		HTTPHeader: http.Header{"Origin": {cfg.PublicOrigin}, "Cookie": {cookie.Name + "=" + cookie.Value}},
 	})
@@ -658,99 +677,6 @@ func TestServeClosesLiveConnectionsWhenItStops(t *testing.T) {
 	}
 }
 
-func TestLinkRotateReplacesTheLinkAndEndsTheOldOnesAccess(t *testing.T) {
-	livekit := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/protobuf")
-		w.WriteHeader(http.StatusOK)
-	}))
-	t.Cleanup(livekit.Close)
-	dir := t.TempDir()
-	vars := map[string]string{
-		platform.EnvDBPath:           filepath.Join(dir, "falky.db"),
-		platform.EnvAdminSocket:      filepath.Join(dir, "admin.sock"),
-		platform.EnvLiveKitAPIURL:    livekit.URL,
-		platform.EnvLiveKitAPIKey:    "test",
-		platform.EnvLiveKitAPISecret: "test-secret",
-	}
-	cfg, err := platform.LoadConfig(env(vars))
-	if err != nil {
-		t.Fatalf("LoadConfig: %v", err)
-	}
-	var logs syncBuffer
-	_, public := startServerOn(t, cfg, &logs)
-	_, link, _ := runLinkShow(t, env(vars))
-	secretOf := func(link string) string { return strings.TrimSpace(link[strings.Index(link, "#k=")+len("#k="):]) }
-	c, err := api.NewClientWithResponses(public)
-	if err != nil {
-		t.Fatalf("NewClientWithResponses: %v", err)
-	}
-	entered, err := c.EnterWithResponse(t.Context(), api.EnterRequest{Secret: secretOf(link), Name: "Bob"})
-	if err != nil || entered.StatusCode() != http.StatusCreated {
-		t.Fatalf("Enter = %v, %v, want 201", entered, err)
-	}
-	cookie := entered.HTTPResponse.Cookies()[0]
-	withCookie := func(_ context.Context, req *http.Request) error {
-		req.AddCookie(cookie)
-		return nil
-	}
-	ws, _, err := websocket.Dial(t.Context(), public+"/api/live", &websocket.DialOptions{ //nolint:bodyclose // Dial closes the body on success
-		HTTPHeader: http.Header{"Origin": {cfg.PublicOrigin}, "Cookie": {cookie.Name + "=" + cookie.Value}},
-	})
-	if err != nil {
-		t.Fatalf("Dial /api/live: %v", err)
-	}
-	defer func() { _ = ws.CloseNow() }()
-
-	start := time.Now()
-	code, rotated, stderr := runCommand(t, env(vars), "link", "rotate")
-	if code != 0 || rotated == link || !strings.Contains(rotated, "/#k=") || !strings.HasSuffix(rotated, "\n") {
-		t.Fatalf("link rotate = exit %d, stdout %q, stderr %q; want 0 and a new link on one line (was %q)", code, rotated, stderr, link)
-	}
-	if _, shown, _ := runLinkShow(t, env(vars)); shown != rotated {
-		t.Errorf("link show after rotating = %q, want %q", shown, rotated)
-	}
-	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
-	defer cancel()
-	_, data, err := ws.Read(ctx)
-	var e api.Event
-	if err != nil || json.Unmarshal(data, &e) != nil || e.Type != api.EventTypeAccessRevoked {
-		t.Errorf("live update after rotating = %s, %v; want access.revoked", data, err)
-	}
-	if _, _, err := ws.Read(ctx); websocket.CloseStatus(err) != realtime.StatusRevoked {
-		t.Errorf("read after access.revoked = %v, want close status %d", err, realtime.StatusRevoked)
-	}
-	if elapsed := time.Since(start); elapsed > 2*time.Second {
-		t.Errorf("rotation took %v to reach the live connection, want at most two seconds", elapsed)
-	}
-
-	if me, err := c.GetMeWithResponse(t.Context(), withCookie); err != nil || me.StatusCode() != http.StatusUnauthorized {
-		t.Errorf("GetMe with the old cookie = %v, %v, want 401", me, err)
-	}
-	if old, err := c.EnterWithResponse(t.Context(), api.EnterRequest{Secret: secretOf(link), Name: "Ann"}); err != nil ||
-		old.StatusCode() != http.StatusForbidden {
-		t.Errorf("Enter with the old secret = %v, %v, want 403", old, err)
-	}
-	again, err := c.EnterWithResponse(t.Context(), api.EnterRequest{Secret: secretOf(rotated), Name: "Bob"})
-	if err != nil || again.StatusCode() != http.StatusCreated || again.JSON201 == nil || again.JSON201.Id == entered.JSON201.Id {
-		t.Errorf("Enter with the new secret = %v, %v, want 201 and a new visitor", again, err)
-	}
-	for _, l := range []string{link, rotated} {
-		if strings.Contains(logs.String(), secretOf(l)) {
-			t.Errorf("server logs contain a link secret: %q", logs.String())
-		}
-	}
-}
-
-func TestLinkRotateFailsWhenNoServerIsRunning(t *testing.T) {
-	socket := filepath.Join(t.TempDir(), "admin.sock")
-	code, stdout, stderr := runCommand(t, env(map[string]string{platform.EnvAdminSocket: socket}), "link", "rotate")
-	if code == 0 || stdout != "" || !strings.Contains(stderr, "not running") {
-		t.Errorf("link rotate = exit %d, stdout %q, stderr %q; want non-zero saying the server is not running", code, stdout, stderr)
-	}
-}
-
-// healthEnv returns the environment of a server whose internal listener is
-// ls.internal, named by port only as the image names it.
 func healthEnv(t *testing.T, ls listeners) func(string) string {
 	t.Helper()
 	_, port, err := net.SplitHostPort(ls.internal.Addr().String())
@@ -810,8 +736,6 @@ func TestARestoredSnapshotHasWhatWasPostedBeforeItAndKeepsTheVisitors(t *testing
 		t.Fatalf("LoadConfig: %v", err)
 	}
 	stop, public := startServerOn(t, cfg, io.Discard)
-	_, link, _ := runLinkShow(t, env(vars))
-	secret := strings.TrimSpace(link[strings.Index(link, "#k=")+len("#k="):])
 	_, out, _ := runCommand(t, env(vars), "room", "create", "Lounge")
 	roomID := strings.TrimSpace(out)
 	c, err := api.NewClientWithResponses(public)
@@ -822,11 +746,7 @@ func TestARestoredSnapshotHasWhatWasPostedBeforeItAndKeepsTheVisitors(t *testing
 	// Visitors who keep posting, each as fast as the post limit lets them.
 	var cookies []*http.Cookie
 	for _, name := range []string{"Ann", "Bob", "Cy"} {
-		entered, err := c.EnterWithResponse(t.Context(), api.EnterRequest{Secret: secret, Name: name})
-		if err != nil || entered.StatusCode() != http.StatusCreated || len(entered.HTTPResponse.Cookies()) != 1 {
-			t.Fatalf("Enter %s = %v, %v, want 201 with a cookie", name, entered, err)
-		}
-		cookies = append(cookies, entered.HTTPResponse.Cookies()[0])
+		cookies = append(cookies, enterServer(t, vars, public, name))
 	}
 	as := func(cookie *http.Cookie) api.RequestEditorFn {
 		return func(_ context.Context, req *http.Request) error {
@@ -908,9 +828,6 @@ func TestARestoredSnapshotHasWhatWasPostedBeforeItAndKeepsTheVisitors(t *testing
 		t.Fatalf("LoadConfig: %v", err)
 	}
 	_, public = startServerOn(t, restoredCfg, io.Discard)
-	if _, got, _ := runLinkShow(t, env(restoredVars)); got != link {
-		t.Errorf("link after restore = %q, want %q", got, link)
-	}
 	c, err = api.NewClientWithResponses(public)
 	if err != nil {
 		t.Fatalf("NewClientWithResponses: %v", err)
@@ -952,40 +869,54 @@ func TestServeFailsExplicitlyWhenColourInitializationCannotComplete(t *testing.T
 	}
 }
 
-func TestInvitationCommandsUseRunningProtectedSocket(t *testing.T) {
+func TestAccountCommandsUseTheRunningServer(t *testing.T) {
 	dir := t.TempDir()
-	vars := map[string]string{platform.EnvDBPath: filepath.Join(dir, "falky.db"), platform.EnvAdminSocket: filepath.Join(dir, "admin.sock"), platform.EnvPublicOrigin: "https://falky.example"}
+	vars := map[string]string{platform.EnvDBPath: filepath.Join(dir, "falky.db"), platform.EnvAdminSocket: filepath.Join(dir, "admin.sock"), platform.EnvPublicOrigin: "http://127.0.0.1:8080"}
 	cfg, err := platform.LoadConfig(env(vars))
 	if err != nil {
 		t.Fatal(err)
 	}
-	var logs syncBuffer
-	startServer(t, cfg, &logs)
-	code, out, stderr := runCommand(t, env(vars), "invitation", "create")
-	if code != 0 || stderr != "" || !strings.HasPrefix(out, "https://falky.example/#invite=") {
-		t.Fatal("invitation create did not return link")
-	}
-	bearer := strings.TrimSpace(strings.TrimPrefix(out, "https://falky.example/#invite="))
-	code, out, stderr = runCommand(t, env(vars), "invitation", "list")
-	if code != 0 || stderr != "" || strings.Contains(out, bearer) {
-		t.Fatal("unsafe invitation list")
-	}
-	var refs []struct{ ID string }
-	if err := json.Unmarshal([]byte(out), &refs); err != nil {
-		t.Fatal(err)
-	}
-	if len(refs) != 1 {
-		t.Fatal("missing invitation reference")
-	}
-	code, _, stderr = runCommand(t, env(vars), "invitation", "revoke", refs[0].ID)
-	if code != 0 || stderr != "" {
-		t.Fatal("invitation revoke failed")
-	}
-	code, out, stderr = runCommand(t, env(vars), "account", "list")
+	_, public := startServerOn(t, cfg, io.Discard)
+	code, out, stderr := runCommand(t, env(vars), "account", "list")
 	if code != 0 || stderr != "" || strings.TrimSpace(out) != "[]" {
-		t.Fatal("private account list failed")
+		t.Fatalf("account list = exit %d, %q, %q; want an empty list", code, out, stderr)
 	}
-	if strings.Contains(logs.String(), bearer) {
-		t.Fatal("operator bearer leaked to server logs")
+	cookie := enterServer(t, vars, public, "Alice")
+	code, out, _ = runCommand(t, env(vars), "account", "list")
+	var accounts []struct {
+		ID, Login, Name string
+		Disabled        bool
+	}
+	if err := json.Unmarshal([]byte(out), &accounts); code != 0 || err != nil || len(accounts) != 1 || accounts[0].Login != "alice" || accounts[0].Name != "Alice" {
+		t.Fatalf("account list = exit %d, %q, %v", code, out, err)
+	}
+	code, out, stderr = runCommand(t, env(vars), "account", "recover", "alice")
+	if code != 0 || stderr != "" || !strings.Contains(out, "/#recover=") || !strings.Contains(out, "&account=alice") {
+		t.Fatalf("account recover = exit %d, %q, %q", code, out, stderr)
+	}
+	me := func() int {
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, public+"/api/me", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.AddCookie(cookie)
+		res, err := (&http.Client{Transport: &http.Transport{DisableKeepAlives: true}}).Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = res.Body.Close()
+		return res.StatusCode
+	}
+	// No LiveKit runs here, so emptying voice fails after the disable is
+	// committed; the command says so, and the account stays disabled.
+	runCommand(t, env(vars), "account", "disable", "alice")
+	if status := me(); status != http.StatusUnauthorized {
+		t.Errorf("GET /api/me after disabling = %d, want 401", status)
+	}
+	if code, _, stderr := runCommand(t, env(vars), "account", "enable", accounts[0].ID); code != 0 || stderr != "" {
+		t.Fatalf("account enable = exit %d, %q", code, stderr)
+	}
+	if code, _, stderr := runCommand(t, env(vars), "account", "disable", "nobody"); code == 0 || stderr == "" {
+		t.Errorf("account disable nobody = exit %d, %q; want a failure", code, stderr)
 	}
 }

@@ -16,21 +16,19 @@ import (
 // security scheme.
 const cookieName = "falky_visitor"
 
-// cookieMaxAge matches the absolute server-side guest session lifetime.
-const cookieMaxAge = int(identity.GuestSessionTTL / time.Second)
+// cookieMaxAge matches the absolute server-side account session lifetime.
+const cookieMaxAge = int(identity.AccountSessionTTL / time.Second)
 
 // openOperations are the operations that need no visitor: those the contract
 // marks with an empty security requirement. Every other operation does.
 var openOperations = map[string]bool{
-	"Enter":                true,
-	"GetLiveness":          true,
-	"GetReadiness":         true,
-	"BeginRegistration":    true,
-	"FinishRegistration":   true,
-	"BeginAuthentication":  true,
-	"FinishAuthentication": true,
-	"BeginRecovery":        true,
-	"FinishRecovery":       true,
+	"GetLiveness":  true,
+	"GetReadiness": true,
+	"GetAccess":    true,
+	"PassAccess":   true,
+	"Register":     true,
+	"Login":        true,
+	"Recover":      true,
 }
 
 type (
@@ -127,37 +125,6 @@ func clientIP(r *http.Request) string {
 	return netip.PrefixFrom(addr.WithZone(""), 64).Masked().String()
 }
 
-func (s *server) Enter(ctx context.Context, req api.EnterRequestObject) (api.EnterResponseObject, error) {
-	ip, _ := ctx.Value(clientIPKey{}).(string)
-	if !s.enterLimit.Allow(ip) {
-		return api.Enter429JSONResponse{Code: "rate_limited", Message: "too many attempts to enter; try again later"}, nil
-	}
-	v, token, err := s.identity.Enter(ctx, req.Body.Secret, req.Body.Name)
-	switch {
-	case errors.Is(err, identity.ErrWrongSecret):
-		return api.Enter403JSONResponse{Code: "invalid_link", Message: "the access link is not valid"}, nil
-	case errors.Is(err, identity.ErrInvalidName):
-		return api.Enter400JSONResponse{InvalidNameJSONResponse: invalidName(err)}, nil
-	case errors.Is(err, identity.ErrNameTaken):
-		return api.Enter409JSONResponse{NameTakenJSONResponse: nameTaken()}, nil
-	case err != nil:
-		return nil, err
-	}
-	cookie := &http.Cookie{
-		Name:     cookieName,
-		Value:    token,
-		Path:     "/api",
-		MaxAge:   cookieMaxAge,
-		HttpOnly: true,
-		Secure:   true,
-		SameSite: http.SameSiteStrictMode,
-	}
-	return api.Enter201JSONResponse{
-		Body:    s.visitorBody(v),
-		Headers: api.Enter201ResponseHeaders{SetCookie: cookie.String()},
-	}, nil
-}
-
 func (s *server) GetMe(ctx context.Context, _ api.GetMeRequestObject) (api.GetMeResponseObject, error) {
 	return api.GetMe200JSONResponse(s.visitorBody(currentVisitor(ctx))), nil
 }
@@ -200,7 +167,7 @@ func (s *server) RenameMe(ctx context.Context, req api.RenameMeRequestObject) (a
 
 // visitorRequired is the answer to a request without a valid visitor cookie.
 var visitorRequired = api.VisitorRequiredJSONResponse{
-	Code: "visitor_required", Message: "no valid visitor cookie; enter through the access link",
+	Code: "visitor_required", Message: "no valid session; sign in first",
 }
 
 // visitorBody is v as the contract shows it.

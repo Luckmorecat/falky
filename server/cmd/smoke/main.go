@@ -1,8 +1,8 @@
 // Command smoke checks a running Falky Compose stack end to end, through Caddy,
-// the way a client would: entering, live updates, chat, voice with LiveKit and
-// its webhooks, a name conflict, replacing the access link, and the limit on
-// entering. It prints one line per check and exits non-zero on the first
-// failure.
+// the way a client would: the access password, registering, live updates,
+// chat, voice with LiveKit and its webhooks, taken names, disabling an account,
+// and the limit on access password attempts. It prints one line per check and
+// exits non-zero on the first failure.
 //
 // Usage, from the repository root with the stack up:
 //
@@ -12,8 +12,8 @@
 // It runs the operator commands in the server's container with docker
 // compose, trusts Caddy's local authority (so the stack must serve a local
 // domain such as localhost), and joins voice from this machine. It replaces
-// the access link, which ends every visitor's access, and leaves its rooms
-// and visitors behind: run it only against a stack nobody uses.
+// the access password, which makes every browser give it again, and leaves
+// its rooms and accounts behind: run it only against a stack nobody uses.
 package main
 
 import (
@@ -95,33 +95,33 @@ type smoke struct {
 	// suffix keeps this run's room and names apart from earlier runs'.
 	suffix string
 
-	secret  string // the access link's secret
-	roomID  string
-	ann     *visitor // in voice and live updates until the link is replaced
-	annLive *liveConn
+	password string // the access password this run set
+	roomID   string
+	ann      *visitor // in voice and live updates until her account is disabled
+	annLive  *liveConn
 	// creds are Ann's latest voice credentials, and voice her current voice
 	// connection, or nil.
 	creds *api.VoiceCredentials
 	voice *voiceConn
-	// nia enters with the replaced link.
+	// nia registers after Ann is disabled.
 	nia *visitor
 }
 
 func (s *smoke) checks() []check {
 	return []check{
-		{"falky link show prints the access link", s.linkShow},
+		{"falky password set sets the access password", s.passwordSet},
 		{"falky room create creates a room", s.roomCreate},
-		{"entering sets the visitor cookie and /api/me returns the visitor", s.enter},
+		{"registering sets the session cookie and /api/me returns the account", s.enter},
 		{"live updates refuse a foreign Origin", s.foreignOrigin},
 		{"a message reaches live updates as message.created within a second", s.post},
 		{"renaming the room reaches live updates as room.changed", s.renameRoom},
 		{"joining voice sends occupancy.changed through LiveKit's webhook", s.joinVoice},
 		{"a second connection with the same token replaces the first", s.replace},
 		{"leaving voice sends occupancy.changed with the room empty", s.leaveVoice},
-		{"a returning visitor whose name was taken is told and kept out", s.nameConflict},
-		{"falky link rotate ends live updates, cookies and voice within two seconds", s.rotate},
+		{"another account cannot take a name or login in use", s.nameConflict},
+		{"falky account disable ends live updates, cookies and voice within two seconds", s.disable},
 		{"live updates stay open through Caddy past the server's 20-second ping", s.idle},
-		{"wrong secrets hit the enter limit, and X-Forwarded-For does not escape it", s.enterLimit},
+		{"wrong access passwords hit the limit, and X-Forwarded-For does not escape it", s.enterLimit},
 	}
 }
 

@@ -10,7 +10,6 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"slices"
-	"strings"
 	"sync"
 	"testing"
 	"testing/fstest"
@@ -37,18 +36,9 @@ func TestDurableGrantSurvivesDatabaseReopenAndUnknownTokensFailClosed(t *testing
 	if _, err = db.Migrate(t.Context(), ms); err != nil {
 		t.Fatal(err)
 	}
-	ident := identity.New(db, "https://falky.example")
-	if _, err := ident.EnsureLink(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	link, err := ident.Link(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, token, err := ident.Enter(t.Context(), link[len("https://falky.example/#k="):], "Bob")
-	if err != nil {
-		t.Fatal(err)
-	}
+	ident := identity.New(db, "https://falky.example", identity.WithPasswordCost(identity.PasswordCost{Time: 1, MemoryKiB: 64}))
+	enrolled, _ := registerAccount(t, ident)
+	token := enrolled.Token
 	session, err := ident.ResolveSession(t.Context(), token)
 	if err != nil {
 		t.Fatal(err)
@@ -74,7 +64,7 @@ func TestDurableGrantSurvivesDatabaseReopenAndUnknownTokensFailClosed(t *testing
 		t.Fatal(err)
 	}
 	defer func() { _ = db.Close() }()
-	ident = identity.New(db, "https://falky.example")
+	ident = identity.New(db, "https://falky.example", identity.WithPasswordCost(identity.PasswordCost{Time: 1, MemoryKiB: 64}))
 	s = voice.New(lk, ident, rooms.New(db), cfg, voice.WithDB(db))
 	s.ConfigureAdmission(&sync.Mutex{}, ident.ValidateSession, "https://falky.example")
 	guard := s.Signalling("http://127.0.0.1:1")
@@ -107,18 +97,9 @@ func TestCleanupRetriesAfterDeletedSessionAndDatabaseRestartEvenWhenListingIsEmp
 	if _, err := db.Migrate(t.Context(), ms); err != nil {
 		t.Fatal(err)
 	}
-	ident := identity.New(db, "https://falky.example")
-	if _, err := ident.EnsureLink(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	link, err := ident.Link(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, cookie, err := ident.Enter(t.Context(), strings.TrimPrefix(link, "https://falky.example/#k="), "Bob")
-	if err != nil {
-		t.Fatal(err)
-	}
+	ident := identity.New(db, "https://falky.example", identity.WithPasswordCost(identity.PasswordCost{Time: 1, MemoryKiB: 64}))
+	enrolled, _ := registerAccount(t, ident)
+	cookie := enrolled.Token
 	session, err := ident.ResolveSession(t.Context(), cookie)
 	if err != nil {
 		t.Fatal(err)
@@ -155,7 +136,7 @@ func TestCleanupRetriesAfterDeletedSessionAndDatabaseRestartEvenWhenListingIsEmp
 		t.Fatal(err)
 	}
 	defer func() { _ = db.Close() }()
-	ident = identity.New(db, "https://falky.example")
+	ident = identity.New(db, "https://falky.example", identity.WithPasswordCost(identity.PasswordCost{Time: 1, MemoryKiB: 64}))
 	s = voice.New(lk, ident, rooms.New(db), cfg, voice.WithDB(db))
 	// No participant appears in the listing. The durable record still requires removal.
 	lk.fail = false

@@ -49,13 +49,13 @@ func TestAutomaticColourSamplesEveryUnusedPaletteUniformly(t *testing.T) {
 	for index, want := range expected {
 		t.Run(want, func(t *testing.T) {
 			f := newFixture(t, filepath.Join(t.TempDir(), "falky.db"))
-			service := identity.New(f.db, "https://falky.example", identity.WithColourChoice(func(n int) int {
+			service := identity.New(f.db, "https://falky.example", cheap, identity.WithColourChoice(func(n int) int {
 				if n != 16 {
 					t.Fatalf("candidate count = %d", n)
 				}
 				return index
 			}))
-			visitor, _, err := service.Enter(t.Context(), f.secret, "Bob")
+			visitor, _, err := enterOn(t, service, f.pass, "Bob")
 			if err != nil || visitor.Colour.Palette != want {
 				t.Fatalf("assignment = %+v, %v; want %s", visitor, err, want)
 			}
@@ -69,7 +69,7 @@ func TestConcurrentFirstAssignmentsExhaustUnusedPalettesBeforeReuse(t *testing.T
 	assigned := make(chan identity.Visitor, 16)
 	for n := range 16 {
 		wg.Go(func() {
-			v, _, err := f.ident.Enter(t.Context(), f.secret, fmt.Sprintf("Visitor %d", n))
+			v, _, err := enterOn(t, f.ident, f.pass, fmt.Sprintf("Visitor %d", n))
 			if err != nil {
 				t.Error(err)
 				return
@@ -93,10 +93,10 @@ func TestConcurrentFirstAssignmentsExhaustUnusedPalettesBeforeReuse(t *testing.T
 
 func TestExhaustedColoursReuseOfflineAssignmentsAndThenLeastConnectedUse(t *testing.T) {
 	f := newFixture(t, filepath.Join(t.TempDir(), "falky.db"))
-	service := identity.New(f.db, "https://falky.example", identity.WithColourChoice(func(int) int { return 0 }))
+	service := identity.New(f.db, "https://falky.example", cheap, identity.WithColourChoice(func(int) int { return 0 }))
 	var original []identity.Visitor
 	for n := range 16 {
-		v, _, err := service.Enter(t.Context(), f.secret, fmt.Sprintf("Visitor %d", n))
+		v, _, err := enterOn(t, service, f.pass, fmt.Sprintf("Visitor %d", n))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -105,7 +105,7 @@ func TestExhaustedColoursReuseOfflineAssignmentsAndThenLeastConnectedUse(t *test
 	}
 	// Only ruby is offline. Reuse never changes its original owner's assignment.
 	service.ColourConnected(original[15].ID, false)
-	reused, _, err := service.Enter(t.Context(), f.secret, "Returning palette")
+	reused, _, err := enterOn(t, service, f.pass, "Returning palette")
 	if err != nil || reused.Colour.Palette != "ruby" {
 		t.Fatalf("offline reuse = %+v, %v", reused, err)
 	}
@@ -117,7 +117,7 @@ func TestExhaustedColoursReuseOfflineAssignmentsAndThenLeastConnectedUse(t *test
 	// palette is least used and the injected first index chooses sky.
 	service.ColourConnected(original[15].ID, true)
 	service.ColourConnected(reused.ID, true)
-	least, _, err := service.Enter(t.Context(), f.secret, "Least used")
+	least, _, err := enterOn(t, service, f.pass, "Least used")
 	if err != nil || least.Colour.Palette != "sky" {
 		t.Fatalf("least used = %+v, %v", least, err)
 	}
@@ -125,7 +125,7 @@ func TestExhaustedColoursReuseOfflineAssignmentsAndThenLeastConnectedUse(t *test
 	if _, err := service.SetColour(t.Context(), original[0].ID, "ruby"); err != nil {
 		t.Fatal(err)
 	}
-	vacant, _, err := service.Enter(t.Context(), f.secret, "Vacant connected palette")
+	vacant, _, err := enterOn(t, service, f.pass, "Vacant connected palette")
 	if err != nil || vacant.Colour.Palette != "sky" {
 		t.Fatalf("manual count update = %+v, %v", vacant, err)
 	}
@@ -155,7 +155,7 @@ func TestDuplicateManualColoursAreValidAndInvalidChoiceLeavesRevisionUnchanged(t
 func TestHistoricalColourLookupDoesNotRestoreRevokedAccess(t *testing.T) {
 	f := newFixture(t, filepath.Join(t.TempDir(), "falky.db"))
 	visitor, token := f.enter(t, "Bob")
-	if _, err := f.ident.Rotate(t.Context()); err != nil {
+	if _, err := f.ident.DisableAccount(t.Context(), visitor.ID); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.ident.InitializeColours(t.Context()); err != nil {

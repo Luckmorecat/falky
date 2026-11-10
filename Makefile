@@ -74,7 +74,7 @@ test-integration:
 	$(IN_SERVER) go test -race -tags integration ./...
 
 # Checks the running Compose stack (deploy/compose.yaml) end to end through
-# Caddy. It replaces the access link: run it only on a stack nobody uses.
+# Caddy. It replaces the access password: run it only on a stack nobody uses.
 smoke:
 	$(IN_SERVER) go run ./cmd/smoke -compose ../deploy/compose.yaml
 

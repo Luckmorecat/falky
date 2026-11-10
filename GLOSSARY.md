@@ -4,29 +4,27 @@ A private, self-hosted place for a small circle of friends to chat, talk by voic
 
 ## People and access
 
-**Access link**:
-The reusable secret link that admits guests to this server. Replacing it ends guest access while accounts keep theirs.
-_Avoid_: Account invitation, password
+**Access password**:
+The one shared password that lets a browser sign in or register on this server. The operator sets and changes it (`falky password set`); changing it makes every browser give it again but signs no one out.
+_Avoid_: Access link, invite, server password, room password
 
 **Identity**:
-A lasting identity that owns messages and attachments, whether a guest or an account. Becoming an account preserves that identity.
+A lasting identity that owns messages and attachments. An account keeps its identity through recovery, and from the guest it may have been.
 _Avoid_: Visitor, user, member
 
-**Guest**:
-An identity admitted through the access link and remembered by one browser. Entering afresh in another browser creates a different guest.
-
 **Account**:
-An identity with durable access established by accepting an account invitation and enrolling a passkey. The same account can use several browsers and keeps its name while away or disabled.
+An identity someone signs in to with a login and a password. The same account can use several browsers and keeps its name while away or disabled.
+
+**Login**:
+What an account signs in with: private, never shown to others, and separate from its name.
+_Avoid_: Username, handle
 
 **Session**:
-A browser's time-limited access to an identity, admitted as a guest or authenticated through an account. Several open tabs can share one session.
-
-**Account invitation**:
-A single-use invitation from the operator to become an account. It is separate from the shared access link.
-_Avoid_: Access link, recovery link
+A browser's time-limited access to an account, started by registering, signing in or recovering. Several open tabs can share one session.
 
 **Recovery**:
-Replacing an account's passkeys using a recovery code or an operator-issued recovery link. It preserves the account's identity, name and history while ending its previous access.
+Setting a new password with a one-time recovery code the operator issues. It preserves the account's identity, name and history while ending its previous sessions.
+_Avoid_: Recovery phrase, password reset email
 
 **Disabled account**:
 An account whose access the operator has ended, with its identity, name and messages retained.
@@ -36,8 +34,8 @@ Someone is connected while they have the app open. This is never shown to others
 _Avoid_: Online, present, active
 
 **Name**:
-What an identity is called, unique among connected identities. Accounts reserve their names even while away; a guest using a newly claimed account name receives another name.
-_Avoid_: Handle, username, nickname
+What others see an account called, unique among accounts, and kept even while the account is away or disabled.
+_Avoid_: Handle, username, nickname, login
 
 **Profile**:
 An identity's visual appearance and personal decoration, separate from their name and access.

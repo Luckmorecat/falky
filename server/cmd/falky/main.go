@@ -6,8 +6,10 @@
 //	falky migrate                   apply pending migrations and exit
 //	falky room create <name>        create a room in the running server and print its ID
 //	falky room rename <id> <name>   rename a room in the running server
-//	falky link show                 print the access link of the running server
-//	falky link rotate               replace the access link, ending guest access, and print it
+//	falky password set              set the access password people give before signing in
+//	falky account list              list accounts as JSON
+//	falky account disable|enable <login>
+//	falky account recover <login>   issue a 30-minute recovery link
 //	falky health live|ready         probe the running server's health and fail unless it is live or ready
 //	falky snapshot                  have the running server snapshot its database and print where it went
 //	falky restore                   make the snapshot on standard input the database; the server must be stopped
@@ -17,6 +19,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -44,6 +47,7 @@ import (
 	"github.com/kisshot/falky/server/internal/rooms"
 	"github.com/kisshot/falky/server/internal/scheduler"
 	"github.com/kisshot/falky/server/internal/voice"
+	"golang.org/x/term"
 )
 
 const usage = `usage: falky <command>
@@ -53,14 +57,12 @@ commands:
   migrate                   apply pending migrations and exit
   room create <name>        create a room in the running server and print its ID
   room rename <id> <name>   rename a room in the running server
-  link show                 print the access link of the running server
-  link rotate               replace the access link, ending guest access, and print it
-  invitation create         create a seven-day single-use account invitation
-  invitation list           list invitation references (no bearer links)
-  invitation revoke <id>    revoke an invitation
-  account list              list private account IDs, names and disabled status
-  account disable <id>      disable an account and end its access
-  account recover <id>      issue a 30-minute replacement-passkey link after human verification
+  password set              set the access password, read from standard input; people give it
+                            once per browser before they sign in or register
+  account list              list accounts: IDs, logins, names and disabled status
+  account disable <login>   disable an account and end its access (a login or an account ID)
+  account enable <login>    let a disabled account sign in again
+  account recover <login>   issue a 30-minute link to set a new password, after verifying the person
   health live|ready         probe the running server's health and fail unless it is live or ready
   snapshot                  have the running server snapshot its database and print where it went
   restore                   make the snapshot on standard input the database; the server must be stopped
@@ -75,11 +77,18 @@ var migrationSources = []fs.FS{identity.Migrations(), rooms.Migrations(), chat.M
 // shutdownTimeout bounds how long serve waits for in-flight requests.
 const shutdownTimeout = 10 * time.Second
 
-// Entering is limited per client IP to a burst of enterBurst attempts, then
-// one more each enterInterval.
+// Signing in is limited per login to a burst of loginBurst attempts, then one
+// more each loginInterval, on top of the per-address account limit.
 const (
-	enterBurst    = 10
-	enterInterval = 6 * time.Second
+	loginBurst    = 10
+	loginInterval = 30 * time.Second
+)
+
+// Creating and renaming rooms is limited per account to a burst of roomBurst
+// changes, then one more each roomInterval.
+const (
+	roomBurst    = 5
+	roomInterval = 12 * time.Second
 )
 
 // Posting is limited per visitor to a burst of postBurst messages, then one
@@ -129,15 +138,15 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdin i
 		operator = func(ctx context.Context, cfg platform.Config, _ io.Writer) error {
 			return roomRename(ctx, cfg, args[2], args[3])
 		}
-	case slices.Equal(args, []string{"link", "show"}):
-		operator = linkShow
-	case slices.Equal(args, []string{"link", "rotate"}):
-		operator = linkRotate
+	case slices.Equal(args, []string{"password", "set"}):
+		operator = func(ctx context.Context, cfg platform.Config, stdout io.Writer) error {
+			return passwordSet(ctx, cfg, stdin, stdout)
+		}
 	case len(args) == 2 && args[0] == "health" && slices.Contains([]string{"live", "ready"}, args[1]):
 		operator = func(ctx context.Context, cfg platform.Config, stdout io.Writer) error {
 			return health(ctx, cfg, stdout, args[1])
 		}
-	case len(args) >= 2 && ((args[0] == "invitation" && ((len(args) == 2 && slices.Contains([]string{"create", "list"}, args[1])) || (len(args) == 3 && args[1] == "revoke"))) || (args[0] == "account" && ((len(args) == 2 && args[1] == "list") || (len(args) == 3 && slices.Contains([]string{"disable", "recover"}, args[1]))))):
+	case len(args) >= 2 && args[0] == "account" && ((len(args) == 2 && args[1] == "list") || (len(args) == 3 && slices.Contains([]string{"disable", "enable", "recover"}, args[1]))):
 		command = strings.Join(args[:2], " ")
 		operator = func(ctx context.Context, cfg platform.Config, out io.Writer) error {
 			return accountCommand(ctx, cfg, out, args)
@@ -190,27 +199,6 @@ func roomCreate(ctx context.Context, cfg platform.Config, stdout io.Writer, name
 // roomRename renames the room id to name in the running server.
 func roomRename(ctx context.Context, cfg platform.Config, id, name string) error {
 	return admin.NewClient(cfg.AdminSocket).RenameRoom(ctx, id, name)
-}
-
-// linkShow prints the access link the running server answers with.
-func linkShow(ctx context.Context, cfg platform.Config, stdout io.Writer) error {
-	link, err := admin.NewClient(cfg.AdminSocket).Link(ctx)
-	if err != nil {
-		return err
-	}
-	_, err = fmt.Fprintln(stdout, link)
-	return err
-}
-
-// linkRotate replaces the access link of the running server and prints the
-// new one.
-func linkRotate(ctx context.Context, cfg platform.Config, stdout io.Writer) error {
-	link, err := admin.NewClient(cfg.AdminSocket).RotateLink(ctx)
-	if err != nil {
-		return err
-	}
-	_, err = fmt.Fprintln(stdout, link)
-	return err
 }
 
 // snapshot has the running server snapshot its database and prints where the
@@ -294,12 +282,12 @@ func openMigrated(ctx context.Context, cfg platform.Config, logger *slog.Logger)
 		return nil, platform.Migrations{}, errors.Join(err, db.Close())
 	}
 	logger.Info("database migrated", "path", cfg.DBPath, "applied", applied)
-	created, err := identity.New(db, cfg.PublicOrigin).EnsureLink(ctx)
+	set, err := identity.New(db, cfg.PublicOrigin).AccessPasswordSet(ctx)
 	if err != nil {
 		return nil, platform.Migrations{}, errors.Join(err, db.Close())
 	}
-	if created {
-		logger.Info("access link created; print it with falky link show")
+	if !set {
+		logger.Warn("no access password yet, so no one can sign in or register; set it with falky password set")
 	}
 	return db, ms, nil
 }
@@ -414,7 +402,8 @@ func serveOn(ctx context.Context, logger *slog.Logger, cfg platform.Config, db *
 			chat.WithPublisher(events.MessageCreated)),
 		Voice:         vs,
 		LiveKitAPIURL: cfg.LiveKitAPIURL,
-		EnterLimit:    platform.NewLimiter(enterBurst, enterInterval, time.Now),
+		LoginLimit:    platform.NewLimiter(loginBurst, loginInterval, time.Now),
+		RoomLimit:     platform.NewLimiter(roomBurst, roomInterval, time.Now),
 		Live:          hub,
 		PublicOrigin:  cfg.PublicOrigin,
 		Attachments:   store,
@@ -499,31 +488,18 @@ func serveOn(ctx context.Context, logger *slog.Logger, cfg platform.Config, db *
 
 func accountCommand(ctx context.Context, cfg platform.Config, out io.Writer, args []string) error {
 	c := admin.NewClient(cfg.AdminSocket)
-	switch args[0] + " " + args[1] {
-	case "invitation create":
-		invite, err := c.CreateInvitation(ctx)
-		if err != nil {
-			return err
-		}
-		_, err = fmt.Fprintln(out, invite.Link)
-		return err
-	case "invitation list":
-		invites, err := c.Invitations(ctx)
-		if err != nil {
-			return err
-		}
-		return json.NewEncoder(out).Encode(invites)
-	case "invitation revoke":
-		return c.RevokeInvitation(ctx, args[2])
-	case "account list":
+	switch args[1] {
+	case "list":
 		accounts, err := c.Accounts(ctx)
 		if err != nil {
 			return err
 		}
 		return json.NewEncoder(out).Encode(accounts)
-	case "account disable":
+	case "disable":
 		return c.DisableAccount(ctx, args[2])
-	case "account recover":
+	case "enable":
+		return c.EnableAccount(ctx, args[2])
+	case "recover":
 		grant, err := c.IssueRecovery(ctx, args[2])
 		if err != nil {
 			return err
@@ -532,4 +508,49 @@ func accountCommand(ctx context.Context, cfg platform.Config, out io.Writer, arg
 		return err
 	}
 	return errors.New("unknown account command")
+}
+
+// passwordSet reads the access password from in and sets it on the running
+// server. From a terminal it asks twice without echoing; otherwise it reads
+// the first line, so the password never has to appear in a command line.
+func passwordSet(ctx context.Context, cfg platform.Config, in io.Reader, out io.Writer) error {
+	password, err := readPassword(in, out)
+	if err != nil {
+		return err
+	}
+	if err := admin.NewClient(cfg.AdminSocket).SetAccessPassword(ctx, password); err != nil {
+		return err
+	}
+	_, err = fmt.Fprintln(out, "access password set; browsers that gave the old one must give the new one before signing in again")
+	return err
+}
+
+func readPassword(in io.Reader, out io.Writer) (string, error) {
+	if f, ok := in.(*os.File); ok && term.IsTerminal(int(f.Fd())) {
+		_, _ = fmt.Fprint(out, "Access password: ")
+		first, err := term.ReadPassword(int(f.Fd()))
+		_, _ = fmt.Fprintln(out)
+		if err != nil {
+			return "", err
+		}
+		_, _ = fmt.Fprint(out, "Again: ")
+		second, err := term.ReadPassword(int(f.Fd()))
+		_, _ = fmt.Fprintln(out)
+		if err != nil {
+			return "", err
+		}
+		if string(first) != string(second) {
+			return "", errors.New("the passwords differ")
+		}
+		return string(first), nil
+	}
+	line, err := bufio.NewReader(io.LimitReader(in, 4096)).ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		return "", err
+	}
+	line = strings.TrimRight(line, "\r\n")
+	if line == "" {
+		return "", errors.New("no password on standard input")
+	}
+	return line, nil
 }

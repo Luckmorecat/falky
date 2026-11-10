@@ -78,15 +78,10 @@ type Deps struct {
 	Logger    *slog.Logger
 	Identity  *identity.Service
 	Rooms     *rooms.Service
-	// Voice is emptied once the access link is replaced.
-	Voice *voice.Service
+	Voice     *voice.Service
 	// DB is the database snapshots are taken of, into SnapshotDir.
 	DB          *platform.DB
 	SnapshotDir string
-}
-
-type linkBody struct {
-	Link string `json:"link"`
 }
 
 // roomNameBody is the body of a request that creates or renames a room.
@@ -112,36 +107,6 @@ type errorBody struct {
 func Handler(deps Deps) http.Handler {
 	mux := http.NewServeMux()
 	accountRoutes(mux, deps)
-	mux.HandleFunc("GET /link", func(w http.ResponseWriter, r *http.Request) {
-		link, err := deps.Identity.Link(r.Context())
-		if err != nil {
-			deps.Logger.Error("admin: read access link", "error", err)
-			writeJSON(w, http.StatusInternalServerError, errorBody{Error: "cannot read the access link"})
-			return
-		}
-		writeJSON(w, http.StatusOK, linkBody{Link: link})
-	})
-	mux.HandleFunc("POST /link/rotate", func(w http.ResponseWriter, r *http.Request) {
-		if deps.Lifecycle == nil {
-			writeJSON(w, http.StatusServiceUnavailable, errorBody{Error: "lifecycle enforcement unavailable"})
-			return
-		}
-		deps.Lifecycle.Lock()
-		defer deps.Lifecycle.Unlock()
-		link, effects, err := deps.Identity.RotateWithEffects(r.Context())
-		if err != nil {
-			deps.Logger.Error("admin: rotate access link", "error", err)
-			writeJSON(w, http.StatusInternalServerError, errorBody{Error: "cannot rotate the access link"})
-			return
-		}
-		// The new link is stored, so old cookies are already refused; what
-		// the visitors of the old link still have open ends now.
-		if adminAccountError(w, deps.Lifecycle.Apply(r.Context(), effects)) {
-			return
-		}
-		deps.Logger.Info("access link rotated")
-		writeJSON(w, http.StatusOK, linkBody{Link: link})
-	})
 	mux.HandleFunc("POST /rooms", func(w http.ResponseWriter, r *http.Request) {
 		var body roomNameBody
 		if !decode(w, r, &body) {
@@ -256,26 +221,6 @@ func NewClient(path string) *Client {
 			},
 		},
 	}
-}
-
-// Link returns the current access link.
-func (c *Client) Link(ctx context.Context) (string, error) {
-	var body linkBody
-	if err := c.do(ctx, http.MethodGet, "/link", nil, &body); err != nil {
-		return "", err
-	}
-	return body.Link, nil
-}
-
-// RotateLink replaces the access link and returns the new one. Visitors
-// admitted by the old link lose their access, live-update connections and
-// voice.
-func (c *Client) RotateLink(ctx context.Context) (string, error) {
-	var body linkBody
-	if err := c.do(ctx, http.MethodPost, "/link/rotate", nil, &body); err != nil {
-		return "", err
-	}
-	return body.Link, nil
 }
 
 // CreateRoom creates a room named name and returns its ID.

@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -56,18 +55,9 @@ func newMaintenanceVoice(t *testing.T) maintenanceVoice {
 	if _, err := db.Migrate(t.Context(), migrations); err != nil {
 		t.Fatal(err)
 	}
-	ident := identity.New(db, maintenanceOrigin)
-	if _, err := ident.EnsureLink(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	link, err := ident.Link(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, cookie, err := ident.Enter(t.Context(), strings.TrimPrefix(link, maintenanceOrigin+"/#k="), "Guest")
-	if err != nil {
-		t.Fatal(err)
-	}
+	ident := identity.New(db, maintenanceOrigin, identity.WithPasswordCost(identity.PasswordCost{Time: 1, MemoryKiB: 64}))
+	enrolled, _ := registerAccount(t, ident)
+	cookie := enrolled.Token
 	session, err := ident.ResolveSession(t.Context(), cookie)
 	if err != nil {
 		t.Fatal(err)
@@ -265,7 +255,7 @@ func TestCancelledVoiceOperationsPreserveExactGrantAndReusableGates(t *testing.T
 
 func TestShutdownJoinsMaintenanceBeforeGrantFenceObtainsSQLiteWriter(t *testing.T) {
 	f := newMaintenanceVoice(t)
-	if _, err := f.ident.Rotate(t.Context()); err != nil {
+	if _, err := f.ident.DisableAccount(t.Context(), f.session.Visitor.ID); err != nil {
 		t.Fatal(err)
 	}
 	entered, resume := make(chan struct{}), make(chan struct{})

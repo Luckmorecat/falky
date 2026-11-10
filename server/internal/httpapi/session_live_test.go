@@ -9,32 +9,27 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"slices"
-	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/coder/websocket"
-	"github.com/go-webauthn/webauthn/protocol"
 	"github.com/kisshot/falky/server/internal/api"
 	"github.com/kisshot/falky/server/internal/identity"
-	"github.com/kisshot/falky/server/internal/identity/passkeytest"
 	"github.com/kisshot/falky/server/internal/platform"
 	"github.com/kisshot/falky/server/internal/realtime"
 	"github.com/kisshot/falky/server/internal/scheduler"
 	"github.com/kisshot/falky/server/internal/voice"
-	"github.com/livekit/protocol/auth"
 )
 
 func TestLogoutEndsOnlyItsLiveSession(t *testing.T) {
 	p := startPublic(t, 100)
 	_, first := p.browserWithHTTP(t)
-	enrollAccount(t, p, first, "Account", passkeytest.New(t))
+	registerAccount(t, p, first, "Account")
 	ws := p.connectLive(t, first)
 	// Another browser still receives global room events after the logout.
 	b, guest := p.browserWithHTTP(t)
-	p.enter(t, b, "Guest")
+	p.enter(t, b, "Other")
 	other := p.connectLive(t, guest)
 	accountRequest(t, p, first, "POST", "/api/accounts/logout", map[string]any{}, testOrigin, http.StatusOK)
 	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
@@ -45,7 +40,7 @@ func TestLogoutEndsOnlyItsLiveSession(t *testing.T) {
 	}
 	p.createRoom(t, "Still connected")
 	if event := nextEvent(t, other); event.Type != "room.changed" {
-		t.Fatalf("guest lost live updates: %v", event.Type)
+		t.Fatalf("another account lost live updates: %v", event.Type)
 	}
 }
 
@@ -64,7 +59,7 @@ func (w delayedLiveUpgrade) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 func TestLogoutFencesRegisteredLiveUpgradeBeforeWebsocketHandshakeCompletes(t *testing.T) {
 	p := startPublic(t, 100)
 	_, browser := p.browserWithHTTP(t)
-	enrollAccount(t, p, browser, "Account", passkeytest.New(t))
+	registerAccount(t, p, browser, "Account")
 	entered, release := make(chan struct{}), make(chan struct{})
 	handler := p.srv.Config.Handler
 	held := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -108,7 +103,7 @@ func TestLogoutFencesRegisteredLiveUpgradeBeforeWebsocketHandshakeCompletes(t *t
 func TestExpiredLiveSessionCannotReceiveGlobalEvents(t *testing.T) {
 	p := startPublic(t, 100)
 	_, browser := p.browserWithHTTP(t)
-	enrollAccount(t, p, browser, "Account", passkeytest.New(t))
+	registerAccount(t, p, browser, "Account")
 	ws := p.connectLive(t, browser)
 	p.clock.Advance(identity.AccountSessionTTL)
 	p.createRoom(t, "Global event")
@@ -120,76 +115,11 @@ func TestExpiredLiveSessionCannotReceiveGlobalEvents(t *testing.T) {
 	}
 }
 
-func loginAccountBrowser(t *testing.T, p publicServer, key *passkeytest.Authenticator) (*api.ClientWithResponses, *http.Client) {
-	t.Helper()
-	client, browser := p.browserWithHTTP(t)
-	ceremony := beginAccount(t, p, browser, "/api/accounts/authentication/begin", map[string]any{})
-	var options protocol.CredentialAssertion
-	if err := json.Unmarshal(ceremony.Options, &options); err != nil {
-		t.Fatal(err)
-	}
-	accountRequest(t, p, browser, "POST", "/api/accounts/authentication/finish", map[string]any{"ceremonyId": ceremony.ID, "credential": json.RawMessage(key.Assertion(t, &options, testOrigin))}, testOrigin, 200)
-	return client, browser
-}
-
-func readClosed(t *testing.T, ws *websocket.Conn, want websocket.StatusCode) {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
-	defer cancel()
-	for {
-		_, data, err := ws.Read(ctx)
-		if err != nil {
-			if websocket.CloseStatus(err) != want {
-				t.Fatalf("close = %v, want %v", err, want)
-			}
-			return
-		}
-		if want != realtime.StatusRevoked && strings.Contains(string(data), "access.revoked") {
-			t.Fatal("name refresh revoked access")
-		}
-	}
-}
-
-func TestGuestRotationPreservesAccountLiveAndVoice(t *testing.T) {
-	p := startPublic(t, 100)
-	room := p.createRoom(t, "Voice")
-	a, accountHTTP := p.browserWithHTTP(t)
-	account := enrollAccount(t, p, accountHTTP, "Account", passkeytest.New(t))
-	b, guestHTTP := p.browserWithHTTP(t)
-	p.enter(t, b, "Guest")
-	accountLive, guestLive := p.connectLive(t, accountHTTP), p.connectLive(t, guestHTTP)
-	var accountParticipants []voice.Participant
-	for range 2 {
-		creds := joinedVoice(t, a, room.ID)
-		accountParticipants = append(accountParticipants, p.livekit.AddParticipant(room.ID, creds.GrantId))
-	}
-	for range 2 {
-		creds := joinedVoice(t, b, room.ID)
-		p.livekit.AddParticipant(room.ID, creds.GrantId)
-	}
-	if _, err := p.adminClient(t).RotateLink(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	readClosed(t, guestLive, realtime.StatusRevoked)
-	listed, err := p.livekit.Participants(t.Context())
-	if err != nil || !slices.Equal(listed, accountParticipants) {
-		t.Fatalf("rotation removed account voice: %v %v", listed, err)
-	}
-	accountRequest(t, p, accountHTTP, "GET", "/api/me", nil, "", 200)
-	p.createRoom(t, "Still available")
-	for event := nextEvent(t, accountLive); event.Type != api.EventTypeRoomChanged; event = nextEvent(t, accountLive) {
-	}
-	if got := p.voice.Occupancy(room.ID); len(got) != 2 || got[0].ID != account.Session.Visitor.ID || got[1].ID != account.Session.Visitor.ID {
-		t.Fatalf("account occupancy = %v", got)
-	}
-}
-
 func TestRecoveryAndDisableEndOldLiveSessionsAndPreserveRecoverySession(t *testing.T) {
 	p := startPublic(t, 100)
 	firstAPI, first := p.browserWithHTTP(t)
-	key := passkeytest.New(t)
-	account := enrollAccount(t, p, first, "Account", key)
-	secondAPI, second := loginAccountBrowser(t, p, key)
+	account := registerAccount(t, p, first, "Account")
+	secondAPI, second := loginAccountBrowser(t, p, "account")
 	room := p.createRoom(t, "Voice")
 	var oldVoice []api.VoiceCredentials
 	for _, client := range []*api.ClientWithResponses{firstAPI, secondAPI} {
@@ -201,8 +131,8 @@ func TestRecoveryAndDisableEndOldLiveSessionsAndPreserveRecoverySession(t *testi
 	}
 	old := []*websocket.Conn{p.connectLive(t, first), p.connectLive(t, second)}
 	_, recovering := p.browserWithHTTP(t)
-	ceremony := beginAccount(t, p, recovering, "/api/accounts/recovery/begin", map[string]any{"accountId": account.Session.Visitor.ID, "proof": account.RecoveryCodes[0]})
-	finishEnrollment(t, p, recovering, ceremony, passkeytest.New(t), "recovery")
+	accountRequest(t, p, recovering, "POST", "/api/access", map[string]any{"password": testAccessPassword}, testOrigin, http.StatusOK)
+	accountRequest(t, p, recovering, "POST", "/api/accounts/recovery", map[string]any{"account": "account", "proof": p.recoveryCode(t, "account"), "password": "a brand new password"}, testOrigin, http.StatusOK)
 	for _, ws := range old {
 		readClosed(t, ws, realtime.StatusRevoked)
 	}
@@ -234,54 +164,12 @@ func TestRecoveryAndDisableEndOldLiveSessionsAndPreserveRecoverySession(t *testi
 	}
 }
 
-func TestAccountRenameRefreshesOwnerAndDisplacedGuestWithCurrentVoiceNames(t *testing.T) {
-	p := startPublic(t, 100)
-	room := p.createRoom(t, "Voice")
-	a, accountHTTP := p.browserWithHTTP(t)
-	account := enrollAccount(t, p, accountHTTP, "Account", passkeytest.New(t))
-	b, guestHTTP := p.browserWithHTTP(t)
-	guest := p.enter(t, b, "Guest")
-	accountLive, guestLive := p.connectLive(t, accountHTTP), p.connectLive(t, guestHTTP)
-	credentials := joinedVoice(t, a, room.ID)
-	verifier, err := auth.ParseAPIToken(credentials.Token)
-	if err != nil {
-		t.Fatal(err)
-	}
-	p.livekit.AddParticipant(room.ID, verifier.Identity())
-	p.inVoice(t, b, guest, room.ID)
-	renamed, err := a.RenameMeWithResponse(t.Context(), api.RenameRequest{Name: "Guest"})
-	if err != nil || renamed.StatusCode() != 200 {
-		t.Fatalf("account rename = %v %v", renamed, err)
-	}
-	readClosed(t, guestLive, websocket.StatusGoingAway)
-	readClosed(t, accountLive, websocket.StatusGoingAway)
-	me, err := b.GetMeWithResponse(t.Context())
-	if err != nil || me.JSON200 == nil || me.JSON200.Name == "Guest" {
-		t.Fatalf("displaced guest not renamed: %v %v", me, err)
-	}
-	if got := p.voice.Occupancy(room.ID); len(got) != 2 {
-		t.Fatalf("occupancy = %v", got)
-	} else {
-		for _, v := range got {
-			if v.ID == account.Session.Visitor.ID && v.Name != "Guest" {
-				t.Fatal("owner voice name stale")
-			}
-			if v.ID == guest.Id && v.Name != me.JSON200.Name {
-				t.Fatal("displaced voice name stale")
-			}
-		}
-	}
-	p.connectLive(t, guestHTTP)
-	p.connectLive(t, accountHTTP)
-}
-
 func TestLegacyConfirmationValuesAllPreserveIndependentAccountConnections(t *testing.T) {
 	p := startPublic(t, 100)
 	room := p.createRoom(t, "Voice")
 	firstAPI, first := p.browserWithHTTP(t)
-	key := passkeytest.New(t)
-	enrollAccount(t, p, first, "Account", key)
-	_, second := loginAccountBrowser(t, p, key)
+	registerAccount(t, p, first, "Account")
+	_, second := loginAccountBrowser(t, p, "account")
 	old := joinedVoice(t, firstAPI, room.ID)
 	participant := p.livekit.AddParticipant(room.ID, old.GrantId)
 	for _, body := range []any{nil, map[string]any{"confirmTransfer": false}, map[string]any{"confirmTransfer": true}} {
@@ -300,21 +188,18 @@ func TestLegacyConfirmationValuesAllPreserveIndependentAccountConnections(t *tes
 	}
 }
 
-func TestAccountVoiceRequiresExactOriginWhileGuestLegacyJoinNeedsNoOrigin(t *testing.T) {
+func TestAccountVoiceRequiresExactOrigin(t *testing.T) {
 	p := startPublic(t, 100)
 	room := p.createRoom(t, "Voice")
 	_, account := p.browserWithHTTP(t)
-	enrollAccount(t, p, account, "Account", passkeytest.New(t))
+	registerAccount(t, p, account, "Account")
 	path := "/api/rooms/" + room.ID + "/voice"
 	accountRequest(t, p, account, "POST", path, map[string]any{"confirmTransfer": true}, "https://foreign.falky.example", 403)
 	accountRequest(t, p, account, "POST", path, nil, "", 403)
 	accountRequest(t, p, account, "POST", path, nil, testOrigin, 200)
-	guestAPI, guest := p.browserWithHTTP(t)
-	p.enter(t, guestAPI, "Guest")
-	accountRequest(t, p, guest, "POST", path, nil, "", 200)
 }
 
-func TestGuestAbsoluteExpiryRefusesHTTPVoiceAndGlobalLiveUpdates(t *testing.T) {
+func TestAbsoluteExpiryRefusesHTTPVoiceAndGlobalLiveUpdates(t *testing.T) {
 	p := restartVoice(t, startPublic(t, 100))
 	room := p.createRoom(t, "Voice")
 	client, browser := p.browserWithHTTP(t)
@@ -324,16 +209,16 @@ func TestGuestAbsoluteExpiryRefusesHTTPVoiceAndGlobalLiveUpdates(t *testing.T) {
 	if err := json.Unmarshal(raw, &session); err != nil {
 		t.Fatal(err)
 	}
-	if session.Kind != api.AccountSessionKindGuest || session.ExpiresAt == nil || session.ExpiresAt.Unix() != p.clock.Now().Add(identity.GuestSessionTTL).Unix() {
-		t.Fatalf("guest expiry missing from session response: %+v", session)
+	if session.Kind != api.AccountSessionKindAccount || session.ExpiresAt == nil || session.ExpiresAt.Unix() != p.clock.Now().Add(identity.AccountSessionTTL).Unix() {
+		t.Fatalf("expiry missing from session response: %+v", session)
 	}
 	ws := p.connectLive(t, browser)
 	creds := joinedVoice(t, client, room.ID)
-	p.clock.Advance(identity.GuestSessionTTL)
+	p.clock.Advance(identity.AccountSessionTTL)
 	accountRequest(t, p, browser, "GET", "/api/accounts/session", nil, "", http.StatusUnauthorized)
 	res, err := client.GetMeWithResponse(t.Context())
 	if err != nil || res.StatusCode() != http.StatusUnauthorized {
-		t.Fatalf("expired guest API access = %v, %v", res, err)
+		t.Fatalf("expired API access = %v, %v", res, err)
 	}
 	checkVoiceValidation(t, p, creds.Token, http.StatusForbidden)
 	p.createRoom(t, "Global after expiry")

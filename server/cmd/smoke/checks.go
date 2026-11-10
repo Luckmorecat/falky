@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 
@@ -18,45 +17,35 @@ import (
 	"github.com/kisshot/falky/server/internal/realtime"
 )
 
-// The server's limit on entering, per client address: a burst of
+// The server's limit on account requests, per client address: a burst of
 // enterBurst attempts, then one more each enterInterval.
 const (
-	enterBurst    = 10
-	enterInterval = 6 * time.Second
+	enterBurst    = 20
+	enterInterval = 3 * time.Second
 )
+
+// password is the password this run's accounts register with.
+const password = "smoke test password"
 
 // occupancyWait bounds how long a voice change may take to reach live
 // updates. LiveKit's webhook brings it in milliseconds; without the webhook
 // it would wait for the server's refresh, every 30 seconds.
 const occupancyWait = 3 * time.Second
 
-// revokeWait bounds how long replacing the link may take to end live
+// revokeWait bounds how long disabling an account may take to end live
 // updates and voice, counted from starting the command.
 const revokeWait = 2 * time.Second
 
-func (s *smoke) linkShow(ctx context.Context) error {
-	link, err := s.falky(ctx, "link", "show")
+func (s *smoke) passwordSet(ctx context.Context) error {
+	s.password = "smoke access " + s.suffix
+	out, err := s.dockerWithInput(ctx, s.password+"\n", "exec", "-T", "falky", "/falky", "password", "set")
 	if err != nil {
 		return err
 	}
-	s.secret, err = secretOf(s.origin, link)
-	return err
-}
-
-// secretOf returns the secret of an access link, which must point at origin.
-func secretOf(origin, link string) (string, error) {
-	if !strings.HasPrefix(link, origin+"/") {
-		return "", fmt.Errorf("link %q is not on %s", link, origin)
+	if strings.Contains(out, s.password) {
+		return errors.New("falky password set printed the password")
 	}
-	u, err := url.Parse(link)
-	if err != nil {
-		return "", err
-	}
-	fragment, err := url.ParseQuery(u.Fragment)
-	if err != nil || fragment.Get("k") == "" {
-		return "", errors.New("the link has no #k= secret")
-	}
-	return fragment.Get("k"), nil
+	return nil
 }
 
 func (s *smoke) roomCreate(ctx context.Context) error {
@@ -72,7 +61,7 @@ func (s *smoke) roomCreate(ctx context.Context) error {
 }
 
 func (s *smoke) enter(ctx context.Context) error {
-	ann, err := s.enterAs(ctx, s.secret, "Ann "+s.suffix)
+	ann, err := s.enterAs(ctx, "Ann "+s.suffix)
 	if err != nil {
 		return err
 	}
@@ -266,80 +255,27 @@ func (s *smoke) leaveVoice(ctx context.Context) error {
 }
 
 func (s *smoke) nameConflict(ctx context.Context) error {
-	name := "Xan " + s.suffix
-	xan, err := s.enterAs(ctx, s.secret, name)
-	if err != nil {
-		return err
+	var se *statusError
+	if _, err := s.enterAs(ctx, strings.ToUpper("Ann "+s.suffix)); !errors.As(err, &se) || se.status != http.StatusConflict {
+		return fmt.Errorf("registering Ann's name and login again: %w, want 409", err)
 	}
-	l, err := s.dialLive(ctx, xan, s.origin)
-	if err != nil {
-		return err
+	if _, err := s.register(ctx, "xan-"+s.suffix, "ANN "+s.suffix); !errors.As(err, &se) || se.code != "name_taken" {
+		return fmt.Errorf("registering Ann's name under another login: %w, want 409 name_taken", err)
 	}
-	l.close()
-	// Someone else enters under Xan's name once the server has seen Xan go,
-	// and holds it by connecting.
-	var other *visitor
-	for deadline := time.Now().Add(2 * time.Second); ; {
-		other, err = s.enterAs(ctx, s.secret, strings.ToUpper(name))
-		var se *statusError
-		if !errors.As(err, &se) || se.code != "name_taken" || time.Now().After(deadline) {
-			break
-		}
-		time.Sleep(100 * time.Millisecond)
+	if _, err := s.register(ctx, s.ann.login, "Xan "+s.suffix); !errors.As(err, &se) || se.code != "login_taken" {
+		return fmt.Errorf("registering Ann's login under another name: %w, want 409 login_taken", err)
 	}
-	if err != nil {
-		return err
-	}
-	ol, err := s.dialLive(ctx, other, s.origin)
-	if err != nil {
-		return err
-	}
-	defer ol.close()
-
-	me, err := xan.api.GetMeWithResponse(ctx)
-	if err != nil {
-		return err
-	}
-	if me.JSON200 == nil || !me.JSON200.NameTaken {
-		return fmt.Errorf("GET /api/me for Xan answered %d %s, want nameTaken", me.StatusCode(), me.Body)
-	}
-	l, err = s.dialLive(ctx, xan, s.origin)
-	if err := wantRefused(l, err, http.StatusConflict, "name_taken"); err != nil {
-		return fmt.Errorf("for Xan: %w", err)
-	}
-	voice, err := xan.api.JoinVoiceWithBodyWithResponse(ctx, s.roomID, "application/json", nil)
-	if err != nil {
-		return err
-	}
-	return wantError(voice.HTTPResponse, voice.Body, http.StatusConflict, "name_taken")
+	return nil
 }
 
-func (s *smoke) rotate(ctx context.Context) error {
+func (s *smoke) disable(ctx context.Context) error {
 	if err := s.joinAnn(ctx); err != nil {
 		return err
 	}
 	start := time.Now()
-	link, err := s.falky(ctx, "link", "rotate")
-	if err != nil {
+	if _, err := s.falky(ctx, "account", "disable", s.ann.login); err != nil {
 		return err
 	}
-	secret, err := secretOf(s.origin, link)
-	if err != nil {
-		return err
-	}
-	if secret == s.secret {
-		return errors.New("falky link rotate printed the same link")
-	}
-	e, err := s.annLive.next(ctx, revokeWait-time.Since(start), "access.revoked", func(e api.Event) bool {
-		return e.Type == api.EventTypeAccessRevoked
-	})
-	if err != nil {
-		return err
-	}
-	if r, err := e.Payload.AsAccessRevoked(); err != nil || r.Reason != api.AccessRevokedReasonLinkReplaced {
-		return fmt.Errorf("access.revoked payload %+v, want reason link_replaced", r)
-	}
-	revoked := time.Since(start)
 	status, err := s.annLive.closed(ctx, revokeWait-time.Since(start))
 	if err != nil {
 		return err
@@ -352,12 +288,8 @@ func (s *smoke) rotate(ctx context.Context) error {
 	if _, err := within(ctx, revokeWait-time.Since(start), s.voice.disconnected, "voice ending"); err != nil {
 		return err
 	}
-	// The server deletes the LiveKit rooms; clients do not reconnect after that.
-	if reason := s.voice.room.DisconnectReason(); reason != livekit.DisconnectReason_ROOM_DELETED {
-		return fmt.Errorf("voice ended with %v, want %v", reason, livekit.DisconnectReason_ROOM_DELETED)
-	}
-	s.logf("access.revoked after %s, closed with %d after %s, voice ended (room deleted) after %s",
-		revoked.Round(time.Millisecond), status, closed.Round(time.Millisecond), time.Since(start).Round(time.Millisecond))
+	s.logf("live updates closed with %d after %s, voice ended (%v) after %s",
+		status, closed.Round(time.Millisecond), s.voice.room.DisconnectReason(), time.Since(start).Round(time.Millisecond))
 	s.voice = nil
 
 	me, err := s.ann.api.GetMeWithResponse(ctx)
@@ -372,13 +304,10 @@ func (s *smoke) rotate(ctx context.Context) error {
 		return fmt.Errorf("with the old cookie: %w", err)
 	}
 	var se *statusError
-	if _, err := s.enterAs(ctx, s.secret, "Ann "+s.suffix); err == nil {
-		return errors.New("entering with the old secret succeeded, want 403 invalid_link")
-	} else if !errors.As(err, &se) || se.status != http.StatusForbidden || se.code != "invalid_link" {
-		return fmt.Errorf("entering with the old secret: %w, want 403 invalid_link", err)
+	if _, err := s.signIn(ctx, s.ann.login); !errors.As(err, &se) || se.code != "account_disabled" {
+		return fmt.Errorf("signing in while disabled: %w, want 403 account_disabled", err)
 	}
-	s.secret = secret
-	if s.nia, err = s.enterAs(ctx, s.secret, "Nia "+s.suffix); err != nil {
+	if s.nia, err = s.enterAs(ctx, "Nia "+s.suffix); err != nil {
 		return err
 	}
 	return s.wantOccupancy(ctx, s.nia)
@@ -408,7 +337,7 @@ func (s *smoke) enterLimit(ctx context.Context) error {
 		return err
 	}
 	attempt := func(forwardedFor string) (int, string, error) {
-		res, err := c.EnterWithResponse(ctx, api.EnterJSONRequestBody{Secret: "wrong" + s.suffix, Name: "Eve " + s.suffix},
+		res, err := c.PassAccessWithResponse(ctx, api.PassAccessJSONRequestBody{Password: "wrong " + s.suffix},
 			func(_ context.Context, req *http.Request) error {
 				if forwardedFor != "" {
 					req.Header.Set("X-Forwarded-For", forwardedFor)
@@ -429,12 +358,12 @@ func (s *smoke) enterLimit(ctx context.Context) error {
 			return err
 		case status == http.StatusTooManyRequests && code == "rate_limited":
 			limited = i
-		case status != http.StatusForbidden || code != "invalid_link":
-			return fmt.Errorf("a wrong secret answered %d %s, want 403 invalid_link or 429 rate_limited", status, code)
+		case status != http.StatusForbidden || code != "invalid_access_password":
+			return fmt.Errorf("a wrong access password answered %d %s, want 403 invalid_access_password or 429 rate_limited", status, code)
 		}
 	}
 	if limited == 0 {
-		return fmt.Errorf("no 429 after %d wrong secrets, each with another X-Forwarded-For", enterBurst+1)
+		return fmt.Errorf("no 429 after %d wrong access passwords, each with another X-Forwarded-For", enterBurst+1)
 	}
 	for _, forwardedFor := range []string{"198.51.100.7", "198.51.100.8, 203.0.113.250", "2001:db8::1", ""} {
 		status, code, err := attempt(forwardedFor)
@@ -449,41 +378,123 @@ func (s *smoke) enterLimit(ctx context.Context) error {
 	return nil
 }
 
-// enterAs enters with secret under name. When a recent run has used up the
-// limit on entering, it waits for the limit to let it in.
-func (s *smoke) enterAs(ctx context.Context, secret, name string) (*visitor, error) {
+// accountRequest sends an account request through c, waiting for the limit
+// on account requests when a recent run has used it up.
+func (s *smoke) accountRequest(ctx context.Context, send func() (int, error)) error {
+	for waited := 0; ; waited++ {
+		status, err := send()
+		if err != nil || status != http.StatusTooManyRequests || waited >= enterBurst {
+			return err
+		}
+		if waited == 0 {
+			s.logf("the limit on account requests is used up, probably by a recent run; waiting")
+		}
+		select {
+		case <-time.After(enterInterval):
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+}
+
+// pass gives the access password and returns the pass cookie.
+func (s *smoke) pass(ctx context.Context) (*http.Cookie, error) {
 	c, err := s.client(nil)
 	if err != nil {
 		return nil, err
 	}
-	for waited := 0; ; waited++ {
-		res, err := c.EnterWithResponse(ctx, api.EnterJSONRequestBody{Secret: secret, Name: name})
+	var res *api.PassAccessResponse
+	err = s.accountRequest(ctx, func() (int, error) {
+		var err error
+		res, err = c.PassAccessWithResponse(ctx, api.PassAccessJSONRequestBody{Password: s.password})
 		if err != nil {
-			return nil, err
+			return 0, err
 		}
-		if res.StatusCode() == http.StatusTooManyRequests && waited < enterBurst {
-			if waited == 0 {
-				s.logf("the limit on entering is used up, probably by a recent run; waiting")
-			}
-			select {
-			case <-time.After(enterInterval):
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			}
-			continue
-		}
-		if res.JSON201 == nil {
-			return nil, fmt.Errorf("POST /api/enter as %q: %w", name, &statusError{res.StatusCode(), errorCode(res.Body)})
-		}
-		for _, cookie := range res.HTTPResponse.Cookies() {
-			if cookie.Name == cookieName {
-				vc, err := s.client(cookie)
-				if err != nil {
-					return nil, err
-				}
-				return &visitor{Visitor: *res.JSON201, cookie: cookie, api: vc}, nil
-			}
-		}
-		return nil, fmt.Errorf("POST /api/enter set no %s cookie", cookieName)
+		return res.StatusCode(), nil
+	})
+	if err != nil {
+		return nil, err
 	}
+	if res.JSON200 == nil {
+		return nil, fmt.Errorf("POST /api/access: %w", &statusError{res.StatusCode(), errorCode(res.Body)})
+	}
+	return findCookie(res.HTTPResponse, accessCookie)
+}
+
+func findCookie(res *http.Response, name string) (*http.Cookie, error) {
+	for _, cookie := range res.Cookies() {
+		if cookie.Name == name {
+			return cookie, nil
+		}
+	}
+	return nil, fmt.Errorf("%s set no %s cookie", res.Request.URL.Path, name)
+}
+
+// register gives the access password and registers login with name.
+func (s *smoke) register(ctx context.Context, login, name string) (*visitor, error) {
+	access, err := s.pass(ctx)
+	if err != nil {
+		return nil, err
+	}
+	c, err := s.client(access)
+	if err != nil {
+		return nil, err
+	}
+	var res *api.RegisterResponse
+	err = s.accountRequest(ctx, func() (int, error) {
+		var err error
+		res, err = c.RegisterWithResponse(ctx, api.RegisterJSONRequestBody{Login: login, Password: password, Name: name})
+		if err != nil {
+			return 0, err
+		}
+		return res.StatusCode(), nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if res.JSON200 == nil {
+		return nil, fmt.Errorf("POST /api/accounts/register as %q: %w", name, &statusError{res.StatusCode(), errorCode(res.Body)})
+	}
+	cookie, err := findCookie(res.HTTPResponse, cookieName)
+	if err != nil {
+		return nil, err
+	}
+	vc, err := s.client(cookie)
+	if err != nil {
+		return nil, err
+	}
+	return &visitor{Visitor: res.JSON200.Session.Visitor, login: login, cookie: cookie, api: vc}, nil
+}
+
+// signIn gives the access password and signs login in with password.
+func (s *smoke) signIn(ctx context.Context, login string) (*http.Cookie, error) {
+	access, err := s.pass(ctx)
+	if err != nil {
+		return nil, err
+	}
+	c, err := s.client(access)
+	if err != nil {
+		return nil, err
+	}
+	var res *api.LoginResponse
+	err = s.accountRequest(ctx, func() (int, error) {
+		var err error
+		res, err = c.LoginWithResponse(ctx, api.LoginJSONRequestBody{Login: login, Password: password})
+		if err != nil {
+			return 0, err
+		}
+		return res.StatusCode(), nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if res.JSON200 == nil {
+		return nil, fmt.Errorf("POST /api/accounts/login as %q: %w", login, &statusError{res.StatusCode(), errorCode(res.Body)})
+	}
+	return findCookie(res.HTTPResponse, cookieName)
+}
+
+// enterAs registers name with a login made from it.
+func (s *smoke) enterAs(ctx context.Context, name string) (*visitor, error) {
+	return s.register(ctx, strings.ToLower(strings.ReplaceAll(name, " ", "-")), name)
 }

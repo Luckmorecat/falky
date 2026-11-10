@@ -18,15 +18,14 @@ import (
 	"github.com/kisshot/falky/server/internal/admin"
 	"github.com/kisshot/falky/server/internal/httpapi"
 	"github.com/kisshot/falky/server/internal/identity"
-	"github.com/kisshot/falky/server/internal/identity/passkeytest"
 	"github.com/kisshot/falky/server/internal/platform"
 	"github.com/kisshot/falky/server/internal/rooms"
 	"github.com/kisshot/falky/server/internal/voice"
 	"github.com/kisshot/falky/server/internal/voice/voicetest"
 )
 
-// newDeps returns the services over a fresh migrated database that already
-// has its access link.
+// newDeps returns the services over a fresh migrated database whose access
+// password is set.
 func newDeps(t *testing.T) admin.Deps {
 	t.Helper()
 	ms, err := platform.LoadMigrations(identity.Migrations(), rooms.Migrations(), voice.Migrations())
@@ -45,9 +44,9 @@ func newDeps(t *testing.T) admin.Deps {
 	if _, err := db.Migrate(t.Context(), ms); err != nil {
 		t.Fatalf("Migrate: %v", err)
 	}
-	ident := identity.New(db, "https://falky.example")
-	if _, err := ident.EnsureLink(t.Context()); err != nil {
-		t.Fatalf("EnsureLink: %v", err)
+	ident := identity.New(db, "https://falky.example", identity.WithPasswordCost(identity.PasswordCost{Time: 1, MemoryKiB: 64}))
+	if err := ident.SetAccessPassword(t.Context(), accessPassword); err != nil {
+		t.Fatalf("SetAccessPassword: %v", err)
 	}
 	rs := rooms.New(db)
 	return admin.Deps{
@@ -115,24 +114,47 @@ func staleSocket(t *testing.T, path string) {
 	}
 }
 
-func TestTheClientShowsTheCurrentLink(t *testing.T) {
-	deps := newDeps(t)
-	want, err := deps.Identity.Link(t.Context())
+const accessPassword = "shared secret phrase"
+
+// register registers name on deps' identity service and returns the enrollment.
+func register(t *testing.T, deps admin.Deps, login, name string) identity.Enrollment {
+	t.Helper()
+	pass, err := deps.Identity.PassAccess(t.Context(), accessPassword)
 	if err != nil {
-		t.Fatalf("Link: %v", err)
+		t.Fatal(err)
 	}
+	e, err := deps.Identity.Register(t.Context(), identity.RegistrationInput{AccessToken: pass, Login: login, Password: "correct horse battery", Name: name})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return e
+}
+
+func TestTheClientSetsTheAccessPassword(t *testing.T) {
+	deps := newDeps(t)
 	path := filepath.Join(t.TempDir(), "admin.sock")
 	serve(t, listen(t, path), deps)
+	old, err := deps.Identity.PassAccess(t.Context(), accessPassword)
+	if err != nil {
+		t.Fatal(err)
+	}
+	account := register(t, deps, "ann", "Ann")
 
 	client := admin.NewClient(path)
-	for i := range 2 {
-		got, err := client.Link(t.Context())
-		if err != nil {
-			t.Fatalf("client Link %d: %v", i+1, err)
-		}
-		if got != want {
-			t.Errorf("client Link %d = %q, want %q", i+1, got, want)
-		}
+	if err := client.SetAccessPassword(t.Context(), "short"); err == nil || !strings.Contains(err.Error(), "8 to 128") {
+		t.Fatalf("SetAccessPassword(short) = %v, want the length rule", err)
+	}
+	if err := client.SetAccessPassword(t.Context(), "a new shared secret"); err != nil {
+		t.Fatalf("SetAccessPassword: %v", err)
+	}
+	if passed, _ := deps.Identity.AccessPassed(t.Context(), old); passed {
+		t.Error("a pass for the old access password still admits")
+	}
+	if _, err := deps.Identity.PassAccess(t.Context(), "a new shared secret"); err != nil {
+		t.Errorf("the new access password is refused: %v", err)
+	}
+	if _, err := deps.Identity.ResolveSession(t.Context(), account.Token); err != nil {
+		t.Errorf("changing the access password ended a session: %v", err)
 	}
 }
 
@@ -159,8 +181,8 @@ func TestListenReplacesAStaleSocket(t *testing.T) {
 	staleSocket(t, path)
 
 	serve(t, listen(t, path), newDeps(t))
-	if _, err := admin.NewClient(path).Link(t.Context()); err != nil {
-		t.Errorf("client Link over the replaced socket: %v", err)
+	if _, err := admin.NewClient(path).Accounts(t.Context()); err != nil {
+		t.Errorf("client Accounts over the replaced socket: %v", err)
 	}
 }
 
@@ -172,8 +194,8 @@ func TestListenRefusesASocketInUse(t *testing.T) {
 		_ = ln.Close()
 		t.Fatal("second Listen = nil error, want a refusal")
 	}
-	if _, err := admin.NewClient(path).Link(t.Context()); err != nil {
-		t.Errorf("client Link after the refused Listen: %v", err)
+	if _, err := admin.NewClient(path).Accounts(t.Context()); err != nil {
+		t.Errorf("client Accounts after the refused Listen: %v", err)
 	}
 }
 
@@ -201,9 +223,9 @@ func TestTheClientSaysWhenNoServerIsRunning(t *testing.T) {
 		"stale socket": stale,
 	} {
 		t.Run(name, func(t *testing.T) {
-			_, err := admin.NewClient(path).Link(t.Context())
+			_, err := admin.NewClient(path).Accounts(t.Context())
 			if !errors.Is(err, admin.ErrNotRunning) || !strings.Contains(err.Error(), path) {
-				t.Errorf("client Link = %v, want ErrNotRunning naming %s", err, path)
+				t.Errorf("client Accounts = %v, want ErrNotRunning naming %s", err, path)
 			}
 		})
 	}
@@ -295,55 +317,41 @@ func TestTheClientReportsWhyARoomChangeIsRefused(t *testing.T) {
 	}
 }
 
-func TestTheClientRotatesTheLinkAndEverythingOfTheOldOneEnds(t *testing.T) {
+func TestDisablingAnAccountEndsItsVoiceAndReportsFailedEnforcement(t *testing.T) {
 	deps := newDeps(t)
-	lk := voicetest.New()
-	inVoice := lk.AddParticipant("01JBX7A2K9D4F6H8M0P3R5T7VW", "01JBX6Z8Q3M5W2K7R9T4V1C0DE")
-	deps.Voice = newVoice(lk, deps.Identity, deps.Rooms, deps.DB)
-	old, err := deps.Identity.Link(t.Context())
+	account := register(t, deps, "ann", "Ann")
+	room, err := deps.Rooms.Create(t.Context(), "Lounge")
 	if err != nil {
-		t.Fatalf("Link: %v", err)
+		t.Fatal(err)
 	}
+	lk := voicetest.New()
+	deps.Voice = newVoice(lk, deps.Identity, deps.Rooms, deps.DB)
+	lifecycle := &httpapi.Lifecycle{Enforce: httpapi.Enforcer(httpapi.Events{}, deps.Voice)}
+	deps.Lifecycle = lifecycle
+	lifecycle.Lock()
+	creds, err := deps.Voice.JoinSession(t.Context(), account.Session, room.ID)
+	lifecycle.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	inVoice := lk.AddParticipant(room.ID, creds.GrantID)
 	path := filepath.Join(t.TempDir(), "admin.sock")
 	serve(t, listen(t, path), deps)
 
-	rotated, err := admin.NewClient(path).RotateLink(t.Context())
-	if err != nil {
-		t.Fatalf("RotateLink: %v", err)
+	lk.Fail(errors.New("connection refused"))
+	if err := admin.NewClient(path).DisableAccount(t.Context(), "ann"); err == nil {
+		t.Fatal("disabling reported success despite failed media enforcement")
 	}
-	if rotated == old || !strings.HasPrefix(rotated, "https://falky.example/#k=") {
-		t.Errorf("RotateLink = %q, want a new link (was %q)", rotated, old)
+	if _, err := deps.Identity.ResolveSession(t.Context(), account.Token); !errors.Is(err, identity.ErrNoVisitor) {
+		t.Fatalf("the committed disable is missing: %v", err)
 	}
-	if current, err := deps.Identity.Link(t.Context()); err != nil || current != rotated {
-		t.Errorf("Link after RotateLink = %q, %v, want %q", current, err, rotated)
+	lk.Fail(nil)
+	if err := admin.NewClient(path).DisableAccount(t.Context(), "ann"); err != nil {
+		t.Fatalf("DisableAccount again: %v", err)
 	}
-	if got := lk.Removed(); !slices.Equal(got, []voice.Participant{inVoice}) {
+	if got := lk.Removed(); !slices.Contains(got, inVoice) {
 		t.Errorf("removed from voice %+v, want %+v", got, inVoice)
 	}
-}
-
-func TestRotatingTheLinkReportsRequiredVoiceEnforcementFailure(t *testing.T) {
-	deps := newDeps(t)
-	lk := voicetest.New()
-	lk.Fail(errors.New("connection refused"))
-	deps.Voice = newVoice(lk, deps.Identity, deps.Rooms, deps.DB)
-	var logs strings.Builder
-	deps.Logger = platform.NewLogger(&logs, 0)
-	old, err := deps.Identity.Link(t.Context())
-	if err != nil {
-		t.Fatalf("Link: %v", err)
-	}
-	path := filepath.Join(t.TempDir(), "admin.sock")
-	stop := serve(t, listen(t, path), deps)
-
-	_, err = admin.NewClient(path).RotateLink(t.Context())
-	if err == nil {
-		t.Fatal("rotation reported success despite failed media enforcement")
-	}
-	if current, err := deps.Identity.Link(t.Context()); err != nil || current == old {
-		t.Fatalf("committed rotation missing: %v", err)
-	}
-	stop()
 }
 
 func TestTheClientTakesAnOwnerOnlySnapshotIntoTheSnapshotDirectory(t *testing.T) {
@@ -393,70 +401,28 @@ func TestTheClientTakesAnOwnerOnlySnapshotIntoTheSnapshotDirectory(t *testing.T)
 	}
 }
 
-func TestOperatorInvitationLifecycleOverOwnerSocket(t *testing.T) {
-	deps := newDeps(t)
-	path := filepath.Join(t.TempDir(), "admin.sock")
-	serve(t, listen(t, path), deps)
-	c := admin.NewClient(path)
-	invite, err := c.CreateInvitation(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if invite.ID == "" || invite.Link == "" || invite.ExpiresAt.Sub(invite.CreatedAt).Round(time.Second) != 7*24*time.Hour {
-		t.Fatal("invalid invitation result")
-	}
-	invitations, err := c.Invitations(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(invitations) != 1 || invitations[0].ID != invite.ID || invitations[0].Token != "" || invitations[0].Link != "" {
-		t.Fatal("operator list leaked bearer or lost invitation")
-	}
-	if err := c.RevokeInvitation(t.Context(), invite.ID); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := deps.Identity.BeginRegistration(t.Context(), identity.RegistrationInput{Invitation: invite.Token, Name: "Alice", BrowserContext: "browser"}); !errors.Is(err, identity.ErrInvalidProof) {
-		t.Fatal("revoked invitation remained usable")
-	}
-}
-
 func TestOperatorRecoveryIssuePreservesAccessAndDisableRejectsIt(t *testing.T) {
 	deps := newDeps(t)
 	path := filepath.Join(t.TempDir(), "admin.sock")
 	serve(t, listen(t, path), deps)
-	invite, err := deps.Identity.CreateInvitation(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	ceremony, err := deps.Identity.BeginRegistration(t.Context(), identity.RegistrationInput{Invitation: invite.Token, Name: "Alice", BrowserContext: "browser"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	key := passkeytest.New(t)
-	account, err := deps.Identity.FinishRegistration(t.Context(), ceremony.ID, "browser", key.Registration(t, ceremony.Creation, "https://falky.example"), "Laptop")
-	if err != nil {
-		t.Fatal(err)
-	}
+	account := register(t, deps, "alice", "Alice")
 	c := admin.NewClient(path)
 	accounts, err := c.Accounts(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(accounts) != 1 || accounts[0].ID != account.Session.Visitor.ID {
-		t.Fatal("operator cannot find account ID")
+	if len(accounts) != 1 || accounts[0].ID != account.Session.Visitor.ID || accounts[0].Login != "alice" || accounts[0].Name != "Alice" {
+		t.Fatalf("accounts = %+v", accounts)
 	}
-	grant, err := c.IssueRecovery(t.Context(), accounts[0].ID)
+	grant, err := c.IssueRecovery(t.Context(), "alice")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if grant.Link == "" || time.Until(grant.ExpiresAt).Round(time.Minute) != 30*time.Minute {
-		t.Fatal("bad recovery link")
+	if !strings.HasSuffix(grant.Link, "&account=alice") || time.Until(grant.ExpiresAt).Round(time.Minute) != 30*time.Minute {
+		t.Fatalf("bad recovery link %+v", grant)
 	}
 	if _, err := deps.Identity.ResolveSession(t.Context(), account.Token); err != nil {
 		t.Fatal("issuing recovery revoked account")
-	}
-	if keys, err := deps.Identity.Passkeys(t.Context(), account.Token); err != nil || len(keys) != 1 {
-		t.Fatal("issuing recovery changed credentials")
 	}
 	if err := c.DisableAccount(t.Context(), accounts[0].ID); err != nil {
 		t.Fatal(err)
@@ -464,7 +430,16 @@ func TestOperatorRecoveryIssuePreservesAccessAndDisableRejectsIt(t *testing.T) {
 	if _, err := deps.Identity.ResolveSession(t.Context(), account.Token); !errors.Is(err, identity.ErrNoVisitor) {
 		t.Fatal("disabled account session resolved")
 	}
-	if _, err := c.IssueRecovery(t.Context(), accounts[0].ID); err == nil {
+	if _, err := c.IssueRecovery(t.Context(), "alice"); err == nil {
 		t.Fatal("disabled account received recovery link")
+	}
+	if err := c.EnableAccount(t.Context(), "alice"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.IssueRecovery(t.Context(), "alice"); err != nil {
+		t.Fatalf("enabled account cannot recover: %v", err)
+	}
+	if err := c.DisableAccount(t.Context(), "nobody"); err == nil {
+		t.Fatal("disabling an unknown account succeeded")
 	}
 }

@@ -44,15 +44,21 @@ container with a volume mounted.
    docker compose up -d --build --wait
    ```
 
-   On its first start the server creates the database and the access link.
+   On its first start the server creates the database. No one can sign in or
+   register until the access password is set.
 
-4. Print the access link and hand it to the people who should get in. Create
-   the rooms:
+4. Set the access password, then share it with the people who should get in;
+   each of them registers their own login and password. Create the first rooms
+   too (any account can also create and rename rooms in the app):
 
    ```sh
-   docker compose exec falky /falky link show
+   docker compose exec falky /falky password set
    docker compose exec falky /falky room create "Living room"
    ```
+
+   `password set` asks for the password twice without echoing it. Without a
+   terminal it reads the first line of standard input, so never pass it as an
+   argument.
 
 To upgrade, take a snapshot first (see *Snapshots*). Then update the checkout
 and run `docker compose up -d --build --wait` again. The server applies new
@@ -403,14 +409,13 @@ protects mutations with the same lock as deployment and backup.
 ./manage.sh status
 ./compose.sh logs --since 10m falky livekit caddy
 ./compose.sh exec falky /falky health ready
-./compose.sh exec falky /falky link show
+./compose.sh exec falky /falky account list
 ./compose.sh exec falky /falky room create "Living room"
 ./compose.sh exec falky /falky room rename ROOM_ID "New name"
 ./manage.sh backup
 ```
 
-Room names are unique ignoring case and surrounding spaces. `link show` and
-`link rotate` reveal the access link; keep output private. Health `live` means
+Room names are unique ignoring case and surrounding spaces. Health `live` means
 that the process answers; `ready` fails if the database is unusable. LiveKit may
 be reported `degraded` while database readiness remains good: chat works but
 voice does not. Full deployment/status verification also requires LiveKit and
@@ -433,7 +438,7 @@ instance, protecting any original bundle referenced by a pending attempt.
 Unrelated files and incomplete bundles are left alone. Pruning failure preserves
 the new complete backup and reports failure; after successful deployment it is
 a warning rather than a false deployment failure. Keep complete bundles off the
-VPS too. They contain the access link and LiveKit secret. Runtime caches currently
+VPS too. They contain password hashes and the LiveKit secret. Runtime caches currently
 have no automatic garbage collection; monitor disk usage.
 
 Host-owned timers call the stable `/srv/<instance>/manage.sh backup`, wait up to
@@ -456,7 +461,7 @@ instance. Resolve any pending different attempt explicitly as above, then:
 cd /srv/falky-dev
 ./manage.sh restore 20261106T120000Z-a1b2c3  # replace with the actual backup basename
 ./manage.sh status
-./compose.sh exec falky /falky link show
+./compose.sh exec falky /falky account list
 ```
 
 Restore verifies the sealed bundle and instance/volume identity, stops only that
@@ -493,21 +498,19 @@ and edge, and make immutable registry images available before recovery. A bare
 database snapshot alone does not contain the application's recovery history or
 runtime package.
 
-### Rotate guest access
+### Change the access password
 
-`link rotate` immediately refuses old guest cookies and guarded RTC admission,
-closes guest live updates and ends guest voice. Accounts, reserved account names
-and their sessions/live/voice remain. Distribute the new shared guest link only
-to intended guests:
+`password set` replaces the access password. Every browser must give the new one
+before it can sign in, register or recover again; sessions that are already
+signed in stay. To exclude a person, disable their account (below): a changed
+access password alone does not sign anyone out.
 
 ```sh
-./compose.sh exec falky /falky link rotate
+./compose.sh exec falky /falky password set
 ```
 
-An account is excluded with `account disable`, below. Rotation cannot exclude
-an account, and disabling an account cannot prevent its holder using a valid
-shared link to enter as a new guest. Preserve the raw LiveKit private-network
-boundary; bypassing Falky's RTC guard defeats immediate token fencing.
+Preserve the raw LiveKit private-network boundary; bypassing Falky's RTC guard
+defeats immediate token fencing.
 
 To replace a compromised LiveKit signing pair as well, generate new values:
 
@@ -522,7 +525,7 @@ Edit this instance's `.env` and private saved copy with the new
 ```sh
 ./compose.sh up --detach --no-build --wait
 ./manage.sh status
-./compose.sh exec falky /falky link show
+./compose.sh exec falky /falky account list
 ```
 
 Both the server and LiveKit restart, briefly interrupting voice. Both account and
@@ -623,138 +626,55 @@ probes, failed handshakes and stale events cannot renew an idle lease. A success
 actual handshake begun before the deadline can finish within its existing
 ten-second bound even if the clock crosses that deadline during admission.
 
-### Accounts, invitations and recovery
+### Accounts and recovery
 
 These commands use the existing owner-only Unix admin socket in the running
 server (`FALKY_ADMIN_SOCKET`, default `falky-admin.sock`, container-configured).
 They do not expose a public administration API. Use the selected instance's
-`./compose.sh`; in local Compose use `docker compose exec` instead:
+`./compose.sh`; in local Compose use `docker compose exec` instead. An account is
+named by its login or its ID:
 
 ```sh
-./compose.sh exec falky /falky invitation create
-./compose.sh exec falky /falky invitation list
-./compose.sh exec falky /falky invitation revoke INVITATION_ID
 ./compose.sh exec falky /falky account list
-./compose.sh exec falky /falky account disable ACCOUNT_ID
-./compose.sh exec falky /falky account recover ACCOUNT_ID
+./compose.sh exec falky /falky account disable LOGIN
+./compose.sh exec falky /falky account enable LOGIN
+./compose.sh exec falky /falky account recover LOGIN
 ```
 
-Creation prints one single-use seven-day `/#invite=<bearer>` link. It is not
-restricted by email and is separate from the reusable guest link. Listing shows
-non-secret references, times and revoked/redeemed status, never bearer links;
-use its reference to revoke. An invitation suffices for a first arrival without
-a guest cookie. If a valid guest cookie is present, verified enrollment upgrades
-that same identity and preserves messages, drafts and colour. Signing into an
-existing account switches identity without merging guest ownership.
+People register themselves in the app after giving the access password: a
+login (3 to 32 latin letters, digits, dots, dashes or underscores), a password
+(8 to 128 characters, no composition rules) and the name others see. Logins are
+private and case-insensitive; names are unique among accounts and stay reserved
+while an account is away or disabled. Passwords and the access password are
+stored only as Argon2id hashes. Sign-in attempts are limited per address and per
+login, and an unknown login answers exactly like a wrong password.
 
-The private account list provides IDs/names/disabled status for operator work;
-there is no public roster. Accounts reserve names while offline or disabled.
-An account claiming a guest name moves affected guests to generated alternatives
-and refreshes their connected clients. Names at the time of message publication
-remain unchanged in history.
+Changing the password in the app ends the account's other sessions. Account
+sessions expire 90 days after signing in.
 
-Keep `FALKY_PUBLIC_ORIGIN` and its hostname stable: passkeys bind to that RP
-hostname and exact origin. Accounts use discoverable passkeys with required user
-verification, never email/password/OAuth. Multiple individually labeled passkeys
-are supported. Management and code regeneration require a verified passkey proof
-in the same session within five minutes; last-key removal is refused. Removing
-one passkey blocks future sign-in/proof with that key, but normal existing
-sessions remain usable; recovery/disable ends the old sessions. Account cookies expire server-side
-after 90 days absolute; logout ends only that browser's exact session and all of
-its grants, preserving other sessions of the same account. Guest-link rotation
-ends affected guest sessions and all their grants, preserving accounts.
+There is no email and no self-service reset: someone who forgets their password
+asks the operator. Issue `account recover` only after verifying the person out
+of band. It prints a `/#recover=<code>&account=<login>` link valid for 30
+minutes and usable once; only its SHA-256 digest is stored. Opening it lets the
+person set a new password, which ends every old session, live update and voice
+connection of the account. Disabling immediately ends the account's
+sessions, live updates and voice and refuses sign-in and recovery while keeping
+its identity, name and messages; `account enable` lets it sign in again with its
+password.
 
-Enrollment, successful recovery and explicit regeneration return `recoveryCodes`
-as an array containing **one twelve-word recovery phrase**. Each word is selected
-independently and uniformly with cryptographic randomness from the bundled
-1296-entry [EFF short wordlist #1](../server/internal/identity/EFF-WORDLIST-LICENSE.md),
-with repeats allowed (about 124 bits of entropy). This is an account recovery
-proof with no wallet seed derivation or checksum. Plaintext appears only in the
-successful response; only the SHA-256 digest of the canonical phrase is stored,
-without a salt, pepper, server secret or password hashing algorithm.
+Accounts from the passkey era keep their identity and history but have no login
+or password: issue them `account recover` with their ID from `account list`, and
+they choose a login while recovering. Browsers that still hold a guest session
+from before accounts may register once without the access password; the new
+account keeps the guest's identity, colour and history.
 
-Keep the phrase privately with `session.visitor.id`, the permanent account ID:
-recovery requires separate `accountId` and `proof` fields, not the changeable
-name. Input accepts any casing and extra whitespace, including tabs and
-newlines; it is lowercased and joined with single ASCII spaces before hashing.
-All twelve words must match in order and spelling; there is no fuzzy correction
-or autocomplete. A phrase authorizes replacement-passkey enrollment, not
-ordinary access. Ordinary sign-in returns an empty `recoveryCodes` array, and
-sign-in or adding/removing a passkey does not rotate the phrase. Authorized
-regeneration requires recent passkey verification and invalidates the previous
-phrase and pending phrase-based recovery ceremonies.
-
-An operator should issue `account recover` only after out-of-band human identity
-verification. It prints a `/#recover=<bearer>&account=<id>` link valid for 30
-minutes. This opaque bearer stays exact and case-sensitive, with no whitespace
-normalization. Issuing it alone changes no access. Failed/cancelled enrollment
-does not consume the phrase/link or lock out the existing owner.
-
-This phrase format preserves the database schema and needs no data migration;
-there are no existing accounts to convert, and legacy raw recovery codes are
-not supported by the new verifier. Rolling back to the previous binary restores
-ten-code generation and exact-input matching: a newly issued phrase's digest
-still matches its exact canonical text, but formatting tolerance is lost.
-Codes issued after rollback will not work when upgrading to phrase verification
-again; explicitly regenerate a phrase with the current version or use operator
-recovery. This format change alone does not require restoring a database snapshot.
-
-Successful recovery verifies and installs a replacement passkey, invalidates
-**all** old passkeys, sessions, saved recovery proofs and outstanding recovery grants
-and account-bound ceremonies, then returns a fresh session and phrase. Old live
-updates and voice end; the recovered identity, reserved name and history remain.
-Disablement immediately ends that account's sessions/live/voice and rejects
-authentication/recovery while retaining the identity and name. It leaves the
-shared guest link untouched. Registration, sign-in and recovery return their
-committed session cookie and any new recovery codes even if subsequent
-enforcement fails, so a media outage cannot discard these one-time credentials.
-Enforcement is still attempted immediately; failures are logged and maintenance
-retries pending fencing and cleanup. Other successful HTTP/CLI mutations await
-required voice removal; a postcommit enforcement error means persistent identity
-state already changed. Inspect logs and LiveKit connectivity; do not assume the
-transaction was rolled back or media removal succeeded.
-
-The current frontend provides the legacy guest flow; these backend invitation
-and recovery links do not add account UI. Client integration must implement the
-[account/WebAuthn API](../api/openapi.yaml), including five-minute context-bound
-ceremonies, same-origin mutations and recovery-phrase storage. Voice uses the
-independent connection model above for both guests and accounts; no new account
-UI is included.
-
-The additive `0007_accounts.sql` migration retains existing IDs, guest history
-and ownership. `0008_identity_profiles.sql` renames the lasting identity table to
-`identities`, appearance to `profiles` and identity-reference columns to
-`identity_id`, preserving data and updating foreign keys. `0009_sessions.sql`
-combines guest tokens and account sessions into `sessions`, preserving cookie
-hashes and existing account-session IDs. Guest sessions receive independent IDs
-and an absolute expiry 400 days after original issuance; account deadlines remain
-90 days from sign-in. Already expired guest tokens remain expired. A guest
-registration ceremony begun before this migration must be restarted because its
-old derived session ID is no longer valid. `serve` or `falky migrate` applies these
-through the normal application migration sources. No reset is required. A runtime
-from before these changes expects the old tables; rolling back to it requires a
-pre-upgrade database snapshot. Snapshot before an upgrade; an older
-binary cannot restore the newer migration set. A deliberate reset would lose
-accounts, credentials, reservations, sessions and history: never delete a live
-database for this feature.
-
-### Logs and host state
-
-App and edge logs are separate:
-
-```sh
-./compose.sh logs --follow --since 1h falky
-sudo docker compose -f /srv/netcup-infra/compose.yaml logs --since 10m caddy
-```
-
-Services log JSON; Docker rotates at 10 MB with three files per container.
-Logs disappear with a removed container, so save needed evidence before teardown.
-The edge's external `falky_caddy_data` holds certificates and the ACME account;
-back it up privately to avoid unnecessary certificate reissuance. Its preserved
-`falky-edge_config` contains autosaved configuration. Host checkout, systemd units,
-SSH access and private settings need separate backup. Dozzle remains a standalone
-container bound to localhost:8080 with `dozzle_data` and the Docker socket;
-netcup-infra does not recreate it or expose it through Caddy.
+Registration, sign-in and recovery return their committed session cookie even if
+subsequent enforcement fails, so a media outage cannot lose a committed sign-in. Enforcement is still attempted
+immediately; failures are logged and maintenance retries pending fencing and
+cleanup. Other successful HTTP/CLI mutations await required voice removal; a
+postcommit enforcement error means persistent identity state already changed.
+Inspect logs and LiveKit connectivity; do not assume the transaction was rolled
+back or media removal succeeded.
 
 ## Chat attachments
 
@@ -844,7 +764,7 @@ chmod 600 database.db
 Snapshots are consistent while the server runs; never copy `falky.db`, `-wal`
 or `-shm` directly. Each snapshot is mode 0600 in a separate snapshot volume.
 Two snapshots in the same second conflict; retry later. A snapshot includes the
-access link, messages, rooms and hashed visitor tokens, so protect it like `.env`.
+password hashes, messages, rooms and hashed session tokens, so protect it like `.env`.
 
 For a local restore, first save the current snapshot if needed, then explicitly
 check the printed database volume before deleting only that volume:
@@ -863,12 +783,12 @@ Do not mount the new volume into another helper first: the server image must
 initialize its ownership. Restore checks integrity and known migrations and
 refuses an existing database. Use the compatible saved server source/image;
 an older binary cannot restore a snapshot containing newer migrations. Rooms,
-messages and access return to the snapshot's state. Rotate the link if the
-snapshot may have leaked. Keep `.env` and the local certificate volume separately.
+messages and access return to the snapshot's state. Change the access password,
+and have people change theirs, if the snapshot may have leaked. Keep `.env` and the local certificate volume separately.
 
 ## `make smoke`
 
-Run only against a disposable local stack. It rotates the access link, ends
-existing access and leaves test rooms/visitors. It trusts Caddy's local authority,
+Run only against a disposable local stack. It replaces the access password,
+disables a test account and leaves test rooms/accounts. It trusts Caddy's local authority,
 not public certificates. Do not run it on either shared VPS instance; validate
 voice and screen sharing manually in both domains after migration.

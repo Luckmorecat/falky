@@ -14,7 +14,6 @@ import (
 	"github.com/livekit/protocol/livekit"
 
 	"github.com/kisshot/falky/server/internal/api"
-	"github.com/kisshot/falky/server/internal/identity/passkeytest"
 	"github.com/kisshot/falky/server/internal/voice"
 )
 
@@ -166,9 +165,8 @@ func TestLogoutDurablyRevokesOnlyItsSessionDespiteFailedMediaCleanup(t *testing.
 	p := startPublic(t, 100)
 	room := p.createRoom(t, "Voice")
 	first, firstHTTP := p.browserWithHTTP(t)
-	key := passkeytest.New(t)
-	enrollAccount(t, p, firstHTTP, "Account", key)
-	second, _ := loginAccountBrowser(t, p, key)
+	registerAccount(t, p, firstHTTP, "Account")
+	second, _ := loginAccountBrowser(t, p, "account")
 	old := joinedVoice(t, first, room.ID)
 	other := joinedVoice(t, second, room.ID)
 	p.livekit.Fail(errors.New("media removal unavailable"))
@@ -182,7 +180,7 @@ func TestLogoutDurablyRevokesOnlyItsSessionDespiteFailedMediaCleanup(t *testing.
 func TestVoiceLeaveEndpointIsAbsent(t *testing.T) {
 	p := startPublic(t, 100)
 	_, browser := p.browserWithHTTP(t)
-	enrollAccount(t, p, browser, "Account", passkeytest.New(t))
+	registerAccount(t, p, browser, "Account")
 	accountRequest(t, p, browser, "POST", "/api/voice/leave", map[string]any{"grantId": "obsolete"}, testOrigin, 404)
 }
 
@@ -190,9 +188,8 @@ func TestIndependentAccountConnectionsSurviveOtherJoinsLogoutAndRestart(t *testi
 	p := startPublic(t, 100)
 	lounge, games := p.createRoom(t, "Lounge"), p.createRoom(t, "Games")
 	first, firstHTTP := p.browserWithHTTP(t)
-	key := passkeytest.New(t)
-	enrollAccount(t, p, firstHTTP, "Account", key)
-	second, secondHTTP := loginAccountBrowser(t, p, key)
+	registerAccount(t, p, firstHTTP, "Account")
+	second, secondHTTP := loginAccountBrowser(t, p, "account")
 	one := joinedVoice(t, first, lounge.ID)
 	two := joinedVoice(t, first, lounge.ID)
 	three := joinedVoice(t, first, games.ID)

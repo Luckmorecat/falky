@@ -7,16 +7,15 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/kisshot/falky/server/internal/api"
-	"github.com/kisshot/falky/server/internal/identity/passkeytest"
 )
 
 func TestOrdinaryRenameSucceedsAndRefreshesEveryOwnerTabDuringVoiceOutage(t *testing.T) {
-	for _, kind := range []string{"guest", "account"} {
-		t.Run(kind, func(t *testing.T) {
+	for _, via := range []string{"helper", "raw"} {
+		t.Run(via, func(t *testing.T) {
 			p := startPublic(t, 100)
 			client, browser := p.browserWithHTTP(t)
-			if kind == "account" {
-				enrollAccount(t, p, browser, "Before", passkeytest.New(t))
+			if via == "raw" {
+				registerAccount(t, p, browser, "Before")
 			} else {
 				p.enter(t, client, "Before")
 			}
@@ -42,25 +41,5 @@ func TestOrdinaryRenameSucceedsAndRefreshesEveryOwnerTabDuringVoiceOutage(t *tes
 				t.Fatalf("unrelated session lost live updates: %+v", event)
 			}
 		})
-	}
-}
-
-func TestRenameStillReportsRequiredLifecycleFailureDuringVoiceOutage(t *testing.T) {
-	p := startPublic(t, 100)
-	account, browser := p.browserWithHTTP(t)
-	enrollAccount(t, p, browser, "Account", passkeytest.New(t))
-	guest, guestHTTP := p.browserWithHTTP(t)
-	p.enter(t, guest, "Claimed")
-	displaced := p.connectLive(t, guestHTTP)
-	p.livekit.Fail(errors.New("LiveKit unavailable"))
-
-	renamed, err := account.RenameMeWithResponse(t.Context(), api.RenameRequest{Name: "Claimed"})
-	if err != nil || renamed.StatusCode() != http.StatusInternalServerError {
-		t.Fatalf("required lifecycle failure = %+v, %v; want 500", renamed, err)
-	}
-	readClosed(t, displaced, websocket.StatusGoingAway)
-	current, err := guest.GetMeWithResponse(t.Context())
-	if err != nil || current.JSON200 == nil || current.JSON200.Name == "Claimed" {
-		t.Fatalf("committed guest displacement lost: %+v, %v", current, err)
 	}
 }

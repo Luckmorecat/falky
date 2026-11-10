@@ -13,14 +13,13 @@ import (
 	"github.com/pion/webrtc/v4/pkg/media"
 
 	"github.com/kisshot/falky/server/internal/identity"
-	"github.com/kisshot/falky/server/internal/identity/passkeytest"
 )
 
 func TestGuardedLiveKitCommittedRevocationSurvivesCallerCancellation(t *testing.T) {
 	for _, operation := range []string{"disable", "recovery"} {
 		t.Run(operation, func(t *testing.T) {
 			f := newGuardedVoice(t)
-			account, _ := f.enroll(t)
+			account, login := f.enroll(t)
 			creds := f.join(t, account.Session)
 			client := connect(t, creds)
 			track, err := lksdk.NewLocalTrack(webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus})
@@ -34,22 +33,13 @@ func TestGuardedLiveKitCommittedRevocationSurvivesCallerCancellation(t *testing.
 			if err := track.WriteSample(media.Sample{Data: []byte{0xf8, 0xff, 0xfe}, Duration: 20 * time.Millisecond}, nil); err != nil {
 				t.Fatal(err)
 			}
-			var recovery identity.Ceremony
-			var replacement *passkeytest.Authenticator
-			if operation == "recovery" {
-				recovery, err = f.ident.BeginRecovery(t.Context(), account.Session.Visitor.ID, account.RecoveryCodes[0], "recovery")
-				if err != nil {
-					t.Fatal(err)
-				}
-				replacement = passkeytest.New(t)
-			}
 			var effects identity.Effects
 			var recovered identity.Enrollment
 			f.gate.Lock()
 			if operation == "disable" {
 				effects, err = f.ident.DisableAccount(t.Context(), account.Session.Visitor.ID)
 			} else {
-				recovered, err = f.ident.FinishRecovery(t.Context(), recovery.ID, "recovery", replacement.Registration(t, recovery.Creation, "https://falky.example"), "Replacement")
+				recovered = recoverAccount(t, f.ident, login)
 				effects = recovered.Effects
 			}
 			if err != nil {

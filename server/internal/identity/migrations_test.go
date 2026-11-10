@@ -3,7 +3,6 @@ package identity_test
 import (
 	"crypto/sha256"
 	"database/sql"
-	"encoding/base64"
 	"errors"
 	"io"
 	"io/fs"
@@ -16,7 +15,7 @@ import (
 	"github.com/kisshot/falky/server/internal/platform"
 )
 
-func TestIdentityAndSessionMigrationsPreserveGuestAndAccountAccess(t *testing.T) {
+func TestMigrationsKeepAccountSessionsAndLeaveGuestsOnlyTheirUpgrade(t *testing.T) {
 	for _, renamed := range []bool{false, true} {
 		name := "before_identity_rename"
 		if renamed {
@@ -66,7 +65,7 @@ func TestIdentityAndSessionMigrationsPreserveGuestAndAccountAccess(t *testing.T)
 					{"INSERT INTO passkeys VALUES(?,'account','Laptop','{}',?)", []any{credential, now.Unix()}},
 					{"INSERT INTO account_sessions VALUES('session',?,'account',2,?,?,?)", []any{accountHash[:], now.Add(identity.AccountSessionTTL).Unix(), now.Unix(), credential}},
 					{"INSERT INTO account_recovery_proofs VALUES(?,'account','code',2,NULL)", []any{[]byte("recovery-hash")}},
-					{"INSERT INTO account_ceremonies VALUES('ceremony',?,'reauthenticate','account','session','Alice',NULL,'{}',?)", []any{[]byte("context-hash"), now.Add(identity.CeremonyTTL).Unix()}},
+					{"INSERT INTO account_ceremonies VALUES('ceremony',?,'reauthenticate','account','session','Alice',NULL,'{}',?)", []any{[]byte("context-hash"), now.Add(5 * time.Minute).Unix()}},
 				} {
 					if _, err := tx.ExecContext(t.Context(), stmt.query, stmt.args...); err != nil {
 						return err
@@ -76,7 +75,7 @@ func TestIdentityAndSessionMigrationsPreserveGuestAndAccountAccess(t *testing.T)
 			}); err != nil {
 				t.Fatal(err)
 			}
-			expected := 2
+			expected := 3
 			if renamed {
 				body, err := fs.ReadFile(identity.Migrations(), "0008_identity_profiles.sql")
 				if err != nil {
@@ -90,7 +89,7 @@ func TestIdentityAndSessionMigrationsPreserveGuestAndAccountAccess(t *testing.T)
 				if applied, err := db.Migrate(t.Context(), intermediate); err != nil || applied != 1 {
 					t.Fatalf("identity rename = %d, %v", applied, err)
 				}
-				expected = 1
+				expected = 2
 			}
 			all, err := platform.LoadMigrations(identity.Migrations())
 			if err != nil {
@@ -103,37 +102,32 @@ func TestIdentityAndSessionMigrationsPreserveGuestAndAccountAccess(t *testing.T)
 				t.Fatalf("repeated migration = %d, %v; want no changes", applied, err)
 			}
 			service := identity.New(db, "https://falky.example", identity.WithClock(func() time.Time { return now }))
-			for _, want := range []struct {
-				token, id, name, palette string
-				kind                     identity.Kind
-				revision                 int64
-			}{
-				{"guest-cookie", "guest", "Guest", "sky", identity.Guest, 7},
-				{"account-cookie", "account", "Alice", "ruby", identity.Account, 4},
-			} {
-				got, err := service.ResolveSession(t.Context(), want.token)
-				if err != nil {
-					t.Fatal(err)
-				}
-				if got.Visitor.ID != want.id || got.Visitor.Name != want.name || got.Kind != want.kind || got.Visitor.Colour.Palette != want.palette || got.Visitor.Colour.Revision != want.revision {
-					t.Fatalf("session after rename = %+v; want %+v", got, want)
-				}
-				if _, err := service.ValidateSession(t.Context(), got); err != nil {
-					t.Fatal(err)
-				}
-				if want.kind == identity.Account && (got.ID != "session" || !got.ExpiresAt.Equal(now.Add(identity.AccountSessionTTL))) {
-					t.Fatalf("account session ID/lifetime changed: %+v", got)
-				}
-				if want.kind == identity.Guest && !got.ExpiresAt.Equal(time.Date(2026, 11, 9, 0, 0, 0, 0, time.UTC).Add(identity.GuestSessionTTL)) {
-					t.Fatalf("guest lifetime reset at migration: %+v", got)
-				}
+			got, err := service.ResolveSession(t.Context(), "account-cookie")
+			if err != nil {
+				t.Fatal(err)
 			}
-			if _, err := service.ResolveSession(t.Context(), "expired-cookie"); !errors.Is(err, identity.ErrNoVisitor) {
+			if got.Visitor.ID != "account" || got.Visitor.Name != "Alice" || got.Kind != identity.Account || got.Visitor.Colour.Palette != "ruby" || got.Visitor.Colour.Revision != 4 {
+				t.Fatalf("account session after migration = %+v", got)
+			}
+			if got.ID != "session" || !got.ExpiresAt.Equal(now.Add(identity.AccountSessionTTL)) {
+				t.Fatalf("account session ID/lifetime changed: %+v", got)
+			}
+			if _, err := service.ValidateSession(t.Context(), got); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := service.ResolveSession(t.Context(), "guest-cookie"); !errors.Is(err, identity.ErrNoVisitor) {
+				t.Fatalf("a guest session still admits after migration: %v", err)
+			}
+			guest, err := service.LegacyGuest(t.Context(), "guest-cookie")
+			if err != nil || guest.ID != "guest" || guest.Name != "Guest" || guest.Colour.Palette != "sky" {
+				t.Fatalf("legacy guest after migration = %+v, %v", guest, err)
+			}
+			if _, err := service.LegacyGuest(t.Context(), "expired-cookie"); !errors.Is(err, identity.ErrNoVisitor) {
 				t.Fatalf("migration revived an already expired guest: %v", err)
 			}
-			keys, err := service.Passkeys(t.Context(), "account-cookie")
-			if err != nil || len(keys) != 1 || keys[0].ID != base64.RawURLEncoding.EncodeToString(credential) || keys[0].Label != "Laptop" {
-				t.Fatalf("passkeys after rename = %+v, %v", keys, err)
+			accounts, err := service.Accounts(t.Context())
+			if err != nil || len(accounts) != 1 || accounts[0].Login != "" {
+				t.Fatalf("accounts after migration = %+v, %v; want Alice without a login until she recovers", accounts, err)
 			}
 			var accountCount, oldTables, oldColumns, violations int
 			for _, check := range []struct {
@@ -141,7 +135,7 @@ func TestIdentityAndSessionMigrationsPreserveGuestAndAccountAccess(t *testing.T)
 				value *int
 			}{
 				{"SELECT count(*) FROM accounts WHERE identity_id='guest'", &accountCount},
-				{"SELECT count(*) FROM sqlite_schema WHERE type='table' AND name IN ('visitors','visitor_colours','visitor_tokens','account_sessions')", &oldTables},
+				{"SELECT count(*) FROM sqlite_schema WHERE type='table' AND name IN ('visitors','visitor_colours','visitor_tokens','account_sessions','passkeys','account_ceremonies','account_invitations')", &oldTables},
 				{"SELECT count(*) FROM sqlite_schema s JOIN pragma_table_info(s.name) p WHERE s.type='table' AND p.name='visitor_id'", &oldColumns},
 				{"SELECT count(*) FROM pragma_foreign_key_check", &violations},
 			} {

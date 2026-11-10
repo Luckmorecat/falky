@@ -19,7 +19,6 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/kisshot/falky/server/internal/identity"
-	"github.com/kisshot/falky/server/internal/identity/passkeytest"
 	"github.com/livekit/protocol/auth"
 	"github.com/livekit/protocol/livekit"
 	"google.golang.org/protobuf/proto"
@@ -115,7 +114,7 @@ func TestGuardedLiveKitAdmissionAndRevocationShareCompleteHandshakeFence(t *test
 }
 
 func TestGuardedLiveKitCancelledHandshakeClosesOnlyFailedAttemptAndAllowsRetry(t *testing.T) {
-	for _, kind := range []identity.Kind{identity.Guest, identity.Account} {
+	for _, kind := range []identity.Kind{identity.Account} {
 		for _, immediate := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/immediate=%t", kind, immediate), func(t *testing.T) {
 				f := newGuardedVoice(t)
@@ -182,7 +181,7 @@ func TestGuardedLiveKitCancelledHandshakeClosesOnlyFailedAttemptAndAllowsRetry(t
 	}
 }
 
-func TestGuardedLiveKitRejectsChangedRoomSignatureAndOldGuestAfterUpgrade(t *testing.T) {
+func TestGuardedLiveKitRejectsChangedRoomOrSignature(t *testing.T) {
 	f := newGuardedVoice(t)
 	account, _ := f.enroll(t)
 	creds := f.join(t, account.Session)
@@ -197,46 +196,6 @@ func TestGuardedLiveKitRejectsChangedRoomSignatureAndOldGuestAfterUpgrade(t *tes
 		}
 		refusedAtGuard(t, f, token)
 	}
-	link, err := f.ident.Link(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	guest, token, err := f.ident.Enter(t.Context(), strings.TrimPrefix(link, "https://falky.example/#k="), "Guest")
-	if err != nil {
-		t.Fatal(err)
-	}
-	session, err := f.ident.ResolveSession(t.Context(), token)
-	if err != nil {
-		t.Fatal(err)
-	}
-	f.gate.Lock()
-	old, err := f.voice.JoinSession(t.Context(), session, f.room)
-	f.gate.Unlock()
-	if err != nil {
-		t.Fatal(err)
-	}
-	old.URL = "ws" + strings.TrimPrefix(f.public.URL, "http")
-	connect(t, old)
-	invite, err := f.ident.CreateInvitation(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	c, err := f.ident.BeginRegistration(t.Context(), identity.RegistrationInput{Invitation: invite.Token, GuestToken: token, Name: guest.Name, BrowserContext: "upgrade"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	key := passkeytest.New(t)
-	f.gate.Lock()
-	upgraded, err := f.ident.FinishRegistration(t.Context(), c.ID, "upgrade", key.Registration(t, c.Creation, "https://falky.example"), "Passkey")
-	if err == nil {
-		err = f.gate.Apply(t.Context(), upgraded.Effects)
-	}
-	f.gate.Unlock()
-	if err != nil {
-		t.Fatal(err)
-	}
-	refusedAtGuard(t, f, old.Token)
-	connect(t, f.join(t, upgraded.Session))
 }
 
 func TestGuardedLiveKitSupportsBrowserV1Signalling(t *testing.T) {

@@ -1,5 +1,7 @@
 # Passkey accounts share lasting identities with guests
 
+Superseded by [ADR-0005](0005-password-accounts-behind-an-access-password.md): accounts now sign in with a login and password behind one access password, and guests are gone. The session, grant and enforcement model below still holds.
+
 We now support invitation-only, passkey-only accounts alongside guests admitted
 by the reusable access link, superseding [ADR-0003](0003-access-link-instead-of-accounts.md).
 Upgrading a guest preserves its identity and ownership; signing into another

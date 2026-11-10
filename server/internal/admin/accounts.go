@@ -16,25 +16,25 @@ type Lifecycle interface {
 	Apply(context.Context, identity.Effects) error
 }
 
+type passwordBody struct {
+	Password string `json:"password"`
+}
+
 func accountRoutes(mux *http.ServeMux, deps Deps) {
-	mux.HandleFunc("POST /invitations", func(w http.ResponseWriter, r *http.Request) {
-		invite, err := deps.Identity.CreateInvitation(r.Context())
+	mux.HandleFunc("PUT /access/password", func(w http.ResponseWriter, r *http.Request) {
+		var body passwordBody
+		if !decode(w, r, &body) {
+			return
+		}
+		err := deps.Identity.SetAccessPassword(r.Context(), body.Password)
+		if errors.Is(err, identity.ErrInvalidPassword) {
+			writeJSON(w, http.StatusBadRequest, errorBody{Error: err.Error()})
+			return
+		}
 		if adminAccountError(w, err) {
 			return
 		}
-		writeJSON(w, 200, invite)
-	})
-	mux.HandleFunc("GET /invitations", func(w http.ResponseWriter, r *http.Request) {
-		invites, err := deps.Identity.Invitations(r.Context())
-		if adminAccountError(w, err) {
-			return
-		}
-		writeJSON(w, 200, invites)
-	})
-	mux.HandleFunc("DELETE /invitations/{id}", func(w http.ResponseWriter, r *http.Request) {
-		if adminAccountError(w, deps.Identity.RevokeInvitation(r.Context(), r.PathValue("id"))) {
-			return
-		}
+		deps.Logger.Info("access password set")
 		writeJSON(w, 200, struct{}{})
 	})
 	mux.HandleFunc("GET /accounts", func(w http.ResponseWriter, r *http.Request) {
@@ -44,21 +44,27 @@ func accountRoutes(mux *http.ServeMux, deps Deps) {
 		}
 		writeJSON(w, 200, accounts)
 	})
-	mux.HandleFunc("POST /accounts/{id}/recovery", func(w http.ResponseWriter, r *http.Request) {
-		grant, err := deps.Identity.IssueRecovery(r.Context(), r.PathValue("id"))
+	mux.HandleFunc("POST /accounts/{ref}/recovery", func(w http.ResponseWriter, r *http.Request) {
+		grant, err := deps.Identity.IssueRecovery(r.Context(), r.PathValue("ref"))
 		if adminAccountError(w, err) {
 			return
 		}
 		writeJSON(w, 200, grant)
 	})
-	mux.HandleFunc("POST /accounts/{id}/disable", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /accounts/{ref}/enable", func(w http.ResponseWriter, r *http.Request) {
+		if adminAccountError(w, deps.Identity.EnableAccount(r.Context(), r.PathValue("ref"))) {
+			return
+		}
+		writeJSON(w, 200, struct{}{})
+	})
+	mux.HandleFunc("POST /accounts/{ref}/disable", func(w http.ResponseWriter, r *http.Request) {
 		if deps.Lifecycle == nil {
 			writeJSON(w, http.StatusServiceUnavailable, errorBody{Error: "lifecycle enforcement unavailable"})
 			return
 		}
 		deps.Lifecycle.Lock()
 		defer deps.Lifecycle.Unlock()
-		effects, err := deps.Identity.DisableAccount(r.Context(), r.PathValue("id"))
+		effects, err := deps.Identity.DisableAccount(r.Context(), r.PathValue("ref"))
 		if adminAccountError(w, err) {
 			return
 		}
@@ -77,27 +83,16 @@ func adminAccountError(w http.ResponseWriter, err error) bool {
 	message := "account operation failed"
 	if errors.Is(err, identity.ErrNoVisitor) || errors.Is(err, identity.ErrInvalidProof) || errors.Is(err, identity.ErrDisabled) {
 		status = 400
-		message = "account or invitation is unavailable"
+		message = "no such enabled account"
 	}
 	writeJSON(w, status, errorBody{Error: message})
 	return true
 }
 
-func (c *Client) CreateInvitation(ctx context.Context) (identity.Invitation, error) {
-	var out identity.Invitation
-	err := c.do(ctx, http.MethodPost, "/invitations", nil, &out)
-	return out, err
-}
-
-func (c *Client) Invitations(ctx context.Context) ([]identity.Invitation, error) {
-	var out []identity.Invitation
-	err := c.do(ctx, http.MethodGet, "/invitations", nil, &out)
-	return out, err
-}
-
-func (c *Client) RevokeInvitation(ctx context.Context, id string) error {
+// SetAccessPassword makes password the access password of the running server.
+func (c *Client) SetAccessPassword(ctx context.Context, password string) error {
 	var out struct{}
-	return c.do(ctx, http.MethodDelete, "/invitations/"+url.PathEscape(id), nil, &out)
+	return c.do(ctx, http.MethodPut, "/access/password", passwordBody{Password: password}, &out)
 }
 
 func (c *Client) Accounts(ctx context.Context) ([]identity.AccountInfo, error) {
@@ -106,9 +101,14 @@ func (c *Client) Accounts(ctx context.Context) ([]identity.AccountInfo, error) {
 	return out, err
 }
 
-func (c *Client) DisableAccount(ctx context.Context, id string) error {
+func (c *Client) DisableAccount(ctx context.Context, ref string) error {
 	var out struct{}
-	return c.do(ctx, http.MethodPost, "/accounts/"+url.PathEscape(id)+"/disable", nil, &out)
+	return c.do(ctx, http.MethodPost, "/accounts/"+url.PathEscape(ref)+"/disable", nil, &out)
+}
+
+func (c *Client) EnableAccount(ctx context.Context, ref string) error {
+	var out struct{}
+	return c.do(ctx, http.MethodPost, "/accounts/"+url.PathEscape(ref)+"/enable", nil, &out)
 }
 
 func (c *Client) IssueRecovery(ctx context.Context, id string) (identity.RecoveryGrant, error) {
