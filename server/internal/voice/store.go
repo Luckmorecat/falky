@@ -1,0 +1,102 @@
+package voice
+
+import (
+	"context"
+	"database/sql"
+	"embed"
+	"io/fs"
+	"time"
+
+	"github.com/kisshot/falky/server/internal/platform"
+)
+
+//go:embed migrations/*.sql
+var migrationFiles embed.FS
+
+// Migrations owns authorization and retryable cleanup, never occupancy.
+func Migrations() fs.FS {
+	sub, err := fs.Sub(migrationFiles, "migrations")
+	if err != nil {
+		panic(err)
+	}
+	return sub
+}
+
+// WithDB makes SQLite authoritative for grants, including after restart.
+// Apply Migrations before using the service.
+func WithDB(db *platform.DB) Option { return func(s *Service) { s.db = db } }
+
+func (s *Service) allGrants(ctx context.Context) ([]*voiceGrant, error) {
+	if err := s.storeMu.lock(ctx); err != nil {
+		return nil, err
+	}
+	defer s.storeMu.unlock()
+	if s.db == nil {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		var result []*voiceGrant
+		for _, g := range s.grants {
+			result = append(result, g)
+		}
+		return result, nil
+	}
+	rows, err := s.db.Read().QueryContext(ctx, `SELECT transport,session_id,identity_id,session_kind,generation,room_id,revoked,disconnected_since FROM voice_grants ORDER BY transport`)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var result []*voiceGrant
+	for rows.Next() {
+		var disconnected sql.NullInt64
+		g := &voiceGrant{sockets: make(map[*signalConnection]struct{})}
+		if err := rows.Scan(&g.transport, &g.session.ID, &g.session.Visitor.ID, &g.session.Kind, &g.session.Generation, &g.room, &g.revoked, &disconnected); err != nil {
+			return nil, err
+		}
+		if disconnected.Valid {
+			g.disconnectedSince = time.Unix(0, disconnected.Int64)
+		}
+		s.mu.Lock()
+		if local := s.grants[g.transport]; local != nil {
+			local.revoked = g.revoked
+			local.disconnectedSince = g.disconnectedSince
+			g = local
+		} else {
+			s.grants[g.transport] = g
+		}
+		s.mu.Unlock()
+		result = append(result, g)
+	}
+	return result, rows.Err()
+}
+
+func (s *Service) grant(ctx context.Context, transport string) (*voiceGrant, error) {
+	grants, err := s.allGrants(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, g := range grants {
+		if g.transport == transport {
+			return g, nil
+		}
+	}
+	return nil, nil
+}
+
+func (s *Service) saveGrant(ctx context.Context, g *voiceGrant) error {
+	if err := s.storeMu.lock(ctx); err != nil {
+		return err
+	}
+	defer s.storeMu.unlock()
+	if s.db != nil {
+		if err := s.db.Write(ctx, func(tx *sql.Tx) error {
+			_, err := tx.ExecContext(ctx, `INSERT INTO voice_grants (transport,session_id,identity_id,session_kind,generation,room_id,disconnected_since) VALUES (?,?,?,?,?,?,?)`, g.transport, g.session.ID, g.session.Visitor.ID, g.session.Kind, g.session.Generation, g.room, g.disconnectedSince.UnixNano())
+			return err
+		}); err != nil {
+			return err
+		}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.grants[g.transport] = g
+	return nil
+}

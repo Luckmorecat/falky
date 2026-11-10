@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"slices"
 	"strings"
-	"time"
 
 	"github.com/livekit/protocol/livekit"
 	"github.com/livekit/protocol/webhook"
@@ -18,10 +17,6 @@ import (
 	"github.com/kisshot/falky/server/internal/identity"
 	"github.com/kisshot/falky/server/internal/rooms"
 )
-
-// RefreshInterval is how often Run refreshes the view from LiveKit's
-// participant listing, which corrects it after a lost webhook.
-const RefreshInterval = 30 * time.Second
 
 // ErrUnverifiedWebhook reports a webhook request that does not carry a valid
 // signature of its body with the LiveKit API key; the wrapping error says
@@ -32,24 +27,28 @@ var ErrUnverifiedWebhook = errors.New("webhook not signed with the LiveKit API k
 // LiveKit event.
 var ErrInvalidWebhook = errors.New("webhook is not a LiveKit event")
 
-// Occupancy returns the participants of the room roomID's voice, each visitor
-// once, ordered by name.
-func (s *Service) Occupancy(roomID string) []identity.Visitor {
+// Occupant identifies one connection and the person using it.
+type Occupant struct {
+	identity.Visitor
+	ConnectionID string
+}
+
+// Occupancy returns every connection, ordered by person name and connection ID.
+func (s *Service) Occupancy(roomID string) []Occupant {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.occupancyLocked(roomID)
 }
 
-// occupancyLocked is Occupancy for a caller that holds s.mu.
-func (s *Service) occupancyLocked(roomID string) []identity.Visitor {
-	var occupancy []identity.Visitor
+func (s *Service) occupancyLocked(roomID string) []Occupant {
+	var occupancy []Occupant
 	for _, v := range s.view[roomID] {
-		if !slices.ContainsFunc(occupancy, func(o identity.Visitor) bool { return o.ID == v.ID }) {
+		if !slices.ContainsFunc(occupancy, func(o Occupant) bool { return o.ConnectionID == v.ConnectionID }) {
 			occupancy = append(occupancy, v)
 		}
 	}
-	slices.SortFunc(occupancy, func(a, b identity.Visitor) int {
-		return cmp.Or(strings.Compare(identity.NameKey(a.Name), identity.NameKey(b.Name)), strings.Compare(a.ID, b.ID))
+	slices.SortFunc(occupancy, func(a, b Occupant) int {
+		return cmp.Or(strings.Compare(identity.NameKey(a.Name), identity.NameKey(b.Name)), strings.Compare(a.ConnectionID, b.ConnectionID))
 	})
 	return occupancy
 }
@@ -79,8 +78,10 @@ func (s *Service) ReceiveWebhook(r *http.Request) error {
 func (s *Service) apply(ctx context.Context, event *livekit.WebhookEvent) error {
 	room := event.GetRoom().GetName()
 	p := Participant{Room: room, Identity: event.GetParticipant().GetIdentity(), SID: event.GetParticipant().GetSid()}
-	s.publishing.Lock()
-	defer s.publishing.Unlock()
+	if err := s.publishing.lock(ctx); err != nil {
+		return err
+	}
+	defer s.publishing.unlock()
 	switch event.GetEvent() {
 	case webhook.EventParticipantJoined:
 		v, ok, err := s.keepOrRemove(ctx, p)
@@ -108,13 +109,26 @@ func (s *Service) apply(ctx context.Context, event *livekit.WebhookEvent) error 
 // an ErrUnavailable or an error from checking a participant, leaving the
 // view as it was.
 func (s *Service) Refresh(ctx context.Context) error {
-	s.publishing.Lock()
-	defer s.publishing.Unlock()
+	if err := s.publishing.lock(ctx); err != nil {
+		return err
+	}
+	defer s.publishing.unlock()
+	observations, err := s.observeLeases(ctx)
+	if err != nil {
+		return err
+	}
 	listed, err := s.livekit.Participants(ctx)
 	if err != nil {
 		return fmt.Errorf("%w: list participants: %w", ErrUnavailable, err)
 	}
-	view := make(map[string]map[string]identity.Visitor)
+	expired, leaseErr := s.reconcileLeases(ctx, observations, listed)
+	for _, g := range expired {
+		s.closeGrant(ctx, g)
+	}
+	if err := errors.Join(leaseErr, s.cleanupGrants(ctx, expired)); err != nil {
+		return err
+	}
+	view := make(map[string]map[string]Occupant)
 	for _, p := range listed {
 		v, ok, err := s.keepOrRemove(ctx, p)
 		if err != nil {
@@ -137,8 +151,10 @@ func (s *Service) Refresh(ctx context.Context) error {
 // view and publishes the occupancy of each room that had participants. It
 // fails with an ErrUnavailable, leaving the view as it was.
 func (s *Service) RemoveAll(ctx context.Context) error {
-	s.publishing.Lock()
-	defer s.publishing.Unlock()
+	if err := s.publishing.lock(ctx); err != nil {
+		return err
+	}
+	defer s.publishing.unlock()
 	if err := s.livekit.RemoveAll(ctx); err != nil {
 		return fmt.Errorf("%w: remove every participant: %w", ErrUnavailable, err)
 	}
@@ -151,32 +167,10 @@ func (s *Service) RemoveAll(ctx context.Context) error {
 	return nil
 }
 
-// Run refreshes the view at once, as the server starts, and then every
-// RefreshInterval until ctx is done. It logs a refresh that fails and leaves
-// it to the next.
-func (s *Service) Run(ctx context.Context) {
-	ticker := time.NewTicker(RefreshInterval)
-	defer ticker.Stop()
-	for {
-		refreshCtx, cancel := context.WithTimeout(ctx, RefreshInterval)
-		err := s.Refresh(refreshCtx)
-		cancel()
-		if err != nil && ctx.Err() == nil {
-			s.logger.WarnContext(ctx, "voice occupancy refresh failed", "error", err)
-		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-		}
-	}
-}
-
 // keepOrRemove reports whether the participant p may stay in their room's voice and
-// removes them from it when not. They may while they are a visitor with
-// current access whom rooms lets join the room's voice and, if the server
-// issued them a token since it started, the last one was for this room. It
-// returns the visitor, under their current name, when they may.
+// removes them from it when not. Staying requires an exact active grant,
+// current session access and room/name authorization. Occupancy uses the
+// permanent identity under its current name.
 func (s *Service) keepOrRemove(ctx context.Context, p Participant) (identity.Visitor, bool, error) {
 	v, refusal, err := s.mayStay(ctx, p)
 	if err != nil {
@@ -185,8 +179,23 @@ func (s *Service) keepOrRemove(ctx context.Context, p Participant) (identity.Vis
 	if refusal == "" {
 		return v, true, nil
 	}
+	g, err := s.grant(ctx, p.Identity)
+	if err != nil {
+		return identity.Visitor{}, false, err
+	}
+	if g != nil && g.room == p.Room {
+		if err := s.fence(ctx, g); err != nil {
+			return identity.Visitor{}, false, err
+		}
+		s.closeGrant(ctx, g)
+	}
 	if err := s.livekit.RemoveParticipant(ctx, p.Room, p.Identity); err != nil {
 		return identity.Visitor{}, false, fmt.Errorf("%w: remove from room %s: %w", ErrUnavailable, p.Room, err)
+	}
+	if g != nil && g.room == p.Room {
+		if err := s.retire(ctx, g); err != nil {
+			return identity.Visitor{}, false, err
+		}
 	}
 	s.logger.InfoContext(ctx, "participant removed from voice", "room", p.Room, "visitor", p.Identity, "reason", refusal)
 	return identity.Visitor{}, false, nil
@@ -195,31 +204,22 @@ func (s *Service) keepOrRemove(ctx context.Context, p Participant) (identity.Vis
 // mayStay returns the visitor p is when they may stay in their room's voice,
 // and otherwise why not.
 func (s *Service) mayStay(ctx context.Context, p Participant) (v identity.Visitor, refusal string, err error) {
+	g, err := s.grant(ctx, p.Identity)
+	if err != nil {
+		return identity.Visitor{}, "", err
+	}
 	s.mu.Lock()
-	g := s.grants[p.Identity]
-	revoked := g != nil && g.revoked
+	refused := g == nil || g.revoked || g.room != p.Room
 	s.mu.Unlock()
-	if g != nil && s.validate != nil {
-		if revoked || g.room != p.Room {
-			return identity.Visitor{}, "voice grant revoked", nil
-		}
+	if refused {
+		return identity.Visitor{}, "unknown or revoked voice grant", nil
+	}
+	if s.validate != nil {
 		var session identity.Session
 		session, err = s.validate(ctx, g.session)
 		v = session.Visitor
-	} else if strings.Contains(p.Identity, ".") {
-		return identity.Visitor{}, "unknown account voice grant", nil
 	} else {
-		v, err = s.visitors.Visitor(ctx, p.Identity)
-		// An old guest JWT must never turn into unbound account admission.
-		if g == nil && s.validate != nil {
-			if accounts, ok := s.visitors.(interface {
-				AccountInfo(context.Context, string) (identity.AccountInfo, error)
-			}); ok {
-				if _, accountErr := accounts.AccountInfo(ctx, p.Identity); accountErr == nil {
-					return identity.Visitor{}, "unbound account participant", nil
-				}
-			}
-		}
+		v, err = s.visitors.Visitor(ctx, g.session.Visitor.ID)
 	}
 	if errors.Is(err, identity.ErrNoVisitor) {
 		return identity.Visitor{}, "no current access", nil
@@ -236,22 +236,19 @@ func (s *Service) mayStay(ctx context.Context, p Participant) (v identity.Visito
 	case err != nil:
 		return identity.Visitor{}, "", err
 	}
-	if room, ok := s.IssuedRoom(v.ID); ok && room != p.Room {
-		return identity.Visitor{}, "issued another room", nil
-	}
 	return v, "", nil
 }
 
 // put adds the participant p, who is the visitor v, to view.
-func put(view map[string]map[string]identity.Visitor, p Participant, v identity.Visitor) {
+func put(view map[string]map[string]Occupant, p Participant, v identity.Visitor) {
 	if view[p.Room] == nil {
-		view[p.Room] = make(map[string]identity.Visitor)
+		view[p.Room] = make(map[string]Occupant)
 	}
-	view[p.Room][p.SID] = v
+	view[p.Room][p.SID] = Occupant{Visitor: v, ConnectionID: p.Identity}
 }
 
 // drop removes the participant p from view.
-func drop(view map[string]map[string]identity.Visitor, p Participant) {
+func drop(view map[string]map[string]Occupant, p Participant) {
 	delete(view[p.Room], p.SID)
 	if len(view[p.Room]) == 0 {
 		delete(view, p.Room)
@@ -263,12 +260,12 @@ func drop(view map[string]map[string]identity.Visitor, p Participant) {
 // publish in the order they apply.
 func (s *Service) change(apply func(), roomIDs ...string) {
 	s.mu.Lock()
-	before := make([][]identity.Visitor, len(roomIDs))
+	before := make([][]Occupant, len(roomIDs))
 	for i, id := range roomIDs {
 		before[i] = s.occupancyLocked(id)
 	}
 	apply()
-	after := make([][]identity.Visitor, len(roomIDs))
+	after := make([][]Occupant, len(roomIDs))
 	for i, id := range roomIDs {
 		after[i] = s.occupancyLocked(id)
 	}

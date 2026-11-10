@@ -1,5 +1,4 @@
-// Package voice issues the LiveKit tokens visitors join a room's voice with,
-// keeps each visitor a participant in at most one room, and keeps a view of
+// Package voice authorizes independent room connections and keeps a view of
 // each room's occupancy. LiveKit owns the media and who is a participant; the
 // server reaches it through a LiveKit, either the client of a real server or
 // a fake in tests, and learns of joins and leaves from LiveKit's webhooks and
@@ -19,6 +18,7 @@ import (
 	"github.com/oklog/ulid/v2"
 
 	"github.com/kisshot/falky/server/internal/identity"
+	"github.com/kisshot/falky/server/internal/platform"
 	"github.com/kisshot/falky/server/internal/rooms"
 )
 
@@ -27,8 +27,11 @@ import (
 // handing the client fresh tokens.
 const TokenLifetime = 10 * time.Minute
 
+// IdleGrace is how long an absent grant can admit a reconnect.
+const IdleGrace = 10 * time.Minute
+
 // LiveKit is the LiveKit server, as voice uses it. Rooms are named by room ID
-// and participants by visitor ID.
+// and participants by immutable grant transport identity.
 type LiveKit interface {
 	// Participants lists the participants of every room.
 	Participants(ctx context.Context) ([]Participant, error)
@@ -43,7 +46,7 @@ type LiveKit interface {
 type Participant struct {
 	// Room is the room's ID.
 	Room string
-	// Identity is the visitor's ID.
+	// Identity is the immutable transport identity, prefixed by the app identity.
 	Identity string
 	// SID is LiveKit's ID of this one connection to the room's voice: a
 	// second tab of the visitor has another.
@@ -68,6 +71,8 @@ type Rooms interface {
 
 // Credentials are what a client connects to a room's voice with.
 type Credentials struct {
+	// GrantID is the immutable connection identifier and LiveKit participant identity.
+	GrantID string
 	// URL is where the client reaches LiveKit.
 	URL string
 	// Token admits the visitor to the room's voice for TokenLifetime.
@@ -81,8 +86,6 @@ var ErrRoomFull = errors.New("the room's voice is full")
 // ErrUnavailable reports that LiveKit could not be reached; the wrapping error
 // says how.
 var ErrUnavailable = errors.New("voice is unavailable")
-
-var ErrTransferRequired = errors.New("confirm transfer of voice from the other session")
 
 // Config is how the Service issues tokens.
 type Config struct {
@@ -98,30 +101,30 @@ type Config struct {
 // Service lets visitors join rooms' voice and keeps the view of who is in
 // each room's voice.
 type Service struct {
+	db       *platform.DB
 	livekit  LiveKit
 	visitors Visitors
 	rooms    Rooms
 	cfg      Config
 	keys     auth.KeyProvider
-	publish  func(roomID string, occupancy []identity.Visitor)
+	publish  func(roomID string, occupancy []Occupant)
 	logger   *slog.Logger
+	now      func() time.Time
 
 	// publishing holds each change to the view, from reading what changed
 	// until it has published, so changes apply and publish one at a time.
-	publishing sync.Mutex
+	publishing operationGate
 
+	// storeMu prevents hydration from restoring a cached pre-revocation snapshot.
+	storeMu    operationGate
 	mu         sync.Mutex
 	joining    sync.Mutex
 	grants     map[string]*voiceGrant
-	current    map[string]string
 	admission  sync.Locker
 	validate   func(context.Context, identity.Session) (identity.Session, error)
 	guardedURL string
-	// issued holds, by visitor ID, the room ID of the last token issued to
-	// the visitor since the server started.
-	issued map[string]string
 	// view holds, by room ID, the participants of each room's voice by SID.
-	view map[string]map[string]identity.Visitor
+	view map[string]map[string]Occupant
 }
 
 // Option changes how New sets up the Service.
@@ -129,9 +132,12 @@ type Option func(*Service)
 
 // WithPublisher makes the Service hand each room's occupancy to publish once
 // it has changed, in the order the changes apply. publish must not block.
-func WithPublisher(publish func(roomID string, occupancy []identity.Visitor)) Option {
+func WithPublisher(publish func(roomID string, occupancy []Occupant)) Option {
 	return func(s *Service) { s.publish = publish }
 }
+
+// WithClock supplies the authorization lease clock; JWT verification uses real time.
+func WithClock(now func() time.Time) Option { return func(s *Service) { s.now = now } }
 
 // WithLogger makes Run log the refreshes that fail, and the Service log the
 // participants it removes, to logger.
@@ -145,16 +151,15 @@ func WithLogger(logger *slog.Logger) Option {
 func New(lk LiveKit, visitors Visitors, rs Rooms, cfg Config, opts ...Option) *Service {
 	s := &Service{
 		livekit:  lk,
+		now:      time.Now,
 		visitors: visitors,
 		rooms:    rs,
 		cfg:      cfg,
 		keys:     auth.NewSimpleKeyProvider(cfg.APIKey, cfg.APISecret),
-		publish:  func(string, []identity.Visitor) {},
+		publish:  func(string, []Occupant) {},
 		logger:   slog.New(slog.DiscardHandler),
-		issued:   make(map[string]string),
-		view:     make(map[string]map[string]identity.Visitor),
+		view:     make(map[string]map[string]Occupant),
 		grants:   make(map[string]*voiceGrant),
-		current:  make(map[string]string),
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -162,100 +167,52 @@ func New(lk LiveKit, visitors Visitors, rs Rooms, cfg Config, opts ...Option) *S
 	return s
 }
 
-// Join returns the credentials visitor joins the voice of the room roomID
-// with. It first removes the visitor from every other room's voice, so they
-// are a participant in one room at most. It reads who is where from LiveKit's
-// listing rather than the view, which may lag behind by a webhook. It fails
-// with ErrRoomFull when the room already has RoomCap participants other than
-// the visitor (a second connection of the visitor replaces the first, so it
-// takes no place), or with an ErrUnavailable. The caller checks that the room
-// exists and that the visitor may join it.
+// Join authorizes a fresh independent connection. Services using WithDB require
+// JoinSession so every durable grant has an exact session binding.
 func (s *Service) Join(ctx context.Context, visitor identity.Visitor, roomID string) (Credentials, error) {
-	return s.join(ctx, identity.Session{Visitor: visitor, Kind: identity.Guest}, roomID, false, false)
+	return s.join(ctx, identity.Session{Visitor: visitor, Kind: identity.Guest}, roomID, false)
 }
 
-// JoinSession binds voice to the exact browser session. Its caller holds the
-// lifecycle gate through session validation and issuance.
-func (s *Service) JoinSession(ctx context.Context, session identity.Session, roomID string, confirm bool) (Credentials, error) {
-	return s.join(ctx, session, roomID, confirm, true)
+// JoinSession authorizes one new connection without changing any other grant.
+// Its caller holds the lifecycle gate through session validation and issuance.
+func (s *Service) JoinSession(ctx context.Context, session identity.Session, roomID string) (Credentials, error) {
+	return s.join(ctx, session, roomID, true)
 }
 
-func (s *Service) join(ctx context.Context, session identity.Session, roomID string, confirm, bound bool) (Credentials, error) {
+func (s *Service) join(ctx context.Context, session identity.Session, roomID string, bound bool) (Credentials, error) {
+	if s.db != nil && (!bound || session.ID == "") {
+		return Credentials{}, identity.ErrNoVisitor
+	}
 	s.joining.Lock()
 	defer s.joining.Unlock()
 	visitor := session.Visitor
-	s.mu.Lock()
-	old := s.grants[s.current[visitor.ID]]
-	s.mu.Unlock()
-	sameBinding := old != nil && !old.revoked && old.room == roomID &&
-		old.session.ID == session.ID && old.session.Kind == session.Kind &&
-		old.session.Generation == session.Generation && old.session.Visitor.ID == visitor.ID
-	if old != nil && !old.revoked && session.Kind == identity.Account && old.session.ID != session.ID && !confirm {
-		return Credentials{}, ErrTransferRequired
-	}
-	transport := visitor.ID
-	if session.Kind == identity.Account {
-		if sameBinding {
-			transport = old.transport
-		} else {
-			transport += "." + ulid.Make().String()
-		}
-	}
+	transport := visitor.ID + "." + ulid.Make().String()
 	participants, err := s.livekit.Participants(ctx)
 	if err != nil {
 		return Credentials{}, fmt.Errorf("%w: list participants: %w", ErrUnavailable, err)
 	}
-	others := 0
-	var elsewhere []Participant
+	count := 0
 	for _, p := range participants {
-		switch {
-		case s.logicalIdentity(p.Identity) != visitor.ID:
-			if p.Room == roomID {
-				others++
-			}
-		case p.Room != roomID || p.Identity != transport:
-			elsewhere = append(elsewhere, p)
+		if p.Room == roomID {
+			count++
 		}
 	}
-	if others >= s.cfg.RoomCap {
+	if count >= s.cfg.RoomCap {
 		return Credentials{}, ErrRoomFull
-	}
-	replacing := old != nil && (!sameBinding || old.transport != transport || !bound)
-	if replacing {
-		s.fence(old)
-		defer s.closeGrant(ctx, old)
-	}
-	for _, p := range elsewhere {
-		if err := s.livekit.RemoveParticipant(ctx, p.Room, p.Identity); err != nil {
-			return Credentials{}, fmt.Errorf("%w: remove from room %s: %w", ErrUnavailable, p.Room, err)
-		}
-	}
-	if replacing {
-		s.retire(old)
 	}
 	token, err := s.token(identity.Visitor{ID: transport, Name: visitor.Name, Colour: visitor.Colour}, roomID)
 	if err != nil {
 		return Credentials{}, err
 	}
-	s.mu.Lock()
-	s.issued[visitor.ID] = roomID
-	if bound {
-		g := &voiceGrant{session: session, transport: transport, room: roomID, sockets: make(map[*signalConnection]struct{})}
-		if sameBinding && old.transport == transport {
-			g = old
-		}
-		if g.expiry == nil && !session.ExpiresAt.IsZero() {
-			s.expireAt(g)
-		}
-		s.grants[transport] = g
-		s.current[visitor.ID] = transport
+	g := &voiceGrant{session: session, transport: transport, room: roomID, disconnectedSince: s.now(), sockets: make(map[*signalConnection]struct{})}
+	if err := s.saveGrant(ctx, g); err != nil {
+		return Credentials{}, err
 	}
-	s.mu.Unlock()
 	connectionURL := s.cfg.URL
-	if session.Kind == identity.Account && s.guardedURL != "" {
+	if s.guardedURL != "" {
 		connectionURL = s.guardedURL
 	}
-	return Credentials{URL: connectionURL, Token: token}, nil
+	return Credentials{URL: connectionURL, Token: token, GrantID: transport}, nil
 }
 
 // token mints the token visitor joins the voice of the room roomID with: the
@@ -290,16 +247,6 @@ func (s *Service) token(visitor identity.Visitor, roomID string) (string, error)
 		return "", fmt.Errorf("mint voice token: %w", err)
 	}
 	return token, nil
-}
-
-// IssuedRoom returns the ID of the room whose voice the visitor visitorID was
-// last issued a token for, and false when they were issued none since the
-// server started.
-func (s *Service) IssuedRoom(visitorID string) (string, bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	room, ok := s.issued[visitorID]
-	return room, ok
 }
 
 // Check fails while LiveKit cannot be reached.

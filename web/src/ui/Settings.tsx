@@ -41,7 +41,7 @@ function SettingToggle({ flag, label }: { flag: Flag; label: string }) {
 /** How loud the microphone is: in voice, what goes out; otherwise a test on request. */
 function MicLevel({ open }: { open: boolean }) {
   const settings = useApp((s) => s.settings);
-  const selfId = useApp((s) => s.visitor?.id);
+  const selfId = useApp((s) => s.voice.people.find((p) => p.local)?.id);
   const inVoice = useApp((s) => s.voice.status === 'connected');
   const muted = useApp((s) => s.voice.muted);
   const [testing, setTesting] = useState(false);

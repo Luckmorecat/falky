@@ -136,16 +136,17 @@ func credentialBody(body *api.AccountFinish) []byte {
 	return raw
 }
 
-func (s *server) enrollment(ctx context.Context, e identity.Enrollment) (api.AccountEnrollment, string, error) {
+func (s *server) enrollment(ctx context.Context, e identity.Enrollment) (api.AccountEnrollment, string) {
 	if err := s.lifecycle.Apply(ctx, e.Effects); err != nil {
-		return api.AccountEnrollment{}, "", err
+		// Enrollment is committed and its one-time credentials cannot be regenerated.
+		s.logger.ErrorContext(ctx, "committed enrollment enforcement failed", "error", err)
 	}
 	codes := e.RecoveryCodes
 	if codes == nil {
 		codes = []string{}
 	}
 	cookie := (&http.Cookie{Name: cookieName, Value: e.Token, Path: "/api", Secure: true, HttpOnly: true, SameSite: http.SameSiteStrictMode, MaxAge: 90 * 24 * 60 * 60}).String()
-	return api.AccountEnrollment{Session: s.sessionBody(e.Session), RecoveryCodes: codes}, cookie, nil
+	return api.AccountEnrollment{Session: s.sessionBody(e.Session), RecoveryCodes: codes}, cookie
 }
 
 func (s *server) BeginRegistration(ctx context.Context, req api.BeginRegistrationRequestObject) (api.BeginRegistrationResponseObject, error) {
@@ -209,10 +210,7 @@ func (s *server) FinishRegistration(ctx context.Context, req api.FinishRegistrat
 	if s.accountError(ctx, err) {
 		return nil, nil
 	}
-	body, cookie, err := s.enrollment(ctx, e)
-	if err != nil {
-		return nil, err
-	}
+	body, cookie := s.enrollment(ctx, e)
 	return api.FinishRegistration200JSONResponse{Body: body, Headers: api.FinishRegistration200ResponseHeaders{SetCookie: cookie}}, nil
 }
 
@@ -223,10 +221,7 @@ func (s *server) FinishAuthentication(ctx context.Context, req api.FinishAuthent
 	if s.accountError(ctx, err) {
 		return nil, nil
 	}
-	body, cookie, err := s.enrollment(ctx, e)
-	if err != nil {
-		return nil, err
-	}
+	body, cookie := s.enrollment(ctx, e)
 	return api.FinishAuthentication200JSONResponse{Body: body, Headers: api.FinishAuthentication200ResponseHeaders{SetCookie: cookie}}, nil
 }
 
@@ -237,10 +232,7 @@ func (s *server) FinishRecovery(ctx context.Context, req api.FinishRecoveryReque
 	if s.accountError(ctx, err) {
 		return nil, nil
 	}
-	body, cookie, err := s.enrollment(ctx, e)
-	if err != nil {
-		return nil, err
-	}
+	body, cookie := s.enrollment(ctx, e)
 	return api.FinishRecovery200JSONResponse{Body: body, Headers: api.FinishRecovery200ResponseHeaders{SetCookie: cookie}}, nil
 }
 

@@ -142,7 +142,7 @@ func TestJoinIssuesATokenForThatRoomOnly(t *testing.T) {
 	}
 
 	grants, expires := decodeToken(t, creds.Token)
-	if grants.Identity != bob.ID || grants.Name != bob.Name {
+	if !strings.HasPrefix(grants.Identity, bob.ID+".") || grants.Name != bob.Name {
 		t.Errorf("identity, name = %q, %q, want %q, %q", grants.Identity, grants.Name, bob.ID, bob.Name)
 	}
 	if until := time.Until(expires); until < voice.TokenLifetime-time.Minute || until > voice.TokenLifetime {
@@ -170,42 +170,44 @@ func TestJoinIssuesATokenForThatRoomOnly(t *testing.T) {
 	}
 }
 
-func TestJoinRecordsTheRoomLastIssued(t *testing.T) {
+func TestEveryJoinIssuesAnIndependentTransport(t *testing.T) {
 	s, _ := newService(8)
-	if room, ok := s.IssuedRoom(bob.ID); ok {
-		t.Errorf("IssuedRoom before joining = %q, want none", room)
-	}
-	for _, room := range []string{roomA, roomB} {
-		if _, err := s.Join(t.Context(), bob, room); err != nil {
-			t.Fatalf("Join(%s): %v", room, err)
+	seen := map[string]bool{}
+	for _, room := range []string{roomA, roomA, roomB} {
+		creds, err := s.Join(t.Context(), bob, room)
+		if err != nil {
+			t.Fatal(err)
 		}
-		if got, ok := s.IssuedRoom(bob.ID); !ok || got != room {
-			t.Errorf("IssuedRoom after joining %s = %q, %v, want %s", room, got, ok, room)
+		if creds.GrantID == "" || seen[creds.GrantID] {
+			t.Fatal("Join reused a transport")
 		}
+		seen[creds.GrantID] = true
 	}
 }
 
-func TestJoiningAnotherRoomRemovesTheVisitorFromThePreviousOne(t *testing.T) {
-	s, lk := newService(8)
-	inA := lk.AddParticipant(roomA, bob.ID)
-	lk.AddParticipant(roomA, "alice")
-	if _, err := s.Join(t.Context(), bob, roomB); err != nil {
-		t.Fatalf("Join: %v", err)
-	}
-	want := []voice.Participant{inA}
-	if got := lk.Removed(); !slices.Equal(got, want) {
-		t.Errorf("removed = %+v, want %+v", got, want)
-	}
-}
-
-func TestJoiningTheSameRoomAgainRemovesNoOne(t *testing.T) {
-	s, lk := newService(8)
-	lk.AddParticipant(roomA, bob.ID)
-	if _, err := s.Join(t.Context(), bob, roomA); err != nil {
-		t.Fatalf("Join: %v", err)
-	}
-	if got := lk.Removed(); len(got) != 0 {
-		t.Errorf("removed = %+v, want no one", got)
+func TestJoiningPreservesExistingConnections(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		room string
+	}{
+		{name: "same room", room: roomA},
+		{name: "another room", room: roomB},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, lk := newService(8)
+			first, err := s.Join(t.Context(), bob, roomA)
+			if err != nil {
+				t.Fatal(err)
+			}
+			lk.AddParticipant(roomA, first.GrantID)
+			lk.AddParticipant(roomA, "alice")
+			if _, err := s.Join(t.Context(), bob, tc.room); err != nil {
+				t.Fatalf("Join: %v", err)
+			}
+			if got := lk.Removed(); len(got) != 0 {
+				t.Errorf("removed = %+v, want no removal", got)
+			}
+		})
 	}
 }
 
@@ -220,17 +222,14 @@ func TestJoiningAFullRoomIsRefusedAndKeepsTheVisitorWhereTheyAre(t *testing.T) {
 	if got := lk.Removed(); len(got) != 0 {
 		t.Errorf("removed = %+v, want no one", got)
 	}
-	if room, ok := s.IssuedRoom(bob.ID); ok {
-		t.Errorf("IssuedRoom = %q, want none", room)
-	}
 }
 
-func TestAVisitorAlreadyInAFullRoomMayJoinItAgain(t *testing.T) {
+func TestAnotherConnectionOfTheSamePersonCountsTowardCapacity(t *testing.T) {
 	s, lk := newService(2)
 	lk.AddParticipant(roomA, "alice")
 	lk.AddParticipant(roomA, bob.ID)
-	if _, err := s.Join(t.Context(), bob, roomA); err != nil {
-		t.Errorf("Join of the full room Bob is in: %v, want a token for a second tab", err)
+	if _, err := s.Join(t.Context(), bob, roomA); !errors.Is(err, voice.ErrRoomFull) {
+		t.Errorf("Join of the full room Bob is in: %v, want ErrRoomFull", err)
 	}
 }
 
@@ -240,9 +239,6 @@ func TestJoinFailsWhileLiveKitIsUnreachable(t *testing.T) {
 	lk.Fail(down)
 	if _, err := s.Join(t.Context(), bob, roomA); !errors.Is(err, voice.ErrUnavailable) || !errors.Is(err, down) {
 		t.Errorf("Join: %v, want ErrUnavailable wrapping %v", err, down)
-	}
-	if room, ok := s.IssuedRoom(bob.ID); ok {
-		t.Errorf("IssuedRoom = %q, want none", room)
 	}
 	if err := s.Check(t.Context()); !errors.Is(err, down) {
 		t.Errorf("Check = %v, want %v", err, down)

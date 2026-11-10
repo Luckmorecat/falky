@@ -42,6 +42,7 @@ import (
 	"github.com/kisshot/falky/server/internal/platform"
 	"github.com/kisshot/falky/server/internal/realtime"
 	"github.com/kisshot/falky/server/internal/rooms"
+	"github.com/kisshot/falky/server/internal/scheduler"
 	"github.com/kisshot/falky/server/internal/voice"
 )
 
@@ -69,7 +70,7 @@ Quote a name that has spaces: falky room create "Living room"
 
 // migrationSources lists the embedded migrations of each module that owns
 // tables; platform applies them as one sequence ordered by version.
-var migrationSources = []fs.FS{identity.Migrations(), rooms.Migrations(), chat.Migrations(), attachments.Migrations()}
+var migrationSources = []fs.FS{identity.Migrations(), rooms.Migrations(), chat.Migrations(), attachments.Migrations(), voice.Migrations()}
 
 // shutdownTimeout bounds how long serve waits for in-flight requests.
 const shutdownTimeout = 10 * time.Second
@@ -394,12 +395,10 @@ func serveOn(ctx context.Context, logger *slog.Logger, cfg platform.Config, db *
 	defer func() { _ = store.Close(context.Background()) }()
 	runCtx, stopRun := context.WithCancel(context.WithoutCancel(ctx))
 	defer stopRun()
-	attachmentsDone := make(chan struct{})
-	go func() { defer close(attachmentsDone); store.Run(runCtx) }()
 	rs := rooms.New(db, rooms.WithPublisher(events.RoomChanged), rooms.WithNameCheck(ident.NameTaken))
 	vs := voice.New(voice.NewClient(cfg.LiveKitAPIURL, cfg.LiveKitAPIKey, cfg.LiveKitAPISecret), ident, rs, voice.Config{
 		URL: cfg.LiveKitURL, APIKey: cfg.LiveKitAPIKey, APISecret: cfg.LiveKitAPISecret, RoomCap: cfg.VoiceRoomCap,
-	}, voice.WithPublisher(events.OccupancyChanged), voice.WithLogger(logger))
+	}, voice.WithDB(db), voice.WithPublisher(events.OccupancyChanged), voice.WithLogger(logger))
 	health.Optional("livekit", vs.Check)
 	lifecycle := &httpapi.Lifecycle{Enforce: httpapi.Enforcer(events, vs)}
 	handlers := httpapi.New(httpapi.Deps{
@@ -443,13 +442,24 @@ func serveOn(ctx context.Context, logger *slog.Logger, cfg platform.Config, db *
 			srv  *http.Server
 		}{"signalling", ls.signalling, &http.Server{Handler: handlers.Signalling, ReadHeaderTimeout: 10 * time.Second, ErrorLog: errorLog}})
 	}
-	// The occupancy view refreshes from LiveKit, first as the servers start,
-	// until they stop.
-	refreshCtx, stopRefresh := context.WithCancel(ctx)
-	refreshed := make(chan struct{})
+	scheduled := make(chan struct{})
 	go func() {
-		defer close(refreshed)
-		vs.Run(refreshCtx)
+		defer close(scheduled)
+		scheduler.Run(runCtx,
+			scheduler.Job{Interval: 20 * time.Second, Run: hub.Heartbeat},
+			scheduler.Job{Interval: 30 * time.Second, Startup: true, Run: func(ctx context.Context) {
+				operationCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+				defer cancel()
+				if err := lifecycle.Maintain(operationCtx, hub, vs); err != nil && ctx.Err() == nil {
+					logger.WarnContext(ctx, "access maintenance failed", "error", err)
+				}
+			}},
+			scheduler.Job{Interval: time.Minute, Run: func(ctx context.Context) {
+				if err := store.Recover(ctx); err != nil && ctx.Err() == nil {
+					logger.ErrorContext(ctx, "attachment cleanup failed", "error", err)
+				}
+			}},
+		)
 	}()
 	errc := make(chan error, len(servers))
 	for _, s := range servers {
@@ -463,10 +473,8 @@ func serveOn(ctx context.Context, logger *slog.Logger, cfg platform.Config, db *
 		logger.Info("shutting down")
 	case err = <-errc:
 	}
-	stopRefresh()
-	<-refreshed
 	stopRun()
-	<-attachmentsDone
+	<-scheduled
 	shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownTimeout)
 	defer cancel()
 	closed := make(chan error, 1)

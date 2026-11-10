@@ -40,7 +40,7 @@ const exitFullscreen = vi.fn(() => {
   return Promise.resolve();
 });
 
-const person = { id: 'sam', name: 'Sam', live: true, isSelf: false, muted: false, deafened: false, sharing: true, cameraTrackId: '' };
+const person = { id: 'sam.connection', visitorId: 'sam', name: 'Sam', live: true, isSelf: false, muted: false, deafened: false, sharing: true, cameraTrackId: '' };
 
 beforeEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
@@ -53,7 +53,7 @@ beforeEach(() => {
   document.exitFullscreen = exitFullscreen;
   vi.mocked(voice.shareTrack).mockReturnValue({ attach: vi.fn(), detach: vi.fn() } as unknown as ShareTrack);
   setState({
-    voice: { ...idleVoice, status: 'connected', roomId: 'room', people: [{ id: 'sam', name: 'Sam', local: false, muted: false, deafened: false, sharing: true, shareTrackId: 'track-1', camera: false, cameraTrackId: '' }] },
+    voice: { ...idleVoice, status: 'connected', roomId: 'room', people: [{ id: 'sam.connection', visitorId: 'sam', name: 'Sam', local: false, muted: false, deafened: false, sharing: true, shareTrackId: 'track-1', camera: false, cameraTrackId: '' }] },
   });
   container = document.createElement('div');
   document.body.append(container);

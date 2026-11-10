@@ -7,7 +7,7 @@ afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); localStorage.clear(
 
 it('scopes prefs before app load and observes a reset independently of revoked or disconnected live state', async () => {
   vi.useFakeTimers();
-  let state = { instanceId: 'boot-test', generation: 1, revision: 1, scenario: 'entry', visitor: null, voiceRoomId: null, accessLink: '/#k=mock-access-link', rooms: [], peers: {}, faults: faultDefaults, scenarios: ['entry', 'quiet'] };
+  let state = { instanceId: 'boot-test', generation: 1, revision: 1, scenario: 'entry', visitor: null, voiceConnections: {}, accessLink: '/#k=mock-access-link', rooms: [], peers: {}, faults: faultDefaults, scenarios: ['entry', 'quiet'] };
   const bodies: unknown[] = [];
   vi.stubGlobal('fetch', async (_url: string, init?: RequestInit) => {
     if (init?.body) bodies.push(JSON.parse(init.body as string));

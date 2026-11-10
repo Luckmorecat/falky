@@ -59,9 +59,8 @@ type Ticket struct {
 
 // Defaults of the options.
 const (
-	defaultPingInterval = 20 * time.Second
-	defaultPongTimeout  = 10 * time.Second
-	defaultQueueSize    = 128
+	defaultPongTimeout = 10 * time.Second
+	defaultQueueSize   = 128
 	// writeTimeout bounds sending one event, so that a stalled connection
 	// cannot hold its sender forever.
 	writeTimeout = 10 * time.Second
@@ -69,11 +68,10 @@ const (
 
 // Hub fans events out to the open connections.
 type Hub struct {
-	logger       *slog.Logger
-	pingInterval time.Duration
-	pongTimeout  time.Duration
-	queueSize    int
-	connected    func(visitorID string, connected bool)
+	logger      *slog.Logger
+	pongTimeout time.Duration
+	queueSize   int
+	connected   func(visitorID string, connected bool)
 
 	mu    sync.Mutex
 	conns map[*conn]struct{}
@@ -93,10 +91,9 @@ func WithLogger(logger *slog.Logger) Option {
 	return func(h *Hub) { h.logger = logger }
 }
 
-// WithHeartbeat pings each connection every interval and closes one that has
-// not answered within timeout.
-func WithHeartbeat(interval, timeout time.Duration) Option {
-	return func(h *Hub) { h.pingInterval, h.pongTimeout = interval, timeout }
+// WithPongTimeout bounds each connection's response to a scheduled heartbeat.
+func WithPongTimeout(timeout time.Duration) Option {
+	return func(h *Hub) { h.pongTimeout = timeout }
 }
 
 // WithQueueSize makes each connection hold at most n events waiting to be
@@ -118,13 +115,12 @@ func WithConnectedFunc(f func(visitorID string, connected bool)) Option {
 // New returns a Hub with no connections.
 func New(opts ...Option) *Hub {
 	h := &Hub{
-		logger:       slog.New(slog.DiscardHandler),
-		pingInterval: defaultPingInterval,
-		pongTimeout:  defaultPongTimeout,
-		queueSize:    defaultQueueSize,
-		connected:    func(string, bool) {},
-		conns:        make(map[*conn]struct{}),
-		visitors:     make(map[string]int),
+		logger:      slog.New(slog.DiscardHandler),
+		pongTimeout: defaultPongTimeout,
+		queueSize:   defaultQueueSize,
+		connected:   func(string, bool) {},
+		conns:       make(map[*conn]struct{}),
+		visitors:    make(map[string]int),
 	}
 	for _, opt := range opts {
 		opt(h)
@@ -146,6 +142,7 @@ type conn struct {
 	// open is set once the upgrade has succeeded and the connection counts
 	// as one of its visitor's.
 	open bool
+	ws   *websocket.Conn
 }
 
 // Publish queues e on every open connection without waiting for any of them.
@@ -238,20 +235,11 @@ func (h *Hub) Serve(w http.ResponseWriter, r *http.Request, sub Subscriber) (ope
 	}
 	defer h.serving.Done()
 	defer h.remove(c)
-	opened = h.opened(c)
-	if !sub.Session.ExpiresAt.IsZero() {
-		timer := time.AfterFunc(time.Until(sub.Session.ExpiresAt), func() {
-			h.mu.Lock()
-			defer h.mu.Unlock()
-			h.removeLocked(c, StatusRevoked, "session expired")
-		})
-		defer timer.Stop()
-	}
+	opened = h.opened(c, ws)
 
 	ctx, cancel := context.WithCancel(r.Context())
 	var wg sync.WaitGroup
 	wg.Go(func() { h.send(ctx, c, ws) })
-	wg.Go(func() { h.heartbeat(ctx, c, ws) })
 	wg.Go(func() {
 		select {
 		case <-ctx.Done():
@@ -293,12 +281,13 @@ func (h *Hub) add(c *conn) bool {
 // opened counts c, whose upgrade has succeeded, as one of its visitor's open
 // connections, unless the Hub has already let go of it. It reports whether it
 // did.
-func (h *Hub) opened(c *conn) bool {
+func (h *Hub) opened(c *conn, ws *websocket.Conn) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if _, ok := h.conns[c]; !ok {
 		return false
 	}
+	c.ws = ws
 	c.open = true
 	h.visitors[c.sub.VisitorID]++
 	if h.visitors[c.sub.VisitorID] == 1 {
@@ -365,26 +354,51 @@ func (h *Hub) send(ctx context.Context, c *conn, ws *websocket.Conn) {
 	}
 }
 
-// heartbeat pings ws every ping interval and closes it when a pong does not
-// come back in time.
-func (h *Hub) heartbeat(ctx context.Context, c *conn, ws *websocket.Conn) {
-	ticker := time.NewTicker(h.pingInterval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
+// Heartbeat pings a snapshot concurrently, without authorization or database
+// work. Each socket has its own deadline, so a missed pong cannot delay peers.
+func (h *Hub) Heartbeat(ctx context.Context) {
+	h.mu.Lock()
+	var conns []*conn
+	for c := range h.conns {
+		if c.open {
+			conns = append(conns, c)
 		}
-		pctx, cancel := context.WithTimeout(ctx, h.pongTimeout)
-		err := ws.Ping(pctx)
-		cancel()
-		if err != nil {
-			if ctx.Err() == nil {
+	}
+	h.mu.Unlock()
+	var running sync.WaitGroup
+	for _, c := range conns {
+		running.Go(func() {
+			pctx, cancel := context.WithTimeout(ctx, h.pongTimeout)
+			defer cancel()
+			if err := c.ws.Ping(pctx); err != nil {
+				if ctx.Err() != nil {
+					return
+				}
 				h.logger.Debug("live connection missed a heartbeat; closing it", "visitor", c.sub.VisitorID, "error", err)
+				_ = c.ws.CloseNow()
 			}
-			_ = ws.CloseNow()
+		})
+	}
+	running.Wait()
+}
+
+// ValidateSessions closes invalid established access. The caller holds the
+// lifecycle gate, while validation itself never holds the hub's socket lock.
+func (h *Hub) ValidateSessions(ctx context.Context) {
+	h.mu.Lock()
+	var conns []*conn
+	for c := range h.conns {
+		conns = append(conns, c)
+	}
+	h.mu.Unlock()
+	for _, c := range conns {
+		if ctx.Err() != nil {
 			return
+		}
+		if c.sub.Authorized != nil && !c.sub.Authorized(ctx) && ctx.Err() == nil {
+			h.mu.Lock()
+			h.removeLocked(c, StatusRevoked, "session expired or revoked")
+			h.mu.Unlock()
 		}
 	}
 }

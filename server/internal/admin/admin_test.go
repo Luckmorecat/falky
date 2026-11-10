@@ -29,7 +29,7 @@ import (
 // has its access link.
 func newDeps(t *testing.T) admin.Deps {
 	t.Helper()
-	ms, err := platform.LoadMigrations(identity.Migrations(), rooms.Migrations())
+	ms, err := platform.LoadMigrations(identity.Migrations(), rooms.Migrations(), voice.Migrations())
 	if err != nil {
 		t.Fatalf("LoadMigrations: %v", err)
 	}
@@ -52,14 +52,14 @@ func newDeps(t *testing.T) admin.Deps {
 	rs := rooms.New(db)
 	return admin.Deps{
 		Logger: platform.NewLogger(io.Discard, 0), Identity: ident, Rooms: rs,
-		Voice: newVoice(voicetest.New(), ident, rs),
+		Voice: newVoice(voicetest.New(), ident, rs, db),
 		DB:    db, SnapshotDir: filepath.Join(t.TempDir(), "snapshots"),
 	}
 }
 
 // newVoice returns the voice service over lk.
-func newVoice(lk voice.LiveKit, ident *identity.Service, rs *rooms.Service) *voice.Service {
-	return voice.New(lk, ident, rs, voice.Config{URL: "wss://falky.example", APIKey: "falky", APISecret: "a-secret", RoomCap: 8})
+func newVoice(lk voice.LiveKit, ident *identity.Service, rs *rooms.Service, db *platform.DB) *voice.Service {
+	return voice.New(lk, ident, rs, voice.Config{URL: "wss://falky.example", APIKey: "falky", APISecret: "a-secret", RoomCap: 8}, voice.WithDB(db))
 }
 
 // serve serves the admin handler on ln until the returned stop is called.
@@ -299,7 +299,7 @@ func TestTheClientRotatesTheLinkAndEverythingOfTheOldOneEnds(t *testing.T) {
 	deps := newDeps(t)
 	lk := voicetest.New()
 	inVoice := lk.AddParticipant("01JBX7A2K9D4F6H8M0P3R5T7VW", "01JBX6Z8Q3M5W2K7R9T4V1C0DE")
-	deps.Voice = newVoice(lk, deps.Identity, deps.Rooms)
+	deps.Voice = newVoice(lk, deps.Identity, deps.Rooms, deps.DB)
 	old, err := deps.Identity.Link(t.Context())
 	if err != nil {
 		t.Fatalf("Link: %v", err)
@@ -326,7 +326,7 @@ func TestRotatingTheLinkReportsRequiredVoiceEnforcementFailure(t *testing.T) {
 	deps := newDeps(t)
 	lk := voicetest.New()
 	lk.Fail(errors.New("connection refused"))
-	deps.Voice = newVoice(lk, deps.Identity, deps.Rooms)
+	deps.Voice = newVoice(lk, deps.Identity, deps.Rooms, deps.DB)
 	var logs strings.Builder
 	deps.Logger = platform.NewLogger(&logs, 0)
 	old, err := deps.Identity.Link(t.Context())

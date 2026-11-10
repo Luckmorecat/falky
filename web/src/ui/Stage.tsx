@@ -16,6 +16,7 @@ import { useDrawerLayout } from './useDrawerLayout';
 
 interface Person {
   id: string;
+  visitorId: string;
   name: string;
   live: boolean;
   isSelf: boolean;
@@ -28,17 +29,15 @@ interface Person {
 /** Who to show: inside the room's voice, LiveKit knows best and tells more. */
 export function usePeople(room: Room | null): Person[] {
   const voiceState = useApp((s) => s.voice);
-  const selfId = useApp((s) => s.visitor?.id);
   return useMemo(() => {
     if (!room) return [];
     const names = new Map(room.occupancy.map((p) => [p.visitorId, p.name]));
     if (voiceState.roomId === room.id && voiceState.status !== 'idle' && voiceState.people.length) {
-      return voiceState.people.map((p) => ({ ...p, name: names.get(p.id) ?? p.name, live: true, isSelf: p.local }));
+      return voiceState.people.map((p) => ({ ...p, name: names.get(p.visitorId) ?? p.name, live: true, isSelf: p.local }));
     }
     return room.occupancy
-      .filter((p) => voiceState.roomId !== null || voiceState.status === 'idle' || p.visitorId !== selfId)
-      .map((p) => ({ id: p.visitorId, name: p.name, live: false, isSelf: p.visitorId === selfId, muted: false, deafened: false, sharing: false, cameraTrackId: '' }));
-  }, [room, voiceState, selfId]);
+      .map((p) => ({ id: p.connectionId, visitorId: p.visitorId, name: p.name, live: false, isSelf: false, muted: false, deafened: false, sharing: false, cameraTrackId: '' }));
+  }, [room, voiceState]);
 }
 
 function useWindowSize(): { w: number; h: number } {
@@ -79,7 +78,7 @@ export function Stage({ room, background }: { room: Room; background?: RefObject
   const grid = useRef<HTMLDivElement>(null);
   const rects = useRef(new Map<string, DOMRect>());
   const roomsOpen = useApp((s) => s.roomsOpen);
-  const sourcesKey = people.filter((p) => p.live).map((p) => `${p.id}:${colours[p.id]?.palette}`).join();
+  const sourcesKey = people.filter((p) => p.live).map((p) => `${p.id}:${colours[p.visitorId]?.palette}`).join();
 
   useLayoutEffect(() => {
     background?.current?.invalidateLayout();
@@ -92,7 +91,7 @@ export function Stage({ room, background }: { room: Room; background?: RefObject
     const tiles = new Map([...grid.current.querySelectorAll<HTMLElement>('[data-tile]')].map((el) => [el.dataset.tile, el]));
     const sources: VoiceSource[] = people.filter((p) => p.live).flatMap((p) => {
       const element = tiles.get(p.id)?.querySelector<HTMLElement>('.orb');
-      return element && colours[p.id] ? [{ element, palette: colours[p.id]!.palette, level: () => {
+      return element && colours[p.visitorId] ? [{ element, palette: colours[p.visitorId]!.palette, level: () => {
         const person = getState().voice.people.find((person) => person.id === p.id);
         return person && !person.muted && !person.deafened ? levelOf(p.id)() : 0;
       } }] : [];
@@ -161,8 +160,9 @@ export function Stage({ room, background }: { room: Room; background?: RefObject
           <Tile
             key={p.id}
             id={p.id}
+            visitorId={p.visitorId}
             name={p.name}
-            palette={colours[p.id]?.palette}
+            palette={colours[p.visitorId]?.palette}
             isSelf={p.isSelf}
             muted={p.muted}
             deafened={p.deafened}
@@ -178,7 +178,7 @@ export function Stage({ room, background }: { room: Room; background?: RefObject
 }
 
 const levelFns = new Map<string, () => number>();
-/** One function per person, so a block's animation is not rebuilt on each render. */
+/** One function per connection, so a block's animation is not rebuilt on each render. */
 function levelOf(id: string): () => number {
   let fn = levelFns.get(id);
   if (!fn) {

@@ -29,6 +29,7 @@ import (
 // database, voice over an in-memory LiveKit, and the internal listener
 // beside it.
 type publicServer struct {
+	db          *platform.DB
 	srv         *httptest.Server
 	internal    *httptest.Server
 	secret      string
@@ -106,7 +107,7 @@ func startPublicLimited(t *testing.T, enterBurst, postBurst int, identityOptions
 
 func startPublicAttachments(t *testing.T, enterBurst, postBurst int, attachmentOptions []attachments.Option, identityOptions ...identity.Option) publicServer {
 	t.Helper()
-	ms, err := platform.LoadMigrations(identity.Migrations(), rooms.Migrations(), chat.Migrations(), attachments.Migrations())
+	ms, err := platform.LoadMigrations(identity.Migrations(), rooms.Migrations(), chat.Migrations(), attachments.Migrations(), voice.Migrations())
 	if err != nil {
 		t.Fatalf("LoadMigrations: %v", err)
 	}
@@ -152,7 +153,7 @@ func startPublicAttachments(t *testing.T, enterBurst, postBurst int, attachmentO
 	lk := voicetest.New()
 	vs := voice.New(lk, ident, rs, voice.Config{
 		URL: testLiveKitURL, APIKey: testLiveKitKey, APISecret: testLiveKitSecret, RoomCap: testRoomCap,
-	}, voice.WithPublisher(events.OccupancyChanged))
+	}, voice.WithDB(db), voice.WithPublisher(events.OccupancyChanged))
 	lifecycle := &Lifecycle{}
 	h := New(Deps{
 		Lifecycle:   lifecycle,
@@ -183,7 +184,7 @@ func startPublicAttachments(t *testing.T, enterBurst, postBurst int, attachmentO
 		}
 	})
 	return publicServer{
-		srv: srv, internal: internal, secret: strings.TrimPrefix(link, testOrigin+"/#k="),
+		db: db, srv: srv, internal: internal, secret: strings.TrimPrefix(link, testOrigin+"/#k="),
 		identity: ident, rooms: rs, attachments: store, voice: vs, livekit: lk, events: events, clock: clk, logs: logs, lifecycle: lifecycle,
 	}
 }

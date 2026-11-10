@@ -21,7 +21,7 @@ func TestGuardedLiveKitCommittedRevocationSurvivesCallerCancellation(t *testing.
 		t.Run(operation, func(t *testing.T) {
 			f := newGuardedVoice(t)
 			account, _ := f.enroll(t)
-			creds := f.join(t, account.Session, false)
+			creds := f.join(t, account.Session)
 			client := connect(t, creds)
 			track, err := lksdk.NewLocalTrack(webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus})
 			if err != nil {
@@ -82,7 +82,7 @@ func TestGuardedLiveKitCommittedRevocationSurvivesCallerCancellation(t *testing.
 				if _, err := f.ident.ValidateSession(t.Context(), recovered.Session); err != nil {
 					t.Fatalf("new recovery session was revoked: %v", err)
 				}
-				connect(t, f.join(t, recovered.Session, false))
+				connect(t, f.join(t, recovered.Session))
 			}
 		})
 	}

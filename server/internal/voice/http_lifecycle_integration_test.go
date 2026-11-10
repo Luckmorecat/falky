@@ -40,7 +40,7 @@ func TestSignedHTTPRecoveryEndsRealMediaAndPreservesNewLiveAndVoiceSession(t *te
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	migrations, err := platform.LoadMigrations(identity.Migrations(), rooms.Migrations())
+	migrations, err := platform.LoadMigrations(identity.Migrations(), rooms.Migrations(), voice.Migrations())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,7 +55,7 @@ func TestSignedHTTPRecoveryEndsRealMediaAndPreservesNewLiveAndVoiceSession(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	vs := voice.New(liveKitClient(), ident, rs, voice.Config{APIKey: devKey, APISecret: devSecret, RoomCap: 8}, voice.WithPublisher(events.OccupancyChanged))
+	vs := voice.New(liveKitClient(), ident, rs, voice.Config{APIKey: devKey, APISecret: devSecret, RoomCap: 8}, voice.WithDB(db), voice.WithPublisher(events.OccupancyChanged))
 	gate := &httpapi.Lifecycle{Enforce: httpapi.Enforcer(events, vs)}
 	handlers := httpapi.New(httpapi.Deps{
 		Logger: logger, Identity: ident, Rooms: rs, Voice: vs, Live: hub, Metrics: platform.NewMetrics().Handler(),

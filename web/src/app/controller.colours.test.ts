@@ -86,15 +86,15 @@ it('recovers every loaded historical author on live open without new messages, b
 
 it('retries failed and missing snapshots on discovery, fetches SDK-only IDs, and ignores a previous session snapshot', async () => {
   const { idleVoice } = await import('../voice/types');
-  seam.api.rooms.mockResolvedValue([{ id: 'room', name: 'Lounge', occupancy: [{ visitorId: 'peer', name: 'Peer' }] }]);
+  seam.api.rooms.mockResolvedValue([{ id: 'room', name: 'Lounge', occupancy: [{ connectionId: 'peer.connection', visitorId: 'peer', name: 'Peer' }] }]);
   seam.api.colours.mockRejectedValue(new Error('offline'));
   const app = await import('./controller'); const { getState } = await import('./store'); await app.boot();
   expect(getState().colours.peer).toBeUndefined();
   seam.api.colours.mockResolvedValue([]);
-  seam.live.onEvent!({ type: 'occupancy.changed', eventId: 'occupancy', timestamp: '2026-11-08T00:00:00Z', payload: { roomId: 'room', occupancy: [{ visitorId: 'peer', name: 'Peer' }] } });
+  seam.live.onEvent!({ type: 'occupancy.changed', eventId: 'occupancy', timestamp: '2026-11-08T00:00:00Z', payload: { roomId: 'room', occupancy: [{ connectionId: 'peer.connection', visitorId: 'peer', name: 'Peer' }] } });
   await vi.waitFor(() => expect(seam.api.colours).toHaveBeenCalledTimes(3));
   const old = deferred<ReturnType<typeof colour>[]>(); seam.api.colours.mockReturnValueOnce(old.promise);
-  seam.voiceChange!({ ...idleVoice, roomId: 'room', people: [{ id: 'sdk-only', name: 'SDK', local: false, muted: false, deafened: false, sharing: false, shareTrackId: '', camera: false, cameraTrackId: '' }] });
+  seam.voiceChange!({ ...idleVoice, roomId: 'room', people: [{ id: 'sdk-only.connection', visitorId: 'sdk-only', name: 'SDK', local: false, muted: false, deafened: false, sharing: false, shareTrackId: '', camera: false, cameraTrackId: '' }] });
   expect(seam.api.colours).toHaveBeenLastCalledWith(['peer', 'sdk-only']);
   seam.api.rooms.mockResolvedValue([]); seam.api.me.mockResolvedValue({ id: 'new-self', name: 'Other', colour: colour('sky', 1, 'new-self') });
   await app.boot(); old.resolve([colour('rose', 5, 'peer'), colour('rose', 5)]);
@@ -103,7 +103,7 @@ it('retries failed and missing snapshots on discovery, fetches SDK-only IDs, and
   expect(getState().visitor?.id).toBe('new-self');
   seam.api.colours.mockImplementation(async (ids: string[]) => ids.map((id) => colour('moss', 2, id)));
   expect(getState().voice.people).toEqual([]);
-  seam.voiceChange!({ ...idleVoice, roomId: 'room', people: [{ id: 'sdk-only', name: 'SDK', local: false, muted: false, deafened: false, sharing: false, shareTrackId: '', camera: false, cameraTrackId: '' }] });
+  seam.voiceChange!({ ...idleVoice, roomId: 'room', people: [{ id: 'sdk-only.connection', visitorId: 'sdk-only', name: 'SDK', local: false, muted: false, deafened: false, sharing: false, shareTrackId: '', camera: false, cameraTrackId: '' }] });
   await vi.waitFor(() => expect(getState().colours['sdk-only']?.palette).toBe('moss'));
 });
 
@@ -134,7 +134,7 @@ it('does not let a previous session refresh or failed save revoke or recolour fr
 
 it('retries a failed recovery snapshot while the live socket remains open and no messages arrive', async () => {
   vi.useFakeTimers();
-  seam.api.rooms.mockResolvedValue([{ id: 'room', name: 'Lounge', occupancy: [{ visitorId: 'peer', name: 'Peer' }] }]);
+  seam.api.rooms.mockResolvedValue([{ id: 'room', name: 'Lounge', occupancy: [{ connectionId: 'peer.connection', visitorId: 'peer', name: 'Peer' }] }]);
   seam.api.colours.mockResolvedValue([colour('rose', 1, 'peer')]);
   const app = await import('./controller'); const { getState } = await import('./store'); await app.boot();
   seam.api.colours.mockRejectedValue(new Error('snapshot unavailable'));
@@ -149,7 +149,7 @@ it('retries a failed recovery snapshot while the live socket remains open and no
   expect(getState().colours.peer).toEqual(colour('moss', 2, 'peer'));
   seam.api.colours.mockRejectedValue(new Error('snapshot unavailable again'));
   seam.live.onOpen!(); await vi.advanceTimersByTimeAsync(0);
-  seam.live.onEvent!({ type: 'occupancy.changed', eventId: 'unknown-peer', timestamp: '2026-11-08T00:00:00Z', payload: { roomId: 'room', occupancy: [{ visitorId: 'missing-peer', name: 'Peer' }] } });
+  seam.live.onEvent!({ type: 'occupancy.changed', eventId: 'unknown-peer', timestamp: '2026-11-08T00:00:00Z', payload: { roomId: 'room', occupancy: [{ connectionId: 'missing-peer.connection', visitorId: 'missing-peer', name: 'Peer' }] } });
   const beforeEnd = seam.api.colours.mock.calls.length;
   seam.live.onRevoked!();
   await vi.advanceTimersByTimeAsync(30_000);

@@ -525,15 +525,103 @@ Edit this instance's `.env` and private saved copy with the new
 ./compose.sh exec falky /falky link show
 ```
 
-Both the server and LiveKit restart, briefly interrupting voice. Account browsers
-must obtain fresh voice credentials after a backend restart because account voice grants
-are process-local and fail closed; account sessions persist. Never copy
-credentials or a database from production to development.
+Both the server and LiveKit restart, briefly interrupting voice. Both account and
+guest browsers can reconnect using a valid original or LiveKit-refreshed JWT,
+provided its exact persisted grant and authoritative session/room/name binding
+remain valid. Missing/revoked grants are never synthesized from old tokens.
+Admission still validates JWT signatures and claims against the exact session,
+identity, kind, generation, room and absolute expiry, plus current name/access
+authorization.
+Never copy credentials or a database from production to development.
 
-Guests can reuse valid original or LiveKit-refreshed voice JWTs after a backend
-restart while their unique persisted guest session and guest-link generation
-remain current. Logout, guest-link rotation or account upgrade refuse that
-restoration; room/name checks and newer room choices still apply.
+Migration `0010_voice_grants.sql` records durable voice permissions and cleanup
+work independently of session deletion. It does not record occupancy. The first
+upgrade cannot backfill historical in-memory permissions: unknown participants
+and old tokens fail closed, and everyone must explicitly rejoin voice once.
+Existing browser sessions and original 90-day account/400-day guest deadlines
+remain unchanged. Subsequent backend restarts preserve exact valid grants.
+
+Migration `0011_independent_voice_connections.sql` removes only the unique index
+that limited an identity to one active grant. Existing grants and cleanup work
+remain intact, and transport IDs remain unique. This upgrade needs no explicit
+rejoin for grants already persisted by `0010`. Migration
+`0012_voice_idle_grace.sql` adds nullable `disconnected_since` authorization
+metadata (UTC Unix nanoseconds). Existing grants begin with unknown absence:
+a successful listing preserves present participants and starts a full grace for
+absent ones, rather than guessing historical activity.
+
+Every explicit `POST /api/rooms/{id}/voice` creates an independent grant. One
+identity can use several sessions, and each session can have several connections
+in the same or different rooms. Join does not evict or transfer another connection;
+the deprecated `confirmTransfer` field is accepted and ignored whether omitted,
+false or true. Reconnect reuses its exact existing grant rather than calling Join.
+Capacity counts every connection, including another of the joining identity;
+LiveKit's hard participant cap also covers racing admissions.
+
+REST and live occupancy list every connection separately with a stable
+`connectionId` (the returned `grantId` and LiveKit transport identity), permanent
+`visitorId` and current name. The room list and participant tiles retain separate
+entries even before the viewer joins. Profile appearance and colour belong to
+`visitorId`; media, microphone levels, active speakers and playback volume use
+`connectionId`. Only the exact local connection receives local controls and camera
+mirroring, so another connection of the same person can share its screen or camera
+independently. Playback preferences use `connectionVolume.<connectionId>`; legacy
+person-wide `volume.<visitorId>` preferences are ignored and new grants start at
+normal volume (1). Existing join-muted and audio defaults remain, with one local
+connection per app instance and no companion mode or device registry.
+
+One internal scheduler owns heartbeat (20 seconds), maintenance (startup and every
+30 seconds), and attachment cleanup (60 seconds). Each job runs independently and
+skips overlapping triggers; no external cron or new deployment service is needed.
+Maintenance closes expired/invalid local live and signalling access before slow
+LiveKit work, retries persisted exact-transport removals even when participants
+are absent, then reconciles occupancy. Failed cleanup survives restart and session
+deletion; successful obsolete work is retired. Established session expiry closes
+at the next maintenance pass, normally within 30 seconds; requests and reconnects
+reject expired sessions immediately. Shutdown cancels and joins jobs before
+closing their dependencies.
+
+Explicit browser Leave immediately stops this app instance's microphone, camera
+and screen tracks and disconnects its SDK room, including while offline. It sends
+no backend revocation request and keeps no retry queue or pending notice. Older
+pending-Leave browser storage is ignored. Local disconnect, reload and temporary
+network disconnection preserve grant authorization during its idle grace: an
+original or LiveKit-refreshed valid JWT can reconnect its exact connection before
+ten continuous minutes of confirmed absence, while its session and room access
+remain valid. Actual successful reconnect cancels the countdown; subsequent
+confirmed absence starts another full grace. At or after the known deadline,
+guarded signalling refuses the old grant immediately, including still-valid JWTs.
+An explicit Join or normal UI retry retrieves a fresh grant under the unchanged
+valid login session; idle voice expiry never logs out the browser or silently
+rejoins after deliberate Leave.
+Logout, recovery, disablement, guest-link rotation and access expiry still fence
+their affected grants and use durable server cleanup.
+
+When switching rooms, the browser keeps its previous connection if the new Join
+is refused, including a full room. After successful admission it disconnects only
+its previous local media before setting up the new room; both grants remain
+authorized. Canceled/late Join credentials are discarded, and failed or obsolete
+SDK setup tears down its captured room and tracks without affecting a newer local
+connection. Unused grants start a ten-minute idle grace at issuance. Other app
+instances' connections stay independent.
+
+Only successful full LiveKit listings establish absence; signed webhooks update
+the occupancy view without changing idle deadlines. Absence detection normally
+lags departure by up to the 30-second maintenance cadence. Expiry and exact-target
+cleanup run on the next successful pass at or after the ten-minute deadline,
+normally about 10–10.5 minutes after departure; listing duration, scheduling and
+outages can add delay. A failed listing does not establish absence or authorize
+idle destruction. A known deadline survives restart/outages and still refuses new
+admission; a fresh listing of an actually present participant clears stale absence.
+Pre-upgrade or previously active NULL timestamps remain unknown across restart
+until a successful list establishes absence. Revocation is durable before media
+removal, and failures retain immutable cleanup targets for later retries.
+
+The voice idle lease and the JWT lifetime are distinct: LiveKit renews tokens for
+connected participants, whose grant does not expire merely from age. Validation
+probes, failed handshakes and stale events cannot renew an idle lease. A successful
+actual handshake begun before the deadline can finish within its existing
+ten-second bound even if the clock crosses that deadline during admission.
 
 ### Accounts, invitations and recovery
 
@@ -572,7 +660,9 @@ are supported. Management and code regeneration require a verified passkey proof
 in the same session within five minutes; last-key removal is refused. Removing
 one passkey blocks future sign-in/proof with that key, but normal existing
 sessions remain usable; recovery/disable ends the old sessions. Account cookies expire server-side
-after 90 days absolute; logout ends only that browser's session.
+after 90 days absolute; logout ends only that browser's exact session and all of
+its grants, preserving other sessions of the same account. Guest-link rotation
+ends affected guest sessions and all their grants, preserving accounts.
 
 Enrollment and recovery return ten high-entropy single-use recovery codes,
 plaintext only in the successful response; only their hashes are stored. Keep
@@ -590,17 +680,21 @@ and account-bound ceremonies, then returns a fresh session and codes. Old live
 updates and voice end; the recovered identity, reserved name and history remain.
 Disablement immediately ends that account's sessions/live/voice and rejects
 authentication/recovery while retaining the identity and name. It leaves the
-shared guest link untouched. A successful HTTP/CLI mutation awaits required
-voice removal; a postcommit enforcement error means persistent identity state
-already changed. Inspect logs and LiveKit connectivity; do not assume the
+shared guest link untouched. Registration, sign-in and recovery return their
+committed session cookie and any new recovery codes even if subsequent
+enforcement fails, so a media outage cannot discard these one-time credentials.
+Enforcement is still attempted immediately; failures are logged and maintenance
+retries pending fencing and cleanup. Other successful HTTP/CLI mutations await
+required voice removal; a postcommit enforcement error means persistent identity
+state already changed. Inspect logs and LiveKit connectivity; do not assume the
 transaction was rolled back or media removal succeeded.
 
 The current frontend provides the legacy guest flow; these backend invitation
 and recovery links do not add account UI. Client integration must implement the
 [account/WebAuthn API](../api/openapi.yaml), including five-minute context-bound
-ceremonies, same-origin mutations, recovery-code storage and explicit confirmed
-voice transfer at `POST /api/rooms/{id}/voice`. Account transport IDs map to the
-permanent prefix before their dot; public occupancy already uses permanent IDs.
+ceremonies, same-origin mutations and recovery-code storage. Voice uses the
+independent connection model above for both guests and accounts; no new account
+UI is included.
 
 The additive `0007_accounts.sql` migration retains existing IDs, guest history
 and ownership. `0008_identity_profiles.sql` renames the lasting identity table to

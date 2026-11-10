@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 )
 
 func (s *Store) cleanupLocked(ctx context.Context) error {
@@ -136,22 +135,6 @@ func (s *Store) Recover(ctx context.Context) error {
 		}
 	}
 	return syncFile(s.root)
-}
-
-// Run retries durable cleanup and expires drafts until ctx is cancelled.
-func (s *Store) Run(ctx context.Context) {
-	ticker := time.NewTicker(time.Minute)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			if err := s.Recover(ctx); err != nil {
-				s.report(err)
-			}
-		}
-	}
 }
 
 // Close stops admission and cancels processing. The HTTP owner must also stop

@@ -539,9 +539,9 @@ export interface paths {
         put?: never;
         /**
          * Join a room's voice.
-         * @description Returns the LiveKit URL and a token to connect to the room's voice with a LiveKit SDK. A visitor is a participant in one room at most: the server first removes them from any other room's voice. Joining the room again, say from a second tab, is allowed even when the room is full, and the new connection replaces the earlier one. For accounts, a different browser session must explicitly send confirmTransfer=true; otherwise voice_transfer_required leaves the first participant intact. Guest callers may continue omitting the request body. Account requests require this server's exact configured Origin header.
+         * @description Returns the LiveKit URL and a token to connect to the room's voice with a LiveKit SDK. Every explicit Join authorizes a fresh independent connection, including repeated joins from the same session. Other tabs and devices remain connected, in the same room or different rooms. Local Leave, room switching and discarded setup credentials do not revoke grants immediately. Valid original or LiveKit-refreshed credentials may reconnect their original connection before ten continuous minutes of confirmed absence, while their token, session and room access remain valid. Successful reconnect cancels the idle countdown. Unused grants receive ten minutes from issuance. At the idle deadline the old grant is refused; a new explicit Join retrieves a fresh grant under the same valid login. Capacity counts connections, including other connections of this identity. Account requests require this server's exact configured Origin header.
          *
-         *     The token admits the visitor to this room only, under their visitor ID as participant identity for guests and their name as display name. Account transport identities append an opaque grant nonce after a dot; occupancy continues to expose the permanent visitor ID. Account clients map a transport identity to that ID by taking its prefix before the dot. Account credentials always use this server's guarded public signalling origin. Restarting Falky requires fresh account voice credentials. Guests may reuse a valid original or LiveKit-refreshed JWT after a backend restart while exactly one persisted guest session and its guest link generation remain current. Guest logout, link rotation or account upgrade prevent restoration; room and name authorization still apply. A newer room choice fences earlier room tokens. It may publish the microphone, a camera, a screen share and the screen share's audio, subscribe to the other participants, and update the participant's own attributes, but not send data messages. It expires 10 minutes after it is issued, so connect right away; once connected, LiveKit renews it.
+         *     Both guests and accounts receive a fresh immutable transport identity on every explicit Join, even for the same room and session. Its prefix before the dot is the permanent identity ID. Occupancy exposes both connectionId (the transport identity) and visitorId (the permanent identity). All credentials use guarded public signalling. Valid original and LiveKit refreshed JWTs reconnect after restart only through their exact persisted active grant and current browser session, expiry, kind, generation, room and name authorization. Unknown grants predating durable grant storage fail closed and require one explicit rejoin; browser sessions and their deadlines survive migration. The idle-grace migration preserves existing grants until authoritative activity establishes their absence window. Temporary disconnection, page exit and SDK Leave preserve the grant during its idle grace. Successful LiveKit listings establish absence, normally within the 30-second maintenance cadence; listing outages defer idle cleanup. Connected participants never expire merely for their age. Voice idle expiry does not log out the browser. The token may publish the microphone, a camera, a screen share and the screen share's audio, subscribe to the other participants, and update the participant's own attributes, but not send data messages. It expires 10 minutes after it is issued, so connect right away; once connected, LiveKit renews it.
          *
          *     Muted is the state of the microphone track. Deafened is the participant attribute `deafened`: a client sets it to `"true"` while it plays no one's audio, and also mutes its microphone, then sets it to `"false"` again; an absent attribute means not deafened. The other participants see it through the SDK, for example with `room.localParticipant.setAttributes({ deafened: 'true' })` in `livekit-client`.
          */
@@ -561,7 +561,7 @@ export interface paths {
         };
         /**
          * Open the live-update WebSocket.
-         * @description Upgrades to a WebSocket over which the server sends live updates, each an `Event` as one JSON text message. The connection carries events from the server only: messages from the client are ignored, though one over 32 KiB closes the connection with close code 1009. The upgrade's `Origin` must be the server's public origin. The server pings every 20 seconds and closes a connection that does not answer within 10 seconds. Each connection has a bounded queue of events waiting to be sent; a client that lets it fill up is disconnected with close code 4000. Replacing the guest access link sends `access.revoked` and closes only old guest connections with code 4001; account connections survive. Logout closes only that browser session; recovery closes old account sessions while preserving its new session; disablement closes that account's sessions. Revoked or expired sessions close with code 4001 and cannot reconnect without current authorization. Account revocation does not send the guest-link replacement event. Name changes, including displaced guests, use retryable close 1001 so clients refresh their identity through GET /api/me. Shutdown also closes with code 1001. Events are not replayed: after a retryable disconnection a client reconnects first and then catches up through the other operations, reading each room's messages with `after` set to the last message ID it saw and the room list again. Events that arrive while it catches up may repeat what it reads; it keeps one message per message ID. It also refreshes every previously visible attachment through GET /api/attachments/{id}: catching up only new messages cannot recover missed attachments.expired events.
+         * @description Upgrades to a WebSocket over which the server sends live updates, each an `Event` as one JSON text message. The connection carries events from the server only: messages from the client are ignored, though one over 32 KiB closes the connection with close code 1009. The upgrade's `Origin` must be the server's public origin. The server pings every 20 seconds and closes a connection that does not answer within 10 seconds. Each connection has a bounded queue of events waiting to be sent; a client that lets it fill up is disconnected with close code 4000. Replacing the guest access link sends `access.revoked` and closes only old guest connections with code 4001; account connections survive. Logout closes only that browser session; recovery closes old account sessions while preserving its new session; disablement closes that account's sessions. Revoked sessions close promptly with code 4001; established expired connections close at the next maintenance pass (normally within 30 seconds). Requests and reconnects reject expired sessions immediately using their original authoritative database deadline, without restart extension. Closed sessions cannot reconnect without current authorization. Account revocation does not send the guest-link replacement event. Name changes, including displaced guests, use retryable close 1001 so clients refresh their identity through GET /api/me. Shutdown also closes with code 1001. Events are not replayed: after a retryable disconnection a client reconnects first and then catches up through the other operations, reading each room's messages with `after` set to the last message ID it saw and the room list again. Events that arrive while it catches up may repeat what it reads; it keeps one message per message ID. It also refreshes every previously visible attachment through GET /api/attachments/{id}: catching up only new messages cannot recover missed attachments.expired events.
          *
          *     A visitor is connected while they have at least one of these connections open. A connected guest holds their name against other guests; account registration or rename may claim it and assign the guest a replacement. Account names stay reserved even while offline or disabled and cannot be taken by another visitor.
          */
@@ -790,7 +790,7 @@ export interface components {
             recoveryCodes: string[];
         };
         /**
-         * @description A new session and any freshly generated recovery codes.
+         * @description A new session and any freshly generated recovery codes. Once the identity change commits, these credentials are returned even if subsequent live or voice enforcement fails. Enforcement is attempted immediately, failures are logged, and maintenance retries pending enforcement and cleanup.
          * @example {
          *       "session": {
          *         "visitor": {
@@ -1178,6 +1178,7 @@ export interface components {
              *         "name": "Lounge",
              *         "occupancy": [
              *           {
+             *             "connectionId": "01JBX6Z8Q3M5W2K7R9T4V1C0DE.01JBX8C4N2F6H8K0P3R5T7W9YZ",
              *             "visitorId": "01JBX6Z8Q3M5W2K7R9T4V1C0DE",
              *             "name": "Bob"
              *           }
@@ -1208,6 +1209,7 @@ export interface components {
              * @description The participants in the room's voice; empty when no one is in it.
              * @example [
              *       {
+             *         "connectionId": "01JBX6Z8Q3M5W2K7R9T4V1C0DE.01JBX8C4N2F6H8K0P3R5T7W9YZ",
              *         "visitorId": "01JBX6Z8Q3M5W2K7R9T4V1C0DE",
              *         "name": "Bob"
              *       }
@@ -1215,10 +1217,15 @@ export interface components {
              */
             occupancy: components["schemas"]["Participant"][];
         };
-        /** @description A visitor connected to a room's voice. */
+        /** @description One independent voice connection; an identity may have several. */
         Participant: {
             /**
-             * @description The participant's visitor ID.
+             * @description Immutable grant and LiveKit transport identity of this connection.
+             * @example 01JBX6Z8Q3M5W2K7R9T4V1C0DE.01JBX8C4N2F6H8K0P3R5T7W9YZ
+             */
+            connectionId: string;
+            /**
+             * @description The permanent identity ID of the person using this connection.
              * @example 01JBX6Z8Q3M5W2K7R9T4V1C0DE
              */
             visitorId: string;
@@ -1230,6 +1237,11 @@ export interface components {
         };
         /** @description What a client connects to a room's voice with. */
         VoiceCredentials: {
+            /**
+             * @description Immutable identifier of this independent connection and its LiveKit transport identity.
+             * @example 01JBX6Z8Q3M5W2K7R9T4V1C0DE.01JBX8C4N2F6H8K0P3R5T7W9YZ
+             */
+            grantId: string;
             /**
              * @description Where to reach LiveKit, a `wss://` URL (`ws://` when run locally); pass it to the SDK as is.
              * @example wss://falky.example
@@ -1394,6 +1406,7 @@ export interface components {
              * @description The participants in the room's voice now, by name; empty when no one is in it.
              * @example [
              *       {
+             *         "connectionId": "01JBX6Z8Q3M5W2K7R9T4V1C0DE.01JBX8C4N2F6H8K0P3R5T7W9YZ",
              *         "visitorId": "01JBX6Z8Q3M5W2K7R9T4V1C0DE",
              *         "name": "Bob"
              *       }
@@ -2714,12 +2727,13 @@ export interface operations {
             };
             cookie?: never;
         };
-        /** @description Optional explicit account voice transfer confirmation; guests may omit the body. */
+        /** @description Optional legacy body; confirmation is no longer required or used. */
         requestBody?: {
             content: {
                 "application/json": {
                     /**
-                     * @description Explicitly transfer account voice from another browser session.
+                     * @deprecated
+                     * @description Ignored. Every Join creates an independent connection.
                      * @default false
                      */
                     confirmTransfer?: boolean;
@@ -2747,7 +2761,7 @@ export interface operations {
                 };
             };
             404: components["responses"]["RoomNotFound"];
-            /** @description The room's voice already has as many participants as it admits (`room_full`), or another connected guest holds this guest's name (`name_taken`; rename first). The visitor stays where they were. Account voice owned by another browser requires explicit confirmation (`voice_transfer_required`). */
+            /** @description The room's voice already has as many participants as it admits (`room_full`), or another connected guest holds this guest's name (`name_taken`; rename first). Existing connections are unchanged. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -2756,7 +2770,7 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
-            /** @description The server cannot reach LiveKit (`voice_unavailable`); try again later. The visitor may already have been disconnected from another room's voice. */
+            /** @description The server cannot reach LiveKit (`voice_unavailable`); try again later. Existing connections are unchanged. */
             503: {
                 headers: {
                     [name: string]: unknown;
