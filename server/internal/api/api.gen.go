@@ -241,13 +241,13 @@ type AccountCeremony struct {
 // Example: {}
 type AccountEmpty = map[string]interface{}
 
-// AccountEnrollment A new session and any freshly generated recovery codes. Once the identity change commits, these credentials are returned even if subsequent live or voice enforcement fails. Enforcement is attempted immediately, failures are logged, and maintenance retries pending enforcement and cleanup.
+// AccountEnrollment A new session and any freshly generated recovery phrase. Once the identity change commits, these credentials are returned even if subsequent live or voice enforcement fails. Enforcement is attempted immediately, failures are logged, and maintenance retries pending enforcement and cleanup.
 //
-// Example: {"recoveryCodes":["private-code"],"session":{"expiresAt":"2027-02-07T12:00:00Z","kind":"account","visitor":{"colour":{"palette":"sky","revision":1,"visitorId":"account-id"},"id":"account-id","name":"Alice","nameTaken":false}}}
+// Example: {"recoveryCodes":["acid acorn acre acts afar affix aged agent agile aging agony ahead"],"session":{"expiresAt":"2027-02-07T12:00:00Z","kind":"account","visitor":{"colour":{"palette":"sky","revision":1,"visitorId":"account-id"},"id":"account-id","name":"Alice","nameTaken":false}}}
 type AccountEnrollment struct {
-	// RecoveryCodes Fresh registration/recovery codes only; empty on sign-in.
+	// RecoveryCodes Exactly one fresh twelve-word recovery phrase on registration or recovery; empty on sign-in.
 	//
-	// Example: ["private-code"]
+	// Example: ["acid acorn acre acts afar affix aged agent agile aging agony ahead"]
 	RecoveryCodes []string `json:"recoveryCodes"`
 
 	// Session Identity kind and absolute session lifetime.
@@ -734,26 +734,26 @@ type PostMessageRequest struct {
 
 // RecoveryBegin Proof authorizing replacement enrollment for one account.
 //
-// Example: {"accountId":"opaque-value","proof":"opaque-value"}
+// Example: {"accountId":"opaque-value","proof":"acid acorn acre acts afar affix aged agent agile aging agony ahead"}
 type RecoveryBegin struct {
-	// AccountId Permanent account identity ID.
+	// AccountId Permanent account identity ID from session.visitor.id, separate from the proof.
 	//
 	// Example: opaque-value
 	AccountId string `json:"accountId"`
 
-	// Proof One recovery code or thirty-minute operator recovery bearer.
+	// Proof Twelve-word recovery phrase (case-insensitive; whitespace is collapsed), or exact, case-sensitive thirty-minute operator recovery bearer. Phrase word order and spelling must match.
 	//
-	// Example: opaque-value
+	// Example: acid acorn acre acts afar affix aged agent agile aging agony ahead
 	Proof string `json:"proof"`
 }
 
-// RecoveryCodes New private codes shown once after successful generation.
+// RecoveryCodes One new private recovery phrase shown once after successful generation.
 //
-// Example: {"recoveryCodes":["private-code"]}
+// Example: {"recoveryCodes":["acid acorn acre acts afar affix aged agent agile aging agony ahead"]}
 type RecoveryCodes struct {
-	// RecoveryCodes Ten new high-entropy single-use codes. Store privately; plaintext is never retrievable.
+	// RecoveryCodes One twelve-word recovery phrase, shown once. Words are independently and uniformly selected from EFF short wordlist 1, with repeats allowed (about 124 bits). Only its SHA-256 digest is stored; plaintext is never retrievable.
 	//
-	// Example: ["private-code"]
+	// Example: ["acid acorn acre acts afar affix aged agent agile aging agony ahead"]
 	RecoveryCodes []string `json:"recoveryCodes"`
 }
 
@@ -1363,7 +1363,7 @@ type ClientInterface interface {
 	// Corresponds with POST /api/accounts/reauthentication/finish (the `FinishReauthentication` operationId).
 	FinishReauthentication(ctx context.Context, body FinishReauthenticationJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
-	// RegenerateRecoveryCodesWithBody Replace recovery codes after recent verification.
+	// RegenerateRecoveryCodesWithBody Replace the recovery phrase after recent verification.
 	//
 	// Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
 	//
@@ -1372,7 +1372,7 @@ type ClientInterface interface {
 	// Corresponds with POST /api/accounts/recovery-codes (the `RegenerateRecoveryCodes` operationId).
 	RegenerateRecoveryCodesWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
 
-	// RegenerateRecoveryCodes Replace recovery codes after recent verification.
+	// RegenerateRecoveryCodes Replace the recovery phrase after recent verification.
 	//
 	// Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
 	//
@@ -1912,7 +1912,7 @@ func (c *Client) FinishReauthentication(ctx context.Context, body FinishReauthen
 	return c.Client.Do(req)
 }
 
-// RegenerateRecoveryCodesWithBody Replace recovery codes after recent verification.
+// RegenerateRecoveryCodesWithBody Replace the recovery phrase after recent verification.
 //
 // Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
 //
@@ -1931,7 +1931,7 @@ func (c *Client) RegenerateRecoveryCodesWithBody(ctx context.Context, contentTyp
 	return c.Client.Do(req)
 }
 
-// RegenerateRecoveryCodes Replace recovery codes after recent verification.
+// RegenerateRecoveryCodes Replace the recovery phrase after recent verification.
 //
 // Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
 //
@@ -3635,7 +3635,7 @@ type ClientWithResponsesInterface interface {
 	// Corresponds with POST /api/accounts/reauthentication/finish (the `FinishReauthentication` operationId).
 	FinishReauthenticationWithResponse(ctx context.Context, body FinishReauthenticationJSONRequestBody, reqEditors ...RequestEditorFn) (*FinishReauthenticationResponse, error)
 
-	// RegenerateRecoveryCodesWithBodyWithResponse Replace recovery codes after recent verification.
+	// RegenerateRecoveryCodesWithBodyWithResponse Replace the recovery phrase after recent verification.
 	//
 	// Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
 	//
@@ -3644,7 +3644,7 @@ type ClientWithResponsesInterface interface {
 	// Corresponds with POST /api/accounts/recovery-codes (the `RegenerateRecoveryCodes` operationId).
 	RegenerateRecoveryCodesWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*RegenerateRecoveryCodesResponse, error)
 
-	// RegenerateRecoveryCodesWithResponse Replace recovery codes after recent verification.
+	// RegenerateRecoveryCodesWithResponse Replace the recovery phrase after recent verification.
 	//
 	// Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
 	//
@@ -5678,7 +5678,7 @@ func (c *ClientWithResponses) FinishReauthenticationWithResponse(ctx context.Con
 	return ParseFinishReauthenticationResponse(rsp)
 }
 
-// RegenerateRecoveryCodesWithBodyWithResponse Replace recovery codes after recent verification.
+// RegenerateRecoveryCodesWithBodyWithResponse Replace the recovery phrase after recent verification.
 //
 // Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
 //
@@ -5693,7 +5693,7 @@ func (c *ClientWithResponses) RegenerateRecoveryCodesWithBodyWithResponse(ctx co
 	return ParseRegenerateRecoveryCodesResponse(rsp)
 }
 
-// RegenerateRecoveryCodesWithResponse Replace recovery codes after recent verification.
+// RegenerateRecoveryCodesWithResponse Replace the recovery phrase after recent verification.
 //
 // Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
 //
@@ -7365,7 +7365,7 @@ type ServerInterface interface {
 	// FinishReauthentication Verify a passkey for sensitive changes.
 	// (POST /api/accounts/reauthentication/finish)
 	FinishReauthentication(w http.ResponseWriter, r *http.Request)
-	// RegenerateRecoveryCodes Replace recovery codes after recent verification.
+	// RegenerateRecoveryCodes Replace the recovery phrase after recent verification.
 	// (POST /api/accounts/recovery-codes)
 	RegenerateRecoveryCodes(w http.ResponseWriter, r *http.Request)
 	// BeginRecovery Begin account-specific replacement enrollment.
@@ -9591,7 +9591,7 @@ type StrictServerInterface interface {
 	// FinishReauthentication Verify a passkey for sensitive changes.
 	// (POST /api/accounts/reauthentication/finish)
 	FinishReauthentication(ctx context.Context, request FinishReauthenticationRequestObject) (FinishReauthenticationResponseObject, error)
-	// RegenerateRecoveryCodes Replace recovery codes after recent verification.
+	// RegenerateRecoveryCodes Replace the recovery phrase after recent verification.
 	// (POST /api/accounts/recovery-codes)
 	RegenerateRecoveryCodes(ctx context.Context, request RegenerateRecoveryCodesRequestObject) (RegenerateRecoveryCodesResponseObject, error)
 	// BeginRecovery Begin account-specific replacement enrollment.

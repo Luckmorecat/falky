@@ -70,7 +70,7 @@ func TestCommittedEnrollmentReturnsCredentialsWhenVoiceCleanupFails(t *testing.T
 			if err := json.Unmarshal(raw, &result); err != nil {
 				t.Fatal(err)
 			}
-			if result.Session.Visitor.ID != identityID || len(result.RecoveryCodes) != 10 || response.Header.Get("Cache-Control") != "no-store" {
+			if result.Session.Visitor.ID != identityID || len(result.RecoveryCodes) != 1 || response.Header.Get("Cache-Control") != "no-store" {
 				t.Fatal("committed enrollment did not return its identity and private recovery codes")
 			}
 			var token string
@@ -112,7 +112,7 @@ func TestCommittedEnrollmentReturnsCredentialsWhenVoiceCleanupFails(t *testing.T
 			}
 			loginAccountBrowser(t, p, key)
 			if purpose == "recovery" {
-				accountRequest(t, p, finishing, http.MethodPost, "/api/accounts/recovery/begin", map[string]any{"accountId": identityID, "proof": account.RecoveryCodes[1]}, testOrigin, http.StatusForbidden)
+				accountRequest(t, p, finishing, http.MethodPost, "/api/accounts/recovery/begin", map[string]any{"accountId": identityID, "proof": account.RecoveryCodes[0]}, testOrigin, http.StatusForbidden)
 				_, stale := p.browserWithHTTP(t)
 				login := beginAccount(t, p, stale, "/api/accounts/authentication/begin", map[string]any{})
 				var assertion protocol.CredentialAssertion

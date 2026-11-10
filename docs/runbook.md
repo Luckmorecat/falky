@@ -664,19 +664,44 @@ after 90 days absolute; logout ends only that browser's exact session and all of
 its grants, preserving other sessions of the same account. Guest-link rotation
 ends affected guest sessions and all their grants, preserving accounts.
 
-Enrollment and recovery return ten high-entropy single-use recovery codes,
-plaintext only in the successful response; only their hashes are stored. Keep
-them privately with `session.visitor.id`, the permanent account ID, rather than
-the changeable name: code recovery requires both ID and code. Authorized regeneration invalidates
-the previous set. Codes authorize replacement-passkey enrollment, not ordinary
-access. An operator should issue `account recover` only after out-of-band human
-identity verification. It prints a `/#recover=<bearer>&account=<id>` link valid
-for 30 minutes. Issuing it alone changes no access. Failed/cancelled enrollment
-does not consume the code/link or lock out the existing owner.
+Enrollment, successful recovery and explicit regeneration return `recoveryCodes`
+as an array containing **one twelve-word recovery phrase**. Each word is selected
+independently and uniformly with cryptographic randomness from the bundled
+1296-entry [EFF short wordlist #1](../server/internal/identity/EFF-WORDLIST-LICENSE.md),
+with repeats allowed (about 124 bits of entropy). This is an account recovery
+proof with no wallet seed derivation or checksum. Plaintext appears only in the
+successful response; only the SHA-256 digest of the canonical phrase is stored,
+without a salt, pepper, server secret or password hashing algorithm.
+
+Keep the phrase privately with `session.visitor.id`, the permanent account ID:
+recovery requires separate `accountId` and `proof` fields, not the changeable
+name. Input accepts any casing and extra whitespace, including tabs and
+newlines; it is lowercased and joined with single ASCII spaces before hashing.
+All twelve words must match in order and spelling; there is no fuzzy correction
+or autocomplete. A phrase authorizes replacement-passkey enrollment, not
+ordinary access. Ordinary sign-in returns an empty `recoveryCodes` array, and
+sign-in or adding/removing a passkey does not rotate the phrase. Authorized
+regeneration requires recent passkey verification and invalidates the previous
+phrase and pending phrase-based recovery ceremonies.
+
+An operator should issue `account recover` only after out-of-band human identity
+verification. It prints a `/#recover=<bearer>&account=<id>` link valid for 30
+minutes. This opaque bearer stays exact and case-sensitive, with no whitespace
+normalization. Issuing it alone changes no access. Failed/cancelled enrollment
+does not consume the phrase/link or lock out the existing owner.
+
+This phrase format preserves the database schema and needs no data migration;
+there are no existing accounts to convert, and legacy raw recovery codes are
+not supported by the new verifier. Rolling back to the previous binary restores
+ten-code generation and exact-input matching: a newly issued phrase's digest
+still matches its exact canonical text, but formatting tolerance is lost.
+Codes issued after rollback will not work when upgrading to phrase verification
+again; explicitly regenerate a phrase with the current version or use operator
+recovery. This format change alone does not require restoring a database snapshot.
 
 Successful recovery verifies and installs a replacement passkey, invalidates
-**all** old passkeys, sessions, recovery codes and outstanding recovery grants
-and account-bound ceremonies, then returns a fresh session and codes. Old live
+**all** old passkeys, sessions, saved recovery proofs and outstanding recovery grants
+and account-bound ceremonies, then returns a fresh session and phrase. Old live
 updates and voice end; the recovered identity, reserved name and history remain.
 Disablement immediately ends that account's sessions/live/voice and rejects
 authentication/recovery while retaining the identity and name. It leaves the
@@ -692,7 +717,7 @@ transaction was rolled back or media removal succeeded.
 The current frontend provides the legacy guest flow; these backend invitation
 and recovery links do not add account UI. Client integration must implement the
 [account/WebAuthn API](../api/openapi.yaml), including five-minute context-bound
-ceremonies, same-origin mutations and recovery-code storage. Voice uses the
+ceremonies, same-origin mutations and recovery-phrase storage. Voice uses the
 independent connection model above for both guests and accounts; no new account
 UI is included.
 
