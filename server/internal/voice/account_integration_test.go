@@ -43,6 +43,11 @@ type guardedVoice struct {
 
 func newGuardedVoice(t *testing.T, options ...identity.Option) guardedVoice {
 	t.Helper()
+	return newGuardedVoiceWithOptions(t, nil, options...)
+}
+
+func newGuardedVoiceWithOptions(t *testing.T, voiceOptions []voice.Option, options ...identity.Option) guardedVoice {
+	t.Helper()
 	logger := platform.NewLogger(io.Discard, 0)
 	db, err := platform.OpenDB(t.Context(), filepath.Join(t.TempDir(), "voice.db"), logger)
 	if err != nil {
@@ -65,7 +70,7 @@ func newGuardedVoice(t *testing.T, options ...identity.Option) guardedVoice {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := voice.New(liveKitClient(), ident, rs, voice.Config{URL: "wss://must-not-bypass.invalid", APIKey: devKey, APISecret: devSecret, RoomCap: 8}, voice.WithDB(db))
+	s := voice.New(liveKitClient(), ident, rs, voice.Config{URL: "wss://must-not-bypass.invalid", APIKey: devKey, APISecret: devSecret, RoomCap: 8}, append(voiceOptions, voice.WithDB(db))...)
 	gate := &httpapi.Lifecycle{Enforce: httpapi.Enforcer(httpapi.Events{}, s)}
 	public := httptest.NewServer(s.Signalling(fmt.Sprintf("http://127.0.0.1:%d", liveKitPort)))
 	s.ConfigureAdmission(gate, ident.ValidateSession, public.URL)

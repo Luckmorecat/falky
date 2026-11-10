@@ -14,10 +14,13 @@ import (
 )
 
 type voiceGrant struct {
-	session         identity.Session
-	transport, room string
-	revoked         bool
-	sockets         map[*signalConnection]struct{}
+	session           identity.Session
+	transport, room   string
+	revoked           bool
+	disconnectedSince time.Time
+	revision          uint64
+	pending           int
+	sockets           map[*signalConnection]struct{}
 }
 
 // ConfigureAdmission must run before serving. One gate protects identity
@@ -43,6 +46,7 @@ func (s *Service) fence(ctx context.Context, g *voiceGrant) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	g.revoked = true
+	g.revision++
 	return nil
 }
 
@@ -168,6 +172,11 @@ func (s *Service) CleanupGrants(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	return errors.Join(s.cleanupGrants(ctx, grants), s.Refresh(ctx))
+}
+
+func (s *Service) cleanupGrants(ctx context.Context, grants []*voiceGrant) error {
+	var err error
 	var running sync.WaitGroup
 	var resultMu sync.Mutex
 	for _, g := range grants {
@@ -185,7 +194,7 @@ func (s *Service) CleanupGrants(ctx context.Context) error {
 		})
 	}
 	running.Wait()
-	return errors.Join(err, s.Refresh(ctx))
+	return err
 }
 
 // CloseSignalling ends all proxied sockets during server shutdown.

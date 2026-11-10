@@ -544,7 +544,11 @@ remain unchanged. Subsequent backend restarts preserve exact valid grants.
 Migration `0011_independent_voice_connections.sql` removes only the unique index
 that limited an identity to one active grant. Existing grants and cleanup work
 remain intact, and transport IDs remain unique. This upgrade needs no explicit
-rejoin for grants already persisted by `0010`.
+rejoin for grants already persisted by `0010`. Migration
+`0012_voice_idle_grace.sql` adds nullable `disconnected_since` authorization
+metadata (UTC Unix nanoseconds). Existing grants begin with unknown absence:
+a successful listing preserves present participants and starts a full grace for
+absent ones, rather than guessing historical activity.
 
 Every explicit `POST /api/rooms/{id}/voice` creates an independent grant. One
 identity can use several sessions, and each session can have several connections
@@ -581,8 +585,15 @@ Explicit browser Leave immediately stops this app instance's microphone, camera
 and screen tracks and disconnects its SDK room, including while offline. It sends
 no backend revocation request and keeps no retry queue or pending notice. Older
 pending-Leave browser storage is ignored. Local disconnect, reload and temporary
-network disconnection preserve grant authorization: an original valid JWT can
-reconnect its exact connection while its JWT, session and room access remain valid.
+network disconnection preserve grant authorization during its idle grace: an
+original or LiveKit-refreshed valid JWT can reconnect its exact connection before
+ten continuous minutes of confirmed absence, while its session and room access
+remain valid. Actual successful reconnect cancels the countdown; subsequent
+confirmed absence starts another full grace. At or after the known deadline,
+guarded signalling refuses the old grant immediately, including still-valid JWTs.
+An explicit Join or normal UI retry retrieves a fresh grant under the unchanged
+valid login session; idle voice expiry never logs out the browser or silently
+rejoins after deliberate Leave.
 Logout, recovery, disablement, guest-link rotation and access expiry still fence
 their affected grants and use durable server cleanup.
 
@@ -591,8 +602,26 @@ is refused, including a full room. After successful admission it disconnects onl
 its previous local media before setting up the new room; both grants remain
 authorized. Canceled/late Join credentials are discarded, and failed or obsolete
 SDK setup tears down its captured room and tracks without affecting a newer local
-connection. Unused grants retain their existing session/access lifetime; there is
-no added idle timeout. Other app instances' connections stay independent.
+connection. Unused grants start a ten-minute idle grace at issuance. Other app
+instances' connections stay independent.
+
+Only successful full LiveKit listings establish absence; signed webhooks update
+the occupancy view without changing idle deadlines. Absence detection normally
+lags departure by up to the 30-second maintenance cadence. Expiry and exact-target
+cleanup run on the next successful pass at or after the ten-minute deadline,
+normally about 10–10.5 minutes after departure; listing duration, scheduling and
+outages can add delay. A failed listing does not establish absence or authorize
+idle destruction. A known deadline survives restart/outages and still refuses new
+admission; a fresh listing of an actually present participant clears stale absence.
+Pre-upgrade or previously active NULL timestamps remain unknown across restart
+until a successful list establishes absence. Revocation is durable before media
+removal, and failures retain immutable cleanup targets for later retries.
+
+The voice idle lease and the JWT lifetime are distinct: LiveKit renews tokens for
+connected participants, whose grant does not expire merely from age. Validation
+probes, failed handshakes and stale events cannot renew an idle lease. A successful
+actual handshake begun before the deadline can finish within its existing
+ten-second bound even if the clock crosses that deadline during admission.
 
 ### Accounts, invitations and recovery
 

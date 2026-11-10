@@ -113,9 +113,20 @@ func (s *Service) Refresh(ctx context.Context) error {
 		return err
 	}
 	defer s.publishing.unlock()
+	observations, err := s.observeLeases(ctx)
+	if err != nil {
+		return err
+	}
 	listed, err := s.livekit.Participants(ctx)
 	if err != nil {
 		return fmt.Errorf("%w: list participants: %w", ErrUnavailable, err)
+	}
+	expired, leaseErr := s.reconcileLeases(ctx, observations, listed)
+	for _, g := range expired {
+		s.closeGrant(ctx, g)
+	}
+	if err := errors.Join(leaseErr, s.cleanupGrants(ctx, expired)); err != nil {
+		return err
 	}
 	view := make(map[string]map[string]Occupant)
 	for _, p := range listed {

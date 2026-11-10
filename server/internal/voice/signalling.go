@@ -1,9 +1,12 @@
 package voice
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -80,6 +83,10 @@ func (s *Service) Signalling(upstream string) http.Handler {
 			http.Error(w, "voice admission refused", status)
 			return
 		}
+		if err := s.checkLease(handshakeCtx, g, false); err != nil {
+			http.Error(w, "voice admission refused", admissionStatus(err))
+			return
+		}
 		if strings.HasSuffix(r.URL.Path, "/validate") {
 			proxy.ServeHTTP(w, r.WithContext(handshakeCtx))
 			return
@@ -88,6 +95,20 @@ func (s *Service) Signalling(upstream string) http.Handler {
 			http.Error(w, "WebSocket required", http.StatusBadRequest)
 			return
 		}
+		acceptOptions := &websocket.AcceptOptions{InsecureSkipVerify: true}
+		if !validateHandshake(w, r, acceptOptions) {
+			return
+		}
+		if err := s.checkLease(handshakeCtx, g, true); err != nil {
+			http.Error(w, "voice admission refused", admissionStatus(err))
+			return
+		}
+		reserved := true
+		defer func() {
+			if reserved {
+				s.releaseLease(g)
+			}
+		}()
 		u := *target
 		u.Scheme = "ws" + strings.TrimPrefix(u.Scheme, "http")
 		u.Path, u.RawQuery = r.URL.Path, r.URL.RawQuery
@@ -140,7 +161,12 @@ func (s *Service) Signalling(upstream string) http.Handler {
 			http.Error(w, "voice handshake failed", http.StatusBadGateway)
 			return
 		}
-		down, err := websocket.Accept(w, r, &websocket.AcceptOptions{InsecureSkipVerify: true})
+		if err := s.connected(ctx, g); err != nil {
+			_ = up.CloseNow()
+			http.Error(w, "voice admission refused", admissionStatus(err))
+			return
+		}
+		down, err := websocket.Accept(w, r, acceptOptions)
 		if err != nil {
 			_ = up.CloseNow()
 			return
@@ -150,6 +176,8 @@ func (s *Service) Signalling(upstream string) http.Handler {
 		s.mu.Lock()
 		g.sockets[connection] = struct{}{}
 		s.mu.Unlock()
+		s.releaseLease(g)
+		reserved = false
 		s.admission.Unlock()
 		locked = false
 		defer func() { connection.close(); s.mu.Lock(); delete(g.sockets, connection); s.mu.Unlock() }()
@@ -224,4 +252,48 @@ func (s *Service) admit(r *http.Request) (*voiceGrant, error) {
 		return nil, err
 	}
 	return g, nil
+}
+
+func admissionStatus(err error) int {
+	if errors.Is(err, identity.ErrNoVisitor) {
+		return http.StatusForbidden
+	}
+	return http.StatusServiceUnavailable
+}
+
+var errHandshakeValidated = errors.New("websocket handshake validated")
+
+// validateHandshake lets Accept validate the complete request before upstream
+// admission can renew its lease. Refusing the probe's Hijack prevents any I/O;
+// the real downstream upgrade still waits for durable upstream success.
+func validateHandshake(w http.ResponseWriter, r *http.Request, options *websocket.AcceptOptions) bool {
+	probe := &handshakeProbe{header: make(http.Header)}
+	_, err := websocket.Accept(probe, r, options)
+	if errors.Is(err, errHandshakeValidated) {
+		// Accept writes 101 then 500 around the refused Hijack; discard both.
+		return true
+	}
+	for name, values := range probe.header {
+		w.Header()[name] = values
+	}
+	w.WriteHeader(probe.status)
+	_, _ = w.Write(probe.body.Bytes())
+	return false
+}
+
+type handshakeProbe struct {
+	header http.Header
+	status int
+	body   bytes.Buffer
+}
+
+func (p *handshakeProbe) Header() http.Header { return p.header }
+func (p *handshakeProbe) WriteHeader(status int) {
+	if p.status == 0 {
+		p.status = status
+	}
+}
+func (p *handshakeProbe) Write(data []byte) (int, error) { return p.body.Write(data) }
+func (*handshakeProbe) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	return nil, nil, errHandshakeValidated
 }

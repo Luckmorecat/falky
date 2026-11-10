@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"embed"
 	"io/fs"
+	"time"
 
 	"github.com/kisshot/falky/server/internal/platform"
 )
@@ -39,20 +40,25 @@ func (s *Service) allGrants(ctx context.Context) ([]*voiceGrant, error) {
 		}
 		return result, nil
 	}
-	rows, err := s.db.Read().QueryContext(ctx, `SELECT transport,session_id,identity_id,session_kind,generation,room_id,revoked FROM voice_grants ORDER BY transport`)
+	rows, err := s.db.Read().QueryContext(ctx, `SELECT transport,session_id,identity_id,session_kind,generation,room_id,revoked,disconnected_since FROM voice_grants ORDER BY transport`)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = rows.Close() }()
 	var result []*voiceGrant
 	for rows.Next() {
+		var disconnected sql.NullInt64
 		g := &voiceGrant{sockets: make(map[*signalConnection]struct{})}
-		if err := rows.Scan(&g.transport, &g.session.ID, &g.session.Visitor.ID, &g.session.Kind, &g.session.Generation, &g.room, &g.revoked); err != nil {
+		if err := rows.Scan(&g.transport, &g.session.ID, &g.session.Visitor.ID, &g.session.Kind, &g.session.Generation, &g.room, &g.revoked, &disconnected); err != nil {
 			return nil, err
+		}
+		if disconnected.Valid {
+			g.disconnectedSince = time.Unix(0, disconnected.Int64)
 		}
 		s.mu.Lock()
 		if local := s.grants[g.transport]; local != nil {
 			local.revoked = g.revoked
+			local.disconnectedSince = g.disconnectedSince
 			g = local
 		} else {
 			s.grants[g.transport] = g
@@ -83,7 +89,7 @@ func (s *Service) saveGrant(ctx context.Context, g *voiceGrant) error {
 	defer s.storeMu.unlock()
 	if s.db != nil {
 		if err := s.db.Write(ctx, func(tx *sql.Tx) error {
-			_, err := tx.ExecContext(ctx, `INSERT INTO voice_grants (transport,session_id,identity_id,session_kind,generation,room_id) VALUES (?,?,?,?,?,?)`, g.transport, g.session.ID, g.session.Visitor.ID, g.session.Kind, g.session.Generation, g.room)
+			_, err := tx.ExecContext(ctx, `INSERT INTO voice_grants (transport,session_id,identity_id,session_kind,generation,room_id,disconnected_since) VALUES (?,?,?,?,?,?,?)`, g.transport, g.session.ID, g.session.Visitor.ID, g.session.Kind, g.session.Generation, g.room, g.disconnectedSince.UnixNano())
 			return err
 		}); err != nil {
 			return err

@@ -27,6 +27,9 @@ import (
 // handing the client fresh tokens.
 const TokenLifetime = 10 * time.Minute
 
+// IdleGrace is how long an absent grant can admit a reconnect.
+const IdleGrace = 10 * time.Minute
+
 // LiveKit is the LiveKit server, as voice uses it. Rooms are named by room ID
 // and participants by immutable grant transport identity.
 type LiveKit interface {
@@ -106,6 +109,7 @@ type Service struct {
 	keys     auth.KeyProvider
 	publish  func(roomID string, occupancy []Occupant)
 	logger   *slog.Logger
+	now      func() time.Time
 
 	// publishing holds each change to the view, from reading what changed
 	// until it has published, so changes apply and publish one at a time.
@@ -132,6 +136,9 @@ func WithPublisher(publish func(roomID string, occupancy []Occupant)) Option {
 	return func(s *Service) { s.publish = publish }
 }
 
+// WithClock supplies the authorization lease clock; JWT verification uses real time.
+func WithClock(now func() time.Time) Option { return func(s *Service) { s.now = now } }
+
 // WithLogger makes Run log the refreshes that fail, and the Service log the
 // participants it removes, to logger.
 func WithLogger(logger *slog.Logger) Option {
@@ -144,6 +151,7 @@ func WithLogger(logger *slog.Logger) Option {
 func New(lk LiveKit, visitors Visitors, rs Rooms, cfg Config, opts ...Option) *Service {
 	s := &Service{
 		livekit:  lk,
+		now:      time.Now,
 		visitors: visitors,
 		rooms:    rs,
 		cfg:      cfg,
@@ -196,7 +204,7 @@ func (s *Service) join(ctx context.Context, session identity.Session, roomID str
 	if err != nil {
 		return Credentials{}, err
 	}
-	g := &voiceGrant{session: session, transport: transport, room: roomID, sockets: make(map[*signalConnection]struct{})}
+	g := &voiceGrant{session: session, transport: transport, room: roomID, disconnectedSince: s.now(), sockets: make(map[*signalConnection]struct{})}
 	if err := s.saveGrant(ctx, g); err != nil {
 		return Credentials{}, err
 	}

@@ -227,7 +227,7 @@ func TestVoiceMigrationUpgradesExistingGrantsWithoutSessionCascade(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if n, err := db.Migrate(t.Context(), ms); err != nil || n != 1 {
+	if n, err := db.Migrate(t.Context(), ms); err != nil || n != 2 {
 		t.Fatalf("forward upgrade: %d %v", n, err)
 	}
 	if err := insert("identity.second", 0); err != nil {
