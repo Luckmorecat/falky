@@ -27,6 +27,724 @@ tags:
   - name: voice
     description: Who is in each room's voice, as LiveKit reports it, on the internal listener.
 paths:
+  /api/accounts/signin-links:
+    post:
+      operationId: createSignInLink
+      tags:
+      - accounts
+      summary: Create a five-minute link.
+      description: Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB.
+        Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof.
+        Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict.
+        Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie.
+        Any valid account session; replaces its previous active link. Uses account IP attempt limit.
+      requestBody:
+        required: true
+        description: JSON input for createSignInLink.
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AccountEmpty'
+      responses:
+        '200':
+          description: Authorized durable result.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SignInLinkResult'
+          headers:
+            Set-Cookie:
+              description: Secure HttpOnly Strict cookie; binding uses Path=/ and Max-Age=600, session uses
+                Path=/api and remaining absolute lifetime.
+              schema:
+                type: string
+        default:
+          $ref: '#/components/responses/Error'
+        '429':
+          description: Attempt, allocation, concurrency or persisted cooldown limit.
+          headers:
+            Retry-After:
+              description: Whole seconds to wait, rounded upward; in-memory token buckets refill continuously
+                and reset on process restart.
+              schema:
+                type: integer
+                minimum: 1
+                example: 3
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/accounts/signin-links/{linkId}:
+    get:
+      operationId: getSignInLink
+      tags:
+      - accounts
+      summary: Recover exact-issuer link state.
+      description: Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB.
+        Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof.
+        Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict.
+        Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie.
+        Other sessions of the same account cannot inspect this link.
+      parameters:
+      - name: linkId
+        in: path
+        required: true
+        description: Public opaque identifier; does not grant authorization.
+        schema:
+          type: string
+          description: Opaque identifier.
+          example: linkId-example
+      responses:
+        '200':
+          description: Authorized durable result.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SignInLink'
+        default:
+          $ref: '#/components/responses/Error'
+        '429':
+          description: Attempt, allocation, concurrency or persisted cooldown limit.
+          headers:
+            Retry-After:
+              description: Whole seconds to wait, rounded upward; in-memory token buckets refill continuously
+                and reset on process restart.
+              schema:
+                type: integer
+                minimum: 1
+                example: 3
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    delete:
+      operationId: revokeSignInLink
+      tags:
+      - accounts
+      summary: Revoke an unconsumed link.
+      description: Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB.
+        Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof.
+        Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict.
+        Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie.
+        Exact issuer only; cancels waiting candidates.
+      parameters:
+      - name: linkId
+        in: path
+        required: true
+        description: Public opaque identifier; does not grant authorization.
+        schema:
+          type: string
+          description: Opaque identifier.
+          example: linkId-example
+      responses:
+        '200':
+          description: Authorized durable result.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountEmpty'
+        default:
+          $ref: '#/components/responses/Error'
+        '429':
+          description: Attempt, allocation, concurrency or persisted cooldown limit.
+          headers:
+            Retry-After:
+              description: Whole seconds to wait, rounded upward; in-memory token buckets refill continuously
+                and reset on process restart.
+              schema:
+                type: integer
+                minimum: 1
+                example: 3
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/accounts/signin-links/{linkId}/approve:
+    post:
+      operationId: approveSignInLink
+      tags:
+      - accounts
+      summary: Approve a candidate code.
+      description: Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB.
+        Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof.
+        Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict.
+        Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie.
+        Exact issuer only. Five incorrect codes durably revoke the link even though the fifth response rejects
+        the proof.
+      parameters:
+      - name: linkId
+        in: path
+        required: true
+        description: Public opaque identifier; does not grant authorization.
+        schema:
+          type: string
+          description: Opaque identifier.
+          example: linkId-example
+      requestBody:
+        required: true
+        description: JSON input for approveSignInLink.
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SignInCode'
+      responses:
+        '200':
+          description: Authorized durable result.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SignInRequest'
+        default:
+          $ref: '#/components/responses/Error'
+        '429':
+          description: Attempt, allocation, concurrency or persisted cooldown limit.
+          headers:
+            Retry-After:
+              description: Whole seconds to wait, rounded upward; in-memory token buckets refill continuously
+                and reset on process restart.
+              schema:
+                type: integer
+                minimum: 1
+                example: 3
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/accounts/signin-links/{linkId}/requests/{requestId}/deny:
+    post:
+      operationId: denySignInRequest
+      tags:
+      - accounts
+      summary: Deny a pending link candidate.
+      description: Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB.
+        Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof.
+        Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict.
+        Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie.
+        Exact issuer only. Denied bindings cannot rejoin this link.
+      parameters:
+      - name: linkId
+        in: path
+        required: true
+        description: Public opaque identifier; does not grant authorization.
+        schema:
+          type: string
+          description: Opaque identifier.
+          example: linkId-example
+      - name: requestId
+        in: path
+        required: true
+        description: Public opaque identifier; does not grant authorization.
+        schema:
+          type: string
+          description: Opaque identifier.
+          example: requestId-example
+      requestBody:
+        required: true
+        description: JSON input for denySignInRequest.
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AccountEmpty'
+      responses:
+        '200':
+          description: Authorized durable result.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountEmpty'
+        default:
+          $ref: '#/components/responses/Error'
+        '429':
+          description: Attempt, allocation, concurrency or persisted cooldown limit.
+          headers:
+            Retry-After:
+              description: Whole seconds to wait, rounded upward; in-memory token buckets refill continuously
+                and reset on process restart.
+              schema:
+                type: integer
+                minimum: 1
+                example: 3
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/accounts/signin-requests:
+    post:
+      operationId: beginSignInRequest
+      tags:
+      - accounts
+      summary: Begin or resume a bound link request.
+      description: 'Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB.
+        Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof.
+        Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict.
+        Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie.
+        Independent IP token bucket burst 20, refill one per 3 seconds, separate from passkey and QR limits.
+        At most three pending candidates per link. Successful begin sets or refreshes __Host-falky-signin:
+        host-only Path=/, Secure, HttpOnly, SameSite=Strict, Max-Age=600. Binding survives logout.'
+      security: []
+      requestBody:
+        required: true
+        description: JSON input for beginSignInRequest.
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SignInToken'
+      responses:
+        '200':
+          description: Authorized durable result.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SignInBegin'
+          headers:
+            Set-Cookie:
+              description: Secure HttpOnly Strict cookie; binding uses Path=/ and Max-Age=600, session uses
+                Path=/api and remaining absolute lifetime.
+              schema:
+                type: string
+        default:
+          $ref: '#/components/responses/Error'
+        '429':
+          description: Attempt, allocation, concurrency or persisted cooldown limit.
+          headers:
+            Retry-After:
+              description: Whole seconds to wait, rounded upward; in-memory token buckets refill continuously
+                and reset on process restart.
+              schema:
+                type: integer
+                minimum: 1
+                example: 3
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/accounts/qr-signins:
+    post:
+      operationId: beginQRSignIn
+      tags:
+      - accounts
+      summary: Create, resume or replace a QR request.
+      description: Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB.
+        Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof.
+        Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict.
+        Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie.
+        Independent HTTP IP bucket burst 20/refill one per 3 seconds. Actual allocations including replacement
+        additionally charge browser-hash burst 3/refill one per 100 seconds and IP burst 10/refill one per
+        30 seconds. Resume consumes no allocation quota; rejected quota preserves the old request. Sets
+        or refreshes the dedicated secure ten-minute binding cookie.
+      security: []
+      requestBody:
+        required: true
+        description: JSON input for beginQRSignIn.
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SignInQRInput'
+      responses:
+        '200':
+          description: Authorized durable result.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SignInBegin'
+          headers:
+            Set-Cookie:
+              description: Secure HttpOnly Strict cookie; binding uses Path=/ and Max-Age=600, session uses
+                Path=/api and remaining absolute lifetime.
+              schema:
+                type: string
+        default:
+          $ref: '#/components/responses/Error'
+        '429':
+          description: Attempt, allocation, concurrency or persisted cooldown limit.
+          headers:
+            Retry-After:
+              description: Whole seconds to wait, rounded upward; in-memory token buckets refill continuously
+                and reset on process restart.
+              schema:
+                type: integer
+                minimum: 1
+                example: 3
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/accounts/qr-signins/preview:
+    post:
+      operationId: previewQRSignIn
+      tags:
+      - accounts
+      summary: Preview a QR without claiming it.
+      description: Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB.
+        Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof.
+        Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict.
+        Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie.
+        Account required. Preview, approval and denial share session burst 10/refill one per 6 seconds in
+        addition to account IP burst 20/refill one per 3 seconds.
+      requestBody:
+        required: true
+        description: JSON input for previewQRSignIn.
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SignInToken'
+      responses:
+        '200':
+          description: Authorized durable result.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SignInPreview'
+        default:
+          $ref: '#/components/responses/Error'
+        '429':
+          description: Attempt, allocation, concurrency or persisted cooldown limit.
+          headers:
+            Retry-After:
+              description: Whole seconds to wait, rounded upward; in-memory token buckets refill continuously
+                and reset on process restart.
+              schema:
+                type: integer
+                minimum: 1
+                example: 3
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/accounts/qr-signins/approve:
+    post:
+      operationId: approveQRSignIn
+      tags:
+      - accounts
+      summary: Explicitly approve a QR request.
+      description: Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB.
+        Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof.
+        Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict.
+        Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie.
+        Account required; first committed session wins. Shares authenticated QR session and account IP attempt
+        limits.
+      requestBody:
+        required: true
+        description: JSON input for approveQRSignIn.
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SignInToken'
+      responses:
+        '200':
+          description: Authorized durable result.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SignInRequest'
+        default:
+          $ref: '#/components/responses/Error'
+        '429':
+          description: Attempt, allocation, concurrency or persisted cooldown limit.
+          headers:
+            Retry-After:
+              description: Whole seconds to wait, rounded upward; in-memory token buckets refill continuously
+                and reset on process restart.
+              schema:
+                type: integer
+                minimum: 1
+                example: 3
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/accounts/qr-signins/deny:
+    post:
+      operationId: denyQRSignIn
+      tags:
+      - accounts
+      summary: Deny a QR without selecting an account.
+      description: Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB.
+        Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof.
+        Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict.
+        Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie.
+        Account required; shares authenticated QR session and account IP attempt limits.
+      requestBody:
+        required: true
+        description: JSON input for denyQRSignIn.
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SignInToken'
+      responses:
+        '200':
+          description: Authorized durable result.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountEmpty'
+        default:
+          $ref: '#/components/responses/Error'
+        '429':
+          description: Attempt, allocation, concurrency or persisted cooldown limit.
+          headers:
+            Retry-After:
+              description: Whole seconds to wait, rounded upward; in-memory token buckets refill continuously
+                and reset on process restart.
+              schema:
+                type: integer
+                minimum: 1
+                example: 3
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/accounts/qr-signins/{requestId}:
+    delete:
+      operationId: cancelQRSignIn
+      tags:
+      - accounts
+      summary: Cancel a bound unconsumed QR.
+      description: Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB.
+        Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof.
+        Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict.
+        Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie.
+        Original binding required. Consumed replacement or cancellation conflicts.
+      security:
+      - signInBindingCookie: []
+      parameters:
+      - name: requestId
+        in: path
+        required: true
+        description: Public opaque identifier; does not grant authorization.
+        schema:
+          type: string
+          description: Opaque identifier.
+          example: requestId-example
+      responses:
+        '200':
+          description: Authorized durable result.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountEmpty'
+        default:
+          $ref: '#/components/responses/Error'
+        '429':
+          description: Attempt, allocation, concurrency or persisted cooldown limit.
+          headers:
+            Retry-After:
+              description: Whole seconds to wait, rounded upward; in-memory token buckets refill continuously
+                and reset on process restart.
+              schema:
+                type: integer
+                minimum: 1
+                example: 3
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/accounts/signin-requests/{requestId}:
+    get:
+      operationId: getSignInRequest
+      tags:
+      - accounts
+      summary: Recover bound request state.
+      description: Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB.
+        Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof.
+        Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict.
+        Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie.
+        Independent browser binding required; no account session required.
+      security:
+      - signInBindingCookie: []
+      parameters:
+      - name: requestId
+        in: path
+        required: true
+        description: Public opaque identifier; does not grant authorization.
+        schema:
+          type: string
+          description: Opaque identifier.
+          example: requestId-example
+      responses:
+        '200':
+          description: Authorized durable result.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SignInRequest'
+        default:
+          $ref: '#/components/responses/Error'
+        '429':
+          description: Attempt, allocation, concurrency or persisted cooldown limit.
+          headers:
+            Retry-After:
+              description: Whole seconds to wait, rounded upward; in-memory token buckets refill continuously
+                and reset on process restart.
+              schema:
+                type: integer
+                minimum: 1
+                example: 3
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/accounts/signin-requests/{requestId}/events:
+    get:
+      operationId: openSignInEvents
+      x-lint-ignore: operation-success-response
+      tags:
+      - accounts
+      summary: Open a private candidate WebSocket.
+      description: 'Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB.
+        Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof.
+        Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict.
+        Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie.
+        Exact Origin and independent binding required. Initial authorized snapshot and subsequent hints
+        carry account.signin.state_changed with SignInRequest payload. No room broadcasts or identity presence.
+        One socket per request; newer replaces older, including at cap. Counts pending upgrades: 16 candidates
+        per IP and 1024 globally. Independent handshake IP bucket burst 20/refill one per 3 seconds. Concurrency
+        rejection Retry-After is 1 second. Terminal notices precede closure where possible. Healthy sockets
+        close at the original deadline. Consumed reconnect validates the resulting session.'
+      security:
+      - signInBindingCookie: []
+      parameters:
+      - name: requestId
+        in: path
+        required: true
+        description: Public opaque identifier; does not grant authorization.
+        schema:
+          type: string
+          description: Opaque identifier.
+          example: requestId-example
+      responses:
+        '101':
+          description: Authorized durable result.
+        default:
+          $ref: '#/components/responses/Error'
+        '429':
+          description: Attempt, allocation, concurrency or persisted cooldown limit.
+          headers:
+            Retry-After:
+              description: Whole seconds to wait, rounded upward; in-memory token buckets refill continuously
+                and reset on process restart.
+              schema:
+                type: integer
+                minimum: 1
+                example: 3
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/accounts/signin-requests/{requestId}/resend:
+    post:
+      operationId: resendSignInRequest
+      tags:
+      - accounts
+      summary: Resend a pending link notification.
+      description: Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB.
+        Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof.
+        Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict.
+        Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie.
+        Link token plus binding required. Reject QR flow. Persisted shared link cooldown 10 seconds returns
+        429 with Retry-After rounded upward; account IP attempt limit also applies.
+      security:
+      - signInBindingCookie: []
+      parameters:
+      - name: requestId
+        in: path
+        required: true
+        description: Public opaque identifier; does not grant authorization.
+        schema:
+          type: string
+          description: Opaque identifier.
+          example: requestId-example
+      requestBody:
+        required: true
+        description: JSON input for resendSignInRequest.
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SignInToken'
+      responses:
+        '200':
+          description: Authorized durable result.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountEmpty'
+        default:
+          $ref: '#/components/responses/Error'
+        '429':
+          description: Attempt, allocation, concurrency or persisted cooldown limit.
+          headers:
+            Retry-After:
+              description: Whole seconds to wait, rounded upward; in-memory token buckets refill continuously
+                and reset on process restart.
+              schema:
+                type: integer
+                minimum: 1
+                example: 3
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/accounts/signin-requests/{requestId}/finish:
+    post:
+      operationId: finishSignInRequest
+      tags:
+      - accounts
+      summary: Redeem approval or retry exact cookie delivery.
+      description: Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB.
+        Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof.
+        Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict.
+        Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie.
+        Independent binding required. Link requires token, QR omits it. Creates exactly one 90-day session.
+        Retries until the original request deadline return the same cookie using remaining session lifetime.
+        Any different active session is protected, including a newer guest (409 signin_conflict). Uses account
+        IP attempt limit.
+      security:
+      - signInBindingCookie: []
+      parameters:
+      - name: requestId
+        in: path
+        required: true
+        description: Public opaque identifier; does not grant authorization.
+        schema:
+          type: string
+          description: Opaque identifier.
+          example: requestId-example
+      requestBody:
+        required: true
+        description: JSON input for finishSignInRequest.
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SignInFinishInput'
+      responses:
+        '200':
+          description: Authorized durable result.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountSession'
+          headers:
+            Set-Cookie:
+              description: Secure HttpOnly Strict cookie; binding uses Path=/ and Max-Age=600, session uses
+                Path=/api and remaining absolute lifetime.
+              schema:
+                type: string
+        default:
+          $ref: '#/components/responses/Error'
+        '429':
+          description: Attempt, allocation, concurrency or persisted cooldown limit.
+          headers:
+            Retry-After:
+              description: Whole seconds to wait, rounded upward; in-memory token buckets refill continuously
+                and reset on process restart.
+              schema:
+                type: integer
+                minimum: 1
+                example: 3
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
   /api/accounts/registration/begin:
     post:
       operationId: beginRegistration
@@ -1418,6 +2136,15 @@ components:
         type: string
         example: 01JBX7A2K9D4F6H8M0P3R5T7VW
   securitySchemes:
+    signInBindingCookie:
+      type: apiKey
+      in: cookie
+      name: __Host-falky-signin
+      description: >-
+        Independent request binding, established/refreshed only by successful link or QR begin.
+        Host-only Path=/, Secure, HttpOnly, SameSite=Strict, Max-Age=600; survives account logout.
+        Request IDs and QR/link bearer tokens cannot substitute for this cookie. Every authorization
+        enforces the original request deadline and current durable flow state.
     visitorCookie:
       type: apiKey
       in: cookie
@@ -1478,6 +2205,233 @@ components:
           schema:
             $ref: "#/components/schemas/Error"
   schemas:
+    SignInRequest:
+      type: object
+      description: Sanitized durable request state. It contains no bearer, code, account or session evidence.
+      additionalProperties: false
+      required:
+      - id
+      - type
+      - state
+      - version
+      - requesterUserAgent
+      - createdAt
+      - expiresAt
+      properties:
+        id:
+          type: string
+          description: Opaque request identifier.
+          example: request-id
+        type:
+          type: string
+          description: Immutable interaction flow.
+          example: qr
+          enum:
+          - link
+          - qr
+        state:
+          type: string
+          description: Durable state; denied and cancelled are terminal. Consumed may reconnect until the
+            original deadline.
+          example: pending
+          enum:
+          - pending
+          - approved
+          - consumed
+          - denied
+          - cancelled
+        linkId:
+          type: string
+          description: Parent public link identifier, only for link requests.
+          example: link-id
+        version:
+          type: integer
+          format: int64
+          minimum: 1
+          description: Persisted ordering version; reads and resend do not increment it.
+          example: 1
+        requesterUserAgent:
+          type: string
+          description: Untrusted display text, at most 256 Unicode code points.
+          example: Browser
+          maxLength: 256
+        createdAt:
+          type: string
+          description: Original creation time.
+          example: '2026-11-10T12:05:00Z'
+          format: date-time
+        expiresAt:
+          type: string
+          description: Original deadline; retries and reconnect never extend it.
+          example: '2026-11-10T12:05:00Z'
+          format: date-time
+        approvedAt:
+          x-go-type-skip-optional-pointer: false
+          nullable: true
+          type: string
+          description: Approval authentication time, when approved.
+          example: '2026-11-10T12:05:00Z'
+          format: date-time
+        consumedAt:
+          x-go-type-skip-optional-pointer: false
+          nullable: true
+          type: string
+          description: Single session creation time, when consumed.
+          example: '2026-11-10T12:05:00Z'
+          format: date-time
+    SignInLink:
+      type: object
+      description: Link state visible only to its exact issuing session.
+      additionalProperties: false
+      required:
+      - id
+      - state
+      - version
+      - createdAt
+      - expiresAt
+      - approvalGrantsRecentProof
+      - requests
+      properties:
+        id:
+          type: string
+          description: Public link identifier.
+          example: link-id
+        state:
+          type: string
+          description: Durable link state.
+          example: open
+          enum:
+          - open
+          - approved
+          - consumed
+          - revoked
+        version:
+          type: integer
+          format: int64
+          minimum: 1
+          description: Persisted link ordering version.
+          example: 1
+        createdAt:
+          type: string
+          description: Original creation time.
+          example: '2026-11-10T12:05:00Z'
+          format: date-time
+        expiresAt:
+          type: string
+          description: Fixed five-minute deadline.
+          example: '2026-11-10T12:05:00Z'
+          format: date-time
+        approvalGrantsRecentProof:
+          type: boolean
+          description: Whether approving now would carry recent actual passkey proof.
+          example: true
+        requests:
+          type: array
+          example: []
+          description: Sanitized requests ordered by creation time and identifier.
+          items:
+            $ref: '#/components/schemas/SignInRequest'
+    SignInLinkResult:
+      type: object
+      description: One-time link bearer delivery. Tokens occur only in response bodies and URL fragments.
+      additionalProperties: false
+      required:
+      - link
+      - token
+      - url
+      properties:
+        link:
+          $ref: '#/components/schemas/SignInLink'
+        token:
+          type: string
+          description: High-entropy link bearer returned only on creation.
+          example: link-bearer
+        url:
+          type: string
+          description: Configured-origin URL with signin fragment.
+          example: https://falky.example/#signin=link-bearer
+    SignInBegin:
+      type: object
+      description: Begin-only response delivered to the bound candidate. The browser secret is exclusively
+        in its cookie.
+      additionalProperties: false
+      required:
+      - request
+      properties:
+        request:
+          $ref: '#/components/schemas/SignInRequest'
+        code:
+          type: string
+          description: Four ASCII decimal digits for link flow only.
+          example: '0000'
+          pattern: ^[0-9]{4}$
+        token:
+          type: string
+          description: QR token for the phone; QR flow only.
+          example: qr-bearer
+        url:
+          type: string
+          description: Configured-origin QR URL fragment; QR flow only.
+          example: https://falky.example/#qr-signin=qr-bearer
+    SignInPreview:
+      type: object
+      description: Read-only confirmation information; scanning never selects an account.
+      additionalProperties: false
+      required:
+      - request
+      - approvalGrantsRecentProof
+      properties:
+        request:
+          $ref: '#/components/schemas/SignInRequest'
+        approvalGrantsRecentProof:
+          type: boolean
+          description: Whether approving now grants recent authentication.
+          example: true
+    SignInToken:
+      type: object
+      description: Bearer input; never place it in a path or query.
+      additionalProperties: false
+      required:
+      - token
+      properties:
+        token:
+          type: string
+          description: Link or QR bearer, as required by this operation.
+          example: opaque-bearer
+          minLength: 1
+          maxLength: 256
+    SignInFinishInput:
+      type: object
+      description: Link finish requires token; QR finish forbids a nonempty link token.
+      additionalProperties: false
+      properties:
+        token:
+          type: string
+          description: Link bearer, omitted for QR flow.
+          example: link-bearer
+          maxLength: 256
+    SignInCode:
+      type: object
+      description: Exact issuer confirmation selector.
+      additionalProperties: false
+      required:
+      - code
+      properties:
+        code:
+          type: string
+          description: Exactly four ASCII decimal digits including leading zeroes.
+          example: '0000'
+          pattern: ^[0-9]{4}$
+    SignInQRInput:
+      type: object
+      description: Resume by default, or explicitly replace the bound unconsumed QR.
+      additionalProperties: false
+      properties:
+        replace:
+          type: boolean
+          default: false
+          description: Allocate a new request after cancelling the previous bound unconsumed QR.
+          example: false
     AccountEmpty:
       type: object
       additionalProperties: false
@@ -1918,7 +2872,9 @@ components:
         code:
           type: string
           description: >-
-            Stable, machine-readable error code: `not_found` (no such route),
+            Device approval also uses `invalid_proof` (generic authorization failure),
+            `account_switch_required`, `already_signed_in`, `pending_request_cap` and
+            `signin_conflict` (409 conflicts). Stable, machine-readable error code: `not_found` (no such route),
             `invalid_request` (the request does not match the contract),
             `internal` (the server failed), `visitor_required` (no valid
             visitor cookie), `invalid_link` (wrong access link secret),
@@ -2246,7 +3202,10 @@ components:
         `room.changed` a `RoomChange`, `occupancy.changed` an
         `OccupancyChange`, `visitor.colour.changed` a `VisitorColour`,
         `access.revoked` an `AccessRevoked`, `attachments.expired` an
-        `AttachmentsExpired`. Clients ignore
+        `AttachmentsExpired`. Private `account.signin.requested` reaches only the exact issuing
+        session; `account.signin.state_changed` reaches only its bound candidate. Both carry
+        a sanitized `SignInRequest` with durable version. Issuer reconnect snapshots repeat
+        its links requests in stable creation/identifier order. Clients ignore
         event types they do not know.
       required: [v, type, eventId, payload, timestamp]
       properties:
@@ -2277,6 +3236,7 @@ components:
             - $ref: "#/components/schemas/AccessRevoked"
             - $ref: "#/components/schemas/VisitorColour"
             - $ref: "#/components/schemas/AttachmentsExpired"
+            - $ref: "#/components/schemas/SignInRequest"
         timestamp:
           type: string
           format: date-time
@@ -2308,8 +3268,9 @@ components:
         the server closes the connection next; `visitor.colour.changed`, an explicit
         saved colour change (its payload is the `VisitorColour`) to all visitors;
         `attachments.expired`, posted files expired in this room (its payload is
-        `AttachmentsExpired`). Private drafts are never broadcast.
-      enum: [message.created, room.changed, occupancy.changed, access.revoked, visitor.colour.changed, attachments.expired]
+        `AttachmentsExpired`); private `account.signin.requested` and
+        `account.signin.state_changed` carry `SignInRequest`. Private drafts are never broadcast.
+      enum: [message.created, room.changed, occupancy.changed, access.revoked, visitor.colour.changed, attachments.expired, account.signin.requested, account.signin.state_changed]
       example: message.created
     RoomChange:
       type: object

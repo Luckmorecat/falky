@@ -9,7 +9,9 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/kisshot/falky/server/internal/api"
 	"github.com/kisshot/falky/server/internal/identity"
@@ -18,7 +20,7 @@ import (
 
 const ceremonyCookie = "__Host-falky-ceremony"
 
-func accountProtection(next http.Handler, origin string, limit *platform.Limiter) http.Handler {
+func accountProtection(next http.Handler, origin string, limit *platform.Limiter, signIns *SignInLimits) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/api/accounts/") {
 			w.Header().Set("Cache-Control", "no-store")
@@ -28,7 +30,16 @@ func accountProtection(next http.Handler, origin string, limit *platform.Limiter
 					writeError(w, 403, "origin_forbidden", "account operations require this server's exact origin")
 					return
 				}
-				if !limit.Allow(clientIP(r)) {
+				attempts := limit
+				wait := 3 * time.Second
+				if r.URL.Path == "/api/accounts/signin-requests" && r.Method == http.MethodPost {
+					attempts = signIns.LinkAttempts
+				}
+				if r.URL.Path == "/api/accounts/qr-signins" && r.Method == http.MethodPost {
+					attempts = signIns.QRAttempts
+				}
+				if !attempts.Allow(clientIP(r)) {
+					w.Header().Set("Retry-After", strconv.Itoa(int(wait/time.Second)))
 					writeError(w, 429, "rate_limited", "too many account attempts; try again later")
 					return
 				}
@@ -46,6 +57,10 @@ func accountProtection(next http.Handler, origin string, limit *platform.Limiter
 					trimmed := bytes.TrimSpace(raw)
 					if len(trimmed) == 0 || trimmed[0] != '{' || !json.Valid(raw) {
 						writeError(w, 400, "invalid_request", "account requests require one JSON object")
+						return
+					}
+					if isSignInPath(r.URL.Path) && !validateSignInBody(r.URL.Path, raw) {
+						writeError(w, 400, "invalid_request", "sign-in body does not match the operation")
 						return
 					}
 					r.Body = io.NopCloser(bytes.NewReader(raw))
@@ -265,8 +280,14 @@ func (s *server) ListPasskeys(ctx context.Context, _ api.ListPasskeysRequestObje
 }
 
 func (s *server) RemovePasskey(ctx context.Context, req api.RemovePasskeyRequestObject) (api.RemovePasskeyResponseObject, error) {
-	if s.accountError(ctx, s.identity.RemovePasskey(ctx, accountToken(ctx), req.CredentialId)) {
+	s.lifecycle.Lock()
+	defer s.lifecycle.Unlock()
+	effects, err := s.identity.RemovePasskeyWithEffects(ctx, accountToken(ctx), req.CredentialId)
+	if s.accountError(ctx, err) {
 		return nil, nil
+	}
+	if err := s.lifecycle.Apply(ctx, effects); err != nil {
+		return nil, err
 	}
 	return api.RemovePasskey200JSONResponse{}, nil
 }

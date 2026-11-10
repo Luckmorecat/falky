@@ -4,6 +4,290 @@
  */
 
 export interface paths {
+    "/api/accounts/signin-links": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create a five-minute link.
+         * @description Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Any valid account session; replaces its previous active link. Uses account IP attempt limit.
+         */
+        post: operations["createSignInLink"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/accounts/signin-links/{linkId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Recover exact-issuer link state.
+         * @description Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Other sessions of the same account cannot inspect this link.
+         */
+        get: operations["getSignInLink"];
+        put?: never;
+        post?: never;
+        /**
+         * Revoke an unconsumed link.
+         * @description Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Exact issuer only; cancels waiting candidates.
+         */
+        delete: operations["revokeSignInLink"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/accounts/signin-links/{linkId}/approve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Approve a candidate code.
+         * @description Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Exact issuer only. Five incorrect codes durably revoke the link even though the fifth response rejects the proof.
+         */
+        post: operations["approveSignInLink"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/accounts/signin-links/{linkId}/requests/{requestId}/deny": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Deny a pending link candidate.
+         * @description Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Exact issuer only. Denied bindings cannot rejoin this link.
+         */
+        post: operations["denySignInRequest"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/accounts/signin-requests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Begin or resume a bound link request.
+         * @description Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Independent IP token bucket burst 20, refill one per 3 seconds, separate from passkey and QR limits. At most three pending candidates per link. Successful begin sets or refreshes __Host-falky-signin: host-only Path=/, Secure, HttpOnly, SameSite=Strict, Max-Age=600. Binding survives logout.
+         */
+        post: operations["beginSignInRequest"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/accounts/qr-signins": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create, resume or replace a QR request.
+         * @description Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Independent HTTP IP bucket burst 20/refill one per 3 seconds. Actual allocations including replacement additionally charge browser-hash burst 3/refill one per 100 seconds and IP burst 10/refill one per 30 seconds. Resume consumes no allocation quota; rejected quota preserves the old request. Sets or refreshes the dedicated secure ten-minute binding cookie.
+         */
+        post: operations["beginQRSignIn"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/accounts/qr-signins/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Preview a QR without claiming it.
+         * @description Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Account required. Preview, approval and denial share session burst 10/refill one per 6 seconds in addition to account IP burst 20/refill one per 3 seconds.
+         */
+        post: operations["previewQRSignIn"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/accounts/qr-signins/approve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Explicitly approve a QR request.
+         * @description Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Account required; first committed session wins. Shares authenticated QR session and account IP attempt limits.
+         */
+        post: operations["approveQRSignIn"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/accounts/qr-signins/deny": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Deny a QR without selecting an account.
+         * @description Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Account required; shares authenticated QR session and account IP attempt limits.
+         */
+        post: operations["denyQRSignIn"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/accounts/qr-signins/{requestId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Cancel a bound unconsumed QR.
+         * @description Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Original binding required. Consumed replacement or cancellation conflicts.
+         */
+        delete: operations["cancelQRSignIn"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/accounts/signin-requests/{requestId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Recover bound request state.
+         * @description Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Independent browser binding required; no account session required.
+         */
+        get: operations["getSignInRequest"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/accounts/signin-requests/{requestId}/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Open a private candidate WebSocket.
+         * @description Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Exact Origin and independent binding required. Initial authorized snapshot and subsequent hints carry account.signin.state_changed with SignInRequest payload. No room broadcasts or identity presence. One socket per request; newer replaces older, including at cap. Counts pending upgrades: 16 candidates per IP and 1024 globally. Independent handshake IP bucket burst 20/refill one per 3 seconds. Concurrency rejection Retry-After is 1 second. Terminal notices precede closure where possible. Healthy sockets close at the original deadline. Consumed reconnect validates the resulting session.
+         */
+        get: operations["openSignInEvents"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/accounts/signin-requests/{requestId}/resend": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Resend a pending link notification.
+         * @description Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Link token plus binding required. Reject QR flow. Persisted shared link cooldown 10 seconds returns 429 with Retry-After rounded upward; account IP attempt limit also applies.
+         */
+        post: operations["resendSignInRequest"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/accounts/signin-requests/{requestId}/finish": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Redeem approval or retry exact cookie delivery.
+         * @description Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Independent binding required. Link requires token, QR omits it. Creates exactly one 90-day session. Retries until the original request deadline return the same cookie using remaining session lifetime. Any different active session is protected, including a newer guest (409 signin_conflict). Uses account IP attempt limit.
+         */
+        post: operations["finishSignInRequest"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/accounts/registration/begin": {
         parameters: {
             query?: never;
@@ -638,6 +922,183 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** @description Sanitized durable request state. It contains no bearer, code, account or session evidence. */
+        SignInRequest: {
+            /**
+             * @description Opaque request identifier.
+             * @example request-id
+             */
+            id: string;
+            /**
+             * @description Immutable interaction flow.
+             * @example qr
+             * @enum {string}
+             */
+            type: "link" | "qr";
+            /**
+             * @description Durable state; denied and cancelled are terminal. Consumed may reconnect until the original deadline.
+             * @example pending
+             * @enum {string}
+             */
+            state: "pending" | "approved" | "consumed" | "denied" | "cancelled";
+            /**
+             * @description Parent public link identifier, only for link requests.
+             * @example link-id
+             */
+            linkId?: string;
+            /**
+             * Format: int64
+             * @description Persisted ordering version; reads and resend do not increment it.
+             * @example 1
+             */
+            version: number;
+            /**
+             * @description Untrusted display text, at most 256 Unicode code points.
+             * @example Browser
+             */
+            requesterUserAgent: string;
+            /**
+             * Format: date-time
+             * @description Original creation time.
+             * @example 2026-11-10T12:05:00Z
+             */
+            createdAt: string;
+            /**
+             * Format: date-time
+             * @description Original deadline; retries and reconnect never extend it.
+             * @example 2026-11-10T12:05:00Z
+             */
+            expiresAt: string;
+            /**
+             * Format: date-time
+             * @description Approval authentication time, when approved.
+             * @example 2026-11-10T12:05:00Z
+             */
+            approvedAt?: string | null;
+            /**
+             * Format: date-time
+             * @description Single session creation time, when consumed.
+             * @example 2026-11-10T12:05:00Z
+             */
+            consumedAt?: string | null;
+        };
+        /** @description Link state visible only to its exact issuing session. */
+        SignInLink: {
+            /**
+             * @description Public link identifier.
+             * @example link-id
+             */
+            id: string;
+            /**
+             * @description Durable link state.
+             * @example open
+             * @enum {string}
+             */
+            state: "open" | "approved" | "consumed" | "revoked";
+            /**
+             * Format: int64
+             * @description Persisted link ordering version.
+             * @example 1
+             */
+            version: number;
+            /**
+             * Format: date-time
+             * @description Original creation time.
+             * @example 2026-11-10T12:05:00Z
+             */
+            createdAt: string;
+            /**
+             * Format: date-time
+             * @description Fixed five-minute deadline.
+             * @example 2026-11-10T12:05:00Z
+             */
+            expiresAt: string;
+            /**
+             * @description Whether approving now would carry recent actual passkey proof.
+             * @example true
+             */
+            approvalGrantsRecentProof: boolean;
+            /**
+             * @description Sanitized requests ordered by creation time and identifier.
+             * @example []
+             */
+            requests: components["schemas"]["SignInRequest"][];
+        };
+        /** @description One-time link bearer delivery. Tokens occur only in response bodies and URL fragments. */
+        SignInLinkResult: {
+            link: components["schemas"]["SignInLink"];
+            /**
+             * @description High-entropy link bearer returned only on creation.
+             * @example link-bearer
+             */
+            token: string;
+            /**
+             * @description Configured-origin URL with signin fragment.
+             * @example https://falky.example/#signin=link-bearer
+             */
+            url: string;
+        };
+        /** @description Begin-only response delivered to the bound candidate. The browser secret is exclusively in its cookie. */
+        SignInBegin: {
+            request: components["schemas"]["SignInRequest"];
+            /**
+             * @description Four ASCII decimal digits for link flow only.
+             * @example 0000
+             */
+            code?: string;
+            /**
+             * @description QR token for the phone; QR flow only.
+             * @example qr-bearer
+             */
+            token?: string;
+            /**
+             * @description Configured-origin QR URL fragment; QR flow only.
+             * @example https://falky.example/#qr-signin=qr-bearer
+             */
+            url?: string;
+        };
+        /** @description Read-only confirmation information; scanning never selects an account. */
+        SignInPreview: {
+            request: components["schemas"]["SignInRequest"];
+            /**
+             * @description Whether approving now grants recent authentication.
+             * @example true
+             */
+            approvalGrantsRecentProof: boolean;
+        };
+        /** @description Bearer input; never place it in a path or query. */
+        SignInToken: {
+            /**
+             * @description Link or QR bearer, as required by this operation.
+             * @example opaque-bearer
+             */
+            token: string;
+        };
+        /** @description Link finish requires token; QR finish forbids a nonempty link token. */
+        SignInFinishInput: {
+            /**
+             * @description Link bearer, omitted for QR flow.
+             * @example link-bearer
+             */
+            token?: string;
+        };
+        /** @description Exact issuer confirmation selector. */
+        SignInCode: {
+            /**
+             * @description Exactly four ASCII decimal digits including leading zeroes.
+             * @example 0000
+             */
+            code: string;
+        };
+        /** @description Resume by default, or explicitly replace the bound unconsumed QR. */
+        SignInQRInput: {
+            /**
+             * @description Allocate a new request after cancelling the previous bound unconsumed QR.
+             * @default false
+             * @example false
+             */
+            replace: boolean;
+        };
         /**
          * @description An empty operation input or successful result.
          * @example {}
@@ -1052,7 +1513,7 @@ export interface components {
         /** @description The body of every error response. */
         Error: {
             /**
-             * @description Stable, machine-readable error code: `not_found` (no such route), `invalid_request` (the request does not match the contract), `internal` (the server failed), `visitor_required` (no valid visitor cookie), `invalid_link` (wrong access link secret), `invalid_name` (a name breaks the name rules), `name_taken` (another visitor holds the name), `rate_limited` (too many requests), `room_not_found` (no such room), `invalid_message` (a message body breaks the message rules), `request_key_reused` (a request key was already used for another message), `origin_forbidden` (a request from a forbidden origin), `room_full` (a room's voice admits no more participants) or `voice_unavailable` (the server cannot reach LiveKit). Attachment operations also use `attachment_not_found`, `attachment_expired`, `invalid_attachments`, `attachment_too_large`, `invalid_image`, `image_dimensions`, `attachment_busy`, `attachment_capacity`, `attachment_processing`, `attachment_unavailable` and `upload_timeout`; each operation documents their status and meaning.
+             * @description Device approval also uses `invalid_proof` (generic authorization failure), `account_switch_required`, `already_signed_in`, `pending_request_cap` and `signin_conflict` (409 conflicts). Stable, machine-readable error code: `not_found` (no such route), `invalid_request` (the request does not match the contract), `internal` (the server failed), `visitor_required` (no valid visitor cookie), `invalid_link` (wrong access link secret), `invalid_name` (a name breaks the name rules), `name_taken` (another visitor holds the name), `rate_limited` (too many requests), `room_not_found` (no such room), `invalid_message` (a message body breaks the message rules), `request_key_reused` (a request key was already used for another message), `origin_forbidden` (a request from a forbidden origin), `room_full` (a room's voice admits no more participants) or `voice_unavailable` (the server cannot reach LiveKit). Attachment operations also use `attachment_not_found`, `attachment_expired`, `invalid_attachments`, `attachment_too_large`, `invalid_image`, `image_dimensions`, `attachment_busy`, `attachment_capacity`, `attachment_processing`, `attachment_unavailable` and `upload_timeout`; each operation documents their status and meaning.
              * @example not_found
              */
             code: string;
@@ -1331,7 +1792,7 @@ export interface components {
             attachmentIds?: string[];
         };
         /**
-         * @description A live update, as sent over `GET /api/live`. `type` says what happened and which schema `payload` has: `message.created` carries a `Message`, `room.changed` a `RoomChange`, `occupancy.changed` an `OccupancyChange`, `visitor.colour.changed` a `VisitorColour`, `access.revoked` an `AccessRevoked`, `attachments.expired` an `AttachmentsExpired`. Clients ignore event types they do not know.
+         * @description A live update, as sent over `GET /api/live`. `type` says what happened and which schema `payload` has: `message.created` carries a `Message`, `room.changed` a `RoomChange`, `occupancy.changed` an `OccupancyChange`, `visitor.colour.changed` a `VisitorColour`, `access.revoked` an `AccessRevoked`, `attachments.expired` an `AttachmentsExpired`. Private `account.signin.requested` reaches only the exact issuing session; `account.signin.state_changed` reaches only its bound candidate. Both carry a sanitized `SignInRequest` with durable version. Issuer reconnect snapshots repeat its links requests in stable creation/identifier order. Clients ignore event types they do not know.
          * @example {
          *       "v": 1,
          *       "type": "message.created",
@@ -1368,7 +1829,7 @@ export interface components {
              */
             roomId?: string;
             /** @description What happened, in the schema `type` names. */
-            payload: components["schemas"]["Message"] | components["schemas"]["RoomChange"] | components["schemas"]["OccupancyChange"] | components["schemas"]["AccessRevoked"] | components["schemas"]["VisitorColour"] | components["schemas"]["AttachmentsExpired"];
+            payload: components["schemas"]["Message"] | components["schemas"]["RoomChange"] | components["schemas"]["OccupancyChange"] | components["schemas"]["AccessRevoked"] | components["schemas"]["VisitorColour"] | components["schemas"]["AttachmentsExpired"] | components["schemas"]["SignInRequest"];
             /**
              * Format: date-time
              * @description When the server published the event, in UTC.
@@ -1377,11 +1838,11 @@ export interface components {
             timestamp: string;
         };
         /**
-         * @description What an event reports: `message.created`, a message was posted (its payload is the `Message`); `room.changed`, a room was created or renamed (its payload is the `RoomChange`); `occupancy.changed`, someone joined or left a room's voice, or a participant's new name reached it (its payload is the `OccupancyChange`); `access.revoked`, the guest link was replaced (its payload is the `AccessRevoked`), and the server closes the connection next; `visitor.colour.changed`, an explicit saved colour change (its payload is the `VisitorColour`) to all visitors; `attachments.expired`, posted files expired in this room (its payload is `AttachmentsExpired`). Private drafts are never broadcast.
+         * @description What an event reports: `message.created`, a message was posted (its payload is the `Message`); `room.changed`, a room was created or renamed (its payload is the `RoomChange`); `occupancy.changed`, someone joined or left a room's voice, or a participant's new name reached it (its payload is the `OccupancyChange`); `access.revoked`, the guest link was replaced (its payload is the `AccessRevoked`), and the server closes the connection next; `visitor.colour.changed`, an explicit saved colour change (its payload is the `VisitorColour`) to all visitors; `attachments.expired`, posted files expired in this room (its payload is `AttachmentsExpired`); private `account.signin.requested` and `account.signin.state_changed` carry `SignInRequest`. Private drafts are never broadcast.
          * @example message.created
          * @enum {string}
          */
-        EventType: "message.created" | "room.changed" | "occupancy.changed" | "access.revoked" | "visitor.colour.changed" | "attachments.expired";
+        EventType: "message.created" | "room.changed" | "occupancy.changed" | "access.revoked" | "visitor.colour.changed" | "attachments.expired" | "account.signin.requested" | "account.signin.state_changed";
         /** @description A room as it is after being created or renamed. */
         RoomChange: {
             /**
@@ -1512,6 +1973,571 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    createSignInLink: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description JSON input for createSignInLink. */
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AccountEmpty"];
+            };
+        };
+        responses: {
+            /** @description Authorized durable result. */
+            200: {
+                headers: {
+                    /** @description Secure HttpOnly Strict cookie; binding uses Path=/ and Max-Age=600, session uses Path=/api and remaining absolute lifetime. */
+                    "Set-Cookie"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SignInLinkResult"];
+                };
+            };
+            /** @description Attempt, allocation, concurrency or persisted cooldown limit. */
+            429: {
+                headers: {
+                    /** @description Whole seconds to wait, rounded upward; in-memory token buckets refill continuously and reset on process restart. */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getSignInLink: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Public opaque identifier; does not grant authorization. */
+                linkId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Authorized durable result. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SignInLink"];
+                };
+            };
+            /** @description Attempt, allocation, concurrency or persisted cooldown limit. */
+            429: {
+                headers: {
+                    /** @description Whole seconds to wait, rounded upward; in-memory token buckets refill continuously and reset on process restart. */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    revokeSignInLink: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Public opaque identifier; does not grant authorization. */
+                linkId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Authorized durable result. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountEmpty"];
+                };
+            };
+            /** @description Attempt, allocation, concurrency or persisted cooldown limit. */
+            429: {
+                headers: {
+                    /** @description Whole seconds to wait, rounded upward; in-memory token buckets refill continuously and reset on process restart. */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    approveSignInLink: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Public opaque identifier; does not grant authorization. */
+                linkId: string;
+            };
+            cookie?: never;
+        };
+        /** @description JSON input for approveSignInLink. */
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SignInCode"];
+            };
+        };
+        responses: {
+            /** @description Authorized durable result. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SignInRequest"];
+                };
+            };
+            /** @description Attempt, allocation, concurrency or persisted cooldown limit. */
+            429: {
+                headers: {
+                    /** @description Whole seconds to wait, rounded upward; in-memory token buckets refill continuously and reset on process restart. */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    denySignInRequest: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Public opaque identifier; does not grant authorization. */
+                linkId: string;
+                /** @description Public opaque identifier; does not grant authorization. */
+                requestId: string;
+            };
+            cookie?: never;
+        };
+        /** @description JSON input for denySignInRequest. */
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AccountEmpty"];
+            };
+        };
+        responses: {
+            /** @description Authorized durable result. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountEmpty"];
+                };
+            };
+            /** @description Attempt, allocation, concurrency or persisted cooldown limit. */
+            429: {
+                headers: {
+                    /** @description Whole seconds to wait, rounded upward; in-memory token buckets refill continuously and reset on process restart. */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    beginSignInRequest: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description JSON input for beginSignInRequest. */
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SignInToken"];
+            };
+        };
+        responses: {
+            /** @description Authorized durable result. */
+            200: {
+                headers: {
+                    /** @description Secure HttpOnly Strict cookie; binding uses Path=/ and Max-Age=600, session uses Path=/api and remaining absolute lifetime. */
+                    "Set-Cookie"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SignInBegin"];
+                };
+            };
+            /** @description Attempt, allocation, concurrency or persisted cooldown limit. */
+            429: {
+                headers: {
+                    /** @description Whole seconds to wait, rounded upward; in-memory token buckets refill continuously and reset on process restart. */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    beginQRSignIn: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description JSON input for beginQRSignIn. */
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SignInQRInput"];
+            };
+        };
+        responses: {
+            /** @description Authorized durable result. */
+            200: {
+                headers: {
+                    /** @description Secure HttpOnly Strict cookie; binding uses Path=/ and Max-Age=600, session uses Path=/api and remaining absolute lifetime. */
+                    "Set-Cookie"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SignInBegin"];
+                };
+            };
+            /** @description Attempt, allocation, concurrency or persisted cooldown limit. */
+            429: {
+                headers: {
+                    /** @description Whole seconds to wait, rounded upward; in-memory token buckets refill continuously and reset on process restart. */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    previewQRSignIn: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description JSON input for previewQRSignIn. */
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SignInToken"];
+            };
+        };
+        responses: {
+            /** @description Authorized durable result. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SignInPreview"];
+                };
+            };
+            /** @description Attempt, allocation, concurrency or persisted cooldown limit. */
+            429: {
+                headers: {
+                    /** @description Whole seconds to wait, rounded upward; in-memory token buckets refill continuously and reset on process restart. */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    approveQRSignIn: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description JSON input for approveQRSignIn. */
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SignInToken"];
+            };
+        };
+        responses: {
+            /** @description Authorized durable result. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SignInRequest"];
+                };
+            };
+            /** @description Attempt, allocation, concurrency or persisted cooldown limit. */
+            429: {
+                headers: {
+                    /** @description Whole seconds to wait, rounded upward; in-memory token buckets refill continuously and reset on process restart. */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    denyQRSignIn: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description JSON input for denyQRSignIn. */
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SignInToken"];
+            };
+        };
+        responses: {
+            /** @description Authorized durable result. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountEmpty"];
+                };
+            };
+            /** @description Attempt, allocation, concurrency or persisted cooldown limit. */
+            429: {
+                headers: {
+                    /** @description Whole seconds to wait, rounded upward; in-memory token buckets refill continuously and reset on process restart. */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    cancelQRSignIn: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Public opaque identifier; does not grant authorization. */
+                requestId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Authorized durable result. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountEmpty"];
+                };
+            };
+            /** @description Attempt, allocation, concurrency or persisted cooldown limit. */
+            429: {
+                headers: {
+                    /** @description Whole seconds to wait, rounded upward; in-memory token buckets refill continuously and reset on process restart. */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getSignInRequest: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Public opaque identifier; does not grant authorization. */
+                requestId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Authorized durable result. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SignInRequest"];
+                };
+            };
+            /** @description Attempt, allocation, concurrency or persisted cooldown limit. */
+            429: {
+                headers: {
+                    /** @description Whole seconds to wait, rounded upward; in-memory token buckets refill continuously and reset on process restart. */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    openSignInEvents: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Public opaque identifier; does not grant authorization. */
+                requestId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Authorized durable result. */
+            101: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Attempt, allocation, concurrency or persisted cooldown limit. */
+            429: {
+                headers: {
+                    /** @description Whole seconds to wait, rounded upward; in-memory token buckets refill continuously and reset on process restart. */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    resendSignInRequest: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Public opaque identifier; does not grant authorization. */
+                requestId: string;
+            };
+            cookie?: never;
+        };
+        /** @description JSON input for resendSignInRequest. */
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SignInToken"];
+            };
+        };
+        responses: {
+            /** @description Authorized durable result. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountEmpty"];
+                };
+            };
+            /** @description Attempt, allocation, concurrency or persisted cooldown limit. */
+            429: {
+                headers: {
+                    /** @description Whole seconds to wait, rounded upward; in-memory token buckets refill continuously and reset on process restart. */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    finishSignInRequest: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Public opaque identifier; does not grant authorization. */
+                requestId: string;
+            };
+            cookie?: never;
+        };
+        /** @description JSON input for finishSignInRequest. */
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SignInFinishInput"];
+            };
+        };
+        responses: {
+            /** @description Authorized durable result. */
+            200: {
+                headers: {
+                    /** @description Secure HttpOnly Strict cookie; binding uses Path=/ and Max-Age=600, session uses Path=/api and remaining absolute lifetime. */
+                    "Set-Cookie"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountSession"];
+                };
+            };
+            /** @description Attempt, allocation, concurrency or persisted cooldown limit. */
+            429: {
+                headers: {
+                    /** @description Whole seconds to wait, rounded upward; in-memory token buckets refill continuously and reset on process restart. */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
     beginRegistration: {
         parameters: {
             query?: never;

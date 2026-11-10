@@ -94,18 +94,24 @@ func (e EventV) Valid() bool {
 
 // Defines values for EventType.
 const (
-	EventTypeAccessRevoked        EventType = "access.revoked"
-	EventTypeAttachmentsExpired   EventType = "attachments.expired"
-	EventTypeMessageCreated       EventType = "message.created"
-	EventTypeOccupancyChanged     EventType = "occupancy.changed"
-	EventTypeRoomChanged          EventType = "room.changed"
-	EventTypeVisitorColourChanged EventType = "visitor.colour.changed"
+	EventTypeAccessRevoked             EventType = "access.revoked"
+	EventTypeAccountSigninRequested    EventType = "account.signin.requested"
+	EventTypeAccountSigninStateChanged EventType = "account.signin.state_changed"
+	EventTypeAttachmentsExpired        EventType = "attachments.expired"
+	EventTypeMessageCreated            EventType = "message.created"
+	EventTypeOccupancyChanged          EventType = "occupancy.changed"
+	EventTypeRoomChanged               EventType = "room.changed"
+	EventTypeVisitorColourChanged      EventType = "visitor.colour.changed"
 )
 
 // Valid indicates whether the value is a known member of the EventType enum.
 func (e EventType) Valid() bool {
 	switch e {
 	case EventTypeAccessRevoked:
+		return true
+	case EventTypeAccountSigninRequested:
+		return true
+	case EventTypeAccountSigninStateChanged:
 		return true
 	case EventTypeAttachmentsExpired:
 		return true
@@ -197,6 +203,75 @@ func (e PaletteName) Valid() bool {
 	case PaletteNameSunset:
 		return true
 	case PaletteNameViolet:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SignInLinkState.
+const (
+	SignInLinkStateApproved SignInLinkState = "approved"
+	SignInLinkStateConsumed SignInLinkState = "consumed"
+	SignInLinkStateOpen     SignInLinkState = "open"
+	SignInLinkStateRevoked  SignInLinkState = "revoked"
+)
+
+// Valid indicates whether the value is a known member of the SignInLinkState enum.
+func (e SignInLinkState) Valid() bool {
+	switch e {
+	case SignInLinkStateApproved:
+		return true
+	case SignInLinkStateConsumed:
+		return true
+	case SignInLinkStateOpen:
+		return true
+	case SignInLinkStateRevoked:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SignInRequestState.
+const (
+	SignInRequestStateApproved  SignInRequestState = "approved"
+	SignInRequestStateCancelled SignInRequestState = "cancelled"
+	SignInRequestStateConsumed  SignInRequestState = "consumed"
+	SignInRequestStateDenied    SignInRequestState = "denied"
+	SignInRequestStatePending   SignInRequestState = "pending"
+)
+
+// Valid indicates whether the value is a known member of the SignInRequestState enum.
+func (e SignInRequestState) Valid() bool {
+	switch e {
+	case SignInRequestStateApproved:
+		return true
+	case SignInRequestStateCancelled:
+		return true
+	case SignInRequestStateConsumed:
+		return true
+	case SignInRequestStateDenied:
+		return true
+	case SignInRequestStatePending:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SignInRequestType.
+const (
+	SignInRequestTypeLink SignInRequestType = "link"
+	SignInRequestTypeQr   SignInRequestType = "qr"
+)
+
+// Valid indicates whether the value is a known member of the SignInRequestType enum.
+func (e SignInRequestType) Valid() bool {
+	switch e {
+	case SignInRequestTypeLink:
+		return true
+	case SignInRequestTypeQr:
 		return true
 	default:
 		return false
@@ -521,7 +596,7 @@ type EnterRequest struct {
 
 // Error The body of every error response.
 type Error struct {
-	// Code Stable, machine-readable error code: `not_found` (no such route), `invalid_request` (the request does not match the contract), `internal` (the server failed), `visitor_required` (no valid visitor cookie), `invalid_link` (wrong access link secret), `invalid_name` (a name breaks the name rules), `name_taken` (another visitor holds the name), `rate_limited` (too many requests), `room_not_found` (no such room), `invalid_message` (a message body breaks the message rules), `request_key_reused` (a request key was already used for another message), `origin_forbidden` (a request from a forbidden origin), `room_full` (a room's voice admits no more participants) or `voice_unavailable` (the server cannot reach LiveKit). Attachment operations also use `attachment_not_found`, `attachment_expired`, `invalid_attachments`, `attachment_too_large`, `invalid_image`, `image_dimensions`, `attachment_busy`, `attachment_capacity`, `attachment_processing`, `attachment_unavailable` and `upload_timeout`; each operation documents their status and meaning.
+	// Code Device approval also uses `invalid_proof` (generic authorization failure), `account_switch_required`, `already_signed_in`, `pending_request_cap` and `signin_conflict` (409 conflicts). Stable, machine-readable error code: `not_found` (no such route), `invalid_request` (the request does not match the contract), `internal` (the server failed), `visitor_required` (no valid visitor cookie), `invalid_link` (wrong access link secret), `invalid_name` (a name breaks the name rules), `name_taken` (another visitor holds the name), `rate_limited` (too many requests), `room_not_found` (no such room), `invalid_message` (a message body breaks the message rules), `request_key_reused` (a request key was already used for another message), `origin_forbidden` (a request from a forbidden origin), `room_full` (a room's voice admits no more participants) or `voice_unavailable` (the server cannot reach LiveKit). Attachment operations also use `attachment_not_found`, `attachment_expired`, `invalid_attachments`, `attachment_too_large`, `invalid_image`, `image_dimensions`, `attachment_busy`, `attachment_capacity`, `attachment_processing`, `attachment_unavailable` and `upload_timeout`; each operation documents their status and meaning.
 	//
 	// Example: not_found
 	Code string `json:"code"`
@@ -532,7 +607,7 @@ type Error struct {
 	Message string `json:"message"`
 }
 
-// Event A live update, as sent over `GET /api/live`. `type` says what happened and which schema `payload` has: `message.created` carries a `Message`, `room.changed` a `RoomChange`, `occupancy.changed` an `OccupancyChange`, `visitor.colour.changed` a `VisitorColour`, `access.revoked` an `AccessRevoked`, `attachments.expired` an `AttachmentsExpired`. Clients ignore event types they do not know.
+// Event A live update, as sent over `GET /api/live`. `type` says what happened and which schema `payload` has: `message.created` carries a `Message`, `room.changed` a `RoomChange`, `occupancy.changed` an `OccupancyChange`, `visitor.colour.changed` a `VisitorColour`, `access.revoked` an `AccessRevoked`, `attachments.expired` an `AttachmentsExpired`. Private `account.signin.requested` reaches only the exact issuing session; `account.signin.state_changed` reaches only its bound candidate. Both carry a sanitized `SignInRequest` with durable version. Issuer reconnect snapshots repeat its links requests in stable creation/identifier order. Clients ignore event types they do not know.
 //
 // Example: {"eventId":"01JBX8C4P0G7J9M1Q4S6V8X0ZA","payload":{"attachments":[],"authorId":"01JBX6Z8Q3M5W2K7R9T4V1C0DE","authorName":"Bob","body":"Anyone up for a game?","createdAt":"2026-11-04T18:30:05.123Z","id":"01JBX8C4N2F6H8K0P3R5T7W9YZ","roomId":"01JBX7A2K9D4F6H8M0P3R5T7VW"},"roomId":"01JBX7A2K9D4F6H8M0P3R5T7VW","timestamp":"2026-11-04T18:30:05.140Z","type":"message.created","v":1}
 type Event struct {
@@ -554,7 +629,7 @@ type Event struct {
 	// Example: 2026-11-04T18:30:05.140Z
 	Timestamp time.Time `json:"timestamp"`
 
-	// Type What an event reports: `message.created`, a message was posted (its payload is the `Message`); `room.changed`, a room was created or renamed (its payload is the `RoomChange`); `occupancy.changed`, someone joined or left a room's voice, or a participant's new name reached it (its payload is the `OccupancyChange`); `access.revoked`, the guest link was replaced (its payload is the `AccessRevoked`), and the server closes the connection next; `visitor.colour.changed`, an explicit saved colour change (its payload is the `VisitorColour`) to all visitors; `attachments.expired`, posted files expired in this room (its payload is `AttachmentsExpired`). Private drafts are never broadcast.
+	// Type What an event reports: `message.created`, a message was posted (its payload is the `Message`); `room.changed`, a room was created or renamed (its payload is the `RoomChange`); `occupancy.changed`, someone joined or left a room's voice, or a participant's new name reached it (its payload is the `OccupancyChange`); `access.revoked`, the guest link was replaced (its payload is the `AccessRevoked`), and the server closes the connection next; `visitor.colour.changed`, an explicit saved colour change (its payload is the `VisitorColour`) to all visitors; `attachments.expired`, posted files expired in this room (its payload is `AttachmentsExpired`); private `account.signin.requested` and `account.signin.state_changed` carry `SignInRequest`. Private drafts are never broadcast.
 	//
 	// Example: message.created
 	Type EventType `json:"type"`
@@ -575,7 +650,7 @@ type Event_Payload struct {
 // Example: 1
 type EventV int
 
-// EventType What an event reports: `message.created`, a message was posted (its payload is the `Message`); `room.changed`, a room was created or renamed (its payload is the `RoomChange`); `occupancy.changed`, someone joined or left a room's voice, or a participant's new name reached it (its payload is the `OccupancyChange`); `access.revoked`, the guest link was replaced (its payload is the `AccessRevoked`), and the server closes the connection next; `visitor.colour.changed`, an explicit saved colour change (its payload is the `VisitorColour`) to all visitors; `attachments.expired`, posted files expired in this room (its payload is `AttachmentsExpired`). Private drafts are never broadcast.
+// EventType What an event reports: `message.created`, a message was posted (its payload is the `Message`); `room.changed`, a room was created or renamed (its payload is the `RoomChange`); `occupancy.changed`, someone joined or left a room's voice, or a participant's new name reached it (its payload is the `OccupancyChange`); `access.revoked`, the guest link was replaced (its payload is the `AccessRevoked`), and the server closes the connection next; `visitor.colour.changed`, an explicit saved colour change (its payload is the `VisitorColour`) to all visitors; `attachments.expired`, posted files expired in this room (its payload is `AttachmentsExpired`); private `account.signin.requested` and `account.signin.state_changed` carry `SignInRequest`. Private drafts are never broadcast.
 //
 // Example: message.created
 type EventType string
@@ -819,6 +894,192 @@ type RoomList struct {
 	Rooms []Room `json:"rooms"`
 }
 
+// SignInBegin Begin-only response delivered to the bound candidate. The browser secret is exclusively in its cookie.
+type SignInBegin struct {
+	// Code Four ASCII decimal digits for link flow only.
+	//
+	// Example: 0000
+	Code string `json:"code,omitempty"`
+
+	// Request Sanitized durable request state. It contains no bearer, code, account or session evidence.
+	Request SignInRequest `json:"request"`
+
+	// Token QR token for the phone; QR flow only.
+	//
+	// Example: qr-bearer
+	Token string `json:"token,omitempty"`
+
+	// Url Configured-origin QR URL fragment; QR flow only.
+	//
+	// Example: https://falky.example/#qr-signin=qr-bearer
+	Url string `json:"url,omitempty"`
+}
+
+// SignInCode Exact issuer confirmation selector.
+type SignInCode struct {
+	// Code Exactly four ASCII decimal digits including leading zeroes.
+	//
+	// Example: 0000
+	Code string `json:"code"`
+}
+
+// SignInFinishInput Link finish requires token; QR finish forbids a nonempty link token.
+type SignInFinishInput struct {
+	// Token Link bearer, omitted for QR flow.
+	//
+	// Example: link-bearer
+	Token string `json:"token,omitempty"`
+}
+
+// SignInLink Link state visible only to its exact issuing session.
+type SignInLink struct {
+	// ApprovalGrantsRecentProof Whether approving now would carry recent actual passkey proof.
+	//
+	// Example: true
+	ApprovalGrantsRecentProof bool `json:"approvalGrantsRecentProof"`
+
+	// CreatedAt Original creation time.
+	//
+	// Example: 2026-11-10T12:05:00Z
+	CreatedAt time.Time `json:"createdAt"`
+
+	// ExpiresAt Fixed five-minute deadline.
+	//
+	// Example: 2026-11-10T12:05:00Z
+	ExpiresAt time.Time `json:"expiresAt"`
+
+	// Id Public link identifier.
+	//
+	// Example: link-id
+	Id string `json:"id"`
+
+	// Requests Sanitized requests ordered by creation time and identifier.
+	//
+	// Example: []
+	Requests []SignInRequest `json:"requests"`
+
+	// State Durable link state.
+	//
+	// Example: open
+	State SignInLinkState `json:"state"`
+
+	// Version Persisted link ordering version.
+	//
+	// Example: 1
+	Version int64 `json:"version"`
+}
+
+// SignInLinkState Durable link state.
+//
+// Example: open
+type SignInLinkState string
+
+// SignInLinkResult One-time link bearer delivery. Tokens occur only in response bodies and URL fragments.
+type SignInLinkResult struct {
+	// Link Link state visible only to its exact issuing session.
+	Link SignInLink `json:"link"`
+
+	// Token High-entropy link bearer returned only on creation.
+	//
+	// Example: link-bearer
+	Token string `json:"token"`
+
+	// Url Configured-origin URL with signin fragment.
+	//
+	// Example: https://falky.example/#signin=link-bearer
+	Url string `json:"url"`
+}
+
+// SignInPreview Read-only confirmation information; scanning never selects an account.
+type SignInPreview struct {
+	// ApprovalGrantsRecentProof Whether approving now grants recent authentication.
+	//
+	// Example: true
+	ApprovalGrantsRecentProof bool `json:"approvalGrantsRecentProof"`
+
+	// Request Sanitized durable request state. It contains no bearer, code, account or session evidence.
+	Request SignInRequest `json:"request"`
+}
+
+// SignInQRInput Resume by default, or explicitly replace the bound unconsumed QR.
+type SignInQRInput struct {
+	// Replace Allocate a new request after cancelling the previous bound unconsumed QR.
+	//
+	// Example: false
+	Replace bool `json:"replace,omitempty"`
+}
+
+// SignInRequest Sanitized durable request state. It contains no bearer, code, account or session evidence.
+type SignInRequest struct {
+	// ApprovedAt Approval authentication time, when approved.
+	//
+	// Example: 2026-11-10T12:05:00Z
+	ApprovedAt *time.Time `json:"approvedAt,omitempty"`
+
+	// ConsumedAt Single session creation time, when consumed.
+	//
+	// Example: 2026-11-10T12:05:00Z
+	ConsumedAt *time.Time `json:"consumedAt,omitempty"`
+
+	// CreatedAt Original creation time.
+	//
+	// Example: 2026-11-10T12:05:00Z
+	CreatedAt time.Time `json:"createdAt"`
+
+	// ExpiresAt Original deadline; retries and reconnect never extend it.
+	//
+	// Example: 2026-11-10T12:05:00Z
+	ExpiresAt time.Time `json:"expiresAt"`
+
+	// Id Opaque request identifier.
+	//
+	// Example: request-id
+	Id string `json:"id"`
+
+	// LinkId Parent public link identifier, only for link requests.
+	//
+	// Example: link-id
+	LinkId string `json:"linkId,omitempty"`
+
+	// RequesterUserAgent Untrusted display text, at most 256 Unicode code points.
+	//
+	// Example: Browser
+	RequesterUserAgent string `json:"requesterUserAgent"`
+
+	// State Durable state; denied and cancelled are terminal. Consumed may reconnect until the original deadline.
+	//
+	// Example: pending
+	State SignInRequestState `json:"state"`
+
+	// Type Immutable interaction flow.
+	//
+	// Example: qr
+	Type SignInRequestType `json:"type"`
+
+	// Version Persisted ordering version; reads and resend do not increment it.
+	//
+	// Example: 1
+	Version int64 `json:"version"`
+}
+
+// SignInRequestState Durable state; denied and cancelled are terminal. Consumed may reconnect until the original deadline.
+//
+// Example: pending
+type SignInRequestState string
+
+// SignInRequestType Immutable interaction flow.
+//
+// Example: qr
+type SignInRequestType string
+
+// SignInToken Bearer input; never place it in a path or query.
+type SignInToken struct {
+	// Token Link or QR bearer, as required by this operation.
+	//
+	// Example: opaque-bearer
+	Token string `json:"token"`
+}
+
 // Visitor A guest or passkey account with one permanent identity, retained through guest upgrade and recovery.
 type Visitor struct {
 	// Colour One persistent assignment. Revisions increase per visitor on every accepted save and survive restart. Equal revisions always identify the same palette. Clients merge by revision because events and responses may arrive out of order.
@@ -944,6 +1205,18 @@ type BeginAddPasskeyJSONRequestBody = AccountEmpty
 // FinishAddPasskeyJSONRequestBody defines body for FinishAddPasskey for application/json ContentType.
 type FinishAddPasskeyJSONRequestBody = AccountFinish
 
+// BeginQRSignInJSONRequestBody defines body for BeginQRSignIn for application/json ContentType.
+type BeginQRSignInJSONRequestBody = SignInQRInput
+
+// ApproveQRSignInJSONRequestBody defines body for ApproveQRSignIn for application/json ContentType.
+type ApproveQRSignInJSONRequestBody = SignInToken
+
+// DenyQRSignInJSONRequestBody defines body for DenyQRSignIn for application/json ContentType.
+type DenyQRSignInJSONRequestBody = SignInToken
+
+// PreviewQRSignInJSONRequestBody defines body for PreviewQRSignIn for application/json ContentType.
+type PreviewQRSignInJSONRequestBody = SignInToken
+
 // BeginReauthenticationJSONRequestBody defines body for BeginReauthentication for application/json ContentType.
 type BeginReauthenticationJSONRequestBody = AccountEmpty
 
@@ -964,6 +1237,24 @@ type BeginRegistrationJSONRequestBody = RegistrationBegin
 
 // FinishRegistrationJSONRequestBody defines body for FinishRegistration for application/json ContentType.
 type FinishRegistrationJSONRequestBody = AccountFinish
+
+// CreateSignInLinkJSONRequestBody defines body for CreateSignInLink for application/json ContentType.
+type CreateSignInLinkJSONRequestBody = AccountEmpty
+
+// ApproveSignInLinkJSONRequestBody defines body for ApproveSignInLink for application/json ContentType.
+type ApproveSignInLinkJSONRequestBody = SignInCode
+
+// DenySignInRequestJSONRequestBody defines body for DenySignInRequest for application/json ContentType.
+type DenySignInRequestJSONRequestBody = AccountEmpty
+
+// BeginSignInRequestJSONRequestBody defines body for BeginSignInRequest for application/json ContentType.
+type BeginSignInRequestJSONRequestBody = SignInToken
+
+// FinishSignInRequestJSONRequestBody defines body for FinishSignInRequest for application/json ContentType.
+type FinishSignInRequestJSONRequestBody = SignInFinishInput
+
+// ResendSignInRequestJSONRequestBody defines body for ResendSignInRequest for application/json ContentType.
+type ResendSignInRequestJSONRequestBody = SignInToken
 
 // EnterJSONRequestBody defines body for Enter for application/json ContentType.
 type EnterJSONRequestBody = EnterRequest
@@ -1129,6 +1420,32 @@ func (t *Event_Payload) FromAttachmentsExpired(v AttachmentsExpired) error {
 
 // MergeAttachmentsExpired performs a merge with any union data inside the Event_Payload, using the provided AttachmentsExpired
 func (t *Event_Payload) MergeAttachmentsExpired(v AttachmentsExpired) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsSignInRequest returns the union data inside the Event_Payload as a SignInRequest
+func (t Event_Payload) AsSignInRequest() (SignInRequest, error) {
+	var body SignInRequest
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromSignInRequest overwrites any union data inside the Event_Payload as the provided SignInRequest
+func (t *Event_Payload) FromSignInRequest(v SignInRequest) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeSignInRequest performs a merge with any union data inside the Event_Payload, using the provided SignInRequest
+func (t *Event_Payload) MergeSignInRequest(v SignInRequest) error {
 	b, err := json.Marshal(v)
 	if err != nil {
 		return err
@@ -1327,6 +1644,85 @@ type ClientInterface interface {
 	// Corresponds with DELETE /api/accounts/passkeys/{credentialId} (the `RemovePasskey` operationId).
 	RemovePasskey(ctx context.Context, credentialId string, reqEditors ...RequestEditorFn) (*http.Response, error)
 
+	// BeginQRSignInWithBody Create, resume or replace a QR request.
+	//
+	// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Independent HTTP IP bucket burst 20/refill one per 3 seconds. Actual allocations including replacement additionally charge browser-hash burst 3/refill one per 100 seconds and IP burst 10/refill one per 30 seconds. Resume consumes no allocation quota; rejected quota preserves the old request. Sets or refreshes the dedicated secure ten-minute binding cookie.
+	//
+	// Takes any type of body and a specified content type.
+	//
+	// Corresponds with POST /api/accounts/qr-signins (the `BeginQRSignIn` operationId).
+	BeginQRSignInWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// BeginQRSignIn Create, resume or replace a QR request.
+	//
+	// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Independent HTTP IP bucket burst 20/refill one per 3 seconds. Actual allocations including replacement additionally charge browser-hash burst 3/refill one per 100 seconds and IP burst 10/refill one per 30 seconds. Resume consumes no allocation quota; rejected quota preserves the old request. Sets or refreshes the dedicated secure ten-minute binding cookie.
+	//
+	// Takes a body of the `application/json` content type.
+	//
+	// Corresponds with POST /api/accounts/qr-signins (the `BeginQRSignIn` operationId).
+	BeginQRSignIn(ctx context.Context, body BeginQRSignInJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// ApproveQRSignInWithBody Explicitly approve a QR request.
+	//
+	// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Account required; first committed session wins. Shares authenticated QR session and account IP attempt limits.
+	//
+	// Takes any type of body and a specified content type.
+	//
+	// Corresponds with POST /api/accounts/qr-signins/approve (the `ApproveQRSignIn` operationId).
+	ApproveQRSignInWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// ApproveQRSignIn Explicitly approve a QR request.
+	//
+	// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Account required; first committed session wins. Shares authenticated QR session and account IP attempt limits.
+	//
+	// Takes a body of the `application/json` content type.
+	//
+	// Corresponds with POST /api/accounts/qr-signins/approve (the `ApproveQRSignIn` operationId).
+	ApproveQRSignIn(ctx context.Context, body ApproveQRSignInJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// DenyQRSignInWithBody Deny a QR without selecting an account.
+	//
+	// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Account required; shares authenticated QR session and account IP attempt limits.
+	//
+	// Takes any type of body and a specified content type.
+	//
+	// Corresponds with POST /api/accounts/qr-signins/deny (the `DenyQRSignIn` operationId).
+	DenyQRSignInWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// DenyQRSignIn Deny a QR without selecting an account.
+	//
+	// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Account required; shares authenticated QR session and account IP attempt limits.
+	//
+	// Takes a body of the `application/json` content type.
+	//
+	// Corresponds with POST /api/accounts/qr-signins/deny (the `DenyQRSignIn` operationId).
+	DenyQRSignIn(ctx context.Context, body DenyQRSignInJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// PreviewQRSignInWithBody Preview a QR without claiming it.
+	//
+	// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Account required. Preview, approval and denial share session burst 10/refill one per 6 seconds in addition to account IP burst 20/refill one per 3 seconds.
+	//
+	// Takes any type of body and a specified content type.
+	//
+	// Corresponds with POST /api/accounts/qr-signins/preview (the `PreviewQRSignIn` operationId).
+	PreviewQRSignInWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// PreviewQRSignIn Preview a QR without claiming it.
+	//
+	// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Account required. Preview, approval and denial share session burst 10/refill one per 6 seconds in addition to account IP burst 20/refill one per 3 seconds.
+	//
+	// Takes a body of the `application/json` content type.
+	//
+	// Corresponds with POST /api/accounts/qr-signins/preview (the `PreviewQRSignIn` operationId).
+	PreviewQRSignIn(ctx context.Context, body PreviewQRSignInJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// CancelQRSignIn Cancel a bound unconsumed QR.
+	//
+	// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Original binding required. Consumed replacement or cancellation conflicts.
+	//
+	// Corresponds with DELETE /api/accounts/qr-signins/{requestId} (the `CancelQRSignIn` operationId).
+	CancelQRSignIn(ctx context.Context, requestId string, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// BeginReauthenticationWithBody Begin recent proof for this session.
 	//
 	// Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
@@ -1459,6 +1855,135 @@ type ClientInterface interface {
 	//
 	// Corresponds with GET /api/accounts/session (the `GetAccountSession` operationId).
 	GetAccountSession(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// CreateSignInLinkWithBody Create a five-minute link.
+	//
+	// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Any valid account session; replaces its previous active link. Uses account IP attempt limit.
+	//
+	// Takes any type of body and a specified content type.
+	//
+	// Corresponds with POST /api/accounts/signin-links (the `CreateSignInLink` operationId).
+	CreateSignInLinkWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// CreateSignInLink Create a five-minute link.
+	//
+	// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Any valid account session; replaces its previous active link. Uses account IP attempt limit.
+	//
+	// Takes a body of the `application/json` content type.
+	//
+	// Corresponds with POST /api/accounts/signin-links (the `CreateSignInLink` operationId).
+	CreateSignInLink(ctx context.Context, body CreateSignInLinkJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// RevokeSignInLink Revoke an unconsumed link.
+	//
+	// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Exact issuer only; cancels waiting candidates.
+	//
+	// Corresponds with DELETE /api/accounts/signin-links/{linkId} (the `RevokeSignInLink` operationId).
+	RevokeSignInLink(ctx context.Context, linkId string, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// GetSignInLink Recover exact-issuer link state.
+	//
+	// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Other sessions of the same account cannot inspect this link.
+	//
+	// Corresponds with GET /api/accounts/signin-links/{linkId} (the `GetSignInLink` operationId).
+	GetSignInLink(ctx context.Context, linkId string, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// ApproveSignInLinkWithBody Approve a candidate code.
+	//
+	// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Exact issuer only. Five incorrect codes durably revoke the link even though the fifth response rejects the proof.
+	//
+	// Takes any type of body and a specified content type.
+	//
+	// Corresponds with POST /api/accounts/signin-links/{linkId}/approve (the `ApproveSignInLink` operationId).
+	ApproveSignInLinkWithBody(ctx context.Context, linkId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// ApproveSignInLink Approve a candidate code.
+	//
+	// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Exact issuer only. Five incorrect codes durably revoke the link even though the fifth response rejects the proof.
+	//
+	// Takes a body of the `application/json` content type.
+	//
+	// Corresponds with POST /api/accounts/signin-links/{linkId}/approve (the `ApproveSignInLink` operationId).
+	ApproveSignInLink(ctx context.Context, linkId string, body ApproveSignInLinkJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// DenySignInRequestWithBody Deny a pending link candidate.
+	//
+	// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Exact issuer only. Denied bindings cannot rejoin this link.
+	//
+	// Takes any type of body and a specified content type.
+	//
+	// Corresponds with POST /api/accounts/signin-links/{linkId}/requests/{requestId}/deny (the `DenySignInRequest` operationId).
+	DenySignInRequestWithBody(ctx context.Context, linkId string, requestId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// DenySignInRequest Deny a pending link candidate.
+	//
+	// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Exact issuer only. Denied bindings cannot rejoin this link.
+	//
+	// Takes a body of the `application/json` content type.
+	//
+	// Corresponds with POST /api/accounts/signin-links/{linkId}/requests/{requestId}/deny (the `DenySignInRequest` operationId).
+	DenySignInRequest(ctx context.Context, linkId string, requestId string, body DenySignInRequestJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// BeginSignInRequestWithBody Begin or resume a bound link request.
+	//
+	// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Independent IP token bucket burst 20, refill one per 3 seconds, separate from passkey and QR limits. At most three pending candidates per link. Successful begin sets or refreshes __Host-falky-signin: host-only Path=/, Secure, HttpOnly, SameSite=Strict, Max-Age=600. Binding survives logout.
+	//
+	// Takes any type of body and a specified content type.
+	//
+	// Corresponds with POST /api/accounts/signin-requests (the `BeginSignInRequest` operationId).
+	BeginSignInRequestWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// BeginSignInRequest Begin or resume a bound link request.
+	//
+	// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Independent IP token bucket burst 20, refill one per 3 seconds, separate from passkey and QR limits. At most three pending candidates per link. Successful begin sets or refreshes __Host-falky-signin: host-only Path=/, Secure, HttpOnly, SameSite=Strict, Max-Age=600. Binding survives logout.
+	//
+	// Takes a body of the `application/json` content type.
+	//
+	// Corresponds with POST /api/accounts/signin-requests (the `BeginSignInRequest` operationId).
+	BeginSignInRequest(ctx context.Context, body BeginSignInRequestJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// GetSignInRequest Recover bound request state.
+	//
+	// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Independent browser binding required; no account session required.
+	//
+	// Corresponds with GET /api/accounts/signin-requests/{requestId} (the `GetSignInRequest` operationId).
+	GetSignInRequest(ctx context.Context, requestId string, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// FinishSignInRequestWithBody Redeem approval or retry exact cookie delivery.
+	//
+	// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Independent binding required. Link requires token, QR omits it. Creates exactly one 90-day session. Retries until the original request deadline return the same cookie using remaining session lifetime. Any different active session is protected, including a newer guest (409 signin_conflict). Uses account IP attempt limit.
+	//
+	// Takes any type of body and a specified content type.
+	//
+	// Corresponds with POST /api/accounts/signin-requests/{requestId}/finish (the `FinishSignInRequest` operationId).
+	FinishSignInRequestWithBody(ctx context.Context, requestId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// FinishSignInRequest Redeem approval or retry exact cookie delivery.
+	//
+	// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Independent binding required. Link requires token, QR omits it. Creates exactly one 90-day session. Retries until the original request deadline return the same cookie using remaining session lifetime. Any different active session is protected, including a newer guest (409 signin_conflict). Uses account IP attempt limit.
+	//
+	// Takes a body of the `application/json` content type.
+	//
+	// Corresponds with POST /api/accounts/signin-requests/{requestId}/finish (the `FinishSignInRequest` operationId).
+	FinishSignInRequest(ctx context.Context, requestId string, body FinishSignInRequestJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// ResendSignInRequestWithBody Resend a pending link notification.
+	//
+	// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Link token plus binding required. Reject QR flow. Persisted shared link cooldown 10 seconds returns 429 with Retry-After rounded upward; account IP attempt limit also applies.
+	//
+	// Takes any type of body and a specified content type.
+	//
+	// Corresponds with POST /api/accounts/signin-requests/{requestId}/resend (the `ResendSignInRequest` operationId).
+	ResendSignInRequestWithBody(ctx context.Context, requestId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// ResendSignInRequest Resend a pending link notification.
+	//
+	// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Link token plus binding required. Reject QR flow. Persisted shared link cooldown 10 seconds returns 429 with Retry-After rounded upward; account IP attempt limit also applies.
+	//
+	// Takes a body of the `application/json` content type.
+	//
+	// Corresponds with POST /api/accounts/signin-requests/{requestId}/resend (the `ResendSignInRequest` operationId).
+	ResendSignInRequest(ctx context.Context, requestId string, body ResendSignInRequestJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// EnterWithBody Enter with the access link's secret and a name.
 	//
@@ -1836,6 +2361,175 @@ func (c *Client) RemovePasskey(ctx context.Context, credentialId string, reqEdit
 	return c.Client.Do(req)
 }
 
+// BeginQRSignInWithBody Create, resume or replace a QR request.
+//
+// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Independent HTTP IP bucket burst 20/refill one per 3 seconds. Actual allocations including replacement additionally charge browser-hash burst 3/refill one per 100 seconds and IP burst 10/refill one per 30 seconds. Resume consumes no allocation quota; rejected quota preserves the old request. Sets or refreshes the dedicated secure ten-minute binding cookie.
+//
+// Takes any type of body and a specified content type.
+//
+// Corresponds with POST /api/accounts/qr-signins (the `BeginQRSignIn` operationId).
+func (c *Client) BeginQRSignInWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewBeginQRSignInRequestWithBody(c.Server, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// BeginQRSignIn Create, resume or replace a QR request.
+//
+// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Independent HTTP IP bucket burst 20/refill one per 3 seconds. Actual allocations including replacement additionally charge browser-hash burst 3/refill one per 100 seconds and IP burst 10/refill one per 30 seconds. Resume consumes no allocation quota; rejected quota preserves the old request. Sets or refreshes the dedicated secure ten-minute binding cookie.
+//
+// Takes a body of the `application/json` content type.
+//
+// Corresponds with POST /api/accounts/qr-signins (the `BeginQRSignIn` operationId).
+func (c *Client) BeginQRSignIn(ctx context.Context, body BeginQRSignInJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewBeginQRSignInRequest(c.Server, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// ApproveQRSignInWithBody Explicitly approve a QR request.
+//
+// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Account required; first committed session wins. Shares authenticated QR session and account IP attempt limits.
+//
+// Takes any type of body and a specified content type.
+//
+// Corresponds with POST /api/accounts/qr-signins/approve (the `ApproveQRSignIn` operationId).
+func (c *Client) ApproveQRSignInWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewApproveQRSignInRequestWithBody(c.Server, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// ApproveQRSignIn Explicitly approve a QR request.
+//
+// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Account required; first committed session wins. Shares authenticated QR session and account IP attempt limits.
+//
+// Takes a body of the `application/json` content type.
+//
+// Corresponds with POST /api/accounts/qr-signins/approve (the `ApproveQRSignIn` operationId).
+func (c *Client) ApproveQRSignIn(ctx context.Context, body ApproveQRSignInJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewApproveQRSignInRequest(c.Server, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// DenyQRSignInWithBody Deny a QR without selecting an account.
+//
+// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Account required; shares authenticated QR session and account IP attempt limits.
+//
+// Takes any type of body and a specified content type.
+//
+// Corresponds with POST /api/accounts/qr-signins/deny (the `DenyQRSignIn` operationId).
+func (c *Client) DenyQRSignInWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewDenyQRSignInRequestWithBody(c.Server, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// DenyQRSignIn Deny a QR without selecting an account.
+//
+// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Account required; shares authenticated QR session and account IP attempt limits.
+//
+// Takes a body of the `application/json` content type.
+//
+// Corresponds with POST /api/accounts/qr-signins/deny (the `DenyQRSignIn` operationId).
+func (c *Client) DenyQRSignIn(ctx context.Context, body DenyQRSignInJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewDenyQRSignInRequest(c.Server, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// PreviewQRSignInWithBody Preview a QR without claiming it.
+//
+// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Account required. Preview, approval and denial share session burst 10/refill one per 6 seconds in addition to account IP burst 20/refill one per 3 seconds.
+//
+// Takes any type of body and a specified content type.
+//
+// Corresponds with POST /api/accounts/qr-signins/preview (the `PreviewQRSignIn` operationId).
+func (c *Client) PreviewQRSignInWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewPreviewQRSignInRequestWithBody(c.Server, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// PreviewQRSignIn Preview a QR without claiming it.
+//
+// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Account required. Preview, approval and denial share session burst 10/refill one per 6 seconds in addition to account IP burst 20/refill one per 3 seconds.
+//
+// Takes a body of the `application/json` content type.
+//
+// Corresponds with POST /api/accounts/qr-signins/preview (the `PreviewQRSignIn` operationId).
+func (c *Client) PreviewQRSignIn(ctx context.Context, body PreviewQRSignInJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewPreviewQRSignInRequest(c.Server, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// CancelQRSignIn Cancel a bound unconsumed QR.
+//
+// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Original binding required. Consumed replacement or cancellation conflicts.
+//
+// Corresponds with DELETE /api/accounts/qr-signins/{requestId} (the `CancelQRSignIn` operationId).
+func (c *Client) CancelQRSignIn(ctx context.Context, requestId string, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCancelQRSignInRequest(c.Server, requestId)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
 // BeginReauthenticationWithBody Begin recent proof for this session.
 //
 // Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
@@ -2109,6 +2803,285 @@ func (c *Client) FinishRegistration(ctx context.Context, body FinishRegistration
 // Corresponds with GET /api/accounts/session (the `GetAccountSession` operationId).
 func (c *Client) GetAccountSession(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewGetAccountSessionRequest(c.Server)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// CreateSignInLinkWithBody Create a five-minute link.
+//
+// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Any valid account session; replaces its previous active link. Uses account IP attempt limit.
+//
+// Takes any type of body and a specified content type.
+//
+// Corresponds with POST /api/accounts/signin-links (the `CreateSignInLink` operationId).
+func (c *Client) CreateSignInLinkWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateSignInLinkRequestWithBody(c.Server, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// CreateSignInLink Create a five-minute link.
+//
+// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Any valid account session; replaces its previous active link. Uses account IP attempt limit.
+//
+// Takes a body of the `application/json` content type.
+//
+// Corresponds with POST /api/accounts/signin-links (the `CreateSignInLink` operationId).
+func (c *Client) CreateSignInLink(ctx context.Context, body CreateSignInLinkJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateSignInLinkRequest(c.Server, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// RevokeSignInLink Revoke an unconsumed link.
+//
+// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Exact issuer only; cancels waiting candidates.
+//
+// Corresponds with DELETE /api/accounts/signin-links/{linkId} (the `RevokeSignInLink` operationId).
+func (c *Client) RevokeSignInLink(ctx context.Context, linkId string, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewRevokeSignInLinkRequest(c.Server, linkId)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// GetSignInLink Recover exact-issuer link state.
+//
+// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Other sessions of the same account cannot inspect this link.
+//
+// Corresponds with GET /api/accounts/signin-links/{linkId} (the `GetSignInLink` operationId).
+func (c *Client) GetSignInLink(ctx context.Context, linkId string, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetSignInLinkRequest(c.Server, linkId)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// ApproveSignInLinkWithBody Approve a candidate code.
+//
+// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Exact issuer only. Five incorrect codes durably revoke the link even though the fifth response rejects the proof.
+//
+// Takes any type of body and a specified content type.
+//
+// Corresponds with POST /api/accounts/signin-links/{linkId}/approve (the `ApproveSignInLink` operationId).
+func (c *Client) ApproveSignInLinkWithBody(ctx context.Context, linkId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewApproveSignInLinkRequestWithBody(c.Server, linkId, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// ApproveSignInLink Approve a candidate code.
+//
+// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Exact issuer only. Five incorrect codes durably revoke the link even though the fifth response rejects the proof.
+//
+// Takes a body of the `application/json` content type.
+//
+// Corresponds with POST /api/accounts/signin-links/{linkId}/approve (the `ApproveSignInLink` operationId).
+func (c *Client) ApproveSignInLink(ctx context.Context, linkId string, body ApproveSignInLinkJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewApproveSignInLinkRequest(c.Server, linkId, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// DenySignInRequestWithBody Deny a pending link candidate.
+//
+// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Exact issuer only. Denied bindings cannot rejoin this link.
+//
+// Takes any type of body and a specified content type.
+//
+// Corresponds with POST /api/accounts/signin-links/{linkId}/requests/{requestId}/deny (the `DenySignInRequest` operationId).
+func (c *Client) DenySignInRequestWithBody(ctx context.Context, linkId string, requestId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewDenySignInRequestRequestWithBody(c.Server, linkId, requestId, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// DenySignInRequest Deny a pending link candidate.
+//
+// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Exact issuer only. Denied bindings cannot rejoin this link.
+//
+// Takes a body of the `application/json` content type.
+//
+// Corresponds with POST /api/accounts/signin-links/{linkId}/requests/{requestId}/deny (the `DenySignInRequest` operationId).
+func (c *Client) DenySignInRequest(ctx context.Context, linkId string, requestId string, body DenySignInRequestJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewDenySignInRequestRequest(c.Server, linkId, requestId, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// BeginSignInRequestWithBody Begin or resume a bound link request.
+//
+// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Independent IP token bucket burst 20, refill one per 3 seconds, separate from passkey and QR limits. At most three pending candidates per link. Successful begin sets or refreshes __Host-falky-signin: host-only Path=/, Secure, HttpOnly, SameSite=Strict, Max-Age=600. Binding survives logout.
+//
+// Takes any type of body and a specified content type.
+//
+// Corresponds with POST /api/accounts/signin-requests (the `BeginSignInRequest` operationId).
+func (c *Client) BeginSignInRequestWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewBeginSignInRequestRequestWithBody(c.Server, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// BeginSignInRequest Begin or resume a bound link request.
+//
+// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Independent IP token bucket burst 20, refill one per 3 seconds, separate from passkey and QR limits. At most three pending candidates per link. Successful begin sets or refreshes __Host-falky-signin: host-only Path=/, Secure, HttpOnly, SameSite=Strict, Max-Age=600. Binding survives logout.
+//
+// Takes a body of the `application/json` content type.
+//
+// Corresponds with POST /api/accounts/signin-requests (the `BeginSignInRequest` operationId).
+func (c *Client) BeginSignInRequest(ctx context.Context, body BeginSignInRequestJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewBeginSignInRequestRequest(c.Server, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// GetSignInRequest Recover bound request state.
+//
+// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Independent browser binding required; no account session required.
+//
+// Corresponds with GET /api/accounts/signin-requests/{requestId} (the `GetSignInRequest` operationId).
+func (c *Client) GetSignInRequest(ctx context.Context, requestId string, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetSignInRequestRequest(c.Server, requestId)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// FinishSignInRequestWithBody Redeem approval or retry exact cookie delivery.
+//
+// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Independent binding required. Link requires token, QR omits it. Creates exactly one 90-day session. Retries until the original request deadline return the same cookie using remaining session lifetime. Any different active session is protected, including a newer guest (409 signin_conflict). Uses account IP attempt limit.
+//
+// Takes any type of body and a specified content type.
+//
+// Corresponds with POST /api/accounts/signin-requests/{requestId}/finish (the `FinishSignInRequest` operationId).
+func (c *Client) FinishSignInRequestWithBody(ctx context.Context, requestId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewFinishSignInRequestRequestWithBody(c.Server, requestId, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// FinishSignInRequest Redeem approval or retry exact cookie delivery.
+//
+// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Independent binding required. Link requires token, QR omits it. Creates exactly one 90-day session. Retries until the original request deadline return the same cookie using remaining session lifetime. Any different active session is protected, including a newer guest (409 signin_conflict). Uses account IP attempt limit.
+//
+// Takes a body of the `application/json` content type.
+//
+// Corresponds with POST /api/accounts/signin-requests/{requestId}/finish (the `FinishSignInRequest` operationId).
+func (c *Client) FinishSignInRequest(ctx context.Context, requestId string, body FinishSignInRequestJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewFinishSignInRequestRequest(c.Server, requestId, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// ResendSignInRequestWithBody Resend a pending link notification.
+//
+// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Link token plus binding required. Reject QR flow. Persisted shared link cooldown 10 seconds returns 429 with Retry-After rounded upward; account IP attempt limit also applies.
+//
+// Takes any type of body and a specified content type.
+//
+// Corresponds with POST /api/accounts/signin-requests/{requestId}/resend (the `ResendSignInRequest` operationId).
+func (c *Client) ResendSignInRequestWithBody(ctx context.Context, requestId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewResendSignInRequestRequestWithBody(c.Server, requestId, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// ResendSignInRequest Resend a pending link notification.
+//
+// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Link token plus binding required. Reject QR flow. Persisted shared link cooldown 10 seconds returns 429 with Retry-After rounded upward; account IP attempt limit also applies.
+//
+// Takes a body of the `application/json` content type.
+//
+// Corresponds with POST /api/accounts/signin-requests/{requestId}/resend (the `ResendSignInRequest` operationId).
+func (c *Client) ResendSignInRequest(ctx context.Context, requestId string, body ResendSignInRequestJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewResendSignInRequestRequest(c.Server, requestId, body)
 	if err != nil {
 		return nil, err
 	}
@@ -2701,6 +3674,200 @@ func NewRemovePasskeyRequest(server string, credentialId string) (*http.Request,
 	return req, nil
 }
 
+// NewBeginQRSignInRequest calls the generic BeginQRSignIn builder with application/json body
+func NewBeginQRSignInRequest(server string, body BeginQRSignInJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewBeginQRSignInRequestWithBody(server, "application/json", bodyReader)
+}
+
+// NewBeginQRSignInRequestWithBody constructs an http.Request for the BeginQRSignIn method, with any body, and a specified content type
+func NewBeginQRSignInRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/accounts/qr-signins")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewApproveQRSignInRequest calls the generic ApproveQRSignIn builder with application/json body
+func NewApproveQRSignInRequest(server string, body ApproveQRSignInJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewApproveQRSignInRequestWithBody(server, "application/json", bodyReader)
+}
+
+// NewApproveQRSignInRequestWithBody constructs an http.Request for the ApproveQRSignIn method, with any body, and a specified content type
+func NewApproveQRSignInRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/accounts/qr-signins/approve")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewDenyQRSignInRequest calls the generic DenyQRSignIn builder with application/json body
+func NewDenyQRSignInRequest(server string, body DenyQRSignInJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewDenyQRSignInRequestWithBody(server, "application/json", bodyReader)
+}
+
+// NewDenyQRSignInRequestWithBody constructs an http.Request for the DenyQRSignIn method, with any body, and a specified content type
+func NewDenyQRSignInRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/accounts/qr-signins/deny")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewPreviewQRSignInRequest calls the generic PreviewQRSignIn builder with application/json body
+func NewPreviewQRSignInRequest(server string, body PreviewQRSignInJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewPreviewQRSignInRequestWithBody(server, "application/json", bodyReader)
+}
+
+// NewPreviewQRSignInRequestWithBody constructs an http.Request for the PreviewQRSignIn method, with any body, and a specified content type
+func NewPreviewQRSignInRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/accounts/qr-signins/preview")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewCancelQRSignInRequest constructs an http.Request for the CancelQRSignIn method
+func NewCancelQRSignInRequest(server string, requestId string) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "requestId", requestId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/accounts/qr-signins/%s", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodDelete, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
 // NewBeginReauthenticationRequest calls the generic BeginReauthentication builder with application/json body
 func NewBeginReauthenticationRequest(server string, body BeginReauthenticationJSONRequestBody) (*http.Request, error) {
 	var bodyReader io.Reader
@@ -3004,6 +4171,383 @@ func NewGetAccountSessionRequest(server string) (*http.Request, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	return req, nil
+}
+
+// NewCreateSignInLinkRequest calls the generic CreateSignInLink builder with application/json body
+func NewCreateSignInLinkRequest(server string, body CreateSignInLinkJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewCreateSignInLinkRequestWithBody(server, "application/json", bodyReader)
+}
+
+// NewCreateSignInLinkRequestWithBody constructs an http.Request for the CreateSignInLink method, with any body, and a specified content type
+func NewCreateSignInLinkRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/accounts/signin-links")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewRevokeSignInLinkRequest constructs an http.Request for the RevokeSignInLink method
+func NewRevokeSignInLinkRequest(server string, linkId string) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "linkId", linkId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/accounts/signin-links/%s", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodDelete, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewGetSignInLinkRequest constructs an http.Request for the GetSignInLink method
+func NewGetSignInLinkRequest(server string, linkId string) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "linkId", linkId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/accounts/signin-links/%s", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewApproveSignInLinkRequest calls the generic ApproveSignInLink builder with application/json body
+func NewApproveSignInLinkRequest(server string, linkId string, body ApproveSignInLinkJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewApproveSignInLinkRequestWithBody(server, linkId, "application/json", bodyReader)
+}
+
+// NewApproveSignInLinkRequestWithBody constructs an http.Request for the ApproveSignInLink method, with any body, and a specified content type
+func NewApproveSignInLinkRequestWithBody(server string, linkId string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "linkId", linkId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/accounts/signin-links/%s/approve", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewDenySignInRequestRequest calls the generic DenySignInRequest builder with application/json body
+func NewDenySignInRequestRequest(server string, linkId string, requestId string, body DenySignInRequestJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewDenySignInRequestRequestWithBody(server, linkId, requestId, "application/json", bodyReader)
+}
+
+// NewDenySignInRequestRequestWithBody constructs an http.Request for the DenySignInRequest method, with any body, and a specified content type
+func NewDenySignInRequestRequestWithBody(server string, linkId string, requestId string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "linkId", linkId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam1 string
+
+	pathParam1, err = runtime.StyleParamWithOptions("simple", false, "requestId", requestId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/accounts/signin-links/%s/requests/%s/deny", pathParam0, pathParam1)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewBeginSignInRequestRequest calls the generic BeginSignInRequest builder with application/json body
+func NewBeginSignInRequestRequest(server string, body BeginSignInRequestJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewBeginSignInRequestRequestWithBody(server, "application/json", bodyReader)
+}
+
+// NewBeginSignInRequestRequestWithBody constructs an http.Request for the BeginSignInRequest method, with any body, and a specified content type
+func NewBeginSignInRequestRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/accounts/signin-requests")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewGetSignInRequestRequest constructs an http.Request for the GetSignInRequest method
+func NewGetSignInRequestRequest(server string, requestId string) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "requestId", requestId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/accounts/signin-requests/%s", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewFinishSignInRequestRequest calls the generic FinishSignInRequest builder with application/json body
+func NewFinishSignInRequestRequest(server string, requestId string, body FinishSignInRequestJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewFinishSignInRequestRequestWithBody(server, requestId, "application/json", bodyReader)
+}
+
+// NewFinishSignInRequestRequestWithBody constructs an http.Request for the FinishSignInRequest method, with any body, and a specified content type
+func NewFinishSignInRequestRequestWithBody(server string, requestId string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "requestId", requestId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/accounts/signin-requests/%s/finish", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewResendSignInRequestRequest calls the generic ResendSignInRequest builder with application/json body
+func NewResendSignInRequestRequest(server string, requestId string, body ResendSignInRequestJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewResendSignInRequestRequestWithBody(server, requestId, "application/json", bodyReader)
+}
+
+// NewResendSignInRequestRequestWithBody constructs an http.Request for the ResendSignInRequest method, with any body, and a specified content type
+func NewResendSignInRequestRequestWithBody(server string, requestId string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "requestId", requestId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/accounts/signin-requests/%s/resend", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
 
 	return req, nil
 }
@@ -3599,6 +5143,87 @@ type ClientWithResponsesInterface interface {
 	// Corresponds with DELETE /api/accounts/passkeys/{credentialId} (the `RemovePasskey` operationId).
 	RemovePasskeyWithResponse(ctx context.Context, credentialId string, reqEditors ...RequestEditorFn) (*RemovePasskeyResponse, error)
 
+	// BeginQRSignInWithBodyWithResponse Create, resume or replace a QR request.
+	//
+	// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Independent HTTP IP bucket burst 20/refill one per 3 seconds. Actual allocations including replacement additionally charge browser-hash burst 3/refill one per 100 seconds and IP burst 10/refill one per 30 seconds. Resume consumes no allocation quota; rejected quota preserves the old request. Sets or refreshes the dedicated secure ten-minute binding cookie.
+	//
+	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /api/accounts/qr-signins (the `BeginQRSignIn` operationId).
+	BeginQRSignInWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*BeginQRSignInResponse, error)
+
+	// BeginQRSignInWithResponse Create, resume or replace a QR request.
+	//
+	// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Independent HTTP IP bucket burst 20/refill one per 3 seconds. Actual allocations including replacement additionally charge browser-hash burst 3/refill one per 100 seconds and IP burst 10/refill one per 30 seconds. Resume consumes no allocation quota; rejected quota preserves the old request. Sets or refreshes the dedicated secure ten-minute binding cookie.
+	//
+	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /api/accounts/qr-signins (the `BeginQRSignIn` operationId).
+	BeginQRSignInWithResponse(ctx context.Context, body BeginQRSignInJSONRequestBody, reqEditors ...RequestEditorFn) (*BeginQRSignInResponse, error)
+
+	// ApproveQRSignInWithBodyWithResponse Explicitly approve a QR request.
+	//
+	// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Account required; first committed session wins. Shares authenticated QR session and account IP attempt limits.
+	//
+	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /api/accounts/qr-signins/approve (the `ApproveQRSignIn` operationId).
+	ApproveQRSignInWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ApproveQRSignInResponse, error)
+
+	// ApproveQRSignInWithResponse Explicitly approve a QR request.
+	//
+	// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Account required; first committed session wins. Shares authenticated QR session and account IP attempt limits.
+	//
+	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /api/accounts/qr-signins/approve (the `ApproveQRSignIn` operationId).
+	ApproveQRSignInWithResponse(ctx context.Context, body ApproveQRSignInJSONRequestBody, reqEditors ...RequestEditorFn) (*ApproveQRSignInResponse, error)
+
+	// DenyQRSignInWithBodyWithResponse Deny a QR without selecting an account.
+	//
+	// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Account required; shares authenticated QR session and account IP attempt limits.
+	//
+	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /api/accounts/qr-signins/deny (the `DenyQRSignIn` operationId).
+	DenyQRSignInWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*DenyQRSignInResponse, error)
+
+	// DenyQRSignInWithResponse Deny a QR without selecting an account.
+	//
+	// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Account required; shares authenticated QR session and account IP attempt limits.
+	//
+	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /api/accounts/qr-signins/deny (the `DenyQRSignIn` operationId).
+	DenyQRSignInWithResponse(ctx context.Context, body DenyQRSignInJSONRequestBody, reqEditors ...RequestEditorFn) (*DenyQRSignInResponse, error)
+
+	// PreviewQRSignInWithBodyWithResponse Preview a QR without claiming it.
+	//
+	// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Account required. Preview, approval and denial share session burst 10/refill one per 6 seconds in addition to account IP burst 20/refill one per 3 seconds.
+	//
+	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /api/accounts/qr-signins/preview (the `PreviewQRSignIn` operationId).
+	PreviewQRSignInWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PreviewQRSignInResponse, error)
+
+	// PreviewQRSignInWithResponse Preview a QR without claiming it.
+	//
+	// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Account required. Preview, approval and denial share session burst 10/refill one per 6 seconds in addition to account IP burst 20/refill one per 3 seconds.
+	//
+	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /api/accounts/qr-signins/preview (the `PreviewQRSignIn` operationId).
+	PreviewQRSignInWithResponse(ctx context.Context, body PreviewQRSignInJSONRequestBody, reqEditors ...RequestEditorFn) (*PreviewQRSignInResponse, error)
+
+	// CancelQRSignInWithResponse Cancel a bound unconsumed QR.
+	//
+	// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Original binding required. Consumed replacement or cancellation conflicts.
+	//
+	// Returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with DELETE /api/accounts/qr-signins/{requestId} (the `CancelQRSignIn` operationId).
+	CancelQRSignInWithResponse(ctx context.Context, requestId string, reqEditors ...RequestEditorFn) (*CancelQRSignInResponse, error)
+
 	// BeginReauthenticationWithBodyWithResponse Begin recent proof for this session.
 	//
 	// Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
@@ -3733,6 +5358,141 @@ type ClientWithResponsesInterface interface {
 	//
 	// Corresponds with GET /api/accounts/session (the `GetAccountSession` operationId).
 	GetAccountSessionWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetAccountSessionResponse, error)
+
+	// CreateSignInLinkWithBodyWithResponse Create a five-minute link.
+	//
+	// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Any valid account session; replaces its previous active link. Uses account IP attempt limit.
+	//
+	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /api/accounts/signin-links (the `CreateSignInLink` operationId).
+	CreateSignInLinkWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateSignInLinkResponse, error)
+
+	// CreateSignInLinkWithResponse Create a five-minute link.
+	//
+	// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Any valid account session; replaces its previous active link. Uses account IP attempt limit.
+	//
+	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /api/accounts/signin-links (the `CreateSignInLink` operationId).
+	CreateSignInLinkWithResponse(ctx context.Context, body CreateSignInLinkJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateSignInLinkResponse, error)
+
+	// RevokeSignInLinkWithResponse Revoke an unconsumed link.
+	//
+	// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Exact issuer only; cancels waiting candidates.
+	//
+	// Returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with DELETE /api/accounts/signin-links/{linkId} (the `RevokeSignInLink` operationId).
+	RevokeSignInLinkWithResponse(ctx context.Context, linkId string, reqEditors ...RequestEditorFn) (*RevokeSignInLinkResponse, error)
+
+	// GetSignInLinkWithResponse Recover exact-issuer link state.
+	//
+	// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Other sessions of the same account cannot inspect this link.
+	//
+	// Returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with GET /api/accounts/signin-links/{linkId} (the `GetSignInLink` operationId).
+	GetSignInLinkWithResponse(ctx context.Context, linkId string, reqEditors ...RequestEditorFn) (*GetSignInLinkResponse, error)
+
+	// ApproveSignInLinkWithBodyWithResponse Approve a candidate code.
+	//
+	// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Exact issuer only. Five incorrect codes durably revoke the link even though the fifth response rejects the proof.
+	//
+	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /api/accounts/signin-links/{linkId}/approve (the `ApproveSignInLink` operationId).
+	ApproveSignInLinkWithBodyWithResponse(ctx context.Context, linkId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ApproveSignInLinkResponse, error)
+
+	// ApproveSignInLinkWithResponse Approve a candidate code.
+	//
+	// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Exact issuer only. Five incorrect codes durably revoke the link even though the fifth response rejects the proof.
+	//
+	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /api/accounts/signin-links/{linkId}/approve (the `ApproveSignInLink` operationId).
+	ApproveSignInLinkWithResponse(ctx context.Context, linkId string, body ApproveSignInLinkJSONRequestBody, reqEditors ...RequestEditorFn) (*ApproveSignInLinkResponse, error)
+
+	// DenySignInRequestWithBodyWithResponse Deny a pending link candidate.
+	//
+	// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Exact issuer only. Denied bindings cannot rejoin this link.
+	//
+	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /api/accounts/signin-links/{linkId}/requests/{requestId}/deny (the `DenySignInRequest` operationId).
+	DenySignInRequestWithBodyWithResponse(ctx context.Context, linkId string, requestId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*DenySignInRequestResponse, error)
+
+	// DenySignInRequestWithResponse Deny a pending link candidate.
+	//
+	// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Exact issuer only. Denied bindings cannot rejoin this link.
+	//
+	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /api/accounts/signin-links/{linkId}/requests/{requestId}/deny (the `DenySignInRequest` operationId).
+	DenySignInRequestWithResponse(ctx context.Context, linkId string, requestId string, body DenySignInRequestJSONRequestBody, reqEditors ...RequestEditorFn) (*DenySignInRequestResponse, error)
+
+	// BeginSignInRequestWithBodyWithResponse Begin or resume a bound link request.
+	//
+	// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Independent IP token bucket burst 20, refill one per 3 seconds, separate from passkey and QR limits. At most three pending candidates per link. Successful begin sets or refreshes __Host-falky-signin: host-only Path=/, Secure, HttpOnly, SameSite=Strict, Max-Age=600. Binding survives logout.
+	//
+	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /api/accounts/signin-requests (the `BeginSignInRequest` operationId).
+	BeginSignInRequestWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*BeginSignInRequestResponse, error)
+
+	// BeginSignInRequestWithResponse Begin or resume a bound link request.
+	//
+	// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Independent IP token bucket burst 20, refill one per 3 seconds, separate from passkey and QR limits. At most three pending candidates per link. Successful begin sets or refreshes __Host-falky-signin: host-only Path=/, Secure, HttpOnly, SameSite=Strict, Max-Age=600. Binding survives logout.
+	//
+	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /api/accounts/signin-requests (the `BeginSignInRequest` operationId).
+	BeginSignInRequestWithResponse(ctx context.Context, body BeginSignInRequestJSONRequestBody, reqEditors ...RequestEditorFn) (*BeginSignInRequestResponse, error)
+
+	// GetSignInRequestWithResponse Recover bound request state.
+	//
+	// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Independent browser binding required; no account session required.
+	//
+	// Returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with GET /api/accounts/signin-requests/{requestId} (the `GetSignInRequest` operationId).
+	GetSignInRequestWithResponse(ctx context.Context, requestId string, reqEditors ...RequestEditorFn) (*GetSignInRequestResponse, error)
+
+	// FinishSignInRequestWithBodyWithResponse Redeem approval or retry exact cookie delivery.
+	//
+	// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Independent binding required. Link requires token, QR omits it. Creates exactly one 90-day session. Retries until the original request deadline return the same cookie using remaining session lifetime. Any different active session is protected, including a newer guest (409 signin_conflict). Uses account IP attempt limit.
+	//
+	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /api/accounts/signin-requests/{requestId}/finish (the `FinishSignInRequest` operationId).
+	FinishSignInRequestWithBodyWithResponse(ctx context.Context, requestId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*FinishSignInRequestResponse, error)
+
+	// FinishSignInRequestWithResponse Redeem approval or retry exact cookie delivery.
+	//
+	// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Independent binding required. Link requires token, QR omits it. Creates exactly one 90-day session. Retries until the original request deadline return the same cookie using remaining session lifetime. Any different active session is protected, including a newer guest (409 signin_conflict). Uses account IP attempt limit.
+	//
+	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /api/accounts/signin-requests/{requestId}/finish (the `FinishSignInRequest` operationId).
+	FinishSignInRequestWithResponse(ctx context.Context, requestId string, body FinishSignInRequestJSONRequestBody, reqEditors ...RequestEditorFn) (*FinishSignInRequestResponse, error)
+
+	// ResendSignInRequestWithBodyWithResponse Resend a pending link notification.
+	//
+	// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Link token plus binding required. Reject QR flow. Persisted shared link cooldown 10 seconds returns 429 with Retry-After rounded upward; account IP attempt limit also applies.
+	//
+	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /api/accounts/signin-requests/{requestId}/resend (the `ResendSignInRequest` operationId).
+	ResendSignInRequestWithBodyWithResponse(ctx context.Context, requestId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ResendSignInRequestResponse, error)
+
+	// ResendSignInRequestWithResponse Resend a pending link notification.
+	//
+	// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Link token plus binding required. Reject QR flow. Persisted shared link cooldown 10 seconds returns 429 with Retry-After rounded upward; account IP attempt limit also applies.
+	//
+	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /api/accounts/signin-requests/{requestId}/resend (the `ResendSignInRequest` operationId).
+	ResendSignInRequestWithResponse(ctx context.Context, requestId string, body ResendSignInRequestJSONRequestBody, reqEditors ...RequestEditorFn) (*ResendSignInRequestResponse, error)
 
 	// EnterWithBodyWithResponse Enter with the access link's secret and a name.
 	//
@@ -4267,6 +6027,323 @@ func (r RemovePasskeyResponse) ContentType() string {
 	return ""
 }
 
+// BeginQRSignInResponse200Headers the declared response headers of an HTTP 200 response for BeginQRSignIn
+type BeginQRSignInResponse200Headers struct {
+	SetCookie string
+}
+
+// BeginQRSignInResponse429Headers the declared response headers of an HTTP 429 response for BeginQRSignIn
+type BeginQRSignInResponse429Headers struct {
+	RetryAfter int
+}
+
+type BeginQRSignInResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *SignInBegin
+	// JSON429 the response for an HTTP 429 `application/json` response
+	JSON429 *Error
+	// JSONDefault the response for an HTTP default `application/json` response
+	JSONDefault *Error
+	// Headers200 the parsed response headers for an HTTP 200 response
+	Headers200 *BeginQRSignInResponse200Headers
+	// Headers429 the parsed response headers for an HTTP 429 response
+	Headers429 *BeginQRSignInResponse429Headers
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r BeginQRSignInResponse) GetJSON200() *SignInBegin {
+	return r.JSON200
+}
+
+// GetJSON429 returns the response for an HTTP 429 `application/json` response
+func (r BeginQRSignInResponse) GetJSON429() *Error {
+	return r.JSON429
+}
+
+// GetJSONDefault returns the response for an HTTP default `application/json` response
+func (r BeginQRSignInResponse) GetJSONDefault() *Error {
+	return r.JSONDefault
+}
+
+// GetBody returns the raw response body bytes
+func (r BeginQRSignInResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r BeginQRSignInResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r BeginQRSignInResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r BeginQRSignInResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+// ApproveQRSignInResponse429Headers the declared response headers of an HTTP 429 response for ApproveQRSignIn
+type ApproveQRSignInResponse429Headers struct {
+	RetryAfter int
+}
+
+type ApproveQRSignInResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *SignInRequest
+	// JSON429 the response for an HTTP 429 `application/json` response
+	JSON429 *Error
+	// JSONDefault the response for an HTTP default `application/json` response
+	JSONDefault *Error
+	// Headers429 the parsed response headers for an HTTP 429 response
+	Headers429 *ApproveQRSignInResponse429Headers
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r ApproveQRSignInResponse) GetJSON200() *SignInRequest {
+	return r.JSON200
+}
+
+// GetJSON429 returns the response for an HTTP 429 `application/json` response
+func (r ApproveQRSignInResponse) GetJSON429() *Error {
+	return r.JSON429
+}
+
+// GetJSONDefault returns the response for an HTTP default `application/json` response
+func (r ApproveQRSignInResponse) GetJSONDefault() *Error {
+	return r.JSONDefault
+}
+
+// GetBody returns the raw response body bytes
+func (r ApproveQRSignInResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r ApproveQRSignInResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ApproveQRSignInResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r ApproveQRSignInResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+// DenyQRSignInResponse429Headers the declared response headers of an HTTP 429 response for DenyQRSignIn
+type DenyQRSignInResponse429Headers struct {
+	RetryAfter int
+}
+
+type DenyQRSignInResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *AccountEmpty
+	// JSON429 the response for an HTTP 429 `application/json` response
+	JSON429 *Error
+	// JSONDefault the response for an HTTP default `application/json` response
+	JSONDefault *Error
+	// Headers429 the parsed response headers for an HTTP 429 response
+	Headers429 *DenyQRSignInResponse429Headers
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r DenyQRSignInResponse) GetJSON200() *AccountEmpty {
+	return r.JSON200
+}
+
+// GetJSON429 returns the response for an HTTP 429 `application/json` response
+func (r DenyQRSignInResponse) GetJSON429() *Error {
+	return r.JSON429
+}
+
+// GetJSONDefault returns the response for an HTTP default `application/json` response
+func (r DenyQRSignInResponse) GetJSONDefault() *Error {
+	return r.JSONDefault
+}
+
+// GetBody returns the raw response body bytes
+func (r DenyQRSignInResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r DenyQRSignInResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r DenyQRSignInResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r DenyQRSignInResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+// PreviewQRSignInResponse429Headers the declared response headers of an HTTP 429 response for PreviewQRSignIn
+type PreviewQRSignInResponse429Headers struct {
+	RetryAfter int
+}
+
+type PreviewQRSignInResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *SignInPreview
+	// JSON429 the response for an HTTP 429 `application/json` response
+	JSON429 *Error
+	// JSONDefault the response for an HTTP default `application/json` response
+	JSONDefault *Error
+	// Headers429 the parsed response headers for an HTTP 429 response
+	Headers429 *PreviewQRSignInResponse429Headers
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r PreviewQRSignInResponse) GetJSON200() *SignInPreview {
+	return r.JSON200
+}
+
+// GetJSON429 returns the response for an HTTP 429 `application/json` response
+func (r PreviewQRSignInResponse) GetJSON429() *Error {
+	return r.JSON429
+}
+
+// GetJSONDefault returns the response for an HTTP default `application/json` response
+func (r PreviewQRSignInResponse) GetJSONDefault() *Error {
+	return r.JSONDefault
+}
+
+// GetBody returns the raw response body bytes
+func (r PreviewQRSignInResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r PreviewQRSignInResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r PreviewQRSignInResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r PreviewQRSignInResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+// CancelQRSignInResponse429Headers the declared response headers of an HTTP 429 response for CancelQRSignIn
+type CancelQRSignInResponse429Headers struct {
+	RetryAfter int
+}
+
+type CancelQRSignInResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *AccountEmpty
+	// JSON429 the response for an HTTP 429 `application/json` response
+	JSON429 *Error
+	// JSONDefault the response for an HTTP default `application/json` response
+	JSONDefault *Error
+	// Headers429 the parsed response headers for an HTTP 429 response
+	Headers429 *CancelQRSignInResponse429Headers
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r CancelQRSignInResponse) GetJSON200() *AccountEmpty {
+	return r.JSON200
+}
+
+// GetJSON429 returns the response for an HTTP 429 `application/json` response
+func (r CancelQRSignInResponse) GetJSON429() *Error {
+	return r.JSON429
+}
+
+// GetJSONDefault returns the response for an HTTP default `application/json` response
+func (r CancelQRSignInResponse) GetJSONDefault() *Error {
+	return r.JSONDefault
+}
+
+// GetBody returns the raw response body bytes
+func (r CancelQRSignInResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r CancelQRSignInResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r CancelQRSignInResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r CancelQRSignInResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
 // BeginReauthenticationResponse200Headers the declared response headers of an HTTP 200 response for BeginReauthentication
 type BeginReauthenticationResponse200Headers struct {
 	SetCookie string
@@ -4694,6 +6771,585 @@ func (r GetAccountSessionResponse) StatusCode() int {
 
 // ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
 func (r GetAccountSessionResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+// CreateSignInLinkResponse200Headers the declared response headers of an HTTP 200 response for CreateSignInLink
+type CreateSignInLinkResponse200Headers struct {
+	SetCookie string
+}
+
+// CreateSignInLinkResponse429Headers the declared response headers of an HTTP 429 response for CreateSignInLink
+type CreateSignInLinkResponse429Headers struct {
+	RetryAfter int
+}
+
+type CreateSignInLinkResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *SignInLinkResult
+	// JSON429 the response for an HTTP 429 `application/json` response
+	JSON429 *Error
+	// JSONDefault the response for an HTTP default `application/json` response
+	JSONDefault *Error
+	// Headers200 the parsed response headers for an HTTP 200 response
+	Headers200 *CreateSignInLinkResponse200Headers
+	// Headers429 the parsed response headers for an HTTP 429 response
+	Headers429 *CreateSignInLinkResponse429Headers
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r CreateSignInLinkResponse) GetJSON200() *SignInLinkResult {
+	return r.JSON200
+}
+
+// GetJSON429 returns the response for an HTTP 429 `application/json` response
+func (r CreateSignInLinkResponse) GetJSON429() *Error {
+	return r.JSON429
+}
+
+// GetJSONDefault returns the response for an HTTP default `application/json` response
+func (r CreateSignInLinkResponse) GetJSONDefault() *Error {
+	return r.JSONDefault
+}
+
+// GetBody returns the raw response body bytes
+func (r CreateSignInLinkResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r CreateSignInLinkResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r CreateSignInLinkResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r CreateSignInLinkResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+// RevokeSignInLinkResponse429Headers the declared response headers of an HTTP 429 response for RevokeSignInLink
+type RevokeSignInLinkResponse429Headers struct {
+	RetryAfter int
+}
+
+type RevokeSignInLinkResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *AccountEmpty
+	// JSON429 the response for an HTTP 429 `application/json` response
+	JSON429 *Error
+	// JSONDefault the response for an HTTP default `application/json` response
+	JSONDefault *Error
+	// Headers429 the parsed response headers for an HTTP 429 response
+	Headers429 *RevokeSignInLinkResponse429Headers
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r RevokeSignInLinkResponse) GetJSON200() *AccountEmpty {
+	return r.JSON200
+}
+
+// GetJSON429 returns the response for an HTTP 429 `application/json` response
+func (r RevokeSignInLinkResponse) GetJSON429() *Error {
+	return r.JSON429
+}
+
+// GetJSONDefault returns the response for an HTTP default `application/json` response
+func (r RevokeSignInLinkResponse) GetJSONDefault() *Error {
+	return r.JSONDefault
+}
+
+// GetBody returns the raw response body bytes
+func (r RevokeSignInLinkResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r RevokeSignInLinkResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r RevokeSignInLinkResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r RevokeSignInLinkResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+// GetSignInLinkResponse429Headers the declared response headers of an HTTP 429 response for GetSignInLink
+type GetSignInLinkResponse429Headers struct {
+	RetryAfter int
+}
+
+type GetSignInLinkResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *SignInLink
+	// JSON429 the response for an HTTP 429 `application/json` response
+	JSON429 *Error
+	// JSONDefault the response for an HTTP default `application/json` response
+	JSONDefault *Error
+	// Headers429 the parsed response headers for an HTTP 429 response
+	Headers429 *GetSignInLinkResponse429Headers
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r GetSignInLinkResponse) GetJSON200() *SignInLink {
+	return r.JSON200
+}
+
+// GetJSON429 returns the response for an HTTP 429 `application/json` response
+func (r GetSignInLinkResponse) GetJSON429() *Error {
+	return r.JSON429
+}
+
+// GetJSONDefault returns the response for an HTTP default `application/json` response
+func (r GetSignInLinkResponse) GetJSONDefault() *Error {
+	return r.JSONDefault
+}
+
+// GetBody returns the raw response body bytes
+func (r GetSignInLinkResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r GetSignInLinkResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r GetSignInLinkResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r GetSignInLinkResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+// ApproveSignInLinkResponse429Headers the declared response headers of an HTTP 429 response for ApproveSignInLink
+type ApproveSignInLinkResponse429Headers struct {
+	RetryAfter int
+}
+
+type ApproveSignInLinkResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *SignInRequest
+	// JSON429 the response for an HTTP 429 `application/json` response
+	JSON429 *Error
+	// JSONDefault the response for an HTTP default `application/json` response
+	JSONDefault *Error
+	// Headers429 the parsed response headers for an HTTP 429 response
+	Headers429 *ApproveSignInLinkResponse429Headers
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r ApproveSignInLinkResponse) GetJSON200() *SignInRequest {
+	return r.JSON200
+}
+
+// GetJSON429 returns the response for an HTTP 429 `application/json` response
+func (r ApproveSignInLinkResponse) GetJSON429() *Error {
+	return r.JSON429
+}
+
+// GetJSONDefault returns the response for an HTTP default `application/json` response
+func (r ApproveSignInLinkResponse) GetJSONDefault() *Error {
+	return r.JSONDefault
+}
+
+// GetBody returns the raw response body bytes
+func (r ApproveSignInLinkResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r ApproveSignInLinkResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ApproveSignInLinkResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r ApproveSignInLinkResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+// DenySignInRequestResponse429Headers the declared response headers of an HTTP 429 response for DenySignInRequest
+type DenySignInRequestResponse429Headers struct {
+	RetryAfter int
+}
+
+type DenySignInRequestResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *AccountEmpty
+	// JSON429 the response for an HTTP 429 `application/json` response
+	JSON429 *Error
+	// JSONDefault the response for an HTTP default `application/json` response
+	JSONDefault *Error
+	// Headers429 the parsed response headers for an HTTP 429 response
+	Headers429 *DenySignInRequestResponse429Headers
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r DenySignInRequestResponse) GetJSON200() *AccountEmpty {
+	return r.JSON200
+}
+
+// GetJSON429 returns the response for an HTTP 429 `application/json` response
+func (r DenySignInRequestResponse) GetJSON429() *Error {
+	return r.JSON429
+}
+
+// GetJSONDefault returns the response for an HTTP default `application/json` response
+func (r DenySignInRequestResponse) GetJSONDefault() *Error {
+	return r.JSONDefault
+}
+
+// GetBody returns the raw response body bytes
+func (r DenySignInRequestResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r DenySignInRequestResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r DenySignInRequestResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r DenySignInRequestResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+// BeginSignInRequestResponse200Headers the declared response headers of an HTTP 200 response for BeginSignInRequest
+type BeginSignInRequestResponse200Headers struct {
+	SetCookie string
+}
+
+// BeginSignInRequestResponse429Headers the declared response headers of an HTTP 429 response for BeginSignInRequest
+type BeginSignInRequestResponse429Headers struct {
+	RetryAfter int
+}
+
+type BeginSignInRequestResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *SignInBegin
+	// JSON429 the response for an HTTP 429 `application/json` response
+	JSON429 *Error
+	// JSONDefault the response for an HTTP default `application/json` response
+	JSONDefault *Error
+	// Headers200 the parsed response headers for an HTTP 200 response
+	Headers200 *BeginSignInRequestResponse200Headers
+	// Headers429 the parsed response headers for an HTTP 429 response
+	Headers429 *BeginSignInRequestResponse429Headers
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r BeginSignInRequestResponse) GetJSON200() *SignInBegin {
+	return r.JSON200
+}
+
+// GetJSON429 returns the response for an HTTP 429 `application/json` response
+func (r BeginSignInRequestResponse) GetJSON429() *Error {
+	return r.JSON429
+}
+
+// GetJSONDefault returns the response for an HTTP default `application/json` response
+func (r BeginSignInRequestResponse) GetJSONDefault() *Error {
+	return r.JSONDefault
+}
+
+// GetBody returns the raw response body bytes
+func (r BeginSignInRequestResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r BeginSignInRequestResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r BeginSignInRequestResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r BeginSignInRequestResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+// GetSignInRequestResponse429Headers the declared response headers of an HTTP 429 response for GetSignInRequest
+type GetSignInRequestResponse429Headers struct {
+	RetryAfter int
+}
+
+type GetSignInRequestResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *SignInRequest
+	// JSON429 the response for an HTTP 429 `application/json` response
+	JSON429 *Error
+	// JSONDefault the response for an HTTP default `application/json` response
+	JSONDefault *Error
+	// Headers429 the parsed response headers for an HTTP 429 response
+	Headers429 *GetSignInRequestResponse429Headers
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r GetSignInRequestResponse) GetJSON200() *SignInRequest {
+	return r.JSON200
+}
+
+// GetJSON429 returns the response for an HTTP 429 `application/json` response
+func (r GetSignInRequestResponse) GetJSON429() *Error {
+	return r.JSON429
+}
+
+// GetJSONDefault returns the response for an HTTP default `application/json` response
+func (r GetSignInRequestResponse) GetJSONDefault() *Error {
+	return r.JSONDefault
+}
+
+// GetBody returns the raw response body bytes
+func (r GetSignInRequestResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r GetSignInRequestResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r GetSignInRequestResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r GetSignInRequestResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+// FinishSignInRequestResponse200Headers the declared response headers of an HTTP 200 response for FinishSignInRequest
+type FinishSignInRequestResponse200Headers struct {
+	SetCookie string
+}
+
+// FinishSignInRequestResponse429Headers the declared response headers of an HTTP 429 response for FinishSignInRequest
+type FinishSignInRequestResponse429Headers struct {
+	RetryAfter int
+}
+
+type FinishSignInRequestResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *AccountSession
+	// JSON429 the response for an HTTP 429 `application/json` response
+	JSON429 *Error
+	// JSONDefault the response for an HTTP default `application/json` response
+	JSONDefault *Error
+	// Headers200 the parsed response headers for an HTTP 200 response
+	Headers200 *FinishSignInRequestResponse200Headers
+	// Headers429 the parsed response headers for an HTTP 429 response
+	Headers429 *FinishSignInRequestResponse429Headers
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r FinishSignInRequestResponse) GetJSON200() *AccountSession {
+	return r.JSON200
+}
+
+// GetJSON429 returns the response for an HTTP 429 `application/json` response
+func (r FinishSignInRequestResponse) GetJSON429() *Error {
+	return r.JSON429
+}
+
+// GetJSONDefault returns the response for an HTTP default `application/json` response
+func (r FinishSignInRequestResponse) GetJSONDefault() *Error {
+	return r.JSONDefault
+}
+
+// GetBody returns the raw response body bytes
+func (r FinishSignInRequestResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r FinishSignInRequestResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r FinishSignInRequestResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r FinishSignInRequestResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+// ResendSignInRequestResponse429Headers the declared response headers of an HTTP 429 response for ResendSignInRequest
+type ResendSignInRequestResponse429Headers struct {
+	RetryAfter int
+}
+
+type ResendSignInRequestResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *AccountEmpty
+	// JSON429 the response for an HTTP 429 `application/json` response
+	JSON429 *Error
+	// JSONDefault the response for an HTTP default `application/json` response
+	JSONDefault *Error
+	// Headers429 the parsed response headers for an HTTP 429 response
+	Headers429 *ResendSignInRequestResponse429Headers
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r ResendSignInRequestResponse) GetJSON200() *AccountEmpty {
+	return r.JSON200
+}
+
+// GetJSON429 returns the response for an HTTP 429 `application/json` response
+func (r ResendSignInRequestResponse) GetJSON429() *Error {
+	return r.JSON429
+}
+
+// GetJSONDefault returns the response for an HTTP default `application/json` response
+func (r ResendSignInRequestResponse) GetJSONDefault() *Error {
+	return r.JSONDefault
+}
+
+// GetBody returns the raw response body bytes
+func (r ResendSignInRequestResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r ResendSignInRequestResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ResendSignInRequestResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r ResendSignInRequestResponse) ContentType() string {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.Header.Get("Content-Type")
 	}
@@ -5618,6 +8274,141 @@ func (c *ClientWithResponses) RemovePasskeyWithResponse(ctx context.Context, cre
 	return ParseRemovePasskeyResponse(rsp)
 }
 
+// BeginQRSignInWithBodyWithResponse Create, resume or replace a QR request.
+//
+// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Independent HTTP IP bucket burst 20/refill one per 3 seconds. Actual allocations including replacement additionally charge browser-hash burst 3/refill one per 100 seconds and IP burst 10/refill one per 30 seconds. Resume consumes no allocation quota; rejected quota preserves the old request. Sets or refreshes the dedicated secure ten-minute binding cookie.
+//
+// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /api/accounts/qr-signins (the `BeginQRSignIn` operationId).
+func (c *ClientWithResponses) BeginQRSignInWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*BeginQRSignInResponse, error) {
+	rsp, err := c.BeginQRSignInWithBody(ctx, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseBeginQRSignInResponse(rsp)
+}
+
+// BeginQRSignInWithResponse Create, resume or replace a QR request.
+//
+// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Independent HTTP IP bucket burst 20/refill one per 3 seconds. Actual allocations including replacement additionally charge browser-hash burst 3/refill one per 100 seconds and IP burst 10/refill one per 30 seconds. Resume consumes no allocation quota; rejected quota preserves the old request. Sets or refreshes the dedicated secure ten-minute binding cookie.
+//
+// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /api/accounts/qr-signins (the `BeginQRSignIn` operationId).
+func (c *ClientWithResponses) BeginQRSignInWithResponse(ctx context.Context, body BeginQRSignInJSONRequestBody, reqEditors ...RequestEditorFn) (*BeginQRSignInResponse, error) {
+	rsp, err := c.BeginQRSignIn(ctx, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseBeginQRSignInResponse(rsp)
+}
+
+// ApproveQRSignInWithBodyWithResponse Explicitly approve a QR request.
+//
+// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Account required; first committed session wins. Shares authenticated QR session and account IP attempt limits.
+//
+// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /api/accounts/qr-signins/approve (the `ApproveQRSignIn` operationId).
+func (c *ClientWithResponses) ApproveQRSignInWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ApproveQRSignInResponse, error) {
+	rsp, err := c.ApproveQRSignInWithBody(ctx, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseApproveQRSignInResponse(rsp)
+}
+
+// ApproveQRSignInWithResponse Explicitly approve a QR request.
+//
+// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Account required; first committed session wins. Shares authenticated QR session and account IP attempt limits.
+//
+// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /api/accounts/qr-signins/approve (the `ApproveQRSignIn` operationId).
+func (c *ClientWithResponses) ApproveQRSignInWithResponse(ctx context.Context, body ApproveQRSignInJSONRequestBody, reqEditors ...RequestEditorFn) (*ApproveQRSignInResponse, error) {
+	rsp, err := c.ApproveQRSignIn(ctx, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseApproveQRSignInResponse(rsp)
+}
+
+// DenyQRSignInWithBodyWithResponse Deny a QR without selecting an account.
+//
+// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Account required; shares authenticated QR session and account IP attempt limits.
+//
+// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /api/accounts/qr-signins/deny (the `DenyQRSignIn` operationId).
+func (c *ClientWithResponses) DenyQRSignInWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*DenyQRSignInResponse, error) {
+	rsp, err := c.DenyQRSignInWithBody(ctx, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseDenyQRSignInResponse(rsp)
+}
+
+// DenyQRSignInWithResponse Deny a QR without selecting an account.
+//
+// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Account required; shares authenticated QR session and account IP attempt limits.
+//
+// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /api/accounts/qr-signins/deny (the `DenyQRSignIn` operationId).
+func (c *ClientWithResponses) DenyQRSignInWithResponse(ctx context.Context, body DenyQRSignInJSONRequestBody, reqEditors ...RequestEditorFn) (*DenyQRSignInResponse, error) {
+	rsp, err := c.DenyQRSignIn(ctx, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseDenyQRSignInResponse(rsp)
+}
+
+// PreviewQRSignInWithBodyWithResponse Preview a QR without claiming it.
+//
+// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Account required. Preview, approval and denial share session burst 10/refill one per 6 seconds in addition to account IP burst 20/refill one per 3 seconds.
+//
+// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /api/accounts/qr-signins/preview (the `PreviewQRSignIn` operationId).
+func (c *ClientWithResponses) PreviewQRSignInWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PreviewQRSignInResponse, error) {
+	rsp, err := c.PreviewQRSignInWithBody(ctx, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParsePreviewQRSignInResponse(rsp)
+}
+
+// PreviewQRSignInWithResponse Preview a QR without claiming it.
+//
+// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Account required. Preview, approval and denial share session burst 10/refill one per 6 seconds in addition to account IP burst 20/refill one per 3 seconds.
+//
+// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /api/accounts/qr-signins/preview (the `PreviewQRSignIn` operationId).
+func (c *ClientWithResponses) PreviewQRSignInWithResponse(ctx context.Context, body PreviewQRSignInJSONRequestBody, reqEditors ...RequestEditorFn) (*PreviewQRSignInResponse, error) {
+	rsp, err := c.PreviewQRSignIn(ctx, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParsePreviewQRSignInResponse(rsp)
+}
+
+// CancelQRSignInWithResponse Cancel a bound unconsumed QR.
+//
+// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Original binding required. Consumed replacement or cancellation conflicts.
+//
+// Returns a wrapper object for the known response body format(s).
+//
+// Corresponds with DELETE /api/accounts/qr-signins/{requestId} (the `CancelQRSignIn` operationId).
+func (c *ClientWithResponses) CancelQRSignInWithResponse(ctx context.Context, requestId string, reqEditors ...RequestEditorFn) (*CancelQRSignInResponse, error) {
+	rsp, err := c.CancelQRSignIn(ctx, requestId, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCancelQRSignInResponse(rsp)
+}
+
 // BeginReauthenticationWithBodyWithResponse Begin recent proof for this session.
 //
 // Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
@@ -5841,6 +8632,231 @@ func (c *ClientWithResponses) GetAccountSessionWithResponse(ctx context.Context,
 		return nil, err
 	}
 	return ParseGetAccountSessionResponse(rsp)
+}
+
+// CreateSignInLinkWithBodyWithResponse Create a five-minute link.
+//
+// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Any valid account session; replaces its previous active link. Uses account IP attempt limit.
+//
+// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /api/accounts/signin-links (the `CreateSignInLink` operationId).
+func (c *ClientWithResponses) CreateSignInLinkWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateSignInLinkResponse, error) {
+	rsp, err := c.CreateSignInLinkWithBody(ctx, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreateSignInLinkResponse(rsp)
+}
+
+// CreateSignInLinkWithResponse Create a five-minute link.
+//
+// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Any valid account session; replaces its previous active link. Uses account IP attempt limit.
+//
+// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /api/accounts/signin-links (the `CreateSignInLink` operationId).
+func (c *ClientWithResponses) CreateSignInLinkWithResponse(ctx context.Context, body CreateSignInLinkJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateSignInLinkResponse, error) {
+	rsp, err := c.CreateSignInLink(ctx, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreateSignInLinkResponse(rsp)
+}
+
+// RevokeSignInLinkWithResponse Revoke an unconsumed link.
+//
+// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Exact issuer only; cancels waiting candidates.
+//
+// Returns a wrapper object for the known response body format(s).
+//
+// Corresponds with DELETE /api/accounts/signin-links/{linkId} (the `RevokeSignInLink` operationId).
+func (c *ClientWithResponses) RevokeSignInLinkWithResponse(ctx context.Context, linkId string, reqEditors ...RequestEditorFn) (*RevokeSignInLinkResponse, error) {
+	rsp, err := c.RevokeSignInLink(ctx, linkId, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseRevokeSignInLinkResponse(rsp)
+}
+
+// GetSignInLinkWithResponse Recover exact-issuer link state.
+//
+// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Other sessions of the same account cannot inspect this link.
+//
+// Returns a wrapper object for the known response body format(s).
+//
+// Corresponds with GET /api/accounts/signin-links/{linkId} (the `GetSignInLink` operationId).
+func (c *ClientWithResponses) GetSignInLinkWithResponse(ctx context.Context, linkId string, reqEditors ...RequestEditorFn) (*GetSignInLinkResponse, error) {
+	rsp, err := c.GetSignInLink(ctx, linkId, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseGetSignInLinkResponse(rsp)
+}
+
+// ApproveSignInLinkWithBodyWithResponse Approve a candidate code.
+//
+// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Exact issuer only. Five incorrect codes durably revoke the link even though the fifth response rejects the proof.
+//
+// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /api/accounts/signin-links/{linkId}/approve (the `ApproveSignInLink` operationId).
+func (c *ClientWithResponses) ApproveSignInLinkWithBodyWithResponse(ctx context.Context, linkId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ApproveSignInLinkResponse, error) {
+	rsp, err := c.ApproveSignInLinkWithBody(ctx, linkId, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseApproveSignInLinkResponse(rsp)
+}
+
+// ApproveSignInLinkWithResponse Approve a candidate code.
+//
+// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Exact issuer only. Five incorrect codes durably revoke the link even though the fifth response rejects the proof.
+//
+// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /api/accounts/signin-links/{linkId}/approve (the `ApproveSignInLink` operationId).
+func (c *ClientWithResponses) ApproveSignInLinkWithResponse(ctx context.Context, linkId string, body ApproveSignInLinkJSONRequestBody, reqEditors ...RequestEditorFn) (*ApproveSignInLinkResponse, error) {
+	rsp, err := c.ApproveSignInLink(ctx, linkId, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseApproveSignInLinkResponse(rsp)
+}
+
+// DenySignInRequestWithBodyWithResponse Deny a pending link candidate.
+//
+// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Exact issuer only. Denied bindings cannot rejoin this link.
+//
+// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /api/accounts/signin-links/{linkId}/requests/{requestId}/deny (the `DenySignInRequest` operationId).
+func (c *ClientWithResponses) DenySignInRequestWithBodyWithResponse(ctx context.Context, linkId string, requestId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*DenySignInRequestResponse, error) {
+	rsp, err := c.DenySignInRequestWithBody(ctx, linkId, requestId, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseDenySignInRequestResponse(rsp)
+}
+
+// DenySignInRequestWithResponse Deny a pending link candidate.
+//
+// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Exact issuer only. Denied bindings cannot rejoin this link.
+//
+// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /api/accounts/signin-links/{linkId}/requests/{requestId}/deny (the `DenySignInRequest` operationId).
+func (c *ClientWithResponses) DenySignInRequestWithResponse(ctx context.Context, linkId string, requestId string, body DenySignInRequestJSONRequestBody, reqEditors ...RequestEditorFn) (*DenySignInRequestResponse, error) {
+	rsp, err := c.DenySignInRequest(ctx, linkId, requestId, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseDenySignInRequestResponse(rsp)
+}
+
+// BeginSignInRequestWithBodyWithResponse Begin or resume a bound link request.
+//
+// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Independent IP token bucket burst 20, refill one per 3 seconds, separate from passkey and QR limits. At most three pending candidates per link. Successful begin sets or refreshes __Host-falky-signin: host-only Path=/, Secure, HttpOnly, SameSite=Strict, Max-Age=600. Binding survives logout.
+//
+// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /api/accounts/signin-requests (the `BeginSignInRequest` operationId).
+func (c *ClientWithResponses) BeginSignInRequestWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*BeginSignInRequestResponse, error) {
+	rsp, err := c.BeginSignInRequestWithBody(ctx, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseBeginSignInRequestResponse(rsp)
+}
+
+// BeginSignInRequestWithResponse Begin or resume a bound link request.
+//
+// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Independent IP token bucket burst 20, refill one per 3 seconds, separate from passkey and QR limits. At most three pending candidates per link. Successful begin sets or refreshes __Host-falky-signin: host-only Path=/, Secure, HttpOnly, SameSite=Strict, Max-Age=600. Binding survives logout.
+//
+// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /api/accounts/signin-requests (the `BeginSignInRequest` operationId).
+func (c *ClientWithResponses) BeginSignInRequestWithResponse(ctx context.Context, body BeginSignInRequestJSONRequestBody, reqEditors ...RequestEditorFn) (*BeginSignInRequestResponse, error) {
+	rsp, err := c.BeginSignInRequest(ctx, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseBeginSignInRequestResponse(rsp)
+}
+
+// GetSignInRequestWithResponse Recover bound request state.
+//
+// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Independent browser binding required; no account session required.
+//
+// Returns a wrapper object for the known response body format(s).
+//
+// Corresponds with GET /api/accounts/signin-requests/{requestId} (the `GetSignInRequest` operationId).
+func (c *ClientWithResponses) GetSignInRequestWithResponse(ctx context.Context, requestId string, reqEditors ...RequestEditorFn) (*GetSignInRequestResponse, error) {
+	rsp, err := c.GetSignInRequest(ctx, requestId, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseGetSignInRequestResponse(rsp)
+}
+
+// FinishSignInRequestWithBodyWithResponse Redeem approval or retry exact cookie delivery.
+//
+// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Independent binding required. Link requires token, QR omits it. Creates exactly one 90-day session. Retries until the original request deadline return the same cookie using remaining session lifetime. Any different active session is protected, including a newer guest (409 signin_conflict). Uses account IP attempt limit.
+//
+// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /api/accounts/signin-requests/{requestId}/finish (the `FinishSignInRequest` operationId).
+func (c *ClientWithResponses) FinishSignInRequestWithBodyWithResponse(ctx context.Context, requestId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*FinishSignInRequestResponse, error) {
+	rsp, err := c.FinishSignInRequestWithBody(ctx, requestId, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseFinishSignInRequestResponse(rsp)
+}
+
+// FinishSignInRequestWithResponse Redeem approval or retry exact cookie delivery.
+//
+// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Independent binding required. Link requires token, QR omits it. Creates exactly one 90-day session. Retries until the original request deadline return the same cookie using remaining session lifetime. Any different active session is protected, including a newer guest (409 signin_conflict). Uses account IP attempt limit.
+//
+// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /api/accounts/signin-requests/{requestId}/finish (the `FinishSignInRequest` operationId).
+func (c *ClientWithResponses) FinishSignInRequestWithResponse(ctx context.Context, requestId string, body FinishSignInRequestJSONRequestBody, reqEditors ...RequestEditorFn) (*FinishSignInRequestResponse, error) {
+	rsp, err := c.FinishSignInRequest(ctx, requestId, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseFinishSignInRequestResponse(rsp)
+}
+
+// ResendSignInRequestWithBodyWithResponse Resend a pending link notification.
+//
+// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Link token plus binding required. Reject QR flow. Persisted shared link cooldown 10 seconds returns 429 with Retry-After rounded upward; account IP attempt limit also applies.
+//
+// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /api/accounts/signin-requests/{requestId}/resend (the `ResendSignInRequest` operationId).
+func (c *ClientWithResponses) ResendSignInRequestWithBodyWithResponse(ctx context.Context, requestId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ResendSignInRequestResponse, error) {
+	rsp, err := c.ResendSignInRequestWithBody(ctx, requestId, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseResendSignInRequestResponse(rsp)
+}
+
+// ResendSignInRequestWithResponse Resend a pending link notification.
+//
+// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Link token plus binding required. Reject QR flow. Persisted shared link cooldown 10 seconds returns 429 with Retry-After rounded upward; account IP attempt limit also applies.
+//
+// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /api/accounts/signin-requests/{requestId}/resend (the `ResendSignInRequest` operationId).
+func (c *ClientWithResponses) ResendSignInRequestWithResponse(ctx context.Context, requestId string, body ResendSignInRequestJSONRequestBody, reqEditors ...RequestEditorFn) (*ResendSignInRequestResponse, error) {
+	rsp, err := c.ResendSignInRequest(ctx, requestId, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseResendSignInRequestResponse(rsp)
 }
 
 // EnterWithBodyWithResponse Enter with the access link's secret and a name.
@@ -6402,6 +9418,281 @@ func ParseRemovePasskeyResponse(rsp *http.Response) (*RemovePasskeyResponse, err
 	return response, nil
 }
 
+// ParseBeginQRSignInResponse parses an HTTP response from a BeginQRSignInWithResponse call
+func ParseBeginQRSignInResponse(rsp *http.Response) (*BeginQRSignInResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &BeginQRSignInResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest SignInBegin
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 429:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON429 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && true:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSONDefault = &dest
+
+	}
+
+	switch {
+	case rsp.StatusCode == 200:
+		var headers BeginQRSignInResponse200Headers
+		if values := rsp.Header.Values("Set-Cookie"); len(values) > 0 {
+			var value string
+			if err := runtime.BindStyledParameterWithOptions("simple", "Set-Cookie", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			}
+			headers.SetCookie = value
+		}
+		response.Headers200 = &headers
+	case rsp.StatusCode == 429:
+		var headers BeginQRSignInResponse429Headers
+		if values := rsp.Header.Values("Retry-After"); len(values) > 0 {
+			var value int
+			if err := runtime.BindStyledParameterWithOptions("simple", "Retry-After", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "integer", Format: ""}); err != nil {
+				return nil, err
+			}
+			headers.RetryAfter = value
+		}
+		response.Headers429 = &headers
+	}
+
+	return response, nil
+}
+
+// ParseApproveQRSignInResponse parses an HTTP response from a ApproveQRSignInWithResponse call
+func ParseApproveQRSignInResponse(rsp *http.Response) (*ApproveQRSignInResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ApproveQRSignInResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest SignInRequest
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 429:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON429 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && true:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSONDefault = &dest
+
+	}
+
+	switch {
+	case rsp.StatusCode == 429:
+		var headers ApproveQRSignInResponse429Headers
+		if values := rsp.Header.Values("Retry-After"); len(values) > 0 {
+			var value int
+			if err := runtime.BindStyledParameterWithOptions("simple", "Retry-After", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "integer", Format: ""}); err != nil {
+				return nil, err
+			}
+			headers.RetryAfter = value
+		}
+		response.Headers429 = &headers
+	}
+
+	return response, nil
+}
+
+// ParseDenyQRSignInResponse parses an HTTP response from a DenyQRSignInWithResponse call
+func ParseDenyQRSignInResponse(rsp *http.Response) (*DenyQRSignInResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &DenyQRSignInResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest AccountEmpty
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 429:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON429 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && true:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSONDefault = &dest
+
+	}
+
+	switch {
+	case rsp.StatusCode == 429:
+		var headers DenyQRSignInResponse429Headers
+		if values := rsp.Header.Values("Retry-After"); len(values) > 0 {
+			var value int
+			if err := runtime.BindStyledParameterWithOptions("simple", "Retry-After", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "integer", Format: ""}); err != nil {
+				return nil, err
+			}
+			headers.RetryAfter = value
+		}
+		response.Headers429 = &headers
+	}
+
+	return response, nil
+}
+
+// ParsePreviewQRSignInResponse parses an HTTP response from a PreviewQRSignInWithResponse call
+func ParsePreviewQRSignInResponse(rsp *http.Response) (*PreviewQRSignInResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &PreviewQRSignInResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest SignInPreview
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 429:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON429 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && true:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSONDefault = &dest
+
+	}
+
+	switch {
+	case rsp.StatusCode == 429:
+		var headers PreviewQRSignInResponse429Headers
+		if values := rsp.Header.Values("Retry-After"); len(values) > 0 {
+			var value int
+			if err := runtime.BindStyledParameterWithOptions("simple", "Retry-After", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "integer", Format: ""}); err != nil {
+				return nil, err
+			}
+			headers.RetryAfter = value
+		}
+		response.Headers429 = &headers
+	}
+
+	return response, nil
+}
+
+// ParseCancelQRSignInResponse parses an HTTP response from a CancelQRSignInWithResponse call
+func ParseCancelQRSignInResponse(rsp *http.Response) (*CancelQRSignInResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &CancelQRSignInResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest AccountEmpty
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 429:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON429 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && true:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSONDefault = &dest
+
+	}
+
+	switch {
+	case rsp.StatusCode == 429:
+		var headers CancelQRSignInResponse429Headers
+		if values := rsp.Header.Values("Retry-After"); len(values) > 0 {
+			var value int
+			if err := runtime.BindStyledParameterWithOptions("simple", "Retry-After", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "integer", Format: ""}); err != nil {
+				return nil, err
+			}
+			headers.RetryAfter = value
+		}
+		response.Headers429 = &headers
+	}
+
+	return response, nil
+}
+
 // ParseBeginReauthenticationResponse parses an HTTP response from a BeginReauthenticationWithResponse call
 func ParseBeginReauthenticationResponse(rsp *http.Response) (*BeginReauthenticationResponse, error) {
 	bodyBytes, err := io.ReadAll(rsp.Body)
@@ -6752,6 +10043,513 @@ func ParseGetAccountSessionResponse(rsp *http.Response) (*GetAccountSessionRespo
 		}
 		response.JSONDefault = &dest
 
+	}
+
+	return response, nil
+}
+
+// ParseCreateSignInLinkResponse parses an HTTP response from a CreateSignInLinkWithResponse call
+func ParseCreateSignInLinkResponse(rsp *http.Response) (*CreateSignInLinkResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &CreateSignInLinkResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest SignInLinkResult
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 429:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON429 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && true:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSONDefault = &dest
+
+	}
+
+	switch {
+	case rsp.StatusCode == 200:
+		var headers CreateSignInLinkResponse200Headers
+		if values := rsp.Header.Values("Set-Cookie"); len(values) > 0 {
+			var value string
+			if err := runtime.BindStyledParameterWithOptions("simple", "Set-Cookie", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			}
+			headers.SetCookie = value
+		}
+		response.Headers200 = &headers
+	case rsp.StatusCode == 429:
+		var headers CreateSignInLinkResponse429Headers
+		if values := rsp.Header.Values("Retry-After"); len(values) > 0 {
+			var value int
+			if err := runtime.BindStyledParameterWithOptions("simple", "Retry-After", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "integer", Format: ""}); err != nil {
+				return nil, err
+			}
+			headers.RetryAfter = value
+		}
+		response.Headers429 = &headers
+	}
+
+	return response, nil
+}
+
+// ParseRevokeSignInLinkResponse parses an HTTP response from a RevokeSignInLinkWithResponse call
+func ParseRevokeSignInLinkResponse(rsp *http.Response) (*RevokeSignInLinkResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &RevokeSignInLinkResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest AccountEmpty
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 429:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON429 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && true:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSONDefault = &dest
+
+	}
+
+	switch {
+	case rsp.StatusCode == 429:
+		var headers RevokeSignInLinkResponse429Headers
+		if values := rsp.Header.Values("Retry-After"); len(values) > 0 {
+			var value int
+			if err := runtime.BindStyledParameterWithOptions("simple", "Retry-After", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "integer", Format: ""}); err != nil {
+				return nil, err
+			}
+			headers.RetryAfter = value
+		}
+		response.Headers429 = &headers
+	}
+
+	return response, nil
+}
+
+// ParseGetSignInLinkResponse parses an HTTP response from a GetSignInLinkWithResponse call
+func ParseGetSignInLinkResponse(rsp *http.Response) (*GetSignInLinkResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &GetSignInLinkResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest SignInLink
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 429:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON429 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && true:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSONDefault = &dest
+
+	}
+
+	switch {
+	case rsp.StatusCode == 429:
+		var headers GetSignInLinkResponse429Headers
+		if values := rsp.Header.Values("Retry-After"); len(values) > 0 {
+			var value int
+			if err := runtime.BindStyledParameterWithOptions("simple", "Retry-After", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "integer", Format: ""}); err != nil {
+				return nil, err
+			}
+			headers.RetryAfter = value
+		}
+		response.Headers429 = &headers
+	}
+
+	return response, nil
+}
+
+// ParseApproveSignInLinkResponse parses an HTTP response from a ApproveSignInLinkWithResponse call
+func ParseApproveSignInLinkResponse(rsp *http.Response) (*ApproveSignInLinkResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ApproveSignInLinkResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest SignInRequest
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 429:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON429 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && true:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSONDefault = &dest
+
+	}
+
+	switch {
+	case rsp.StatusCode == 429:
+		var headers ApproveSignInLinkResponse429Headers
+		if values := rsp.Header.Values("Retry-After"); len(values) > 0 {
+			var value int
+			if err := runtime.BindStyledParameterWithOptions("simple", "Retry-After", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "integer", Format: ""}); err != nil {
+				return nil, err
+			}
+			headers.RetryAfter = value
+		}
+		response.Headers429 = &headers
+	}
+
+	return response, nil
+}
+
+// ParseDenySignInRequestResponse parses an HTTP response from a DenySignInRequestWithResponse call
+func ParseDenySignInRequestResponse(rsp *http.Response) (*DenySignInRequestResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &DenySignInRequestResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest AccountEmpty
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 429:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON429 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && true:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSONDefault = &dest
+
+	}
+
+	switch {
+	case rsp.StatusCode == 429:
+		var headers DenySignInRequestResponse429Headers
+		if values := rsp.Header.Values("Retry-After"); len(values) > 0 {
+			var value int
+			if err := runtime.BindStyledParameterWithOptions("simple", "Retry-After", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "integer", Format: ""}); err != nil {
+				return nil, err
+			}
+			headers.RetryAfter = value
+		}
+		response.Headers429 = &headers
+	}
+
+	return response, nil
+}
+
+// ParseBeginSignInRequestResponse parses an HTTP response from a BeginSignInRequestWithResponse call
+func ParseBeginSignInRequestResponse(rsp *http.Response) (*BeginSignInRequestResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &BeginSignInRequestResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest SignInBegin
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 429:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON429 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && true:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSONDefault = &dest
+
+	}
+
+	switch {
+	case rsp.StatusCode == 200:
+		var headers BeginSignInRequestResponse200Headers
+		if values := rsp.Header.Values("Set-Cookie"); len(values) > 0 {
+			var value string
+			if err := runtime.BindStyledParameterWithOptions("simple", "Set-Cookie", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			}
+			headers.SetCookie = value
+		}
+		response.Headers200 = &headers
+	case rsp.StatusCode == 429:
+		var headers BeginSignInRequestResponse429Headers
+		if values := rsp.Header.Values("Retry-After"); len(values) > 0 {
+			var value int
+			if err := runtime.BindStyledParameterWithOptions("simple", "Retry-After", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "integer", Format: ""}); err != nil {
+				return nil, err
+			}
+			headers.RetryAfter = value
+		}
+		response.Headers429 = &headers
+	}
+
+	return response, nil
+}
+
+// ParseGetSignInRequestResponse parses an HTTP response from a GetSignInRequestWithResponse call
+func ParseGetSignInRequestResponse(rsp *http.Response) (*GetSignInRequestResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &GetSignInRequestResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest SignInRequest
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 429:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON429 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && true:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSONDefault = &dest
+
+	}
+
+	switch {
+	case rsp.StatusCode == 429:
+		var headers GetSignInRequestResponse429Headers
+		if values := rsp.Header.Values("Retry-After"); len(values) > 0 {
+			var value int
+			if err := runtime.BindStyledParameterWithOptions("simple", "Retry-After", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "integer", Format: ""}); err != nil {
+				return nil, err
+			}
+			headers.RetryAfter = value
+		}
+		response.Headers429 = &headers
+	}
+
+	return response, nil
+}
+
+// ParseFinishSignInRequestResponse parses an HTTP response from a FinishSignInRequestWithResponse call
+func ParseFinishSignInRequestResponse(rsp *http.Response) (*FinishSignInRequestResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &FinishSignInRequestResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest AccountSession
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 429:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON429 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && true:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSONDefault = &dest
+
+	}
+
+	switch {
+	case rsp.StatusCode == 200:
+		var headers FinishSignInRequestResponse200Headers
+		if values := rsp.Header.Values("Set-Cookie"); len(values) > 0 {
+			var value string
+			if err := runtime.BindStyledParameterWithOptions("simple", "Set-Cookie", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			}
+			headers.SetCookie = value
+		}
+		response.Headers200 = &headers
+	case rsp.StatusCode == 429:
+		var headers FinishSignInRequestResponse429Headers
+		if values := rsp.Header.Values("Retry-After"); len(values) > 0 {
+			var value int
+			if err := runtime.BindStyledParameterWithOptions("simple", "Retry-After", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "integer", Format: ""}); err != nil {
+				return nil, err
+			}
+			headers.RetryAfter = value
+		}
+		response.Headers429 = &headers
+	}
+
+	return response, nil
+}
+
+// ParseResendSignInRequestResponse parses an HTTP response from a ResendSignInRequestWithResponse call
+func ParseResendSignInRequestResponse(rsp *http.Response) (*ResendSignInRequestResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ResendSignInRequestResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest AccountEmpty
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 429:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON429 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && true:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSONDefault = &dest
+
+	}
+
+	switch {
+	case rsp.StatusCode == 429:
+		var headers ResendSignInRequestResponse429Headers
+		if values := rsp.Header.Values("Retry-After"); len(values) > 0 {
+			var value int
+			if err := runtime.BindStyledParameterWithOptions("simple", "Retry-After", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "integer", Format: ""}); err != nil {
+				return nil, err
+			}
+			headers.RetryAfter = value
+		}
+		response.Headers429 = &headers
 	}
 
 	return response, nil
@@ -7359,6 +11157,21 @@ type ServerInterface interface {
 	// RemovePasskey Remove an owned passkey, retaining at least one.
 	// (DELETE /api/accounts/passkeys/{credentialId})
 	RemovePasskey(w http.ResponseWriter, r *http.Request, credentialId string)
+	// BeginQRSignIn Create, resume or replace a QR request.
+	// (POST /api/accounts/qr-signins)
+	BeginQRSignIn(w http.ResponseWriter, r *http.Request)
+	// ApproveQRSignIn Explicitly approve a QR request.
+	// (POST /api/accounts/qr-signins/approve)
+	ApproveQRSignIn(w http.ResponseWriter, r *http.Request)
+	// DenyQRSignIn Deny a QR without selecting an account.
+	// (POST /api/accounts/qr-signins/deny)
+	DenyQRSignIn(w http.ResponseWriter, r *http.Request)
+	// PreviewQRSignIn Preview a QR without claiming it.
+	// (POST /api/accounts/qr-signins/preview)
+	PreviewQRSignIn(w http.ResponseWriter, r *http.Request)
+	// CancelQRSignIn Cancel a bound unconsumed QR.
+	// (DELETE /api/accounts/qr-signins/{requestId})
+	CancelQRSignIn(w http.ResponseWriter, r *http.Request, requestId string)
 	// BeginReauthentication Begin recent proof for this session.
 	// (POST /api/accounts/reauthentication/begin)
 	BeginReauthentication(w http.ResponseWriter, r *http.Request)
@@ -7383,6 +11196,33 @@ type ServerInterface interface {
 	// GetAccountSession Read the current resolved session.
 	// (GET /api/accounts/session)
 	GetAccountSession(w http.ResponseWriter, r *http.Request)
+	// CreateSignInLink Create a five-minute link.
+	// (POST /api/accounts/signin-links)
+	CreateSignInLink(w http.ResponseWriter, r *http.Request)
+	// RevokeSignInLink Revoke an unconsumed link.
+	// (DELETE /api/accounts/signin-links/{linkId})
+	RevokeSignInLink(w http.ResponseWriter, r *http.Request, linkId string)
+	// GetSignInLink Recover exact-issuer link state.
+	// (GET /api/accounts/signin-links/{linkId})
+	GetSignInLink(w http.ResponseWriter, r *http.Request, linkId string)
+	// ApproveSignInLink Approve a candidate code.
+	// (POST /api/accounts/signin-links/{linkId}/approve)
+	ApproveSignInLink(w http.ResponseWriter, r *http.Request, linkId string)
+	// DenySignInRequest Deny a pending link candidate.
+	// (POST /api/accounts/signin-links/{linkId}/requests/{requestId}/deny)
+	DenySignInRequest(w http.ResponseWriter, r *http.Request, linkId string, requestId string)
+	// BeginSignInRequest Begin or resume a bound link request.
+	// (POST /api/accounts/signin-requests)
+	BeginSignInRequest(w http.ResponseWriter, r *http.Request)
+	// GetSignInRequest Recover bound request state.
+	// (GET /api/accounts/signin-requests/{requestId})
+	GetSignInRequest(w http.ResponseWriter, r *http.Request, requestId string)
+	// FinishSignInRequest Redeem approval or retry exact cookie delivery.
+	// (POST /api/accounts/signin-requests/{requestId}/finish)
+	FinishSignInRequest(w http.ResponseWriter, r *http.Request, requestId string)
+	// ResendSignInRequest Resend a pending link notification.
+	// (POST /api/accounts/signin-requests/{requestId}/resend)
+	ResendSignInRequest(w http.ResponseWriter, r *http.Request, requestId string)
 	// Enter Enter with the access link's secret and a name.
 	// (POST /api/enter)
 	Enter(w http.ResponseWriter, r *http.Request)
@@ -7537,6 +11377,88 @@ func (siw *ServerInterfaceWrapper) RemovePasskey(w http.ResponseWriter, r *http.
 	handler.ServeHTTP(w, r)
 }
 
+// BeginQRSignIn operation middleware
+func (siw *ServerInterfaceWrapper) BeginQRSignIn(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.BeginQRSignIn(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ApproveQRSignIn operation middleware
+func (siw *ServerInterfaceWrapper) ApproveQRSignIn(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ApproveQRSignIn(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// DenyQRSignIn operation middleware
+func (siw *ServerInterfaceWrapper) DenyQRSignIn(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.DenyQRSignIn(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// PreviewQRSignIn operation middleware
+func (siw *ServerInterfaceWrapper) PreviewQRSignIn(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.PreviewQRSignIn(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// CancelQRSignIn operation middleware
+func (siw *ServerInterfaceWrapper) CancelQRSignIn(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "requestId" -------------
+	var requestId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "requestId", r.PathValue("requestId"), &requestId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "requestId", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CancelQRSignIn(w, r, requestId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // BeginReauthentication operation middleware
 func (siw *ServerInterfaceWrapper) BeginReauthentication(w http.ResponseWriter, r *http.Request) {
 
@@ -7640,6 +11562,225 @@ func (siw *ServerInterfaceWrapper) GetAccountSession(w http.ResponseWriter, r *h
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.GetAccountSession(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// CreateSignInLink operation middleware
+func (siw *ServerInterfaceWrapper) CreateSignInLink(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CreateSignInLink(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// RevokeSignInLink operation middleware
+func (siw *ServerInterfaceWrapper) RevokeSignInLink(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "linkId" -------------
+	var linkId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "linkId", r.PathValue("linkId"), &linkId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "linkId", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.RevokeSignInLink(w, r, linkId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetSignInLink operation middleware
+func (siw *ServerInterfaceWrapper) GetSignInLink(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "linkId" -------------
+	var linkId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "linkId", r.PathValue("linkId"), &linkId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "linkId", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetSignInLink(w, r, linkId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ApproveSignInLink operation middleware
+func (siw *ServerInterfaceWrapper) ApproveSignInLink(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "linkId" -------------
+	var linkId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "linkId", r.PathValue("linkId"), &linkId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "linkId", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ApproveSignInLink(w, r, linkId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// DenySignInRequest operation middleware
+func (siw *ServerInterfaceWrapper) DenySignInRequest(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "linkId" -------------
+	var linkId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "linkId", r.PathValue("linkId"), &linkId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "linkId", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "requestId" -------------
+	var requestId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "requestId", r.PathValue("requestId"), &requestId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "requestId", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.DenySignInRequest(w, r, linkId, requestId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// BeginSignInRequest operation middleware
+func (siw *ServerInterfaceWrapper) BeginSignInRequest(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.BeginSignInRequest(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetSignInRequest operation middleware
+func (siw *ServerInterfaceWrapper) GetSignInRequest(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "requestId" -------------
+	var requestId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "requestId", r.PathValue("requestId"), &requestId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "requestId", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetSignInRequest(w, r, requestId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// FinishSignInRequest operation middleware
+func (siw *ServerInterfaceWrapper) FinishSignInRequest(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "requestId" -------------
+	var requestId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "requestId", r.PathValue("requestId"), &requestId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "requestId", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.FinishSignInRequest(w, r, requestId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ResendSignInRequest operation middleware
+func (siw *ServerInterfaceWrapper) ResendSignInRequest(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "requestId" -------------
+	var requestId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "requestId", r.PathValue("requestId"), &requestId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "requestId", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ResendSignInRequest(w, r, requestId)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -8001,6 +12142,20 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 		ErrorHandlerFunc:   options.ErrorHandlerFunc,
 	}
 
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/accounts/signin-links", wrapper.CreateSignInLink)
+	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/accounts/signin-links/{linkId}", wrapper.RevokeSignInLink)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/accounts/signin-links/{linkId}", wrapper.GetSignInLink)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/accounts/signin-links/{linkId}/approve", wrapper.ApproveSignInLink)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/accounts/signin-links/{linkId}/requests/{requestId}/deny", wrapper.DenySignInRequest)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/accounts/signin-requests", wrapper.BeginSignInRequest)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/accounts/qr-signins", wrapper.BeginQRSignIn)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/accounts/qr-signins/preview", wrapper.PreviewQRSignIn)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/accounts/qr-signins/approve", wrapper.ApproveQRSignIn)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/accounts/qr-signins/deny", wrapper.DenyQRSignIn)
+	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/accounts/qr-signins/{requestId}", wrapper.CancelQRSignIn)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/accounts/signin-requests/{requestId}", wrapper.GetSignInRequest)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/accounts/signin-requests/{requestId}/resend", wrapper.ResendSignInRequest)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/accounts/signin-requests/{requestId}/finish", wrapper.FinishSignInRequest)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/accounts/registration/begin", wrapper.BeginRegistration)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/accounts/registration/finish", wrapper.FinishRegistration)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/accounts/authentication/begin", wrapper.BeginAuthentication)
@@ -8342,6 +12497,319 @@ type RemovePasskeydefaultJSONResponse struct {
 }
 
 func (response RemovePasskeydefaultJSONResponse) VisitRemovePasskeyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type BeginQRSignInRequestObject struct {
+	Body *BeginQRSignInJSONRequestBody
+}
+
+type BeginQRSignInResponseObject interface {
+	VisitBeginQRSignInResponse(w http.ResponseWriter) error
+}
+
+type BeginQRSignIn200ResponseHeaders struct {
+	SetCookie string
+}
+
+type BeginQRSignIn200JSONResponse struct {
+	Body    SignInBegin
+	Headers BeginQRSignIn200ResponseHeaders
+}
+
+func (response BeginQRSignIn200JSONResponse) VisitBeginQRSignInResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Set-Cookie", fmt.Sprint(response.Headers.SetCookie))
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type BeginQRSignIn429ResponseHeaders struct {
+	RetryAfter int
+}
+
+type BeginQRSignIn429JSONResponse struct {
+	Body    Error
+	Headers BeginQRSignIn429ResponseHeaders
+}
+
+func (response BeginQRSignIn429JSONResponse) VisitBeginQRSignInResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Retry-After", fmt.Sprint(response.Headers.RetryAfter))
+	w.WriteHeader(429)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type BeginQRSignIndefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response BeginQRSignIndefaultJSONResponse) VisitBeginQRSignInResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ApproveQRSignInRequestObject struct {
+	Body *ApproveQRSignInJSONRequestBody
+}
+
+type ApproveQRSignInResponseObject interface {
+	VisitApproveQRSignInResponse(w http.ResponseWriter) error
+}
+
+type ApproveQRSignIn200JSONResponse SignInRequest
+
+func (response ApproveQRSignIn200JSONResponse) VisitApproveQRSignInResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ApproveQRSignIn429ResponseHeaders struct {
+	RetryAfter int
+}
+
+type ApproveQRSignIn429JSONResponse struct {
+	Body    Error
+	Headers ApproveQRSignIn429ResponseHeaders
+}
+
+func (response ApproveQRSignIn429JSONResponse) VisitApproveQRSignInResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Retry-After", fmt.Sprint(response.Headers.RetryAfter))
+	w.WriteHeader(429)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ApproveQRSignIndefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response ApproveQRSignIndefaultJSONResponse) VisitApproveQRSignInResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DenyQRSignInRequestObject struct {
+	Body *DenyQRSignInJSONRequestBody
+}
+
+type DenyQRSignInResponseObject interface {
+	VisitDenyQRSignInResponse(w http.ResponseWriter) error
+}
+
+type DenyQRSignIn200JSONResponse AccountEmpty
+
+func (response DenyQRSignIn200JSONResponse) VisitDenyQRSignInResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DenyQRSignIn429ResponseHeaders struct {
+	RetryAfter int
+}
+
+type DenyQRSignIn429JSONResponse struct {
+	Body    Error
+	Headers DenyQRSignIn429ResponseHeaders
+}
+
+func (response DenyQRSignIn429JSONResponse) VisitDenyQRSignInResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Retry-After", fmt.Sprint(response.Headers.RetryAfter))
+	w.WriteHeader(429)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DenyQRSignIndefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response DenyQRSignIndefaultJSONResponse) VisitDenyQRSignInResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type PreviewQRSignInRequestObject struct {
+	Body *PreviewQRSignInJSONRequestBody
+}
+
+type PreviewQRSignInResponseObject interface {
+	VisitPreviewQRSignInResponse(w http.ResponseWriter) error
+}
+
+type PreviewQRSignIn200JSONResponse SignInPreview
+
+func (response PreviewQRSignIn200JSONResponse) VisitPreviewQRSignInResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type PreviewQRSignIn429ResponseHeaders struct {
+	RetryAfter int
+}
+
+type PreviewQRSignIn429JSONResponse struct {
+	Body    Error
+	Headers PreviewQRSignIn429ResponseHeaders
+}
+
+func (response PreviewQRSignIn429JSONResponse) VisitPreviewQRSignInResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Retry-After", fmt.Sprint(response.Headers.RetryAfter))
+	w.WriteHeader(429)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type PreviewQRSignIndefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response PreviewQRSignIndefaultJSONResponse) VisitPreviewQRSignInResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CancelQRSignInRequestObject struct {
+	RequestId string `json:"requestId"`
+}
+
+type CancelQRSignInResponseObject interface {
+	VisitCancelQRSignInResponse(w http.ResponseWriter) error
+}
+
+type CancelQRSignIn200JSONResponse AccountEmpty
+
+func (response CancelQRSignIn200JSONResponse) VisitCancelQRSignInResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CancelQRSignIn429ResponseHeaders struct {
+	RetryAfter int
+}
+
+type CancelQRSignIn429JSONResponse struct {
+	Body    Error
+	Headers CancelQRSignIn429ResponseHeaders
+}
+
+func (response CancelQRSignIn429JSONResponse) VisitCancelQRSignInResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Retry-After", fmt.Sprint(response.Headers.RetryAfter))
+	w.WriteHeader(429)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CancelQRSignIndefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response CancelQRSignIndefaultJSONResponse) VisitCancelQRSignInResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
@@ -8709,6 +13177,584 @@ type GetAccountSessiondefaultJSONResponse struct {
 }
 
 func (response GetAccountSessiondefaultJSONResponse) VisitGetAccountSessionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateSignInLinkRequestObject struct {
+	Body *CreateSignInLinkJSONRequestBody
+}
+
+type CreateSignInLinkResponseObject interface {
+	VisitCreateSignInLinkResponse(w http.ResponseWriter) error
+}
+
+type CreateSignInLink200ResponseHeaders struct {
+	SetCookie string
+}
+
+type CreateSignInLink200JSONResponse struct {
+	Body    SignInLinkResult
+	Headers CreateSignInLink200ResponseHeaders
+}
+
+func (response CreateSignInLink200JSONResponse) VisitCreateSignInLinkResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Set-Cookie", fmt.Sprint(response.Headers.SetCookie))
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateSignInLink429ResponseHeaders struct {
+	RetryAfter int
+}
+
+type CreateSignInLink429JSONResponse struct {
+	Body    Error
+	Headers CreateSignInLink429ResponseHeaders
+}
+
+func (response CreateSignInLink429JSONResponse) VisitCreateSignInLinkResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Retry-After", fmt.Sprint(response.Headers.RetryAfter))
+	w.WriteHeader(429)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateSignInLinkdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response CreateSignInLinkdefaultJSONResponse) VisitCreateSignInLinkResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RevokeSignInLinkRequestObject struct {
+	LinkId string `json:"linkId"`
+}
+
+type RevokeSignInLinkResponseObject interface {
+	VisitRevokeSignInLinkResponse(w http.ResponseWriter) error
+}
+
+type RevokeSignInLink200JSONResponse AccountEmpty
+
+func (response RevokeSignInLink200JSONResponse) VisitRevokeSignInLinkResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RevokeSignInLink429ResponseHeaders struct {
+	RetryAfter int
+}
+
+type RevokeSignInLink429JSONResponse struct {
+	Body    Error
+	Headers RevokeSignInLink429ResponseHeaders
+}
+
+func (response RevokeSignInLink429JSONResponse) VisitRevokeSignInLinkResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Retry-After", fmt.Sprint(response.Headers.RetryAfter))
+	w.WriteHeader(429)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RevokeSignInLinkdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response RevokeSignInLinkdefaultJSONResponse) VisitRevokeSignInLinkResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetSignInLinkRequestObject struct {
+	LinkId string `json:"linkId"`
+}
+
+type GetSignInLinkResponseObject interface {
+	VisitGetSignInLinkResponse(w http.ResponseWriter) error
+}
+
+type GetSignInLink200JSONResponse SignInLink
+
+func (response GetSignInLink200JSONResponse) VisitGetSignInLinkResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetSignInLink429ResponseHeaders struct {
+	RetryAfter int
+}
+
+type GetSignInLink429JSONResponse struct {
+	Body    Error
+	Headers GetSignInLink429ResponseHeaders
+}
+
+func (response GetSignInLink429JSONResponse) VisitGetSignInLinkResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Retry-After", fmt.Sprint(response.Headers.RetryAfter))
+	w.WriteHeader(429)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetSignInLinkdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response GetSignInLinkdefaultJSONResponse) VisitGetSignInLinkResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ApproveSignInLinkRequestObject struct {
+	LinkId string `json:"linkId"`
+	Body   *ApproveSignInLinkJSONRequestBody
+}
+
+type ApproveSignInLinkResponseObject interface {
+	VisitApproveSignInLinkResponse(w http.ResponseWriter) error
+}
+
+type ApproveSignInLink200JSONResponse SignInRequest
+
+func (response ApproveSignInLink200JSONResponse) VisitApproveSignInLinkResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ApproveSignInLink429ResponseHeaders struct {
+	RetryAfter int
+}
+
+type ApproveSignInLink429JSONResponse struct {
+	Body    Error
+	Headers ApproveSignInLink429ResponseHeaders
+}
+
+func (response ApproveSignInLink429JSONResponse) VisitApproveSignInLinkResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Retry-After", fmt.Sprint(response.Headers.RetryAfter))
+	w.WriteHeader(429)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ApproveSignInLinkdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response ApproveSignInLinkdefaultJSONResponse) VisitApproveSignInLinkResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DenySignInRequestRequestObject struct {
+	LinkId    string `json:"linkId"`
+	RequestId string `json:"requestId"`
+	Body      *DenySignInRequestJSONRequestBody
+}
+
+type DenySignInRequestResponseObject interface {
+	VisitDenySignInRequestResponse(w http.ResponseWriter) error
+}
+
+type DenySignInRequest200JSONResponse AccountEmpty
+
+func (response DenySignInRequest200JSONResponse) VisitDenySignInRequestResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DenySignInRequest429ResponseHeaders struct {
+	RetryAfter int
+}
+
+type DenySignInRequest429JSONResponse struct {
+	Body    Error
+	Headers DenySignInRequest429ResponseHeaders
+}
+
+func (response DenySignInRequest429JSONResponse) VisitDenySignInRequestResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Retry-After", fmt.Sprint(response.Headers.RetryAfter))
+	w.WriteHeader(429)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DenySignInRequestdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response DenySignInRequestdefaultJSONResponse) VisitDenySignInRequestResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type BeginSignInRequestRequestObject struct {
+	Body *BeginSignInRequestJSONRequestBody
+}
+
+type BeginSignInRequestResponseObject interface {
+	VisitBeginSignInRequestResponse(w http.ResponseWriter) error
+}
+
+type BeginSignInRequest200ResponseHeaders struct {
+	SetCookie string
+}
+
+type BeginSignInRequest200JSONResponse struct {
+	Body    SignInBegin
+	Headers BeginSignInRequest200ResponseHeaders
+}
+
+func (response BeginSignInRequest200JSONResponse) VisitBeginSignInRequestResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Set-Cookie", fmt.Sprint(response.Headers.SetCookie))
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type BeginSignInRequest429ResponseHeaders struct {
+	RetryAfter int
+}
+
+type BeginSignInRequest429JSONResponse struct {
+	Body    Error
+	Headers BeginSignInRequest429ResponseHeaders
+}
+
+func (response BeginSignInRequest429JSONResponse) VisitBeginSignInRequestResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Retry-After", fmt.Sprint(response.Headers.RetryAfter))
+	w.WriteHeader(429)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type BeginSignInRequestdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response BeginSignInRequestdefaultJSONResponse) VisitBeginSignInRequestResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetSignInRequestRequestObject struct {
+	RequestId string `json:"requestId"`
+}
+
+type GetSignInRequestResponseObject interface {
+	VisitGetSignInRequestResponse(w http.ResponseWriter) error
+}
+
+type GetSignInRequest200JSONResponse SignInRequest
+
+func (response GetSignInRequest200JSONResponse) VisitGetSignInRequestResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetSignInRequest429ResponseHeaders struct {
+	RetryAfter int
+}
+
+type GetSignInRequest429JSONResponse struct {
+	Body    Error
+	Headers GetSignInRequest429ResponseHeaders
+}
+
+func (response GetSignInRequest429JSONResponse) VisitGetSignInRequestResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Retry-After", fmt.Sprint(response.Headers.RetryAfter))
+	w.WriteHeader(429)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetSignInRequestdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response GetSignInRequestdefaultJSONResponse) VisitGetSignInRequestResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type FinishSignInRequestRequestObject struct {
+	RequestId string `json:"requestId"`
+	Body      *FinishSignInRequestJSONRequestBody
+}
+
+type FinishSignInRequestResponseObject interface {
+	VisitFinishSignInRequestResponse(w http.ResponseWriter) error
+}
+
+type FinishSignInRequest200ResponseHeaders struct {
+	SetCookie string
+}
+
+type FinishSignInRequest200JSONResponse struct {
+	Body    AccountSession
+	Headers FinishSignInRequest200ResponseHeaders
+}
+
+func (response FinishSignInRequest200JSONResponse) VisitFinishSignInRequestResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Set-Cookie", fmt.Sprint(response.Headers.SetCookie))
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type FinishSignInRequest429ResponseHeaders struct {
+	RetryAfter int
+}
+
+type FinishSignInRequest429JSONResponse struct {
+	Body    Error
+	Headers FinishSignInRequest429ResponseHeaders
+}
+
+func (response FinishSignInRequest429JSONResponse) VisitFinishSignInRequestResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Retry-After", fmt.Sprint(response.Headers.RetryAfter))
+	w.WriteHeader(429)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type FinishSignInRequestdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response FinishSignInRequestdefaultJSONResponse) VisitFinishSignInRequestResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ResendSignInRequestRequestObject struct {
+	RequestId string `json:"requestId"`
+	Body      *ResendSignInRequestJSONRequestBody
+}
+
+type ResendSignInRequestResponseObject interface {
+	VisitResendSignInRequestResponse(w http.ResponseWriter) error
+}
+
+type ResendSignInRequest200JSONResponse AccountEmpty
+
+func (response ResendSignInRequest200JSONResponse) VisitResendSignInRequestResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ResendSignInRequest429ResponseHeaders struct {
+	RetryAfter int
+}
+
+type ResendSignInRequest429JSONResponse struct {
+	Body    Error
+	Headers ResendSignInRequest429ResponseHeaders
+}
+
+func (response ResendSignInRequest429JSONResponse) VisitResendSignInRequestResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Retry-After", fmt.Sprint(response.Headers.RetryAfter))
+	w.WriteHeader(429)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ResendSignInRequestdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response ResendSignInRequestdefaultJSONResponse) VisitResendSignInRequestResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
@@ -9585,6 +14631,21 @@ type StrictServerInterface interface {
 	// RemovePasskey Remove an owned passkey, retaining at least one.
 	// (DELETE /api/accounts/passkeys/{credentialId})
 	RemovePasskey(ctx context.Context, request RemovePasskeyRequestObject) (RemovePasskeyResponseObject, error)
+	// BeginQRSignIn Create, resume or replace a QR request.
+	// (POST /api/accounts/qr-signins)
+	BeginQRSignIn(ctx context.Context, request BeginQRSignInRequestObject) (BeginQRSignInResponseObject, error)
+	// ApproveQRSignIn Explicitly approve a QR request.
+	// (POST /api/accounts/qr-signins/approve)
+	ApproveQRSignIn(ctx context.Context, request ApproveQRSignInRequestObject) (ApproveQRSignInResponseObject, error)
+	// DenyQRSignIn Deny a QR without selecting an account.
+	// (POST /api/accounts/qr-signins/deny)
+	DenyQRSignIn(ctx context.Context, request DenyQRSignInRequestObject) (DenyQRSignInResponseObject, error)
+	// PreviewQRSignIn Preview a QR without claiming it.
+	// (POST /api/accounts/qr-signins/preview)
+	PreviewQRSignIn(ctx context.Context, request PreviewQRSignInRequestObject) (PreviewQRSignInResponseObject, error)
+	// CancelQRSignIn Cancel a bound unconsumed QR.
+	// (DELETE /api/accounts/qr-signins/{requestId})
+	CancelQRSignIn(ctx context.Context, request CancelQRSignInRequestObject) (CancelQRSignInResponseObject, error)
 	// BeginReauthentication Begin recent proof for this session.
 	// (POST /api/accounts/reauthentication/begin)
 	BeginReauthentication(ctx context.Context, request BeginReauthenticationRequestObject) (BeginReauthenticationResponseObject, error)
@@ -9609,6 +14670,33 @@ type StrictServerInterface interface {
 	// GetAccountSession Read the current resolved session.
 	// (GET /api/accounts/session)
 	GetAccountSession(ctx context.Context, request GetAccountSessionRequestObject) (GetAccountSessionResponseObject, error)
+	// CreateSignInLink Create a five-minute link.
+	// (POST /api/accounts/signin-links)
+	CreateSignInLink(ctx context.Context, request CreateSignInLinkRequestObject) (CreateSignInLinkResponseObject, error)
+	// RevokeSignInLink Revoke an unconsumed link.
+	// (DELETE /api/accounts/signin-links/{linkId})
+	RevokeSignInLink(ctx context.Context, request RevokeSignInLinkRequestObject) (RevokeSignInLinkResponseObject, error)
+	// GetSignInLink Recover exact-issuer link state.
+	// (GET /api/accounts/signin-links/{linkId})
+	GetSignInLink(ctx context.Context, request GetSignInLinkRequestObject) (GetSignInLinkResponseObject, error)
+	// ApproveSignInLink Approve a candidate code.
+	// (POST /api/accounts/signin-links/{linkId}/approve)
+	ApproveSignInLink(ctx context.Context, request ApproveSignInLinkRequestObject) (ApproveSignInLinkResponseObject, error)
+	// DenySignInRequest Deny a pending link candidate.
+	// (POST /api/accounts/signin-links/{linkId}/requests/{requestId}/deny)
+	DenySignInRequest(ctx context.Context, request DenySignInRequestRequestObject) (DenySignInRequestResponseObject, error)
+	// BeginSignInRequest Begin or resume a bound link request.
+	// (POST /api/accounts/signin-requests)
+	BeginSignInRequest(ctx context.Context, request BeginSignInRequestRequestObject) (BeginSignInRequestResponseObject, error)
+	// GetSignInRequest Recover bound request state.
+	// (GET /api/accounts/signin-requests/{requestId})
+	GetSignInRequest(ctx context.Context, request GetSignInRequestRequestObject) (GetSignInRequestResponseObject, error)
+	// FinishSignInRequest Redeem approval or retry exact cookie delivery.
+	// (POST /api/accounts/signin-requests/{requestId}/finish)
+	FinishSignInRequest(ctx context.Context, request FinishSignInRequestRequestObject) (FinishSignInRequestResponseObject, error)
+	// ResendSignInRequest Resend a pending link notification.
+	// (POST /api/accounts/signin-requests/{requestId}/resend)
+	ResendSignInRequest(ctx context.Context, request ResendSignInRequestRequestObject) (ResendSignInRequestResponseObject, error)
 	// Enter Enter with the access link's secret and a name.
 	// (POST /api/enter)
 	Enter(ctx context.Context, request EnterRequestObject) (EnterResponseObject, error)
@@ -9888,6 +14976,156 @@ func (sh *strictHandler) RemovePasskey(w http.ResponseWriter, r *http.Request, c
 	}
 }
 
+// BeginQRSignIn operation middleware
+func (sh *strictHandler) BeginQRSignIn(w http.ResponseWriter, r *http.Request) {
+	var request BeginQRSignInRequestObject
+
+	var body BeginQRSignInJSONRequestBody
+	if err := runtime.BindJSONBody(r, &body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.BeginQRSignIn(ctx, request.(BeginQRSignInRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "BeginQRSignIn")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(BeginQRSignInResponseObject); ok {
+		if err := validResponse.VisitBeginQRSignInResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ApproveQRSignIn operation middleware
+func (sh *strictHandler) ApproveQRSignIn(w http.ResponseWriter, r *http.Request) {
+	var request ApproveQRSignInRequestObject
+
+	var body ApproveQRSignInJSONRequestBody
+	if err := runtime.BindJSONBody(r, &body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ApproveQRSignIn(ctx, request.(ApproveQRSignInRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ApproveQRSignIn")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ApproveQRSignInResponseObject); ok {
+		if err := validResponse.VisitApproveQRSignInResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// DenyQRSignIn operation middleware
+func (sh *strictHandler) DenyQRSignIn(w http.ResponseWriter, r *http.Request) {
+	var request DenyQRSignInRequestObject
+
+	var body DenyQRSignInJSONRequestBody
+	if err := runtime.BindJSONBody(r, &body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.DenyQRSignIn(ctx, request.(DenyQRSignInRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "DenyQRSignIn")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(DenyQRSignInResponseObject); ok {
+		if err := validResponse.VisitDenyQRSignInResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// PreviewQRSignIn operation middleware
+func (sh *strictHandler) PreviewQRSignIn(w http.ResponseWriter, r *http.Request) {
+	var request PreviewQRSignInRequestObject
+
+	var body PreviewQRSignInJSONRequestBody
+	if err := runtime.BindJSONBody(r, &body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.PreviewQRSignIn(ctx, request.(PreviewQRSignInRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "PreviewQRSignIn")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(PreviewQRSignInResponseObject); ok {
+		if err := validResponse.VisitPreviewQRSignInResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// CancelQRSignIn operation middleware
+func (sh *strictHandler) CancelQRSignIn(w http.ResponseWriter, r *http.Request, requestId string) {
+	var request CancelQRSignInRequestObject
+
+	request.RequestId = requestId
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.CancelQRSignIn(ctx, request.(CancelQRSignInRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "CancelQRSignIn")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(CancelQRSignInResponseObject); ok {
+		if err := validResponse.VisitCancelQRSignInResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
 // BeginReauthentication operation middleware
 func (sh *strictHandler) BeginReauthentication(w http.ResponseWriter, r *http.Request) {
 	var request BeginReauthenticationRequestObject
@@ -10122,6 +15360,279 @@ func (sh *strictHandler) GetAccountSession(w http.ResponseWriter, r *http.Reques
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(GetAccountSessionResponseObject); ok {
 		if err := validResponse.VisitGetAccountSessionResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// CreateSignInLink operation middleware
+func (sh *strictHandler) CreateSignInLink(w http.ResponseWriter, r *http.Request) {
+	var request CreateSignInLinkRequestObject
+
+	var body CreateSignInLinkJSONRequestBody
+	if err := runtime.BindJSONBody(r, &body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.CreateSignInLink(ctx, request.(CreateSignInLinkRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "CreateSignInLink")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(CreateSignInLinkResponseObject); ok {
+		if err := validResponse.VisitCreateSignInLinkResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// RevokeSignInLink operation middleware
+func (sh *strictHandler) RevokeSignInLink(w http.ResponseWriter, r *http.Request, linkId string) {
+	var request RevokeSignInLinkRequestObject
+
+	request.LinkId = linkId
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.RevokeSignInLink(ctx, request.(RevokeSignInLinkRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "RevokeSignInLink")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(RevokeSignInLinkResponseObject); ok {
+		if err := validResponse.VisitRevokeSignInLinkResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetSignInLink operation middleware
+func (sh *strictHandler) GetSignInLink(w http.ResponseWriter, r *http.Request, linkId string) {
+	var request GetSignInLinkRequestObject
+
+	request.LinkId = linkId
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetSignInLink(ctx, request.(GetSignInLinkRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetSignInLink")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetSignInLinkResponseObject); ok {
+		if err := validResponse.VisitGetSignInLinkResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ApproveSignInLink operation middleware
+func (sh *strictHandler) ApproveSignInLink(w http.ResponseWriter, r *http.Request, linkId string) {
+	var request ApproveSignInLinkRequestObject
+
+	request.LinkId = linkId
+
+	var body ApproveSignInLinkJSONRequestBody
+	if err := runtime.BindJSONBody(r, &body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ApproveSignInLink(ctx, request.(ApproveSignInLinkRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ApproveSignInLink")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ApproveSignInLinkResponseObject); ok {
+		if err := validResponse.VisitApproveSignInLinkResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// DenySignInRequest operation middleware
+func (sh *strictHandler) DenySignInRequest(w http.ResponseWriter, r *http.Request, linkId string, requestId string) {
+	var request DenySignInRequestRequestObject
+
+	request.LinkId = linkId
+	request.RequestId = requestId
+
+	var body DenySignInRequestJSONRequestBody
+	if err := runtime.BindJSONBody(r, &body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.DenySignInRequest(ctx, request.(DenySignInRequestRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "DenySignInRequest")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(DenySignInRequestResponseObject); ok {
+		if err := validResponse.VisitDenySignInRequestResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// BeginSignInRequest operation middleware
+func (sh *strictHandler) BeginSignInRequest(w http.ResponseWriter, r *http.Request) {
+	var request BeginSignInRequestRequestObject
+
+	var body BeginSignInRequestJSONRequestBody
+	if err := runtime.BindJSONBody(r, &body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.BeginSignInRequest(ctx, request.(BeginSignInRequestRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "BeginSignInRequest")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(BeginSignInRequestResponseObject); ok {
+		if err := validResponse.VisitBeginSignInRequestResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetSignInRequest operation middleware
+func (sh *strictHandler) GetSignInRequest(w http.ResponseWriter, r *http.Request, requestId string) {
+	var request GetSignInRequestRequestObject
+
+	request.RequestId = requestId
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetSignInRequest(ctx, request.(GetSignInRequestRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetSignInRequest")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetSignInRequestResponseObject); ok {
+		if err := validResponse.VisitGetSignInRequestResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// FinishSignInRequest operation middleware
+func (sh *strictHandler) FinishSignInRequest(w http.ResponseWriter, r *http.Request, requestId string) {
+	var request FinishSignInRequestRequestObject
+
+	request.RequestId = requestId
+
+	var body FinishSignInRequestJSONRequestBody
+	if err := runtime.BindJSONBody(r, &body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.FinishSignInRequest(ctx, request.(FinishSignInRequestRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "FinishSignInRequest")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(FinishSignInRequestResponseObject); ok {
+		if err := validResponse.VisitFinishSignInRequestResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ResendSignInRequest operation middleware
+func (sh *strictHandler) ResendSignInRequest(w http.ResponseWriter, r *http.Request, requestId string) {
+	var request ResendSignInRequestRequestObject
+
+	request.RequestId = requestId
+
+	var body ResendSignInRequestJSONRequestBody
+	if err := runtime.BindJSONBody(r, &body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ResendSignInRequest(ctx, request.(ResendSignInRequestRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ResendSignInRequest")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ResendSignInRequestResponseObject); ok {
+		if err := validResponse.VisitResendSignInRequestResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

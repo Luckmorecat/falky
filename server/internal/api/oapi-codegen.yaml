@@ -11,7 +11,7 @@ output-options:
   # request or response body for the generated server or client to handle.
   # So is the LiveKit webhook: verifying its signature needs the body as
   # sent, before anything decodes it.
-  exclude-operation-ids: [openLive, receiveLiveKitWebhook, uploadAttachment, getAttachmentLimits, getAttachment, cancelAttachment, getAttachmentContent]
+  exclude-operation-ids: [openSignInEvents, openLive, receiveLiveKitWebhook, uploadAttachment, getAttachmentLimits, getAttachment, cancelAttachment, getAttachmentContent]
   # Keep the event schemas, which no operation references.
   skip-prune: true
 compatibility:

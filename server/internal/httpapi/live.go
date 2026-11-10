@@ -74,7 +74,26 @@ func (l live) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	opened := false
 	defer func() { disconnect(opened) }()
+	var initial []realtime.Event
+	if session.Kind == identity.Account {
+		links, err := l.identity.SignInLinks(r.Context(), sessionToken(r))
+		if err != nil {
+			errorWriter{logger: l.logger}.internal(w, r, err)
+			return
+		}
+		for _, link := range links {
+			for _, request := range link.Requests {
+				data, err := signInEventData(api.EventTypeAccountSigninRequested, request)
+				if err != nil {
+					errorWriter{logger: l.logger}.internal(w, r, err)
+					return
+				}
+				initial = append(initial, realtime.Event{SessionID: session.ID, Data: data})
+			}
+		}
+	}
 	opened = l.hub.Serve(w, r, realtime.Subscriber{
+		Initial:    initial,
 		VisitorID:  visitor.ID,
 		Session:    session,
 		Ticket:     l.hub.Ticket(),

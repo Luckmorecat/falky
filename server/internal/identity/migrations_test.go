@@ -1,9 +1,9 @@
 package identity_test
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"database/sql"
-	"encoding/base64"
 	"errors"
 	"io"
 	"io/fs"
@@ -16,12 +16,8 @@ import (
 	"github.com/kisshot/falky/server/internal/platform"
 )
 
-func TestIdentityAndSessionMigrationsPreserveGuestAndAccountAccess(t *testing.T) {
-	for _, renamed := range []bool{false, true} {
-		name := "before_identity_rename"
-		if renamed {
-			name = "after_identity_rename"
-		}
+func TestIdentityAndSessionMigrationsPreserveGuestsAndResetAccountAccess(t *testing.T) {
+	for _, name := range []string{"before_identity_rename", "after_identity_rename", "after_sessions"} {
 		t.Run(name, func(t *testing.T) {
 			legacy := fstest.MapFS{}
 			for _, name := range []string{"0001_access.sql", "0002_visitors.sql", "0005_visitor_colours.sql", "0007_accounts.sql"} {
@@ -76,8 +72,8 @@ func TestIdentityAndSessionMigrationsPreserveGuestAndAccountAccess(t *testing.T)
 			}); err != nil {
 				t.Fatal(err)
 			}
-			expected := 2
-			if renamed {
+			expected := 3
+			if name != "before_identity_rename" {
 				body, err := fs.ReadFile(identity.Migrations(), "0008_identity_profiles.sql")
 				if err != nil {
 					t.Fatal(err)
@@ -89,6 +85,27 @@ func TestIdentityAndSessionMigrationsPreserveGuestAndAccountAccess(t *testing.T)
 				}
 				if applied, err := db.Migrate(t.Context(), intermediate); err != nil || applied != 1 {
 					t.Fatalf("identity rename = %d, %v", applied, err)
+				}
+				expected = 2
+			}
+			var beforeID string
+			var beforeHash []byte
+			var beforeGeneration, beforeCreated, beforeExpiry int64
+			if name == "after_sessions" {
+				body, err := fs.ReadFile(identity.Migrations(), "0009_sessions.sql")
+				if err != nil {
+					t.Fatal(err)
+				}
+				legacy["0009_sessions.sql"] = &fstest.MapFile{Data: body}
+				intermediate, err := platform.LoadMigrations(legacy)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if applied, err := db.Migrate(t.Context(), intermediate); err != nil || applied != 1 {
+					t.Fatalf("sessions migration=%d,%v", applied, err)
+				}
+				if err := db.Read().QueryRowContext(t.Context(), "SELECT id,token_hash,generation,created_at,expires_at FROM sessions WHERE identity_id='guest'").Scan(&beforeID, &beforeHash, &beforeGeneration, &beforeCreated, &beforeExpiry); err != nil {
+					t.Fatal(err)
 				}
 				expected = 1
 			}
@@ -102,6 +119,17 @@ func TestIdentityAndSessionMigrationsPreserveGuestAndAccountAccess(t *testing.T)
 			if applied, err := db.Migrate(t.Context(), all); err != nil || applied != 0 {
 				t.Fatalf("repeated migration = %d, %v; want no changes", applied, err)
 			}
+			if name == "after_sessions" {
+				var id string
+				var hash []byte
+				var generation, created, expiry int64
+				if err := db.Read().QueryRowContext(t.Context(), "SELECT id,token_hash,generation,created_at,expires_at FROM sessions WHERE identity_id='guest'").Scan(&id, &hash, &generation, &created, &expiry); err != nil {
+					t.Fatal(err)
+				}
+				if id != beforeID || !bytes.Equal(hash, beforeHash) || generation != beforeGeneration || created != beforeCreated || expiry != beforeExpiry {
+					t.Fatal("0013 changed guest's exact persisted access")
+				}
+			}
 			service := identity.New(db, "https://falky.example", identity.WithClock(func() time.Time { return now }))
 			for _, want := range []struct {
 				token, id, name, palette string
@@ -109,7 +137,6 @@ func TestIdentityAndSessionMigrationsPreserveGuestAndAccountAccess(t *testing.T)
 				revision                 int64
 			}{
 				{"guest-cookie", "guest", "Guest", "sky", identity.Guest, 7},
-				{"account-cookie", "account", "Alice", "ruby", identity.Account, 4},
 			} {
 				got, err := service.ResolveSession(t.Context(), want.token)
 				if err != nil {
@@ -131,9 +158,24 @@ func TestIdentityAndSessionMigrationsPreserveGuestAndAccountAccess(t *testing.T)
 			if _, err := service.ResolveSession(t.Context(), "expired-cookie"); !errors.Is(err, identity.ErrNoVisitor) {
 				t.Fatalf("migration revived an already expired guest: %v", err)
 			}
-			keys, err := service.Passkeys(t.Context(), "account-cookie")
-			if err != nil || len(keys) != 1 || keys[0].ID != base64.RawURLEncoding.EncodeToString(credential) || keys[0].Label != "Laptop" {
-				t.Fatalf("passkeys after rename = %+v, %v", keys, err)
+			if _, err := service.ResolveSession(t.Context(), "account-cookie"); !errors.Is(err, identity.ErrNoVisitor) {
+				t.Fatalf("legacy account session survived: %v", err)
+			}
+			var passkeys, proofs, events int
+			for _, check := range []struct {
+				query string
+				dst   *int
+			}{
+				{"SELECT count(*) FROM passkeys WHERE identity_id='account'", &passkeys},
+				{"SELECT count(*) FROM account_recovery_proofs WHERE identity_id='account'", &proofs},
+				{"SELECT count(*) FROM sessions t JOIN session_authentications e ON e.session_id=t.id WHERE e.method='guest_link' AND e.purpose='sign_in' AND e.authenticated_at=t.created_at AND e.recent_proof=0", &events},
+			} {
+				if err := db.Read().QueryRowContext(t.Context(), check.query).Scan(check.dst); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if passkeys != 1 || proofs != 1 || events != 2 {
+				t.Fatalf("preserved passkeys=%d proofs=%d guest events=%d", passkeys, proofs, events)
 			}
 			var accountCount, oldTables, oldColumns, violations int
 			for _, check := range []struct {
@@ -161,3 +203,87 @@ func TestIdentityAndSessionMigrationsPreserveGuestAndAccountAccess(t *testing.T)
 		})
 	}
 }
+
+func TestSessionResetPreservesPasskeysAndAllowsFreshSignedLogin(t *testing.T) {
+	source := newFixture(t, filepath.Join(t.TempDir(), "source.db"))
+	account, key := enroll(t, source, "Alice")
+	var credential string
+	if err := source.db.Read().QueryRowContext(t.Context(), "SELECT credential FROM passkeys WHERE credential_id=?", key.ID).Scan(&credential); err != nil {
+		t.Fatal(err)
+	}
+	legacy := fstest.MapFS{}
+	entries, err := fs.ReadDir(identity.Migrations(), ".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if entry.Name() >= "0013" {
+			continue
+		}
+		body, err := fs.ReadFile(identity.Migrations(), entry.Name())
+		if err != nil {
+			t.Fatal(err)
+		}
+		legacy[entry.Name()] = &fstest.MapFile{Data: body}
+	}
+	ms, err := platform.LoadMigrations(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db, err := platform.OpenDB(t.Context(), filepath.Join(t.TempDir(), "upgrade.db"), platform.NewLogger(io.Discard, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	if _, err := db.Migrate(t.Context(), ms); err != nil {
+		t.Fatal(err)
+	}
+	now := source.clock.Now().Unix()
+	if err := db.Write(t.Context(), func(tx *sql.Tx) error {
+		for _, stmt := range []struct {
+			query string
+			args  []any
+		}{
+			{"INSERT INTO identities(id,name,created_at) VALUES(?,'Alice','2026-11-04')", []any{account.Session.Visitor.ID}},
+			{"INSERT INTO profiles(identity_id,palette,revision) VALUES(?,'ruby',7)", []any{account.Session.Visitor.ID}},
+			{"INSERT INTO accounts(identity_id,name_key,created_at) VALUES(?,?,?)", []any{account.Session.Visitor.ID, identity.NameKey("Alice"), now}},
+			{"INSERT INTO passkeys(credential_id,identity_id,label,credential,created_at) VALUES(?,?,'Original',?,?)", []any{key.ID, account.Session.Visitor.ID, credential, now}},
+			{"INSERT INTO sessions(id,token_hash,identity_id,account_id,generation,created_at,expires_at,proof_at,proof_credential) VALUES('old',?,?,?,1,?,?,?,?)", []any{sha256Bytes("old-cookie"), account.Session.Visitor.ID, account.Session.Visitor.ID, now, now + 7776000, now, key.ID}},
+		} {
+			if _, err := tx.ExecContext(t.Context(), stmt.query, stmt.args...); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	all, err := platform.LoadMigrations(identity.Migrations())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Migrate(t.Context(), all); err != nil {
+		t.Fatal(err)
+	}
+	ident := identity.New(db, "https://falky.example", identity.WithClock(source.clock.Now))
+	if _, err := ident.ResolveSession(t.Context(), "old-cookie"); !errors.Is(err, identity.ErrNoVisitor) {
+		t.Fatalf("legacy token survived reset: %v", err)
+	}
+	login, err := ident.BeginAuthentication(t.Context(), "fresh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fresh, err := ident.FinishAuthentication(t.Context(), login.ID, "fresh", key.Assertion(t, login.Assertion, "https://falky.example"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fresh.Session.Visitor.ID != account.Session.Visitor.ID || fresh.Session.Visitor.Colour.Palette != "ruby" || fresh.Session.Visitor.Colour.Revision != 7 {
+		t.Fatalf("fresh sign-in lost account profile: %+v", fresh.Session)
+	}
+}
+
+func sha256Bytes(token string) []byte { hash := sha256.Sum256([]byte(token)); return hash[:] }

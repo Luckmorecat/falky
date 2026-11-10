@@ -2,6 +2,7 @@ package voice_test
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"errors"
 	"io"
@@ -389,4 +390,154 @@ func (lk *blockedRemoval) RemoveParticipant(ctx context.Context, room, transport
 	}
 	close(lk.otherRemoved)
 	return lk.LiveKit.RemoveParticipant(ctx, room, transport)
+}
+
+func TestAccountSessionResetRejectsPersistedVoiceAndPreservesGuestGrant(t *testing.T) {
+	logger := platform.NewLogger(io.Discard, 0)
+	db, err := platform.OpenDB(t.Context(), filepath.Join(t.TempDir(), "reset.db"), logger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	before := fstest.MapFS{}
+	for _, source := range []fs.FS{identity.Migrations(), rooms.Migrations(), voice.Migrations()} {
+		entries, err := fs.ReadDir(source, ".")
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, entry := range entries {
+			if entry.Name() >= "0013" {
+				continue
+			}
+			raw, err := fs.ReadFile(source, entry.Name())
+			if err != nil {
+				t.Fatal(err)
+			}
+			before[entry.Name()] = &fstest.MapFile{Data: raw}
+		}
+	}
+	migrations, err := platform.LoadMigrations(before)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Migrate(t.Context(), migrations); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	ident := identity.New(db, "https://falky.example")
+	if _, err := ident.EnsureLink(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Write(t.Context(), func(tx *sql.Tx) error {
+		for _, id := range []string{"account", "guest"} {
+			if _, err := tx.ExecContext(t.Context(), "INSERT INTO identities(id,name,created_at) VALUES(?,?,?)", id, id, now.Format(time.RFC3339Nano)); err != nil {
+				return err
+			}
+		}
+		if _, err := tx.ExecContext(t.Context(), "INSERT INTO accounts(identity_id,name_key,created_at) VALUES('account','account',?)", now.Unix()); err != nil {
+			return err
+		}
+		for _, id := range []string{"account", "guest"} {
+			hash := sha256.Sum256([]byte(id + "-cookie"))
+			var owner any
+			if id == "account" {
+				owner = id
+			}
+			if _, err := tx.ExecContext(t.Context(), "INSERT INTO sessions(id,token_hash,identity_id,account_id,generation,created_at,expires_at) VALUES(?,?,?,?,1,?,?)", id+"-session", hash[:], id, owner, now.Unix(), now.Add(24*time.Hour).Unix()); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := ident.InitializeColours(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	account, err := ident.ResolveSession(t.Context(), "account-cookie")
+	if err != nil {
+		t.Fatal(err)
+	}
+	guest, err := ident.ResolveSession(t.Context(), "guest-cookie")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rs := rooms.New(db)
+	room, err := rs.Create(t.Context(), "Voice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	lk := &retryLiveKit{LiveKit: voicetest.New()}
+	cfg := voice.Config{APIKey: testKey, APISecret: testSecret, RoomCap: 8}
+	old := voice.New(lk, ident, rs, cfg, voice.WithDB(db))
+	accountGrant, err := old.JoinSession(t.Context(), account, room.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	guestGrant, err := old.JoinSession(t.Context(), guest, room.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old.CloseSignalling()
+	migrations, err = platform.LoadMigrations(identity.Migrations(), rooms.Migrations(), voice.Migrations())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Migrate(t.Context(), migrations); err != nil {
+		t.Fatal(err)
+	}
+	ident = identity.New(db, "https://falky.example")
+	if _, err := ident.ValidateSession(t.Context(), account); !errors.Is(err, identity.ErrNoVisitor) {
+		t.Fatal("old account session survived reset:", err)
+	}
+	if current, err := ident.ValidateSession(t.Context(), guest); err != nil || current.ID != guest.ID || !current.ExpiresAt.Equal(guest.ExpiresAt) {
+		t.Fatal("guest reset changed its grant authority:", err)
+	}
+	service := voice.New(lk, ident, rooms.New(db), cfg, voice.WithDB(db))
+	service.ConfigureAdmission(&sync.Mutex{}, ident.ValidateSession, "https://falky.example")
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }))
+	defer upstream.Close()
+	guard := service.Signalling(upstream.URL)
+	for _, test := range []struct {
+		token  string
+		status int
+	}{{accountGrant.Token, 403}, {guestGrant.Token, 200}} {
+		r := httptest.NewRequestWithContext(t.Context(), "GET", "/rtc/validate?access_token="+test.token, nil)
+		w := httptest.NewRecorder()
+		guard.ServeHTTP(w, r)
+		if w.Code != test.status {
+			t.Fatalf("persisted admission=%d, want %d", w.Code, test.status)
+		}
+	}
+	lk.mu.Lock()
+	lk.fail = true
+	lk.mu.Unlock()
+	if err := service.ValidateGrants(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.CleanupGrants(t.Context()); err == nil {
+		t.Fatal("failed media cleanup lost")
+	}
+	lk.mu.Lock()
+	lk.fail = false
+	lk.attempts = nil
+	lk.mu.Unlock()
+	service.CloseSignalling()
+	service = voice.New(lk, ident, rooms.New(db), cfg, voice.WithDB(db))
+	if err := service.CleanupGrants(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	lk.mu.Lock()
+	attempts := append([]string(nil), lk.attempts...)
+	lk.mu.Unlock()
+	if !slices.Equal(attempts, []string{accountGrant.GrantID}) {
+		t.Fatalf("reset cleanup = %v", attempts)
+	}
+	service.ConfigureAdmission(&sync.Mutex{}, ident.ValidateSession, "https://falky.example")
+	r := httptest.NewRequestWithContext(t.Context(), "GET", "/rtc/validate?access_token="+guestGrant.Token, nil)
+	w := httptest.NewRecorder()
+	service.Signalling(upstream.URL).ServeHTTP(w, r)
+	if w.Code != 200 {
+		t.Fatalf("guest grant cleanup = %d", w.Code)
+	}
 }
