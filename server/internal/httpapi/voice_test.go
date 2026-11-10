@@ -14,6 +14,7 @@ import (
 	"github.com/livekit/protocol/livekit"
 
 	"github.com/kisshot/falky/server/internal/api"
+	"github.com/kisshot/falky/server/internal/identity/passkeytest"
 	"github.com/kisshot/falky/server/internal/voice"
 )
 
@@ -60,7 +61,7 @@ func TestJoiningVoiceReturnsATokenForThatRoomOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Verify: %v", err)
 	}
-	if grants.Identity != bob.Id || grants.Name != "Bob" {
+	if !strings.HasPrefix(grants.Identity, bob.Id+".") || grants.Name != "Bob" {
 		t.Errorf("identity, name = %q, %q, want %q, Bob", grants.Identity, grants.Name, bob.Id)
 	}
 	if until := time.Until(claims.ExpiresAt.Time); until < 9*time.Minute || until > 10*time.Minute {
@@ -91,22 +92,22 @@ func TestJoiningVoiceNeedsAVisitorAndAnExistingRoom(t *testing.T) {
 	wantError(t, "JoinVoice of an unknown room", res.StatusCode(), res.Body, http.StatusNotFound, "room_not_found")
 }
 
-func TestJoiningAnotherRoomsVoiceRemovesTheVisitorFromThePreviousOne(t *testing.T) {
+func TestJoiningAnotherRoomsVoicePreservesThePreviousConnection(t *testing.T) {
 	p := startPublic(t, 10)
 	lounge, games := p.createRoom(t, "Lounge"), p.createRoom(t, "Games")
 	b := p.browser(t)
-	bob := p.enter(t, b, "Bob")
+	p.enter(t, b, "Bob")
 
-	joinedVoice(t, b, lounge.ID)
-	inLounge := p.livekit.AddParticipant(lounge.ID, bob.Id)
+	old := joinedVoice(t, b, lounge.ID)
+	p.livekit.AddParticipant(lounge.ID, old.GrantId)
 	joinedVoice(t, b, games.ID)
-	want := []voice.Participant{inLounge}
+	var want []voice.Participant
 	if got := p.livekit.Removed(); !slices.Equal(got, want) {
 		t.Errorf("removed = %+v, want %+v", got, want)
 	}
 }
 
-func TestJoiningAFullRoomsVoiceIsRefusedUnlessTheVisitorIsInIt(t *testing.T) {
+func TestJoiningAFullRoomsVoiceCountsTheSamePersonsOtherConnection(t *testing.T) {
 	p := startPublic(t, 10)
 	lounge := p.createRoom(t, "Lounge")
 	for i := range testRoomCap - 1 {
@@ -121,8 +122,8 @@ func TestJoiningAFullRoomsVoiceIsRefusedUnlessTheVisitorIsInIt(t *testing.T) {
 	res := joinVoice(t, carol, lounge.ID)
 	wantError(t, "JoinVoice of a full room", res.StatusCode(), res.Body, http.StatusConflict, "room_full")
 
-	// A second tab of Bob's replaces his first connection.
-	joinedVoice(t, bob, lounge.ID)
+	res = joinVoice(t, bob, lounge.ID)
+	wantError(t, "JoinVoice of a full room by another connection of Bob", res.StatusCode(), res.Body, http.StatusConflict, "room_full")
 }
 
 func TestJoiningVoiceAnswersUnavailableWhileLiveKitIsUnreachable(t *testing.T) {
@@ -159,4 +160,52 @@ func TestTheLiveKitSecretIsNeitherAnsweredNorLogged(t *testing.T) {
 	if strings.Contains(p.logs.String(), creds.Token) {
 		t.Error("the logs contain a voice token")
 	}
+}
+
+func TestLogoutDurablyRevokesOnlyItsSessionDespiteFailedMediaCleanup(t *testing.T) {
+	p := startPublic(t, 100)
+	room := p.createRoom(t, "Voice")
+	first, firstHTTP := p.browserWithHTTP(t)
+	key := passkeytest.New(t)
+	enrollAccount(t, p, firstHTTP, "Account", key)
+	second, _ := loginAccountBrowser(t, p, key)
+	old := joinedVoice(t, first, room.ID)
+	other := joinedVoice(t, second, room.ID)
+	p.livekit.Fail(errors.New("media removal unavailable"))
+	accountRequest(t, p, firstHTTP, "POST", "/api/accounts/logout", map[string]any{}, testOrigin, 500)
+	p.livekit.Fail(nil)
+	p = restartVoice(t, p)
+	checkVoiceValidation(t, p, old.Token, 403)
+	checkVoiceValidation(t, p, other.Token, 200)
+}
+
+func TestVoiceLeaveEndpointIsAbsent(t *testing.T) {
+	p := startPublic(t, 100)
+	_, browser := p.browserWithHTTP(t)
+	enrollAccount(t, p, browser, "Account", passkeytest.New(t))
+	accountRequest(t, p, browser, "POST", "/api/voice/leave", map[string]any{"grantId": "obsolete"}, testOrigin, 404)
+}
+
+func TestIndependentAccountConnectionsSurviveOtherJoinsLogoutAndRestart(t *testing.T) {
+	p := startPublic(t, 100)
+	lounge, games := p.createRoom(t, "Lounge"), p.createRoom(t, "Games")
+	first, firstHTTP := p.browserWithHTTP(t)
+	key := passkeytest.New(t)
+	enrollAccount(t, p, firstHTTP, "Account", key)
+	second, secondHTTP := loginAccountBrowser(t, p, key)
+	one := joinedVoice(t, first, lounge.ID)
+	two := joinedVoice(t, first, lounge.ID)
+	three := joinedVoice(t, first, games.ID)
+	four := joinedVoice(t, second, lounge.ID)
+	p = restartVoice(t, p)
+	for _, creds := range []api.VoiceCredentials{one, two, three, four} {
+		checkVoiceValidation(t, p, creds.Token, 200)
+	}
+	accountRequest(t, p, firstHTTP, "POST", "/api/accounts/logout", map[string]any{}, testOrigin, 200)
+	for _, creds := range []api.VoiceCredentials{one, two, three} {
+		checkVoiceValidation(t, p, creds.Token, 403)
+	}
+	checkVoiceValidation(t, p, four.Token, 200)
+	accountRequest(t, p, secondHTTP, "POST", "/api/accounts/logout", map[string]any{}, testOrigin, 200)
+	checkVoiceValidation(t, p, four.Token, 403)
 }

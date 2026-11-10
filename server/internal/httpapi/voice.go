@@ -40,11 +40,8 @@ func (s *server) JoinVoice(ctx context.Context, req api.JoinVoiceRequestObject) 
 	if err != nil {
 		return nil, err
 	}
-	confirm := req.Body != nil && req.Body.ConfirmTransfer
-	creds, err := s.voice.JoinSession(ctx, session, req.Id, confirm)
+	creds, err := s.voice.JoinSession(ctx, session, req.Id)
 	switch {
-	case errors.Is(err, voice.ErrTransferRequired):
-		return api.JoinVoice409JSONResponse{Code: "voice_transfer_required", Message: err.Error()}, nil
 	case errors.Is(err, voice.ErrRoomFull):
 		return api.JoinVoice409JSONResponse{Code: "room_full", Message: err.Error()}, nil
 	case errors.Is(err, voice.ErrUnavailable):
@@ -53,5 +50,5 @@ func (s *server) JoinVoice(ctx context.Context, req api.JoinVoiceRequestObject) 
 	case err != nil:
 		return nil, err
 	}
-	return api.JoinVoice200JSONResponse{Url: creds.URL, Token: creds.Token}, nil
+	return api.JoinVoice200JSONResponse{Url: creds.URL, Token: creds.Token, GrantId: creds.GrantID}, nil
 }

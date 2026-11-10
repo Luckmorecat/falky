@@ -10,6 +10,7 @@ import { VolumeSlider } from './VolumeSlider';
 
 export interface TileProps {
   id: string;
+  visitorId: string;
   name: string;
   palette?: PaletteName;
   isSelf?: boolean;
@@ -50,8 +51,8 @@ function Camera({ id, trackId, mirror }: { id: string; trackId: string; mirror: 
   );
 }
 
-/** A person in the room: their orb, their name, and how they are heard. */
-export function Tile({ id, name, palette, isSelf, level, muted, deafened, adjustable, mini, cameraTrackId }: TileProps) {
+/** A connection in the room: their orb, their name, and how they are heard. */
+export function Tile({ id, visitorId, name, palette, isSelf, level, muted, deafened, adjustable, mini, cameraTrackId }: TileProps) {
   const tile = useRef<HTMLElement>(null);
   const mirror = useApp((s) => s.settings.cameraMirror);
   const [volumeOpen, setVolumeOpen] = useState(false);
@@ -75,7 +76,7 @@ export function Tile({ id, name, palette, isSelf, level, muted, deafened, adjust
         // No hover on a touch screen: a tap on the orb brings its controls up instead.
         onPointerUp={adjustable && !mini ? (e) => { if (e.pointerType !== 'mouse') setVolumeOpen(!volumeOpen); } : undefined}
       >
-        <Orb seed={id} palette={palette} level={level}>
+        <Orb seed={visitorId} palette={palette} level={level}>
           {cameraTrackId && <Camera id={id} trackId={cameraTrackId} mirror={!!isSelf && mirror} />}
         </Orb>
         {!mini && (deafened || muted || locallyMuted) && <div className="t-flags">

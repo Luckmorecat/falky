@@ -42,8 +42,8 @@ func (p publicServer) adminClient(t *testing.T) *admin.Client {
 // them a participant there, as LiveKit reports it.
 func (p publicServer) inVoice(t *testing.T, b *api.ClientWithResponses, v api.Visitor, roomID string) voice.Participant {
 	t.Helper()
-	joinedVoice(t, b, roomID)
-	participant := p.livekit.AddParticipant(roomID, v.Id)
+	creds := joinedVoice(t, b, roomID)
+	participant := p.livekit.AddParticipant(roomID, creds.GrantId)
 	p.applied(t, voicetest.Joined(participant))
 	return participant
 }

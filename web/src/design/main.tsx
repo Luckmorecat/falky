@@ -22,7 +22,7 @@ import { Message } from '../ui/Message';
 
 const NAMES = ['Олена', 'Марк', 'Софія', 'Тарас', 'Ірина', 'Богдан', 'Катя', 'Дмитро'];
 const person = (i: number): VoicePerson => ({
-  id: `01JBX6Z8Q3M5W2K7R9T4V1C0D${i}`, name: NAMES[i]!, local: i === 0, muted: false, deafened: false, sharing: false, shareTrackId: '', camera: false, cameraTrackId: '',
+  id: `01JBX6Z8Q3M5W2K7R9T4V1C0D${i}.design`, visitorId: `01JBX6Z8Q3M5W2K7R9T4V1C0D${i}`, name: NAMES[i]!, local: i === 0, muted: false, deafened: false, sharing: false, shareTrackId: '', camera: false, cameraTrackId: '',
 });
 const self = person(0);
 
@@ -91,8 +91,8 @@ voice.join = async (roomId) => setState({ voice: inVoice(ROOM_PEOPLE, roomId) })
 
 const ROOM_PEOPLE = [person(0), person(1), { ...person(2), muted: true }, person(3)];
 const rooms: Room[] = [
-  { id: 'lounge', name: 'Вітальня', occupancy: ROOM_PEOPLE.map((p) => ({ visitorId: p.id, name: p.name })) },
-  { id: 'games', name: 'Ігри', occupancy: [person(4), person(5)].map((p) => ({ visitorId: p.id, name: p.name })) },
+  { id: 'lounge', name: 'Вітальня', occupancy: ROOM_PEOPLE.map((p) => ({ connectionId: p.id, visitorId: p.visitorId, name: p.name })) },
+  { id: 'games', name: 'Ігри', occupancy: [person(4), person(5)].map((p) => ({ connectionId: p.id, visitorId: p.visitorId, name: p.name })) },
   { id: 'work', name: 'Робота', occupancy: [] },
 ];
 const minutesAgo = (m: number) => new Date(Date.now() - m * 60_000).toISOString();
@@ -101,7 +101,7 @@ const messages: ChatMessage[] = [
   ['Софія', 2, 38, 'Я буду після восьмої'],
   ['Софія', 2, 37, 'Тільки мікрофон ще не налаштувала'],
   ['Олена', 0, 12, 'Глянула нові орби, живі якісь'],
-].map(([name, i, ago, body], n) => ({ id: `m${n}`, roomId: 'lounge', authorId: person(i as number).id, authorName: name as string, body: body as string, attachments: [], createdAt: minutesAgo(ago as number) }));
+].map(([name, i, ago, body], n) => ({ id: `m${n}`, roomId: 'lounge', authorId: person(i as number).visitorId, authorName: name as string, body: body as string, attachments: [], createdAt: minutesAgo(ago as number) }));
 
 const SCENES = {
   orbs: 'Орби',
@@ -123,12 +123,12 @@ function stage(scene: Scene): void {
   const chats = Object.fromEntries(rooms.map((r) => [r.id, { ...emptyChat(), loaded: true, messages: r.id === 'lounge' ? messages : [] }]));
   const many = NAMES.map((_, i) => person(i));
   setState({
-    phase: 'ready', visitor: { id: self.id, name: self.name, nameTaken: false, colour: { visitorId: self.id, palette: 'sky', revision: 1 } }, live: 'open', chats, notice: null, roomsOpen: false,
-    colours: Object.fromEntries(NAMES.map((_, i) => { const id = person(i).id; return [id, { visitorId: id, palette: PALETTE_NAMES[i % PALETTE_NAMES.length]!, revision: 1 }]; })),
+    phase: 'ready', visitor: { id: self.visitorId, name: self.name, nameTaken: false, colour: { visitorId: self.visitorId, palette: 'sky', revision: 1 } }, live: 'open', chats, notice: null, roomsOpen: false,
+    colours: Object.fromEntries(NAMES.map((_, i) => { const id = person(i).visitorId; return [id, { visitorId: id, palette: PALETTE_NAMES[i % PALETTE_NAMES.length]!, revision: 1 }]; })),
     rooms, viewedRoomId: scene === 'empty' ? 'work' : 'lounge', chatOpen: scene === 'chat', voice: idleVoice,
   });
   if (scene === 'voice' || scene === 'chat') setState({ voice: inVoice(ROOM_PEOPLE, 'lounge') });
-  if (scene === 'many') setState({ rooms: [{ ...rooms[0]!, occupancy: many.map((p) => ({ visitorId: p.id, name: p.name })) }, rooms[1]!, rooms[2]!], voice: inVoice(many, 'lounge') });
+  if (scene === 'many') setState({ rooms: [{ ...rooms[0]!, occupancy: many.map((p) => ({ connectionId: p.id, visitorId: p.visitorId, name: p.name })) }, rooms[1]!, rooms[2]!], voice: inVoice(many, 'lounge') });
   if (scene === 'share') setState({ voice: inVoice([{ ...person(1), sharing: true }, ...ROOM_PEOPLE.filter((p) => p.id !== person(1).id)], 'lounge') });
   if (scene === 'camera') setState({ voice: { ...inVoice(ROOM_PEOPLE.map((p, i) => (i < 2 ? { ...p, camera: true, cameraTrackId: 'fake' } : p)), 'lounge'), camera: true } });
   if (scene === 'entry') setState({ phase: 'entry' });

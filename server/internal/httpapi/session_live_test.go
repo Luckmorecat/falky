@@ -4,10 +4,14 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -16,7 +20,10 @@ import (
 	"github.com/kisshot/falky/server/internal/api"
 	"github.com/kisshot/falky/server/internal/identity"
 	"github.com/kisshot/falky/server/internal/identity/passkeytest"
+	"github.com/kisshot/falky/server/internal/platform"
 	"github.com/kisshot/falky/server/internal/realtime"
+	"github.com/kisshot/falky/server/internal/scheduler"
+	"github.com/kisshot/falky/server/internal/voice"
 	"github.com/livekit/protocol/auth"
 )
 
@@ -149,49 +156,69 @@ func TestGuestRotationPreservesAccountLiveAndVoice(t *testing.T) {
 	a, accountHTTP := p.browserWithHTTP(t)
 	account := enrollAccount(t, p, accountHTTP, "Account", passkeytest.New(t))
 	b, guestHTTP := p.browserWithHTTP(t)
-	guest := p.enter(t, b, "Guest")
+	p.enter(t, b, "Guest")
 	accountLive, guestLive := p.connectLive(t, accountHTTP), p.connectLive(t, guestHTTP)
-	accountCreds := joinedVoice(t, a, room.ID)
-	verifier, err := auth.ParseAPIToken(accountCreds.Token)
-	if err != nil {
-		t.Fatal(err)
+	var accountParticipants []voice.Participant
+	for range 2 {
+		creds := joinedVoice(t, a, room.ID)
+		accountParticipants = append(accountParticipants, p.livekit.AddParticipant(room.ID, creds.GrantId))
 	}
-	_, grants, err := verifier.Verify(testLiveKitSecret)
-	if err != nil {
-		t.Fatal(err)
+	for range 2 {
+		creds := joinedVoice(t, b, room.ID)
+		p.livekit.AddParticipant(room.ID, creds.GrantId)
 	}
-	accountParticipant := p.livekit.AddParticipant(room.ID, grants.Identity)
-	joinedVoice(t, b, room.ID)
-	p.livekit.AddParticipant(room.ID, guest.Id)
 	if _, err := p.adminClient(t).RotateLink(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	readClosed(t, guestLive, realtime.StatusRevoked)
 	listed, err := p.livekit.Participants(t.Context())
-	if err != nil || len(listed) != 1 || listed[0] != accountParticipant {
+	if err != nil || !slices.Equal(listed, accountParticipants) {
 		t.Fatalf("rotation removed account voice: %v %v", listed, err)
 	}
 	accountRequest(t, p, accountHTTP, "GET", "/api/me", nil, "", 200)
 	p.createRoom(t, "Still available")
 	for event := nextEvent(t, accountLive); event.Type != api.EventTypeRoomChanged; event = nextEvent(t, accountLive) {
 	}
-	if got := p.voice.Occupancy(room.ID); len(got) != 1 || got[0].ID != account.Session.Visitor.ID {
+	if got := p.voice.Occupancy(room.ID); len(got) != 2 || got[0].ID != account.Session.Visitor.ID || got[1].ID != account.Session.Visitor.ID {
 		t.Fatalf("account occupancy = %v", got)
 	}
 }
 
 func TestRecoveryAndDisableEndOldLiveSessionsAndPreserveRecoverySession(t *testing.T) {
 	p := startPublic(t, 100)
-	_, first := p.browserWithHTTP(t)
+	firstAPI, first := p.browserWithHTTP(t)
 	key := passkeytest.New(t)
 	account := enrollAccount(t, p, first, "Account", key)
-	_, second := loginAccountBrowser(t, p, key)
+	secondAPI, second := loginAccountBrowser(t, p, key)
+	room := p.createRoom(t, "Voice")
+	var oldVoice []api.VoiceCredentials
+	for _, client := range []*api.ClientWithResponses{firstAPI, secondAPI} {
+		for range 2 {
+			creds := joinedVoice(t, client, room.ID)
+			oldVoice = append(oldVoice, creds)
+			p.livekit.AddParticipant(room.ID, creds.GrantId)
+		}
+	}
 	old := []*websocket.Conn{p.connectLive(t, first), p.connectLive(t, second)}
 	_, recovering := p.browserWithHTTP(t)
 	ceremony := beginAccount(t, p, recovering, "/api/accounts/recovery/begin", map[string]any{"accountId": account.Session.Visitor.ID, "proof": account.RecoveryCodes[0]})
 	finishEnrollment(t, p, recovering, ceremony, passkeytest.New(t), "recovery")
 	for _, ws := range old {
 		readClosed(t, ws, realtime.StatusRevoked)
+	}
+	p = restartVoice(t, p)
+	for _, creds := range oldVoice {
+		checkVoiceValidation(t, p, creds.Token, 403)
+	}
+	var freshVoice []api.VoiceCredentials
+	for range 2 {
+		raw, _ := accountRequest(t, p, recovering, "POST", "/api/rooms/"+room.ID+"/voice", nil, testOrigin, 200)
+		var creds api.VoiceCredentials
+		if err := json.Unmarshal(raw, &creds); err != nil {
+			t.Fatal(err)
+		}
+		freshVoice = append(freshVoice, creds)
+		p.livekit.AddParticipant(room.ID, creds.GrantId)
 	}
 	fresh := p.connectLive(t, recovering)
 	p.createRoom(t, "Recovered")
@@ -202,6 +229,9 @@ func TestRecoveryAndDisableEndOldLiveSessionsAndPreserveRecoverySession(t *testi
 		t.Fatal(err)
 	}
 	readClosed(t, fresh, realtime.StatusRevoked)
+	for _, creds := range freshVoice {
+		checkVoiceValidation(t, p, creds.Token, 403)
+	}
 }
 
 func TestAccountRenameRefreshesOwnerAndDisplacedGuestWithCurrentVoiceNames(t *testing.T) {
@@ -245,7 +275,7 @@ func TestAccountRenameRefreshesOwnerAndDisplacedGuestWithCurrentVoiceNames(t *te
 	p.connectLive(t, accountHTTP)
 }
 
-func TestAccountVoiceTransferRequiresExplicitPublicConfirmation(t *testing.T) {
+func TestLegacyConfirmationValuesAllPreserveIndependentAccountConnections(t *testing.T) {
 	p := startPublic(t, 100)
 	room := p.createRoom(t, "Voice")
 	firstAPI, first := p.browserWithHTTP(t)
@@ -253,23 +283,20 @@ func TestAccountVoiceTransferRequiresExplicitPublicConfirmation(t *testing.T) {
 	enrollAccount(t, p, first, "Account", key)
 	_, second := loginAccountBrowser(t, p, key)
 	old := joinedVoice(t, firstAPI, room.ID)
-	verifier, err := auth.ParseAPIToken(old.Token)
-	if err != nil {
-		t.Fatal(err)
-	}
-	participant := p.livekit.AddParticipant(room.ID, verifier.Identity())
-	raw, _ := accountRequest(t, p, second, "POST", "/api/rooms/"+room.ID+"/voice", nil, testOrigin, 409)
-	if !strings.Contains(string(raw), "voice_transfer_required") {
-		t.Fatalf("unconfirmed error = %s", raw)
-	}
-	listed, _ := p.livekit.Participants(t.Context())
-	if len(listed) != 1 || listed[0] != participant {
-		t.Fatal("unconfirmed public join displaced owner")
-	}
-	accountRequest(t, p, second, "POST", "/api/rooms/"+room.ID+"/voice", map[string]any{"confirmTransfer": true}, testOrigin, 200)
-	listed, _ = p.livekit.Participants(t.Context())
-	if len(listed) != 0 {
-		t.Fatal("confirmed public transfer left stale media")
+	participant := p.livekit.AddParticipant(room.ID, old.GrantId)
+	for _, body := range []any{nil, map[string]any{"confirmTransfer": false}, map[string]any{"confirmTransfer": true}} {
+		raw, _ := accountRequest(t, p, second, "POST", "/api/rooms/"+room.ID+"/voice", body, testOrigin, 200)
+		var creds api.VoiceCredentials
+		if err := json.Unmarshal(raw, &creds); err != nil {
+			t.Fatal(err)
+		}
+		if creds.GrantId == old.GrantId {
+			t.Fatal("Join reused transport")
+		}
+		listed, _ := p.livekit.Participants(t.Context())
+		if len(listed) != 1 || listed[0] != participant {
+			t.Fatal("legacy confirmation displaced independent media")
+		}
 	}
 }
 
@@ -313,4 +340,340 @@ func TestGuestAbsoluteExpiryRefusesHTTPVoiceAndGlobalLiveUpdates(t *testing.T) {
 	readClosed(t, ws, realtime.StatusRevoked)
 	p = restartVoice(t, p)
 	checkVoiceValidation(t, p, creds.Token, http.StatusForbidden)
+}
+
+type heldMaintenanceRemoval struct {
+	voice.LiveKit
+	started chan struct{}
+}
+
+func (lk heldMaintenanceRemoval) RemoveParticipant(ctx context.Context, _, _ string) error {
+	close(lk.started)
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+func TestMaintenanceClosesExpiredLocalAccessBeforeBlockedMediaCleanup(t *testing.T) {
+	p := startPublic(t, 100)
+	room := p.createRoom(t, "Voice")
+	client, browser := p.browserWithHTTP(t)
+	p.enter(t, client, "Guest")
+	live := p.connectLive(t, browser)
+	creds := joinedVoice(t, client, room.ID)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{InsecureSkipVerify: true})
+		if err != nil {
+			return
+		}
+		defer func() { _ = ws.CloseNow() }()
+		if err := ws.Write(r.Context(), websocket.MessageText, []byte(`{"join":{}}`)); err != nil {
+			return
+		}
+		<-ws.CloseRead(r.Context()).Done()
+	}))
+	t.Cleanup(upstream.Close)
+	lk := heldMaintenanceRemoval{LiveKit: p.livekit, started: make(chan struct{})}
+	voices := voice.New(lk, p.identity, p.rooms, voice.Config{APIKey: testLiveKitKey, APISecret: testLiveKitSecret}, voice.WithDB(p.db))
+	voices.ConfigureAdmission(p.lifecycle, p.identity.ValidateSession, testOrigin)
+	guard := httptest.NewServer(voices.Signalling(upstream.URL))
+	t.Cleanup(guard.Close)
+	t.Cleanup(voices.CloseSignalling)
+	signal, res, err := websocket.Dial(t.Context(), guard.URL+"/rtc?access_token="+url.QueryEscape(creds.Token), nil)
+	if res != nil && res.Body != nil {
+		_ = res.Body.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = signal.CloseNow() }()
+	if _, _, err := signal.Read(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	p.clock.Advance(identity.GuestSessionTTL)
+	accountRequest(t, p, browser, "GET", "/api/accounts/session", nil, "", 401)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- p.lifecycle.Maintain(ctx, p.events.Hub, voices) }()
+	defer func() {
+		cancel()
+		if err := <-done; !errors.Is(err, context.Canceled) {
+			t.Errorf("cancelled maintenance = %v", err)
+		}
+	}()
+	select {
+	case <-lk.started:
+	case <-time.After(time.Second):
+		t.Fatal("maintenance did not reach media cleanup")
+	}
+	readClosed(t, live, realtime.StatusRevoked)
+	readCtx, stopRead := context.WithTimeout(t.Context(), time.Second)
+	defer stopRead()
+	for {
+		if _, _, err := signal.Read(readCtx); err != nil {
+			if readCtx.Err() != nil {
+				t.Fatal("expired signaling survived maintenance")
+			}
+			break
+		}
+	}
+	gateFree := make(chan struct{})
+	go func() { p.lifecycle.Lock(); close(gateFree); p.lifecycle.Unlock() }()
+	select {
+	case <-gateFree:
+	case <-time.After(time.Second):
+		t.Fatal("media cleanup retained the lifecycle gate")
+	}
+	healthyAPI, healthyBrowser := p.browserWithHTTP(t)
+	p.enter(t, healthyAPI, "Healthy")
+	pinged := make(chan struct{}, 1)
+	healthy, response, err := websocket.Dial(t.Context(), p.srv.URL+"/api/live", &websocket.DialOptions{
+		HTTPClient: healthyBrowser, HTTPHeader: http.Header{"Origin": {testOrigin}},
+		OnPingReceived: func(context.Context, []byte) bool { pinged <- struct{}{}; return true },
+	})
+	if response != nil && response.Body != nil {
+		_ = response.Body.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = healthy.CloseNow() }()
+	healthy.CloseRead(t.Context())
+	beatCtx, stopBeat := context.WithTimeout(t.Context(), time.Second)
+	defer stopBeat()
+	if err := healthy.Ping(beatCtx); err != nil {
+		t.Fatal(err)
+	}
+	p.events.Hub.Heartbeat(beatCtx)
+	select {
+	case <-pinged:
+	default:
+		t.Fatal("blocked media cleanup delayed a healthy heartbeat")
+	}
+	select {
+	case err := <-done:
+		done <- err
+		t.Fatalf("media cleanup did not remain blocked: %v", err)
+	default:
+	}
+}
+
+func TestScheduledHeartbeatsContinueWhileMaintenanceWaitsForSQLiteValidation(t *testing.T) {
+	p := startPublic(t, 100)
+	client, browser := p.browserWithHTTP(t)
+	p.enter(t, client, "Guest")
+	pings := make(chan struct{}, 32)
+	ws, res, err := websocket.Dial(t.Context(), p.srv.URL+"/api/live", &websocket.DialOptions{
+		HTTPClient: browser, HTTPHeader: http.Header{"Origin": {testOrigin}},
+		OnPingReceived: func(context.Context, []byte) bool { pings <- struct{}{}; return true },
+	})
+	if res != nil && res.Body != nil {
+		_ = res.Body.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = ws.CloseNow() }()
+	ws.CloseRead(t.Context())
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	if err := ws.Ping(ctx); err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+	cancel()
+	p.db.Read().SetMaxOpenConns(1)
+	held, err := p.db.Read().Conn(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = held.Close() }()
+	waits := p.db.Read().Stats().WaitCount
+	runCtx, stop := context.WithCancel(t.Context())
+	done, maintained := make(chan struct{}), make(chan error, 1)
+	go func() {
+		defer close(done)
+		scheduler.Run(runCtx,
+			scheduler.Job{Interval: 20 * time.Millisecond, Run: p.events.Hub.Heartbeat},
+			scheduler.Job{Interval: time.Second, Startup: true, Run: func(ctx context.Context) { maintained <- p.lifecycle.Maintain(ctx, p.events.Hub, p.voice) }},
+		)
+	}()
+	defer func() { stop(); <-done }()
+	deadline := time.Now().Add(time.Second)
+	for p.db.Read().Stats().WaitCount == waits {
+		if time.Now().After(deadline) {
+			t.Fatal("maintenance did not block on SQLite session validation")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	for range 3 {
+		select {
+		case <-pings:
+		case <-time.After(time.Second):
+			t.Fatal("SQLite validation delayed scheduled heartbeats")
+		}
+	}
+	select {
+	case err := <-maintained:
+		t.Fatalf("maintenance did not stay blocked: %v", err)
+	default:
+	}
+}
+
+func TestCancelledMaintenanceReturnsBeforeTheLifecycleGateIsReleased(t *testing.T) {
+	gate := &Lifecycle{}
+	gate.Lock()
+	defer gate.Unlock()
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	started, done := make(chan struct{}), make(chan error, 1)
+	go func() {
+		close(started)
+		done <- gate.Maintain(ctx, nil, nil)
+	}()
+	<-started
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("cancelled maintenance = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("cancelled maintenance still waits for the lifecycle gate")
+	}
+}
+
+func TestCancelledMaintenancePreservesValidAccessAndReleasesAnAvailableGate(t *testing.T) {
+	p := restartVoice(t, startPublic(t, 100))
+	room := p.createRoom(t, "Voice")
+	client, browser := p.browserWithHTTP(t)
+	p.enter(t, client, "Guest")
+	creds := joinedVoice(t, client, room.ID)
+	live := p.connectLive(t, browser)
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err := p.lifecycle.Maintain(ctx, p.events.Hub, p.voice); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled maintenance = %v", err)
+	}
+	if !p.lifecycle.TryLock() {
+		t.Fatal("cancelled maintenance retained the lifecycle gate")
+	}
+	p.lifecycle.Unlock()
+	checkVoiceValidation(t, p, creds.Token, http.StatusOK)
+	p.createRoom(t, "Still authorized")
+	if event := nextEvent(t, live); event.Type != api.EventTypeRoomChanged {
+		t.Fatalf("valid live access changed after cancelled maintenance: %v", event.Type)
+	}
+}
+
+func TestShutdownJoinsMaintenanceBeforeClosingAdmissionBlockedOnSQLite(t *testing.T) {
+	p := startPublic(t, 100)
+	client, browser := p.browserWithHTTP(t)
+	p.enter(t, client, "Guest")
+	gate := &Lifecycle{}
+	readingDeadline, resumeValidation := make(chan struct{}), make(chan struct{})
+	var deadlineOnce, resumeOnce sync.Once
+	resume := func() { resumeOnce.Do(func() { close(resumeValidation) }) }
+	defer resume()
+	ident := identity.New(p.db, testOrigin, identity.WithClock(func() time.Time {
+		if gate.TryLock() {
+			gate.Unlock()
+		} else {
+			// Pause the authoritative deadline check after live admission has
+			// acquired the gate, so its subsequent query meets a full DB pool.
+			deadlineOnce.Do(func() { close(readingDeadline); <-resumeValidation })
+		}
+		return p.clock.Now()
+	}))
+	handlers := New(Deps{
+		Identity: ident, Rooms: p.rooms, Live: p.events.Hub, Logger: p.events.Logger,
+		Lifecycle: gate, PublicOrigin: testOrigin, Metrics: platform.NewMetrics().Handler(),
+	})
+	admissionDone := make(chan struct{})
+	public := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer close(admissionDone)
+		handlers.Public.ServeHTTP(w, r)
+	}))
+	t.Cleanup(public.Close)
+	dialCtx, stopDial := context.WithCancel(t.Context())
+	defer stopDial()
+	dialed := make(chan error, 1)
+	go func() {
+		ws, res, err := websocket.Dial(dialCtx, public.URL+"/api/live", &websocket.DialOptions{HTTPClient: browser, HTTPHeader: http.Header{"Origin": {testOrigin}}})
+		if res != nil && res.Body != nil {
+			_ = res.Body.Close()
+		}
+		if ws != nil {
+			_ = ws.CloseNow()
+		}
+		dialed <- err
+	}()
+	select {
+	case <-readingDeadline:
+	case <-time.After(time.Second):
+		t.Fatal("live admission did not acquire the lifecycle gate")
+	}
+	p.db.Read().SetMaxOpenConns(1)
+	held, err := p.db.Read().Conn(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = held.Close() }()
+	waits := p.db.Read().Stats().WaitCount
+	resume()
+	deadline := time.Now().Add(time.Second)
+	for p.db.Read().Stats().WaitCount == waits {
+		if time.Now().After(deadline) {
+			t.Fatal("live admission did not wait for SQLite")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	runCtx, stopRun := context.WithCancel(t.Context())
+	defer stopRun()
+	started, joined := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(joined)
+		scheduler.Run(runCtx, scheduler.Job{Interval: time.Hour, Startup: true, Run: func(ctx context.Context) {
+			close(started)
+			if err := gate.Maintain(ctx, p.events.Hub, nil); !errors.Is(err, context.Canceled) {
+				t.Errorf("cancelled maintenance = %v", err)
+			}
+		}})
+	}()
+	<-started
+	stopRun()
+	select {
+	case <-joined:
+	case <-time.After(time.Second):
+		t.Fatal("scheduler shutdown waited for admission's gate or database")
+	}
+	select {
+	case err := <-dialed:
+		t.Fatalf("live admission did not remain blocked during scheduler shutdown: %v", err)
+	default:
+	}
+	shutdownCtx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+	defer cancel()
+	if err := public.Config.Shutdown(shutdownCtx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("active admission shutdown = %v", err)
+	}
+	if err := public.Config.Close(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-dialed:
+		if err == nil {
+			t.Fatal("blocked admission unexpectedly upgraded during shutdown")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("forced HTTP shutdown did not cancel SQLite-blocked admission")
+	}
+	select {
+	case <-admissionDone:
+	case <-time.After(time.Second):
+		t.Fatal("SQLite-blocked admission did not finish after HTTP shutdown")
+	}
+	if !gate.TryLock() {
+		t.Fatal("admission retained the lifecycle gate after HTTP shutdown")
+	}
+	gate.Unlock()
 }

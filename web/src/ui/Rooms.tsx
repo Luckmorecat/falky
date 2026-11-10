@@ -62,7 +62,7 @@ export function Rooms({ room, status }: { room: Room | null; status: React.React
                 </span>
                 <span className="people" aria-label={t.inVoiceCount(n)}>
                   {n ? r.occupancy.map((p, k) => (
-                    <span key={p.visitorId} className={r.id === voiceRoomId && speakers.includes(p.visitorId) ? 'talk' : ''}>
+                    <span key={p.connectionId} className={r.id === voiceRoomId && speakers.includes(p.connectionId) ? 'talk' : ''}>
                       {p.name}{k < n - 1 ? ', ' : ''}
                     </span>
                   )) : t.nobodyInVoice}

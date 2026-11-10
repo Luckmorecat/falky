@@ -146,6 +146,37 @@ func TestServeAnswersOnItsListenersAndStopsCleanly(t *testing.T) {
 	}
 }
 
+func TestShutdownCancelsScheduledMaintenanceBlockedInLiveKit(t *testing.T) {
+	started, cancelled := make(chan struct{}), make(chan struct{})
+	upstream := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		close(started)
+		<-r.Context().Done()
+		close(cancelled)
+	}))
+	t.Cleanup(upstream.Close)
+	ls := newListeners(t, filepath.Join(t.TempDir(), "admin.sock"))
+	cfg := platform.Config{DBPath: filepath.Join(t.TempDir(), "falky.db"), LiveKitAPIURL: upstream.URL, LiveKitAPIKey: "key", LiveKitAPISecret: "secret"}
+	stop := startServerWith(t, cfg, io.Discard, ls)
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("startup maintenance did not reach LiveKit")
+	}
+	stopped := make(chan struct{})
+	go func() { stop(); close(stopped) }()
+	select {
+	case <-stopped:
+	case <-time.After(2 * time.Second):
+		t.Fatal("shutdown did not cancel and join blocked maintenance")
+	}
+	select {
+	case <-cancelled:
+	case <-time.After(time.Second):
+		t.Fatal("maintenance left its LiveKit request running")
+	}
+}
+
 func TestReadinessAndTheHealthCommandFailWhenTheDatabaseIsGone(t *testing.T) {
 	ls := newListeners(t, filepath.Join(t.TempDir(), "admin.sock"))
 	logger := platform.NewLogger(io.Discard, 0)

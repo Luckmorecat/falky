@@ -1,5 +1,5 @@
 import { preparePreferences } from './preferences';
-import { bootstrapState, mockAction, refreshMockState, subscribeMockState } from './state';
+import { bootstrapState, refreshMockState, subscribeMockState } from './state';
 
 interface Navigation {
   href(): string;
@@ -17,8 +17,6 @@ export async function bootstrap(navigation: Navigation = browserNavigation): Pro
   const url = new URL(navigation.href());
   const state = await bootstrapState(url.searchParams.get('scenario') ?? undefined);
   preparePreferences(state.instanceId, state.generation);
-  // Reloading a page ends its former synthetic media session, just as closing real media does.
-  if (state.voiceRoomId) await mockAction({ type: 'voice-leave', generation: state.generation });
   if (state.scenario === 'entry' && !state.visitor && !url.hash.includes('k=')) {
     url.hash = new URL(state.accessLink, url).hash;
     navigation.replaceURL(url.href);

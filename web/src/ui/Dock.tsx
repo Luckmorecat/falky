@@ -42,7 +42,7 @@ export function Dock({ room }: { room: Room | null }) {
 function Controls({ room, onSettings }: { room: Room | null; onSettings(): void }) {
   const v = useApp((s) => s.voice);
   const rooms = useApp((s) => s.rooms);
-  const selfId = useApp((s) => s.visitor?.id);
+  const selfId = useApp((s) => s.voice.people.find((p) => p.local)?.id);
   const ring = useRef<HTMLSpanElement>(null);
   const inVoice = v.status === 'connected' || v.status === 'reconnecting' || (v.status === 'joining' && v.roomId !== null);
   const joining = v.status === 'joining';

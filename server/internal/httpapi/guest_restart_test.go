@@ -21,7 +21,7 @@ func restartVoice(t *testing.T, p publicServer) publicServer {
 	t.Helper()
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }))
 	t.Cleanup(upstream.Close)
-	p.voice = voice.New(p.livekit, p.identity, p.rooms, voice.Config{URL: testLiveKitURL, APIKey: testLiveKitKey, APISecret: testLiveKitSecret, RoomCap: testRoomCap})
+	p.voice = voice.New(p.livekit, p.identity, p.rooms, voice.Config{URL: testLiveKitURL, APIKey: testLiveKitKey, APISecret: testLiveKitSecret, RoomCap: testRoomCap}, voice.WithDB(p.db))
 	p.lifecycle = &Lifecycle{}
 	handlers := New(Deps{Identity: p.identity, Voice: p.voice, Rooms: p.rooms, Live: p.events.Hub, Logger: p.events.Logger, Lifecycle: p.lifecycle, PublicOrigin: testOrigin, LiveKitAPIURL: upstream.URL, Metrics: platform.NewMetrics().Handler(), EnterLimit: platform.NewLimiter(100, time.Hour, time.Now)})
 	p.srv = httptest.NewTLSServer(handlers.Public)
@@ -81,14 +81,14 @@ func TestGuestVoiceRestartCannotRestoreRevokedOrUpgradedGuest(t *testing.T) {
 					t.Fatal(err)
 				}
 				p = restartVoice(t, p)
-				checkVoiceValidation(t, p, account.Token, 403)
+				checkVoiceValidation(t, p, account.Token, 200)
 			}
 			checkVoiceValidation(t, p, creds.Token, 403)
 		})
 	}
 }
 
-func TestRestoredGuestVoiceKeepsNewHTTPRoomChoiceAndNameAuthorization(t *testing.T) {
+func TestRestoredGuestConnectionsKeepBothRoomsAndNameAuthorization(t *testing.T) {
 	p := startPublic(t, 100)
 	first, second := p.createRoom(t, "First"), p.createRoom(t, "Second")
 	client, browser := p.browserWithHTTP(t)
@@ -100,12 +100,12 @@ func TestRestoredGuestVoiceKeepsNewHTTPRoomChoiceAndNameAuthorization(t *testing
 	if err := json.Unmarshal(raw, &current); err != nil {
 		t.Fatal(err)
 	}
-	checkVoiceValidation(t, p, old.Token, 403)
+	checkVoiceValidation(t, p, old.Token, 200)
 	checkVoiceValidation(t, p, current.Token, 200)
-	// Restoring the current room also fences an older room's JWT.
+	// Restart retains each independently authorized room.
 	p = restartVoice(t, p)
 	checkVoiceValidation(t, p, current.Token, 200)
-	checkVoiceValidation(t, p, old.Token, 403)
+	checkVoiceValidation(t, p, old.Token, 200)
 	p = restartVoice(t, p)
 	p.clock.Advance(2 * time.Minute)
 	other, otherHTTP := p.browserWithHTTP(t)
@@ -131,13 +131,13 @@ func TestGuestRestorationStillRequiresVerifiedSignerSignatureAndRoom(t *testing.
 	checkVoiceValidation(t, p, valid.Token, 200)
 }
 
-func TestGuestHTTPRoomMoveOverridesOrdinaryAndRestoredGrants(t *testing.T) {
+func TestGuestHTTPJoinsPreserveOrdinaryAndRestoredGrants(t *testing.T) {
 	for _, restored := range []bool{false, true} {
 		t.Run(fmt.Sprintf("restored=%t", restored), func(t *testing.T) {
 			p := startPublic(t, 100)
 			first, second, third := p.createRoom(t, "First"), p.createRoom(t, "Second"), p.createRoom(t, "Third")
 			client, browser := p.browserWithHTTP(t)
-			guest := p.enter(t, client, "Guest")
+			p.enter(t, client, "Guest")
 			old := joinedVoice(t, client, first.ID)
 			if restored {
 				p = restartVoice(t, p)
@@ -154,7 +154,7 @@ func TestGuestHTTPRoomMoveOverridesOrdinaryAndRestoredGrants(t *testing.T) {
 			if !restored {
 				validation.srv = p.internal
 			}
-			oldParticipant := p.livekit.AddParticipant(first.ID, guest.Id)
+			p.livekit.AddParticipant(first.ID, old.GrantId)
 			join := func(room string) api.VoiceCredentials {
 				raw, _ := accountRequest(t, p, browser, "POST", "/api/rooms/"+room+"/voice", nil, "", 200)
 				var credentials api.VoiceCredentials
@@ -164,8 +164,8 @@ func TestGuestHTTPRoomMoveOverridesOrdinaryAndRestoredGrants(t *testing.T) {
 				return credentials
 			}
 			current := join(second.ID)
-			if got := p.livekit.Removed(); len(got) != 1 || got[0] != oldParticipant {
-				t.Fatalf("old room media not removed before credentials returned: %v", got)
+			if got := p.livekit.Removed(); len(got) != 0 {
+				t.Fatalf("independent Join removed old media: %v", got)
 			}
 			assert := func(token string, valid bool) {
 				for _, path := range []string{"/rtc", "/rtc/v1", "/rtc/validate", "/rtc/v1/validate"} {
@@ -190,24 +190,24 @@ func TestGuestHTTPRoomMoveOverridesOrdinaryAndRestoredGrants(t *testing.T) {
 					}
 				}
 			}
-			assert(old.Token, false)
+			assert(old.Token, true)
 			assert(current.Token, true)
-			p.livekit.AddParticipant(second.ID, guest.Id)
+			p.livekit.AddParticipant(second.ID, current.GrantId)
 			sameRoom := join(second.ID)
 			assert(current.Token, true)
 			assert(sameRoom.Token, true)
-			if got := p.livekit.Removed(); len(got) != 1 {
-				t.Fatal("same-room guest rejoin removed existing media")
+			if got := p.livekit.Removed(); len(got) != 0 {
+				t.Fatal("same-room guest join removed independent media")
 			}
 			newest := join(third.ID)
-			assert(old.Token, false)
-			assert(current.Token, false)
+			assert(old.Token, true)
+			assert(current.Token, true)
 			assert(newest.Token, true)
 		})
 	}
 }
 
-func TestLegacyGuestJoinReplacesRestoredRoomBinding(t *testing.T) {
+func TestGuestExplicitJoinRetainsPersistedRoomBinding(t *testing.T) {
 	p := startPublic(t, 100)
 	first, second := p.createRoom(t, "First"), p.createRoom(t, "Second")
 	client := p.browser(t)
@@ -215,16 +215,16 @@ func TestLegacyGuestJoinReplacesRestoredRoomBinding(t *testing.T) {
 	old := joinedVoice(t, client, first.ID)
 	p = restartVoice(t, p)
 	checkVoiceValidation(t, p, old.Token, 200)
-	visitor, err := p.identity.Visitor(t.Context(), guest.Id)
+	session, err := p.identity.GuestSession(t.Context(), guest.Id)
 	if err != nil {
 		t.Fatal(err)
 	}
 	p.lifecycle.Lock()
-	current, err := p.voice.Join(t.Context(), visitor, second.ID)
+	current, err := p.voice.JoinSession(t.Context(), session, second.ID)
 	p.lifecycle.Unlock()
 	if err != nil {
 		t.Fatal(err)
 	}
-	checkVoiceValidation(t, p, old.Token, 403)
+	checkVoiceValidation(t, p, old.Token, 200)
 	checkVoiceValidation(t, p, current.Token, 200)
 }

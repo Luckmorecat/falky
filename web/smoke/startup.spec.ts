@@ -34,7 +34,7 @@ test('keeps background programs through empty and same-size source updates', asy
   await expect(field).toHaveAttribute('data-program-builds', '2');
   const next = await page.request.post(`${app.url}/__mock/action`, { data: {
     type: 'participants', roomId: state.rooms[0]!.id,
-    participants: [{ visitorId: '01JBX6Z8Q3M5W2K7R9T4V1C0D1', name: 'Sam', muted: false, deafened: false, sharing: false }],
+    participants: [{ connectionId: 'sam.connection', visitorId: '01JBX6Z8Q3M5W2K7R9T4V1C0D1', name: 'Sam', muted: false, deafened: false, sharing: false }],
   } });
   expect(next.ok()).toBeTruthy();
   await expect(page.locator('.grid .orb')).toHaveCount(2);

@@ -1,9 +1,12 @@
 package voice
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -80,6 +83,10 @@ func (s *Service) Signalling(upstream string) http.Handler {
 			http.Error(w, "voice admission refused", status)
 			return
 		}
+		if err := s.checkLease(handshakeCtx, g, false); err != nil {
+			http.Error(w, "voice admission refused", admissionStatus(err))
+			return
+		}
 		if strings.HasSuffix(r.URL.Path, "/validate") {
 			proxy.ServeHTTP(w, r.WithContext(handshakeCtx))
 			return
@@ -88,6 +95,20 @@ func (s *Service) Signalling(upstream string) http.Handler {
 			http.Error(w, "WebSocket required", http.StatusBadRequest)
 			return
 		}
+		acceptOptions := &websocket.AcceptOptions{InsecureSkipVerify: true}
+		if !validateHandshake(w, r, acceptOptions) {
+			return
+		}
+		if err := s.checkLease(handshakeCtx, g, true); err != nil {
+			http.Error(w, "voice admission refused", admissionStatus(err))
+			return
+		}
+		reserved := true
+		defer func() {
+			if reserved {
+				s.releaseLease(g)
+			}
+		}()
 		u := *target
 		u.Scheme = "ws" + strings.TrimPrefix(u.Scheme, "http")
 		u.Path, u.RawQuery = r.URL.Path, r.URL.RawQuery
@@ -108,9 +129,8 @@ func (s *Service) Signalling(upstream string) http.Handler {
 		// HTTP 101 precedes participant creation. Wait for LiveKit's first
 		// Join/Reconnect response before releasing the mutation gate, so an
 		// already checked handshake cannot attach after its removal.
-		// Keep the upstream alive until cleanup has removed a half-joined
-		// participant. Cancelling Read itself closes the socket immediately,
-		// which can tear down LiveKit's RPC route before removal is answered.
+		// A failed attempt closes only its own signal source. Management
+		// removal addresses identity and could remove a concurrent retry.
 		type frame struct {
 			typ  websocket.MessageType
 			data []byte
@@ -136,15 +156,18 @@ func (s *Service) Signalling(upstream string) http.Handler {
 			}
 		}
 		if err != nil || (response.GetJoin() == nil && response.GetReconnect() == nil) {
-			// Even a failed frontend handshake may already have created media.
-			s.removeFailedHandshake(r.Context(), g)
+			// LiveKit tears down this attempt when its signal source closes.
 			_ = up.CloseNow()
 			http.Error(w, "voice handshake failed", http.StatusBadGateway)
 			return
 		}
-		down, err := websocket.Accept(w, r, &websocket.AcceptOptions{InsecureSkipVerify: true})
+		if err := s.connected(ctx, g); err != nil {
+			_ = up.CloseNow()
+			http.Error(w, "voice admission refused", admissionStatus(err))
+			return
+		}
+		down, err := websocket.Accept(w, r, acceptOptions)
 		if err != nil {
-			s.removeFailedHandshake(r.Context(), g)
 			_ = up.CloseNow()
 			return
 		}
@@ -153,6 +176,8 @@ func (s *Service) Signalling(upstream string) http.Handler {
 		s.mu.Lock()
 		g.sockets[connection] = struct{}{}
 		s.mu.Unlock()
+		s.releaseLease(g)
+		reserved = false
 		s.admission.Unlock()
 		locked = false
 		defer func() { connection.close(); s.mu.Lock(); delete(g.sockets, connection); s.mu.Unlock() }()
@@ -167,14 +192,6 @@ func (s *Service) Signalling(upstream string) http.Handler {
 		connection.close()
 		<-done
 	})
-}
-
-func (s *Service) removeFailedHandshake(ctx context.Context, grant *voiceGrant) {
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
-	defer cancel()
-	if err := s.livekit.RemoveParticipant(ctx, grant.room, grant.transport); err != nil {
-		s.logger.ErrorContext(ctx, "failed signalling cleanup", "error", err)
-	}
 }
 
 func relaySignals(ctx context.Context, from, to *websocket.Conn) {
@@ -211,33 +228,14 @@ func (s *Service) admit(r *http.Request) (*voiceGrant, error) {
 	if err != nil || claims.ExpiresAt == nil || !time.Now().Before(claims.ExpiresAt.Time) || grants.Video == nil || !grants.Video.RoomJoin || grants.Video.Room == "" || grants.Video.RoomAdmin || grants.Video.RoomCreate || grants.Video.RoomList || grants.Video.RoomRecord || grants.Video.IngressAdmin || grants.Video.Agent {
 		return nil, identity.ErrNoVisitor
 	}
-	if room, issued := s.IssuedRoom(s.logicalIdentity(grants.Identity)); issued && room != grants.Video.Room {
-		return nil, identity.ErrNoVisitor
+	g, err := s.grant(r.Context(), grants.Identity)
+	if err != nil {
+		return nil, err
 	}
 	s.mu.Lock()
-	g := s.grants[grants.Identity]
+	refused := g == nil || g.revoked || g.room != grants.Video.Room
 	s.mu.Unlock()
-	restored := g == nil
-	if restored {
-		// Account transports, including upgraded bare IDs, must never regain
-		// access from identity alone. Only persisted current guest state can
-		// restore a signed guest token after process-local grant loss.
-		lookup, ok := s.visitors.(interface {
-			GuestSession(context.Context, string) (identity.Session, error)
-		})
-		if !ok || strings.Contains(grants.Identity, ".") {
-			return nil, identity.ErrNoVisitor
-		}
-		session, err := lookup.GuestSession(r.Context(), grants.Identity)
-		if err != nil {
-			return nil, err
-		}
-		if session.Kind != identity.Guest || session.Visitor.ID != grants.Identity {
-			return nil, identity.ErrNoVisitor
-		}
-		g = &voiceGrant{session: session, transport: grants.Identity, room: grants.Video.Room, sockets: make(map[*signalConnection]struct{})}
-	}
-	if g.revoked || g.room != grants.Video.Room {
+	if refused {
 		return nil, identity.ErrNoVisitor
 	}
 	if requested := r.URL.Query().Get("room"); requested != "" && requested != g.room {
@@ -253,13 +251,49 @@ func (s *Service) admit(r *http.Request) (*voiceGrant, error) {
 		}
 		return nil, err
 	}
-	if restored {
-		g.session = current
-		s.mu.Lock()
-		s.grants[g.transport] = g
-		s.current[current.Visitor.ID] = g.transport
-		s.issued[current.Visitor.ID] = g.room
-		s.mu.Unlock()
-	}
 	return g, nil
+}
+
+func admissionStatus(err error) int {
+	if errors.Is(err, identity.ErrNoVisitor) {
+		return http.StatusForbidden
+	}
+	return http.StatusServiceUnavailable
+}
+
+var errHandshakeValidated = errors.New("websocket handshake validated")
+
+// validateHandshake lets Accept validate the complete request before upstream
+// admission can renew its lease. Refusing the probe's Hijack prevents any I/O;
+// the real downstream upgrade still waits for durable upstream success.
+func validateHandshake(w http.ResponseWriter, r *http.Request, options *websocket.AcceptOptions) bool {
+	probe := &handshakeProbe{header: make(http.Header)}
+	_, err := websocket.Accept(probe, r, options)
+	if errors.Is(err, errHandshakeValidated) {
+		// Accept writes 101 then 500 around the refused Hijack; discard both.
+		return true
+	}
+	for name, values := range probe.header {
+		w.Header()[name] = values
+	}
+	w.WriteHeader(probe.status)
+	_, _ = w.Write(probe.body.Bytes())
+	return false
+}
+
+type handshakeProbe struct {
+	header http.Header
+	status int
+	body   bytes.Buffer
+}
+
+func (p *handshakeProbe) Header() http.Header { return p.header }
+func (p *handshakeProbe) WriteHeader(status int) {
+	if p.status == 0 {
+		p.status = status
+	}
+}
+func (p *handshakeProbe) Write(data []byte) (int, error) { return p.body.Write(data) }
+func (*handshakeProbe) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	return nil, nil, errHandshakeValidated
 }

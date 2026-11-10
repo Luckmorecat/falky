@@ -1135,7 +1135,7 @@ paths:
       summary: Join a room's voice.
       requestBody:
         required: false
-        description: Optional explicit account voice transfer confirmation; guests may omit the body.
+        description: Optional legacy body; confirmation is no longer required or used.
         content:
           application/json:
             schema:
@@ -1145,31 +1145,41 @@ paths:
                 confirmTransfer:
                   type: boolean
                   default: false
-                  description: Explicitly transfer account voice from another browser session.
+                  deprecated: true
+                  description: Ignored. Every Join creates an independent connection.
       description: >-
         Returns the LiveKit URL and a token to connect to the room's voice
-        with a LiveKit SDK. A visitor is a participant in one room at most:
-        the server first removes them from any other room's voice. Joining
-        the room again, say from a second tab, is allowed even when the room
-        is full, and the new connection replaces the earlier one. For accounts,
-        a different browser session must explicitly send confirmTransfer=true;
-        otherwise voice_transfer_required leaves the first participant intact.
-        Guest callers may continue omitting the request body. Account requests
-        require this server's exact configured Origin header.
+        with a LiveKit SDK. Every explicit Join authorizes a fresh independent
+        connection, including repeated joins from the same session. Other tabs
+        and devices remain connected, in the same room or different rooms.
+        Local Leave, room switching and discarded setup credentials do not revoke
+        grants immediately. Valid original or LiveKit-refreshed credentials may
+        reconnect their original connection before ten continuous minutes of
+        confirmed absence, while their token, session and room access remain valid.
+        Successful reconnect cancels the idle countdown. Unused grants receive
+        ten minutes from issuance. At the idle deadline the old grant is refused;
+        a new explicit Join retrieves a fresh grant under the same valid login.
+        Capacity counts connections, including other connections of this identity.
+        Account requests require this server's exact configured Origin header.
 
 
-        The token admits the visitor to this room only, under their visitor
-        ID as participant identity for guests and their name as display name.
-        Account transport identities append an opaque grant nonce after a dot;
-        occupancy continues to expose the permanent visitor ID. Account clients
-        map a transport identity to that ID by taking its prefix before the dot.
-        Account credentials always use this server's guarded public signalling
-        origin. Restarting Falky requires fresh account voice credentials.
-        Guests may reuse a valid original or LiveKit-refreshed JWT after a
-        backend restart while exactly one persisted guest session and its guest
-        link generation remain current. Guest logout, link rotation or account
-        upgrade prevent restoration; room and name authorization still apply.
-        A newer room choice fences earlier room tokens. It may
+        Both guests and accounts receive a fresh immutable transport identity on
+        every explicit Join, even for the same room and session. Its prefix before
+        the dot is the permanent identity ID. Occupancy exposes both connectionId
+        (the transport identity) and visitorId (the permanent identity).
+        All credentials use guarded public signalling. Valid original and LiveKit
+        refreshed JWTs reconnect after restart only through their exact persisted
+        active grant and current browser session, expiry, kind, generation, room
+        and name authorization. Unknown grants predating durable grant storage fail
+        closed and require one explicit rejoin; browser sessions and their deadlines
+        survive migration. The idle-grace migration preserves existing grants
+        until authoritative activity establishes their absence window.
+        Temporary disconnection, page exit and SDK Leave preserve the grant during
+        its idle grace. Successful LiveKit listings establish absence, normally
+        within the 30-second maintenance cadence; listing outages defer idle
+        cleanup. Connected participants never expire merely for their age.
+        Voice idle expiry does not log out the browser.
+        The token may
         publish the microphone, a camera, a screen share and the screen share's
         audio, subscribe to the other participants, and update the
         participant's own attributes, but not send data messages. It expires
@@ -1205,9 +1215,7 @@ paths:
           description: >-
             The room's voice already has as many participants as it admits
             (`room_full`), or another connected guest holds this guest's
-            name (`name_taken`; rename first). The visitor stays where they
-            were. Account voice owned by another browser requires explicit
-            confirmation (`voice_transfer_required`).
+            name (`name_taken`; rename first). Existing connections are unchanged.
           content:
             application/json:
               schema:
@@ -1215,8 +1223,7 @@ paths:
         "503":
           description: >-
             The server cannot reach LiveKit (`voice_unavailable`); try again
-            later. The visitor may already have been disconnected from another
-            room's voice.
+            later. Existing connections are unchanged.
           content:
             application/json:
               schema:
@@ -1243,8 +1250,11 @@ paths:
         only old guest connections with code 4001; account connections survive.
         Logout closes only that browser session; recovery closes old account
         sessions while preserving its new session; disablement closes that
-        account's sessions. Revoked or expired sessions close with code 4001
-        and cannot reconnect without current authorization. Account revocation
+        account's sessions. Revoked sessions close promptly with code 4001;
+        established expired connections close at the next maintenance pass
+        (normally within 30 seconds). Requests and reconnects reject expired
+        sessions immediately using their original authoritative database deadline,
+        without restart extension. Closed sessions cannot reconnect without current authorization. Account revocation
         does not send the guest-link replacement event. Name changes, including
         displaced guests, use retryable close 1001 so clients refresh their
         identity through GET /api/me. Shutdown also closes with code 1001.
@@ -1639,7 +1649,9 @@ components:
           description: Exactly one fresh twelve-word recovery phrase on registration or recovery; empty on sign-in.
           example: &id004
           - acid acorn acre acts afar affix aged agent agile aging agony ahead
-      description: A new session and any freshly generated recovery phrase.
+      description: A new session and any freshly generated recovery phrase. Once the identity change commits,
+        these credentials are returned even if subsequent live or voice enforcement fails. Enforcement is
+        attempted immediately, failures are logged, and maintenance retries pending enforcement and cleanup.
       example:
         session:
           visitor:
@@ -2071,7 +2083,8 @@ components:
             - id: 01JBX7A2K9D4F6H8M0P3R5T7VW
               name: Lounge
               occupancy:
-                - visitorId: 01JBX6Z8Q3M5W2K7R9T4V1C0DE
+                - connectionId: 01JBX6Z8Q3M5W2K7R9T4V1C0DE.01JBX8C4N2F6H8K0P3R5T7W9YZ
+                  visitorId: 01JBX6Z8Q3M5W2K7R9T4V1C0DE
                   name: Bob
             - id: 01JBX7B3M1E5G7J9N2Q4S6V8XY
               name: Games
@@ -2097,16 +2110,21 @@ components:
           items:
             $ref: "#/components/schemas/Participant"
           example:
-            - visitorId: 01JBX6Z8Q3M5W2K7R9T4V1C0DE
+            - connectionId: 01JBX6Z8Q3M5W2K7R9T4V1C0DE.01JBX8C4N2F6H8K0P3R5T7W9YZ
+              visitorId: 01JBX6Z8Q3M5W2K7R9T4V1C0DE
               name: Bob
     Participant:
       type: object
-      description: A visitor connected to a room's voice.
-      required: [visitorId, name]
+      description: One independent voice connection; an identity may have several.
+      required: [connectionId, visitorId, name]
       properties:
+        connectionId:
+          type: string
+          description: Immutable grant and LiveKit transport identity of this connection.
+          example: 01JBX6Z8Q3M5W2K7R9T4V1C0DE.01JBX8C4N2F6H8K0P3R5T7W9YZ
         visitorId:
           type: string
-          description: The participant's visitor ID.
+          description: The permanent identity ID of the person using this connection.
           example: 01JBX6Z8Q3M5W2K7R9T4V1C0DE
         name:
           type: string
@@ -2115,8 +2133,12 @@ components:
     VoiceCredentials:
       type: object
       description: What a client connects to a room's voice with.
-      required: [url, token]
+      required: [url, token, grantId]
       properties:
+        grantId:
+          type: string
+          description: Immutable identifier of this independent connection and its LiveKit transport identity.
+          example: 01JBX6Z8Q3M5W2K7R9T4V1C0DE.01JBX8C4N2F6H8K0P3R5T7W9YZ
         url:
           type: string
           description: >-
@@ -2319,7 +2341,8 @@ components:
           items:
             $ref: "#/components/schemas/Participant"
           example:
-            - visitorId: 01JBX6Z8Q3M5W2K7R9T4V1C0DE
+            - connectionId: 01JBX6Z8Q3M5W2K7R9T4V1C0DE.01JBX8C4N2F6H8K0P3R5T7W9YZ
+              visitorId: 01JBX6Z8Q3M5W2K7R9T4V1C0DE
               name: Bob
     AccessRevoked:
       type: object

@@ -85,9 +85,9 @@ export const prefs = {
   viewedRoom: () => read('viewedRoom'),
   setViewedRoom: (roomId: string) => write('viewedRoom', roomId),
   /** A participant's volume from 0 to 2, where 1 is as they arrive and everyone starts. */
-  volume(visitorId: string): number {
-    const v = Number(read(`volume.${visitorId}`));
-    return read(`volume.${visitorId}`) === null || Number.isNaN(v) ? 1 : Math.max(0, Math.min(2, v));
+  volume(connectionId: string): number {
+    const v = Number(read(`connectionVolume.${connectionId}`));
+    return read(`connectionVolume.${connectionId}`) === null || Number.isNaN(v) ? 1 : Math.max(0, Math.min(2, v));
   },
-  setVolume: (visitorId: string, v: number) => write(`volume.${visitorId}`, String(v)),
+  setVolume: (connectionId: string, v: number) => write(`connectionVolume.${connectionId}`, String(v)),
 };

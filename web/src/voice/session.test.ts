@@ -11,14 +11,27 @@ function deferred() {
 
 let download: ReturnType<typeof deferred>;
 let host: VoiceHost;
+const rooms: { disconnect: ReturnType<typeof vi.fn> }[] = [];
 const resume = vi.fn(async () => {});
+const startAudio = vi.fn(async () => {});
 const connect = vi.fn(async () => {});
-const fetchVoice = vi.fn(async () => Response.json({ url: 'ws://localhost/rtc', token: 'test' }));
+const fetchVoice = vi.fn(async (_url: string, _init?: RequestInit) => Response.json({ url: 'ws://localhost/rtc', token: 'test', grantId: 'self.old' }));
 const loadSDK = vi.fn();
+const remotes = new Map();
+const speakers: { identity: string }[] = [];
+let localTracks = new Map();
+const disconnect = vi.fn();
+const constructRoom = vi.fn();
+const enableMicrophone = vi.fn(async () => {});
+const enableShare = vi.fn(async () => {});
+const enableCamera = vi.fn(async () => {});
 
 beforeEach(() => {
+  localStorage.clear();
   vi.resetModules();
   vi.clearAllMocks();
+  fetchVoice.mockImplementation(async () => Response.json({ url: 'ws://localhost/rtc', token: 'test', grantId: 'self.old' }));
+  remotes.clear(); speakers.length = 0; localTracks = new Map(); rooms.length = 0;
   download = deferred();
   vi.doMock('livekit-client', async () => {
     loadSDK();
@@ -28,14 +41,15 @@ beforeEach(() => {
       Track: { Source: { Camera: 'camera', ScreenShare: 'screen', Microphone: 'mic' } },
       RoomEvent: {},
       Room: class {
-        localParticipant = { identity: 'self', attributes: {}, isMicrophoneEnabled: false, getTrackPublication() {} };
-        remoteParticipants = new Map();
-        activeSpeakers = [];
+        constructor() { constructRoom(); rooms.push(this); }
+        localParticipant = { identity: 'self.nonce', setCameraEnabled: enableCamera, setScreenShareEnabled: enableShare, setMicrophoneEnabled: enableMicrophone, trackPublications: localTracks, attributes: {}, isMicrophoneEnabled: false, getTrackPublication(source: string) { return this.trackPublications.get(source); } };
+        remoteParticipants = remotes;
+        activeSpeakers = speakers;
         connect = connect;
-        startAudio = async () => {};
+        startAudio = startAudio;
         on() { return this; }
         removeAllListeners() {}
-        disconnect() {}
+        disconnect = vi.fn(() => disconnect());
       },
     };
   });
@@ -50,6 +64,7 @@ beforeEach(() => {
   };
 });
 afterEach(() => {
+  window.dispatchEvent(new Event('pagehide'));
   vi.doUnmock('livekit-client');
   vi.unstubAllGlobals();
   document.body.replaceChildren();
@@ -109,4 +124,250 @@ it('reports a failed SDK download through the existing voice error without leavi
   expect(host.onProblem).toHaveBeenCalledWith('join_failed');
   expect(fetchVoice).not.toHaveBeenCalled();
   expect(session.snapshot).toEqual(idleVoice);
+});
+
+it('discards a late Join after explicit Leave without sending another request', async () => {
+  const { VoiceSession } = await import('./session');
+  let respond!: (value: Response) => void;
+  const received = new Promise<Response>((resolve) => { respond = resolve; });
+  fetchVoice.mockImplementationOnce(() => received);
+  const session = new VoiceSession(host);
+  const joining = session.join('lounge');
+  download.resolve();
+  await vi.waitFor(() => expect(fetchVoice).toHaveBeenCalledOnce());
+  await session.leave();
+  respond(Response.json({ url: 'ws://localhost/rtc', token: 'test', grantId: 'self.late' }));
+  await joining;
+  expect(connect).not.toHaveBeenCalled();
+  expect(session.snapshot).toEqual(idleVoice);
+  expect(fetchVoice).toHaveBeenCalledOnce();
+  session.end();
+});
+
+it('routes same-person remote media, speakers, meters and volume by exact connection', async () => {
+  const share = { mediaStreamTrack: { id: 'screen-track' } };
+  const camera = { mediaStreamTrack: { id: 'camera-track' } };
+  const mic = { mediaStreamTrack: { id: 'mic-track' } };
+  const volume = vi.fn();
+  localTracks.set('mic', { track: { mediaStreamTrack: { id: 'windows-mic' } } });
+  remotes.set('self.mac', { identity: 'self.mac', name: 'Sam', attributes: {}, isMicrophoneEnabled: true,
+    isScreenShareEnabled: true, isCameraEnabled: true, setVolume: volume, audioTrackPublications: new Map(),
+    getTrackPublication: (source: string) => ({ track: source === 'screen' ? share : source === 'camera' ? camera : mic }) });
+  speakers.push({ identity: 'self.mac' });
+  const sample = vi.fn((buf: Float32Array) => buf.fill(0.5));
+  vi.stubGlobal('AudioContext', class {
+    resume = resume;
+    createMediaStreamSource() { return { connect() {}, disconnect() {} }; }
+    createAnalyser() { return { fftSize: 1024, getFloatTimeDomainData: sample }; }
+  });
+  vi.stubGlobal('MediaStream', class {});
+  host.volumeOf = vi.fn(() => 0.4);
+  const { VoiceSession } = await import('./session');
+  const session = new VoiceSession(host);
+  const joining = session.join('lounge'); download.resolve(); await joining;
+  expect(session.snapshot.people.map((person) => person.id)).toEqual(['self.nonce', 'self.mac']);
+  expect(session.snapshot.people.map((person) => person.visitorId)).toEqual(['self', 'self']);
+  expect(session.snapshot.people.map((person) => person.local)).toEqual([true, false]);
+  expect(session.snapshot.speakers).toEqual(['self.mac']);
+  expect(session.shareTrack('self.mac')).toBe(share);
+  expect(session.cameraTrack('self.mac')).toBe(camera);
+  expect(session.level('self.mac')).toBeGreaterThan(0);
+  expect(session.level('self.nonce')).toBeGreaterThan(0);
+  expect(session.level('self')).toBe(0);
+  session.applyVolumes();
+  expect(host.volumeOf).toHaveBeenCalledWith('self.mac');
+  expect(volume).toHaveBeenCalledWith(0.4, 'mic');
+  const stop = vi.fn(); localTracks.set('mic', { track: { stop } });
+  const leaving = session.leave();
+  expect(stop).toHaveBeenCalledOnce();
+  expect(disconnect).toHaveBeenCalledOnce();
+  expect(session.snapshot).toMatchObject({ status: 'idle' });
+  await leaving;
+  expect(fetchVoice).toHaveBeenCalledOnce();
+  const requests = fetchVoice.mock.calls.length;
+  session.end();
+  expect(fetchVoice.mock.calls).toHaveLength(requests);
+});
+
+it('does not restore voice after Leave interrupts audio startup', async () => {
+  const audioReady = deferred();
+  startAudio.mockImplementationOnce(() => audioReady.promise);
+  const { VoiceSession } = await import('./session');
+  const session = new VoiceSession(host);
+  const joining = session.join('lounge'); download.resolve();
+  await vi.waitFor(() => expect(startAudio).toHaveBeenCalledOnce());
+  await session.leave();
+  audioReady.resolve();
+  await joining;
+  expect(session.snapshot.status).toBe('idle');
+});
+
+it('discards an abandoned late Join after access ends', async () => {
+  let respond!: (value: Response) => void;
+  fetchVoice.mockImplementationOnce(() => new Promise<Response>((resolve) => { respond = resolve; }));
+  const { VoiceSession } = await import('./session');
+  const session = new VoiceSession(host);
+  const joining = session.join('lounge'); download.resolve();
+  await vi.waitFor(() => expect(fetchVoice).toHaveBeenCalledOnce());
+  session.end();
+  respond(Response.json({ url: 'ws://localhost/rtc', token: 'test', grantId: 'self.ended' }));
+  await joining;
+  expect(fetchVoice.mock.calls.every(([url]) => url.startsWith('/api/rooms/'))).toBe(true);
+  expect(connect).not.toHaveBeenCalled();
+  expect(session.snapshot).toEqual(idleVoice);
+});
+
+it('stops microphone media that becomes available after explicit Leave', async () => {
+  const micReady = deferred();
+  const stop = vi.fn();
+  enableMicrophone.mockImplementationOnce(async () => {
+    await micReady.promise;
+    localTracks.set('mic', { track: { stop } });
+  });
+  host.joinMuted = () => false;
+  const { VoiceSession } = await import('./session');
+  const session = new VoiceSession(host);
+  const joining = session.join('lounge'); download.resolve();
+  await vi.waitFor(() => expect(enableMicrophone).toHaveBeenCalledOnce());
+  await session.leave();
+  micReady.resolve();
+  await joining;
+  expect(stop).toHaveBeenCalledOnce();
+  expect(session.snapshot.status).toBe('idle');
+});
+
+it('ignores a canceled microphone failure after a replacement Join', async () => {
+  const micReady = deferred();
+  enableMicrophone.mockImplementationOnce(() => micReady.promise);
+  host.joinMuted = () => false;
+  const { VoiceSession } = await import('./session');
+  const session = new VoiceSession(host);
+  const oldJoin = session.join('lounge'); download.resolve();
+  await vi.waitFor(() => expect(enableMicrophone).toHaveBeenCalledOnce());
+  await session.leave();
+  host.joinMuted = () => true;
+  await session.join('games');
+  micReady.reject(new DOMException('Canceled', 'NotAllowedError'));
+  await oldJoin;
+  expect(session.snapshot).toMatchObject({ status: 'connected', roomId: 'games', listenOnly: false });
+  expect(host.onProblem).not.toHaveBeenCalled();
+  session.end();
+});
+
+it('stops a screen share accepted in the picker after explicit Leave', async () => {
+  const picked = deferred();
+  const stop = vi.fn();
+  enableShare.mockImplementationOnce(async () => { await picked.promise; localTracks.set('share', { track: { stop } }); });
+  const { VoiceSession } = await import('./session');
+  const session = new VoiceSession(host);
+  const joining = session.join('lounge'); download.resolve(); await joining;
+  const sharing = session.toggleShare();
+  await session.leave();
+  picked.resolve(); await sharing;
+  expect(stop).toHaveBeenCalledOnce();
+  expect(session.snapshot.status).toBe('idle');
+});
+
+it('disconnects the old local room only after successful admission and preserves it on refusal', async () => {
+  const { VoiceSession } = await import('./session');
+  const session = new VoiceSession(host);
+  const first = session.join('lounge'); download.resolve(); await first;
+  fetchVoice.mockResolvedValueOnce(Response.json({ code: 'room_full' }, { status: 409 }));
+  await session.join('full');
+  expect(session.snapshot).toMatchObject({ status: 'connected', roomId: 'lounge' });
+  expect(disconnect).not.toHaveBeenCalled();
+  fetchVoice.mockResolvedValueOnce(Response.json({ url: 'ws://localhost/rtc', token: 'new', grantId: 'self.new' }));
+  await session.join('games');
+  expect(session.snapshot).toMatchObject({ status: 'connected', roomId: 'games' });
+  expect(fetchVoice.mock.calls.every(([url]) => url.startsWith('/api/rooms/'))).toBe(true);
+  session.end();
+});
+
+it('discards failed media admission without HTTP cleanup and permits a newer connection', async () => {
+  connect.mockRejectedValueOnce(new Error('Unavailable'));
+  fetchVoice.mockResolvedValueOnce(Response.json({ url: 'ws://localhost/rtc', token: 'bad', grantId: 'self.failed' }));
+  const { VoiceSession } = await import('./session');
+  const session = new VoiceSession(host);
+  const joining = session.join('lounge'); download.resolve(); await joining;
+  expect(session.snapshot).toMatchObject({ status: 'idle' });
+  expect(host.onProblem).toHaveBeenCalledWith('media_failed');
+  await session.join('games');
+  expect(session.snapshot).toMatchObject({ status: 'connected', roomId: 'games' });
+  expect(fetchVoice.mock.calls.every(([url]) => url.startsWith('/api/rooms/'))).toBe(true);
+  session.end();
+});
+
+it.each(['resolve', 'reject'] as const)('disconnects captured obsolete RTC setup after a newer connection when old setup %ss', async (completion) => {
+  const admitting = deferred();
+  connect.mockImplementationOnce(() => admitting.promise);
+  const { VoiceSession } = await import('./session');
+  const session = new VoiceSession(host);
+  const first = session.join('lounge'); download.resolve();
+  await vi.waitFor(() => expect(connect).toHaveBeenCalledOnce());
+  const oldStop = vi.fn(); localTracks.set('mic', { track: { stop: oldStop } });
+  session.end();
+  const currentStop = vi.fn(); localTracks = new Map([['mic', { track: { stop: currentStop } }]]);
+  fetchVoice.mockResolvedValueOnce(Response.json({ url: 'ws://localhost/rtc', token: 'new', grantId: 'self.new' }));
+  await session.join('games');
+  if (completion === 'resolve') admitting.resolve(); else admitting.reject(new Error('Canceled RTC setup'));
+  await first;
+  expect(session.snapshot).toMatchObject({ status: 'connected', roomId: 'games' });
+  expect(rooms[0]!.disconnect).toHaveBeenCalledTimes(2);
+  expect(rooms[1]!.disconnect).not.toHaveBeenCalled();
+  expect(oldStop).toHaveBeenCalledTimes(2);
+  expect(currentStop).not.toHaveBeenCalled();
+  expect(host.onProblem).not.toHaveBeenCalled();
+  expect(fetchVoice).toHaveBeenCalledTimes(2);
+  session.end();
+});
+
+it('discards a late HTTP admission without touching a newer Join', async () => {
+  let respond!: (value: Response) => void;
+  fetchVoice.mockImplementationOnce(() => new Promise<Response>((resolve) => { respond = resolve; }));
+  const { VoiceSession } = await import('./session');
+  const session = new VoiceSession(host);
+  const first = session.join('lounge'); download.resolve();
+  await vi.waitFor(() => expect(fetchVoice).toHaveBeenCalledOnce());
+  await session.leave();
+  fetchVoice.mockResolvedValueOnce(Response.json({ url: 'ws://localhost/rtc', token: 'new', grantId: 'self.new' }));
+  await session.join('games');
+  respond(Response.json({ url: 'ws://localhost/rtc', token: 'late', grantId: 'self.abandoned' }));
+  await first;
+  expect(session.snapshot).toMatchObject({ status: 'connected', roomId: 'games' });
+  expect(fetchVoice.mock.calls.every(([url]) => url.startsWith('/api/rooms/'))).toBe(true);
+  session.end();
+});
+
+it('discards credentials when media initialization itself fails', async () => {
+  constructRoom.mockImplementationOnce(() => { throw new Error('Unsupported media'); });
+  fetchVoice.mockResolvedValueOnce(Response.json({ url: 'ws://localhost/rtc', token: 'bad', grantId: 'self.unsupported' }));
+  const { VoiceSession } = await import('./session');
+  const session = new VoiceSession(host);
+  const joining = session.join('lounge'); download.resolve();
+  await joining;
+  expect(session.snapshot).toMatchObject({ status: 'idle' });
+  expect(host.onProblem).toHaveBeenCalledWith('media_failed');
+  expect(fetchVoice.mock.calls.every(([url]) => url.startsWith('/api/rooms/'))).toBe(true);
+  session.end();
+});
+
+it('stops a late camera on its captured old room while a replacement keeps its media', async () => {
+  const ready = deferred();
+  const oldTracks = localTracks;
+  const oldStop = vi.fn();
+  enableCamera.mockImplementationOnce(async () => { await ready.promise; oldTracks.set('camera', { track: { stop: oldStop } }); });
+  const { VoiceSession } = await import('./session');
+  const session = new VoiceSession(host);
+  const joining = session.join('lounge'); download.resolve(); await joining;
+  const camera = session.toggleCamera();
+  await session.leave();
+  const currentStop = vi.fn(); localTracks = new Map([['mic', { track: { stop: currentStop } }]]);
+  await session.join('games');
+  ready.resolve(); await camera;
+  expect(oldStop).toHaveBeenCalledOnce();
+  expect(currentStop).not.toHaveBeenCalled();
+  expect(rooms[1]!.disconnect).not.toHaveBeenCalled();
+  expect(session.snapshot).toMatchObject({ status: 'connected', roomId: 'games' });
+  expect(fetchVoice).toHaveBeenCalledTimes(2);
+  session.end();
 });

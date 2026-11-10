@@ -521,3 +521,22 @@ test('chat keeps each room reading place, pages without jumping, and virtualizes
   await page.getByRole('button', { name: /^Chat/ }).click();
   await expectPlace(page, phone);
 });
+
+
+test('offline Leave disconnects immediately without a server request and stays idle after reload', async ({ page, context }) => {
+  const requests: string[] = [];
+  page.on('request', (request) => { if (request.url().includes('/api/voice/leave')) requests.push(request.url()); });
+  await page.goto(app.url);
+  await english(page);
+  await page.getByRole('button', { name: 'Join', exact: true }).click();
+  await expect(page.getByRole('toolbar')).toBeVisible();
+  try {
+    await context.setOffline(true);
+    await page.getByRole('button', { name: 'Leave voice', exact: true }).click();
+    await expect(page.getByRole('toolbar')).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Join', exact: true })).toBeVisible();
+  } finally { await context.setOffline(false); }
+  await page.reload();
+  await expect(page.getByRole('button', { name: 'Join', exact: true })).toBeVisible();
+  expect(requests).toEqual([]);
+});
