@@ -17,7 +17,7 @@ import { t } from '../strings';
 import { idleVoice, type VoicePerson, type VoiceSnapshot } from '../voice/types';
 import { Main } from '../ui/Main';
 import { Orb } from '../ui/Orb';
-import { Entry } from '../ui/Screens';
+import { Auth } from '../ui/Screens';
 import { Message } from '../ui/Message';
 
 const NAMES = ['Олена', 'Марк', 'Софія', 'Тарас', 'Ірина', 'Богдан', 'Катя', 'Дмитро'];
@@ -112,9 +112,11 @@ const SCENES = {
   camera: 'Камери',
   chat: 'Чат',
   empty: 'Порожня кімната',
-  entry: 'Вхід',
-  noaccess: 'Немає доступу',
-  revoked: 'Посилання замінено',
+  entry: 'Пароль сервера',
+  signin: 'Вхід',
+  register: 'Реєстрація',
+  recover: 'Відновлення',
+  noaccess: 'Сервер не готовий',
   elsewhere: 'Голос в іншій кімнаті',
 } as const;
 type Scene = keyof typeof SCENES;
@@ -131,9 +133,12 @@ function stage(scene: Scene): void {
   if (scene === 'many') setState({ rooms: [{ ...rooms[0]!, occupancy: many.map((p) => ({ connectionId: p.id, visitorId: p.visitorId, name: p.name })) }, rooms[1]!, rooms[2]!], voice: inVoice(many, 'lounge') });
   if (scene === 'share') setState({ voice: inVoice([{ ...person(1), sharing: true }, ...ROOM_PEOPLE.filter((p) => p.id !== person(1).id)], 'lounge') });
   if (scene === 'camera') setState({ voice: { ...inVoice(ROOM_PEOPLE.map((p, i) => (i < 2 ? { ...p, camera: true, cameraTrackId: 'fake' } : p)), 'lounge'), camera: true } });
-  if (scene === 'entry') setState({ phase: 'entry' });
-  if (scene === 'noaccess') setState({ phase: 'noaccess' });
-  if (scene === 'revoked') setState({ phase: 'revoked' });
+  const auth = { guestName: null, reason: null, recovery: null } as const;
+  if (scene === 'entry') setState({ phase: 'auth', auth: { ...auth, step: 'access' } });
+  if (scene === 'signin') setState({ phase: 'auth', auth: { ...auth, step: 'signin' } });
+  if (scene === 'register') setState({ phase: 'auth', auth: { ...auth, step: 'register' } });
+  if (scene === 'recover') setState({ phase: 'auth', auth: { ...auth, step: 'recover' } });
+  if (scene === 'noaccess') setState({ phase: 'unset' });
   if (scene === 'elsewhere') setState({ viewedRoomId: 'games', voice: inVoice(ROOM_PEOPLE, 'lounge') });
 }
 
@@ -180,7 +185,7 @@ function Design() {
 
   return (
     <>
-      {scene === 'orbs' ? <OrbSheet /> : phase === 'entry' ? <Entry /> : phase === 'noaccess' ? <Message title={t.noAccessTitle} body={t.noAccessBody} /> : phase === 'revoked' ? <Message title={t.revokedTitle} body={t.revokedBody} /> : <Main key={scene} />}
+      {scene === 'orbs' ? <OrbSheet /> : phase === 'auth' ? <Auth /> : phase === 'unset' ? <Message title={t.auth.unsetTitle} body={t.auth.unsetBody} /> : <Main key={scene} />}
       <nav style={{ position: 'fixed', left: 12, bottom: 12, zIndex: 100, display: 'flex', flexDirection: 'column', gap: 2, padding: 6, borderRadius: 16, background: 'rgba(30,30,34,.92)', fontSize: 12 }}>
         {(Object.keys(SCENES) as Scene[]).map((s) => (
           <button key={s} onClick={() => pick(s)} style={{ padding: '5px 10px', borderRadius: 10, textAlign: 'left', background: s === scene ? '#fff' : 'none', color: s === scene ? '#000' : '#fff' }}>{SCENES[s]}</button>

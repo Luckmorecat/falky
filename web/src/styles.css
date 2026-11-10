@@ -198,6 +198,24 @@ input[type=range]::-moz-range-thumb { width: 18px; height: 18px; border: 0; bord
 .room-new { width: 8px; height: 8px; border-radius: var(--round); background: var(--level); flex: none; }
 .room-here { width: 16px; height: 16px; color: var(--signal-text); flex: none; }
 .room-here svg.i { width: 16px; height: 16px; }
+.room-item { position: relative; flex: none; display: flex; border-radius: 30px; }
+.room-item .room { padding-right: 44px; }
+.room-rename { position: absolute; right: 8px; top: 50%; translate: 0 -50%; width: 32px; height: 32px; border-radius: var(--round); corner-shape: superellipse(1.77); display: grid; place-items: center; color: var(--text-2); opacity: 0; transition: opacity 140ms ease, background-color 160ms ease, color 160ms ease; }
+.room-rename svg.i { width: 17px; height: 17px; }
+.room-item:hover .room-rename, .room-rename:focus-visible { opacity: 1; }
+@media (hover:hover) and (pointer:fine) { .room-rename:hover { background: var(--fill-2); color: var(--text); } }
+@media (hover:none) { .room-item.on .room-rename { opacity: 1; } }
+.chip-add { display: grid; place-items: center; width: 100%; height: 100%; border-radius: var(--round); corner-shape: superellipse(1.77); background: var(--fill); color: var(--text-2); transition: background-color 160ms ease, color 160ms ease; }
+.chip-add svg.i { width: 20px; height: 20px; }
+.room-add { color: var(--text-2); }
+@media (hover:hover) and (pointer:fine) { .room-add:hover .chip-add { background: var(--fill-2); color: var(--text); } .room-add:hover { color: var(--text); } }
+.room-edit { background: var(--raised); }
+.room-edit input { width: 100%; height: 30px; border: 0; border-radius: 12px; background: var(--fill); padding: 0 10px; font-size: 15px; color: var(--text); outline-offset: 0; }
+.room-edit input[aria-invalid] { box-shadow: inset 0 0 0 1.5px var(--danger); }
+.room-err { font-size: 12px; color: var(--danger); line-height: 1.3; padding-top: 3px; }
+.room-edit .people { padding-top: 3px; }
+.no-rooms { display: grid; justify-items: center; gap: 10px; }
+.no-rooms .go { width: auto; padding: 0 26px; margin-top: 6px; }
 .people { font-size: 13px; color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .people .talk { color: var(--text); }
 
@@ -467,6 +485,11 @@ kbd { min-width: 34px; height: 34px; padding: 0 10px; display: inline-grid; plac
 .setrow select, .setrow input[type=text], .conflict input { width: 100%; height: 46px; border-radius: 24px; background: var(--raised); border: 0; outline-offset: 0; padding: 0 14px; color: var(--text); font-size: 15px; }
 .setrow select { appearance: none; padding-right: 38px; text-overflow: ellipsis; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23888' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6.500 9.500 12 15l5.500-5.500'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 12px center; background-size: 18px; }
 .namerow { display: flex; gap: 8px; }
+.setrow input[type=password], .account .setrow input[type=text] { width: 100%; height: 46px; border-radius: 24px; background: var(--raised); border: 0; outline-offset: 0; padding: 0 52px 0 14px; color: var(--text); font-size: 15px; }
+.setrow .field-eye { top: 3px; right: 3px; }
+.account .setrow .btn2 { justify-self: start; }
+.btn2.danger { color: var(--danger); }
+
 .btn2 { height: 46px; padding: 0 16px; border-radius: 24px; background: var(--raised-2); flex: none; font-size: 14px; color: var(--text); transition: transform 140ms var(--ease-out), background-color 160ms ease; }
 .btn2:active { transform: scale(.97); }
 .btn2[disabled] { opacity: .45; cursor: default; }
@@ -501,6 +524,29 @@ kbd { min-width: 34px; height: 34px; padding: 0 10px; display: inline-grid; plac
 .go:active { transform: scale(.97); }
 .go[disabled] { opacity: .35; pointer-events: none; }
 .enter-err { min-height: 1.45em; color: var(--danger) !important; }
+/* The way in: access password, sign-in, registration, recovery */
+.screen.center:has(> .auth) { overflow-y: auto; align-items: safe center; }
+.auth { padding: 24px 0; }
+.auth .orb { width: min(168px, 24dvh); margin-bottom: 4px; }
+.auth > p { max-width: 320px; text-wrap: pretty; }
+.auth-notice { padding: 8px 14px; border-radius: 99px; background: var(--fill); color: var(--text) !important; }
+.auth-fields { display: grid; gap: 12px; width: 100%; margin-top: 10px; text-align: left; }
+.auth-field { display: grid; gap: 6px; }
+.auth-field > label { font-size: 13px; color: var(--text-2); padding-left: 18px; }
+.field-box { position: relative; display: block; }
+.enter .auth-field input { width: 100%; height: 50px; margin: 0; text-align: left; font-size: 16px; padding: 0 18px; border-radius: 25px; }
+.enter .auth-field:has(.field-eye) input { padding-right: 52px; }
+.auth-field input[aria-invalid], .setrow input[aria-invalid] { box-shadow: inset 0 0 0 1.5px var(--danger); }
+.field-eye { position: absolute; right: 5px; top: 5px; width: 40px; height: 40px; border-radius: var(--round); display: grid; place-items: center; color: var(--text-2); transition: background-color 160ms ease, color 160ms ease; }
+@media (hover:hover) and (pointer:fine) { .field-eye:hover { background: var(--fill); color: var(--text); } }
+.field-eye svg.i { width: 20px; height: 20px; }
+.field-hint, .auth-field .field-err { font-size: 13px; padding-left: 18px; line-height: 1.35; }
+.field-hint { color: var(--text-3); }
+.auth .go { width: 100%; margin-top: 6px; }
+.auth .enter-err { margin-top: -4px; }
+.auth-links { display: grid; gap: 6px; font-size: 14px; color: var(--text-2); }
+.link { color: var(--text); font-weight: 550; text-decoration: underline; text-decoration-color: var(--fill-2); text-underline-offset: 3px; transition: text-decoration-color 160ms ease; }
+@media (hover:hover) and (pointer:fine) { .link:hover { text-decoration-color: currentColor; } }
 .message-screen { display: grid; justify-items: center; text-align: center; gap: 10px; max-width: 420px; }
 .message-screen .orb { width: 132px; }
 .message-screen h1 { font-size: 30px; font-weight: 500; letter-spacing: -.02em; line-height: 1.15; margin-top: 18px; }

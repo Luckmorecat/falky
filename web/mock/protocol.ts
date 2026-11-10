@@ -36,7 +36,8 @@ export interface MockState {
   rooms: Schema['Room'][];
   peers: Record<string, MockPeer[]>;
   faults: MockFaults;
-  accessLink: string;
+  /** What the entry scenario asks for: the access password, the fixture account's login and password, and its operator recovery code. */
+  credentials: { accessPassword: string; login: string; password: string; recoveryCode: string };
 }
 /** Generation is required for asynchronous browser voice operations. */
 export type MockAction =

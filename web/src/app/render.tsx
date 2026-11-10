@@ -7,7 +7,7 @@ import { installInterfaceSounds } from './interfaceSounds';
 import { useApp } from './store';
 import { t } from '../strings';
 import { Main } from '../ui/Main';
-import { Entry } from '../ui/Screens';
+import { Auth } from '../ui/Screens';
 import { Message } from '../ui/Message';
 
 function Screen() {
@@ -21,7 +21,7 @@ function Screen() {
   }, [unread]);
 
   useEffect(() => {
-    if (phase !== 'entry' && phase !== 'ready') return;
+    if (phase !== 'auth' && phase !== 'ready') return;
     let frame = 0;
     let observer: PerformanceObserver | undefined;
     function afterPaint() {
@@ -54,12 +54,10 @@ function Screen() {
   switch (phase) {
     case 'loading':
       return <div className="screen" />;
-    case 'entry':
-      return <Entry />;
-    case 'noaccess':
-      return <Message title={t.noAccessTitle} body={t.noAccessBody} />;
-    case 'revoked':
-      return <Message title={t.revokedTitle} body={t.revokedBody} />;
+    case 'auth':
+      return <Auth />;
+    case 'unset':
+      return <Message title={t.auth.unsetTitle} body={t.auth.unsetBody} />;
     case 'ready':
       return <Main />;
   }
@@ -70,9 +68,9 @@ function App() {
   return <Screen />;
 }
 
-// A new access link pasted into this tab changes only the fragment.
+// A recovery link pasted into this tab changes only the fragment.
 addEventListener('hashchange', () => {
-  if (location.hash.includes('k=')) void boot();
+  if (location.hash.includes('recover=')) void boot();
 });
 
 applyAppearance();

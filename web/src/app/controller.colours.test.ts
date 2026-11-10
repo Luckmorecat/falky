@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { LiveHandlers } from '../api/live';
 import type { VoiceSnapshot } from '../voice/types';
 
-const seam = vi.hoisted(() => ({ api: { me: vi.fn(), rooms: vi.fn(), messages: vi.fn(), colours: vi.fn(), setColour: vi.fn(), rename: vi.fn() }, live: {} as LiveHandlers, voiceChange: undefined as undefined | ((snapshot: VoiceSnapshot) => void) }));
+const seam = vi.hoisted(() => ({ api: { access: vi.fn(), me: vi.fn(), rooms: vi.fn(), messages: vi.fn(), colours: vi.fn(), setColour: vi.fn(), rename: vi.fn() }, live: {} as LiveHandlers, voiceChange: undefined as undefined | ((snapshot: VoiceSnapshot) => void) }));
 vi.mock('../api/client', async (original) => ({ ...await original<typeof import('../api/client')>(), api: seam.api }));
 vi.mock('../api/live', () => ({ LiveConnection: class {
   constructor(options: typeof seam.live) { seam.live = options; }
@@ -26,7 +26,7 @@ afterEach(() => vi.useRealTimers());
 
 beforeEach(() => {
   vi.resetModules(); vi.clearAllMocks(); localStorage.clear();
-  seam.api.me.mockResolvedValue(me()); seam.api.rooms.mockResolvedValue([]); seam.api.messages.mockResolvedValue([]); seam.api.colours.mockResolvedValue([]);
+  seam.api.access.mockResolvedValue({ passwordSet: true, passed: true }); seam.api.me.mockResolvedValue(me()); seam.api.rooms.mockResolvedValue([]); seam.api.messages.mockResolvedValue([]); seam.api.colours.mockResolvedValue([]);
 });
 
 it('keeps the confirmed selection through failure and retry, and ignores an older response after a newer live edit', async () => {
@@ -154,5 +154,6 @@ it('retries a failed recovery snapshot while the live socket remains open and no
   seam.live.onRevoked!();
   await vi.advanceTimersByTimeAsync(30_000);
   expect(seam.api.colours).toHaveBeenCalledTimes(beforeEnd);
-  expect(getState().phase).toBe('revoked');
+  expect(getState().phase).toBe('auth');
+  expect(getState().auth).toMatchObject({ step: 'signin', reason: 'ended' });
 });

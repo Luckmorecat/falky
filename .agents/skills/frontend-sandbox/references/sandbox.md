@@ -26,7 +26,7 @@ pnpm run dev:mock --port 5174 --api-port 8081 --scenario remote-share
 | Scenario | Starting state |
 |---|---|
 | `populated` | Entered visitor, three rooms, peers and chat history (default) |
-| `entry` | Normal name-entry screen with a valid mock access link |
+| `entry` | Signed out, before the server password: give `falky-mock`, then sign in as `alex` / `mock-password`, register, or recover with code `mock-recovery-code` |
 | `quiet` | Entered visitor, empty rooms and histories |
 | `remote-share` | Populated rooms; join Lounge to see Sam's synthetic share |
 
@@ -107,7 +107,7 @@ after cleanup; progress/errors go to stderr. No interactive browser setup is nee
 | `voice` | Joined Lounge with simulated participants |
 | `screen-share` | Joined Lounge displaying Sam's animated synthetic screen |
 | `settings` | Settings panel open |
-| `entry` | Name-entry screen with a valid mock link |
+| `entry` | The server password screen, signed out |
 
 Defaults are 1440×1000, dark theme, English, UTC and device scale 1. Use
 `--viewport WIDTHxHEIGHT`, `--theme dark|light`, `--lang en|uk` and `--full-page`

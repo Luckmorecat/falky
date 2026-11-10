@@ -4,27 +4,31 @@
  */
 
 export interface paths {
-    "/api/accounts/registration/begin": {
+    "/api/access": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /**
+         * Say whether this browser may sign in or register.
+         * @description Reports whether the operator has set the access password, whether this browser holds a current access pass (the `falky_access` cookie), and, for a browser that still holds a guest session from before accounts, the name that guest had: such a browser may register without the access password and keeps the guest's history.
+         */
+        get: operations["getAccess"];
         put?: never;
         /**
-         * Begin invitation-only enrollment.
-         * @description Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
+         * Give the access password.
+         * @description Checks the access password and sets the `falky_access` cookie (`HttpOnly`, `Secure`, `SameSite=Strict`, for `/api`, 400 days), which signing in, registering and recovering require. Changing the access password ends every pass but no account session. Requires this server's exact `Origin`; attempts are limited per client IP.
          */
-        post: operations["beginRegistration"];
+        post: operations["passAccess"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/accounts/registration/finish": {
+    "/api/accounts/register": {
         parameters: {
             query?: never;
             header?: never;
@@ -34,17 +38,17 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Complete verified invitation enrollment.
-         * @description Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
+         * Create an account and sign in.
+         * @description Creates an account with a login, a password and the name others see, and sets the session cookie. Requires the access pass, or a guest session from before accounts, whose identity, history and colour the account then keeps; without either it answers `access_required` before checking anything else. Requires this server's exact `Origin`; attempts are limited per client IP.
          */
-        post: operations["finishRegistration"];
+        post: operations["register"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/accounts/authentication/begin": {
+    "/api/accounts/login": {
         parameters: {
             query?: never;
             header?: never;
@@ -54,17 +58,17 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Begin discoverable passkey sign-in.
-         * @description Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
+         * Sign in with a login and password.
+         * @description Requires the access pass. An unknown login and a wrong password both answer `invalid_credentials`; attempts are limited per client IP and per login. Requires this server's exact `Origin`.
          */
-        post: operations["beginAuthentication"];
+        post: operations["login"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/accounts/authentication/finish": {
+    "/api/accounts/recovery": {
         parameters: {
             query?: never;
             header?: never;
@@ -74,17 +78,17 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Complete discoverable passkey sign-in.
-         * @description Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
+         * Set a new password with an operator recovery code.
+         * @description Requires the access pass. With a code the operator issued (`falky account recover`), sets a new password, and a new login when one is given, ends every session of the account and signs this browser in. An account from before passwords has no login and must be given one (`login_required`). Requires this server's exact `Origin`; attempts are limited per client IP.
          */
-        post: operations["finishAuthentication"];
+        post: operations["recover"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/accounts/reauthentication/begin": {
+    "/api/accounts/password": {
         parameters: {
             query?: never;
             header?: never;
@@ -92,132 +96,12 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
-        put?: never;
         /**
-         * Begin recent proof for this session.
-         * @description Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
+         * Change the password, given the current one.
+         * @description Ends every other session of the account; this one stays signed in. Requires this server's exact `Origin`.
          */
-        post: operations["beginReauthentication"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/accounts/reauthentication/finish": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Verify a passkey for sensitive changes.
-         * @description Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
-         */
-        post: operations["finishReauthentication"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/accounts/passkeys/begin": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Begin enrollment of another passkey.
-         * @description Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
-         */
-        post: operations["beginAddPasskey"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/accounts/passkeys/finish": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Complete enrollment of another passkey.
-         * @description Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
-         */
-        post: operations["finishAddPasskey"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/accounts/recovery/begin": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Begin account-specific replacement enrollment.
-         * @description Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
-         */
-        post: operations["beginRecovery"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/accounts/recovery/finish": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Complete recovery and revoke all old account access.
-         * @description Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
-         */
-        post: operations["finishRecovery"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/accounts/recovery-codes": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Replace the recovery phrase after recent verification.
-         * @description Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
-         */
-        post: operations["regenerateRecoveryCodes"];
+        put: operations["changePassword"];
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -234,8 +118,8 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Revoke the current browser session.
-         * @description Requires exact configured Origin, JSON body (64 KiB maximum), and bounded per-client attempts. Begin sets a Secure HttpOnly SameSite=Strict __Host-falky-ceremony cookie; finish requires that same browser cookie and a genuine WebAuthn credential. Proof errors are generic. Sensitive changes require a verified passkey in this session within five minutes. All account responses prohibit caching.
+         * End this browser's session.
+         * @description Ends this session, closes its live updates and voice, and clears the session cookie. Requires this server's exact `Origin`.
          */
         post: operations["logout"];
         delete?: never;
@@ -251,54 +135,11 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /**
-         * Read the current resolved session.
-         * @description Owner-only current session cookie; credential deletion also requires recent verified passkey proof and refuses the last credential. Mutations require exact configured Origin. Responses prohibit caching.
-         */
+        /** Read the current session. */
         get: operations["getAccountSession"];
         put?: never;
         post?: never;
         delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/accounts/passkeys": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List the owner’s passkeys.
-         * @description Owner-only current session cookie; credential deletion also requires recent verified passkey proof and refuses the last credential. Mutations require exact configured Origin. Responses prohibit caching.
-         */
-        get: operations["listPasskeys"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/accounts/passkeys/{credentialId}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post?: never;
-        /**
-         * Remove an owned passkey, retaining at least one.
-         * @description Owner-only current session cookie; credential deletion also requires recent verified passkey proof and refuses the last credential. Mutations require exact configured Origin. Responses prohibit caching.
-         */
-        delete: operations["removePasskey"];
         options?: never;
         head?: never;
         patch?: never;
@@ -394,26 +235,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/enter": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Enter with the access link's secret and a name.
-         * @description Exchanges the secret from the access link (the `k` value in its URL fragment) and a name for a new guest, and sets the visitor cookie. Account names remain reserved even while offline or disabled and cannot be claimed by guests. The guest's name is reserved against other guests for 60 seconds; opening live updates (`GET /api/live`) holds it while connected. Account registration or rename may claim a guest's name, assigning that guest a replacement and refreshing connected clients. Attempts are limited per client IP, whether they succeed or not.
-         */
-        post: operations["enter"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/me": {
         parameters: {
             query?: never;
@@ -423,7 +244,7 @@ export interface paths {
         };
         /**
          * Return the current visitor.
-         * @description Returns the current guest or account identity. For guests, `nameTaken` reports whether another connected guest holds their name; live updates and voice then remain closed until they rename. Temporary guest entry reservations do not count. Account names remain reserved offline. Account name claims assign displaced guests replacement names rather than marking an account's name as taken.
+         * @description Returns the signed-in account's identity. Account names are unique and stay reserved while the account is away or disabled, so `nameTaken` is false.
          */
         get: operations["getMe"];
         put?: never;
@@ -433,7 +254,7 @@ export interface paths {
         head?: never;
         /**
          * Change the current visitor's name.
-         * @description Renames the guest or account the cookie belongs to. A guest cannot claim a name reserved by an account or held by another guest. An account cannot claim another account's name, including an offline or disabled account, but may claim a guest's name and assign that guest a replacement. Changed identities receive a retryable live close (1001) to refresh their names, and current voice names are published in occupancy updates.
+         * @description Renames the signed-in account. It cannot take another account's name, including an offline or disabled account's. Changed identities receive a retryable live close (1001) to refresh their names, and current voice names are published in occupancy updates.
          */
         patch: operations["renameMe"];
         trace?: never;
@@ -487,15 +308,42 @@ export interface paths {
         };
         /**
          * List every room with its occupancy.
-         * @description Returns every room, in the order they were created, each with the participants in its voice. The operator creates and renames rooms.
+         * @description Returns every room, in the order they were created, each with the participants in its voice.
          */
         get: operations["listRooms"];
+        put?: never;
+        /**
+         * Create a room.
+         * @description Any account may create a room, up to 50 rooms on the server and a few per account each minute. Everyone connected receives `room.changed`.
+         */
+        post: operations["createRoom"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/rooms/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The room's ID. */
+                id: components["parameters"]["RoomId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
         put?: never;
         post?: never;
         delete?: never;
         options?: never;
         head?: never;
-        patch?: never;
+        /**
+         * Rename a room.
+         * @description Any account may rename any room; a room may change the case of its own name. Everyone connected receives `room.changed`.
+         */
+        patch: operations["renameRoom"];
         trace?: never;
     };
     "/api/rooms/{id}/messages": {
@@ -541,7 +389,7 @@ export interface paths {
          * Join a room's voice.
          * @description Returns the LiveKit URL and a token to connect to the room's voice with a LiveKit SDK. Every explicit Join authorizes a fresh independent connection, including repeated joins from the same session. Other tabs and devices remain connected, in the same room or different rooms. Local Leave, room switching and discarded setup credentials do not revoke grants immediately. Valid original or LiveKit-refreshed credentials may reconnect their original connection before ten continuous minutes of confirmed absence, while their token, session and room access remain valid. Successful reconnect cancels the idle countdown. Unused grants receive ten minutes from issuance. At the idle deadline the old grant is refused; a new explicit Join retrieves a fresh grant under the same valid login. Capacity counts connections, including other connections of this identity. Account requests require this server's exact configured Origin header.
          *
-         *     Both guests and accounts receive a fresh immutable transport identity on every explicit Join, even for the same room and session. Its prefix before the dot is the permanent identity ID. Occupancy exposes both connectionId (the transport identity) and visitorId (the permanent identity). All credentials use guarded public signalling. Valid original and LiveKit refreshed JWTs reconnect after restart only through their exact persisted active grant and current browser session, expiry, kind, generation, room and name authorization. Unknown grants predating durable grant storage fail closed and require one explicit rejoin; browser sessions and their deadlines survive migration. The idle-grace migration preserves existing grants until authoritative activity establishes their absence window. Temporary disconnection, page exit and SDK Leave preserve the grant during its idle grace. Successful LiveKit listings establish absence, normally within the 30-second maintenance cadence; listing outages defer idle cleanup. Connected participants never expire merely for their age. Voice idle expiry does not log out the browser. The token may publish the microphone, a camera, a screen share and the screen share's audio, subscribe to the other participants, and update the participant's own attributes, but not send data messages. It expires 10 minutes after it is issued, so connect right away; once connected, LiveKit renews it.
+         *     Every explicit Join receives a fresh immutable transport identity on every explicit Join, even for the same room and session. Its prefix before the dot is the permanent identity ID. Occupancy exposes both connectionId (the transport identity) and visitorId (the permanent identity). All credentials use guarded public signalling. Valid original and LiveKit refreshed JWTs reconnect after restart only through their exact persisted active grant and current browser session, expiry, kind, generation, room and name authorization. Unknown grants predating durable grant storage fail closed and require one explicit rejoin; browser sessions and their deadlines survive migration. The idle-grace migration preserves existing grants until authoritative activity establishes their absence window. Temporary disconnection, page exit and SDK Leave preserve the grant during its idle grace. Successful LiveKit listings establish absence, normally within the 30-second maintenance cadence; listing outages defer idle cleanup. Connected participants never expire merely for their age. Voice idle expiry does not log out the browser. The token may publish the microphone, a camera, a screen share and the screen share's audio, subscribe to the other participants, and update the participant's own attributes, but not send data messages. It expires 10 minutes after it is issued, so connect right away; once connected, LiveKit renews it.
          *
          *     Muted is the state of the microphone track. Deafened is the participant attribute `deafened`: a client sets it to `"true"` while it plays no one's audio, and also mutes its microphone, then sets it to `"false"` again; an absent attribute means not deafened. The other participants see it through the SDK, for example with `room.localParticipant.setAttributes({ deafened: 'true' })` in `livekit-client`.
          */
@@ -561,9 +409,9 @@ export interface paths {
         };
         /**
          * Open the live-update WebSocket.
-         * @description Upgrades to a WebSocket over which the server sends live updates, each an `Event` as one JSON text message. The connection carries events from the server only: messages from the client are ignored, though one over 32 KiB closes the connection with close code 1009. The upgrade's `Origin` must be the server's public origin. The server pings every 20 seconds and closes a connection that does not answer within 10 seconds. Each connection has a bounded queue of events waiting to be sent; a client that lets it fill up is disconnected with close code 4000. Replacing the guest access link sends `access.revoked` and closes only old guest connections with code 4001; account connections survive. Logout closes only that browser session; recovery closes old account sessions while preserving its new session; disablement closes that account's sessions. Revoked sessions close promptly with code 4001; established expired connections close at the next maintenance pass (normally within 30 seconds). Requests and reconnects reject expired sessions immediately using their original authoritative database deadline, without restart extension. Closed sessions cannot reconnect without current authorization. Account revocation does not send the guest-link replacement event. Name changes, including displaced guests, use retryable close 1001 so clients refresh their identity through GET /api/me. Shutdown also closes with code 1001. Events are not replayed: after a retryable disconnection a client reconnects first and then catches up through the other operations, reading each room's messages with `after` set to the last message ID it saw and the room list again. Events that arrive while it catches up may repeat what it reads; it keeps one message per message ID. It also refreshes every previously visible attachment through GET /api/attachments/{id}: catching up only new messages cannot recover missed attachments.expired events.
+         * @description Upgrades to a WebSocket over which the server sends live updates, each an `Event` as one JSON text message. The connection carries events from the server only: messages from the client are ignored, though one over 32 KiB closes the connection with close code 1009. The upgrade's `Origin` must be the server's public origin. The server pings every 20 seconds and closes a connection that does not answer within 10 seconds. Each connection has a bounded queue of events waiting to be sent; a client that lets it fill up is disconnected with close code 4000. Logout closes only that browser session; recovery closes old account sessions while preserving its new session; disablement closes that account's sessions. Revoked sessions close promptly with code 4001; established expired connections close at the next maintenance pass (normally within 30 seconds). Requests and reconnects reject expired sessions immediately using their original authoritative database deadline, without restart extension. Closed sessions cannot reconnect without current authorization. Name changes use retryable close 1001 so clients refresh their identity through GET /api/me. Shutdown also closes with code 1001. Events are not replayed: after a retryable disconnection a client reconnects first and then catches up through the other operations, reading each room's messages with `after` set to the last message ID it saw and the room list again. Events that arrive while it catches up may repeat what it reads; it keeps one message per message ID. It also refreshes every previously visible attachment through GET /api/attachments/{id}: catching up only new messages cannot recover missed attachments.expired events.
          *
-         *     A visitor is connected while they have at least one of these connections open. A connected guest holds their name against other guests; account registration or rename may claim it and assign the guest a replacement. Account names stay reserved even while offline or disabled and cannot be taken by another visitor.
+         *     A visitor is connected while they have at least one of these connections open. Account names stay reserved even while offline or disabled and cannot be taken by another account.
          */
         get: operations["openLive"];
         put?: never;
@@ -625,7 +473,7 @@ export interface paths {
         put?: never;
         /**
          * Receive an event from LiveKit.
-         * @description LiveKit reports here who joins and leaves each room's voice; the server keeps its view of every room's occupancy from these events and from LiveKit's participant listing, read when the server starts and every 30 seconds. A participant joined, left or failed to connect, or a room's voice closed; other events change nothing, and an event received again changes nothing more. A participant who may not be in that room's voice is removed from it instead of entering the view: a guest without current guest-link access, an account with a revoked, expired or disabled session or stale voice grant, a guest whose name another connected guest holds, or a participant in a room other than their current voice grant. Public account admission is already fenced before reaching LiveKit; webhook/list reconciliation repairs the view. A change of occupancy is sent to every live-update connection as `occupancy.changed`.
+         * @description LiveKit reports here who joins and leaves each room's voice; the server keeps its view of every room's occupancy from these events and from LiveKit's participant listing, read when the server starts and every 30 seconds. A participant joined, left or failed to connect, or a room's voice closed; other events change nothing, and an event received again changes nothing more. A participant who may not be in that room's voice is removed from it instead of entering the view: an account with a revoked, expired or disabled session or stale voice grant, or a participant in a room other than their current voice grant. Public account admission is already fenced before reaching LiveKit; webhook/list reconciliation repairs the view. A change of occupancy is sent to every live-update connection as `occupancy.changed`.
          */
         post: operations["receiveLiveKitWebhook"];
         delete?: never;
@@ -643,102 +491,76 @@ export interface components {
          * @example {}
          */
         AccountEmpty: Record<string, never>;
-        /**
-         * @description Invitation bearer and chosen reserved account name.
-         * @example {
-         *       "invitation": "opaque-value",
-         *       "name": "opaque-value"
-         *     }
-         */
-        RegistrationBegin: {
+        /** @description Whether this browser may sign in or register. */
+        Access: {
             /**
-             * @description Single-use seven-day operator invitation bearer.
-             * @example opaque-value
+             * @description Whether the operator has set the access password; until then no one can enter.
+             * @example true
              */
-            invitation: string;
+            passwordSet: boolean;
             /**
-             * @description Chosen reserved account name.
-             * @example opaque-value
+             * @description Whether this browser holds a current access pass.
+             * @example false
              */
-            name: string;
+            passed: boolean;
+            /**
+             * @description Present when this browser still holds a guest session from before accounts: that guest's name. Registering keeps the guest's history.
+             * @example Bob
+             */
+            guestName?: string;
+        };
+        /** @description The access password. */
+        AccessRequest: {
+            /**
+             * @description The access password the operator shares.
+             * @example the shared access password
+             */
+            password: string;
         };
         /**
-         * @description Proof authorizing replacement enrollment for one account.
-         * @example {
-         *       "accountId": "opaque-value",
-         *       "proof": "acid acorn acre acts afar affix aged agent agile aging agony ahead"
-         *     }
+         * @description What an account signs in with: 3 to 32 latin letters, digits, dots, dashes or underscores, starting with a letter or digit. Logins are compared case-insensitively and never shown to others.
+         * @example bob
          */
-        RecoveryBegin: {
+        Login: string;
+        /**
+         * @description A password of 8 to 128 characters; there are no composition rules.
+         * @example correct horse battery staple
+         */
+        Password: string;
+        /** @description The new account's login, password and the name others see. */
+        RegisterRequest: {
+            login: components["schemas"]["Login"];
+            password: components["schemas"]["Password"];
+            name: components["schemas"]["Name"];
+        };
+        /** @description A login and password. */
+        LoginRequest: {
+            login: components["schemas"]["Login"];
+            password: components["schemas"]["Password"];
+        };
+        /** @description Proof of an account and its new password; `login`, when present, becomes the account's login. */
+        RecoveryRequest: {
             /**
-             * @description Permanent account identity ID from session.visitor.id, separate from the proof.
-             * @example opaque-value
+             * @description The account's login, or its ID as an operator recovery link carries it.
+             * @example bob
              */
-            accountId: string;
+            account: string;
             /**
-             * @description Twelve-word recovery phrase (case-insensitive; whitespace is collapsed), or exact, case-sensitive thirty-minute operator recovery bearer. Phrase word order and spelling must match.
-             * @example acid acorn acre acts afar affix aged agent agile aging agony ahead
+             * @description The operator recovery code, exactly as given; it works once, for 30 minutes.
+             * @example 6GQ3VQKXHVY4HRSMBJ2TQ5W7DA6GQ3VQKXHVY4HRSMBJ2TQ5W7DA
              */
             proof: string;
+            password: components["schemas"]["Password"];
+            login?: components["schemas"]["Login"];
         };
-        /**
-         * @description A browser credential completing the bound ceremony.
-         * @example {
-         *       "ceremonyId": "opaque-value",
-         *       "credential": {},
-         *       "label": "opaque-value"
-         *     }
-         */
-        AccountFinish: {
-            /**
-             * @description Opaque five-minute one-use ceremony ID.
-             * @example opaque-value
-             */
-            ceremonyId: string;
-            /**
-             * @description Standard browser WebAuthn JSON, with base64url binary fields.
-             * @example {}
-             */
-            credential: {
-                [key: string]: unknown;
-            };
-            /**
-             * @description Optional passkey label; defaults to Passkey.
-             * @example opaque-value
-             */
-            label?: string;
+        /** @description The current password and the one to change to. */
+        PasswordChange: {
+            currentPassword: components["schemas"]["Password"];
+            newPassword: components["schemas"]["Password"];
         };
-        /**
-         * @description A short-lived ceremony with standard WebAuthn options.
-         * @example {
-         *       "id": "ceremony-id",
-         *       "expiresAt": "2026-11-09T12:05:00Z",
-         *       "options": {
-         *         "publicKey": {}
-         *       }
-         *     }
-         */
-        AccountCeremony: {
-            /**
-             * @description Opaque ceremony ID.
-             * @example ceremony-id
-             */
-            id: string;
-            /**
-             * Format: date-time
-             * @description Absolute ceremony expiry.
-             * @example 2026-11-09T12:05:00Z
-             */
-            expiresAt: string;
-            /**
-             * @description Standard WebAuthn publicKey creation or assertion envelope. UV and resident keys are required.
-             * @example {
-             *       "publicKey": {}
-             *     }
-             */
-            options: {
-                [key: string]: unknown;
-            };
+        /** @description A room's name; rooms follow the same name rules as people. */
+        RoomNameRequest: {
+            name: components["schemas"]["Name"];
         };
         /**
          * @description Identity kind and absolute session lifetime.
@@ -760,37 +582,20 @@ export interface components {
         AccountSession: {
             visitor: components["schemas"]["Visitor"];
             /**
-             * @description Current identity kind.
+             * @description Current identity kind; only accounts sign in.
              * @example account
              * @enum {string}
              */
-            kind: "guest" | "account";
+            kind: "account";
             /**
              * Format: date-time
-             * @description Absolute server-side expiry for guest and account sessions; ordinary activity does not extend it.
+             * @description Absolute server-side expiry, 90 days after signing in; ordinary activity does not extend it.
              * @example 2027-02-07T12:00:00Z
              */
             expiresAt?: string;
         };
         /**
-         * @description One new private recovery phrase shown once after successful generation.
-         * @example {
-         *       "recoveryCodes": [
-         *         "acid acorn acre acts afar affix aged agent agile aging agony ahead"
-         *       ]
-         *     }
-         */
-        RecoveryCodes: {
-            /**
-             * @description One twelve-word recovery phrase, shown once. Words are independently and uniformly selected from EFF short wordlist 1, with repeats allowed (about 124 bits). Only its SHA-256 digest is stored; plaintext is never retrievable.
-             * @example [
-             *       "acid acorn acre acts afar affix aged agent agile aging agony ahead"
-             *     ]
-             */
-            recoveryCodes: string[];
-        };
-        /**
-         * @description A new session and any freshly generated recovery phrase. Once the identity change commits, these credentials are returned even if subsequent live or voice enforcement fails. Enforcement is attempted immediately, failures are logged, and maintenance retries pending enforcement and cleanup.
+         * @description A new session. Once the identity change commits, the session is returned even if subsequent live or voice enforcement fails. Enforcement is attempted immediately, failures are logged, and maintenance retries pending enforcement and cleanup.
          * @example {
          *       "session": {
          *         "visitor": {
@@ -805,60 +610,11 @@ export interface components {
          *         },
          *         "kind": "account",
          *         "expiresAt": "2027-02-07T12:00:00Z"
-         *       },
-         *       "recoveryCodes": [
-         *         "acid acorn acre acts afar affix aged agent agile aging agony ahead"
-         *       ]
+         *       }
          *     }
          */
         AccountEnrollment: {
             session: components["schemas"]["AccountSession"];
-            /**
-             * @description Exactly one fresh twelve-word recovery phrase on registration or recovery; empty on sign-in.
-             * @example [
-             *       "acid acorn acre acts afar affix aged agent agile aging agony ahead"
-             *     ]
-             */
-            recoveryCodes: string[];
-        };
-        /**
-         * @description An individually identifiable credential belonging to the owner.
-         * @example {
-         *       "id": "base64url-id",
-         *       "label": "Laptop",
-         *       "createdAt": "2026-11-09T12:00:00Z"
-         *     }
-         */
-        AccountPasskey: {
-            /**
-             * @description Base64url credential ID.
-             * @example base64url-id
-             */
-            id: string;
-            /**
-             * @description Owner-supplied label.
-             * @example Laptop
-             */
-            label: string;
-            /**
-             * Format: date-time
-             * @description Credential enrollment time.
-             * @example 2026-11-09T12:00:00Z
-             */
-            createdAt: string;
-        };
-        /**
-         * @description The authenticated account’s passkeys.
-         * @example {
-         *       "passkeys": []
-         *     }
-         */
-        AccountPasskeys: {
-            /**
-             * @description This account’s credentials only.
-             * @example []
-             */
-            passkeys: components["schemas"]["AccountPasskey"][];
         };
         /** @description Private metadata. Availability is ready (owned draft), posted, expired, or cancelled. Metadata survives expiry; private drafts retain expiresAt through expiry or cancellation. Posted records omit it. Content URL always requires the current visitor cookie. */
         Attachment: {
@@ -1052,7 +808,7 @@ export interface components {
         /** @description The body of every error response. */
         Error: {
             /**
-             * @description Stable, machine-readable error code: `not_found` (no such route), `invalid_request` (the request does not match the contract), `internal` (the server failed), `visitor_required` (no valid visitor cookie), `invalid_link` (wrong access link secret), `invalid_name` (a name breaks the name rules), `name_taken` (another visitor holds the name), `rate_limited` (too many requests), `room_not_found` (no such room), `invalid_message` (a message body breaks the message rules), `request_key_reused` (a request key was already used for another message), `origin_forbidden` (a request from a forbidden origin), `room_full` (a room's voice admits no more participants) or `voice_unavailable` (the server cannot reach LiveKit). Attachment operations also use `attachment_not_found`, `attachment_expired`, `invalid_attachments`, `attachment_too_large`, `invalid_image`, `image_dimensions`, `attachment_busy`, `attachment_capacity`, `attachment_processing`, `attachment_unavailable` and `upload_timeout`; each operation documents their status and meaning.
+             * @description Stable, machine-readable error code: `not_found` (no such route), `invalid_request` (the request does not match the contract), `internal` (the server failed), `visitor_required` (no valid visitor cookie), `access_required` (give the access password first), `invalid_access_password`, `access_unset` (no access password yet), `invalid_credentials` (wrong login or password), `account_disabled`, `invalid_login`, `login_taken`, `login_required`, `invalid_password`, `invalid_proof` (wrong or expired recovery code), `invalid_name` (a name breaks the name rules), `name_taken` (another account has the name), `room_name_taken`, `room_limit`, `rate_limited` (too many requests), `room_not_found` (no such room), `invalid_message` (a message body breaks the message rules), `request_key_reused` (a request key was already used for another message), `origin_forbidden` (a request from a forbidden origin), `room_full` (a room's voice admits no more participants) or `voice_unavailable` (the server cannot reach LiveKit). Attachment operations also use `attachment_not_found`, `attachment_expired`, `invalid_attachments`, `attachment_too_large`, `invalid_image`, `image_dimensions`, `attachment_busy`, `attachment_capacity`, `attachment_processing`, `attachment_unavailable` and `upload_timeout`; each operation documents their status and meaning.
              * @example not_found
              */
             code: string;
@@ -1082,7 +838,7 @@ export interface components {
          * @enum {string}
          */
         HealthStatus: "ok" | "degraded" | "unavailable";
-        /** @description A guest or passkey account with one permanent identity, retained through guest upgrade and recovery. */
+        /** @description An account's permanent identity, kept through recovery and from the guest it may have been. */
         Visitor: {
             /**
              * @description The visitor's ID, a ULID; it never changes.
@@ -1095,7 +851,7 @@ export interface components {
              */
             name: string;
             /**
-             * @description Whether another connected guest holds this guest's name. Temporary guest entry reservations do not count. Live updates and voice stay closed to that guest until they rename; reading and posting remain available. Account names are reserved offline and report false. Account name claims give displaced guests replacement names and refresh their clients instead of setting an account's nameTaken.
+             * @description Kept for older clients: account names are unique, so it is always false.
              * @example false
              */
             nameTaken: boolean;
@@ -1149,15 +905,6 @@ export interface components {
              *     ]
              */
             colours: components["schemas"]["VisitorColour"][];
-        };
-        /** @description The access link's secret and the name to enter under. */
-        EnterRequest: {
-            /**
-             * @description The `k` value from the access link's URL fragment.
-             * @example 6GQ3VQKXHVY4HRSMBJ2TQ5W7DA
-             */
-            secret: string;
-            name: components["schemas"]["Name"];
         };
         /** @description The name the visitor changes to. */
         RenameRequest: {
@@ -1377,7 +1124,7 @@ export interface components {
             timestamp: string;
         };
         /**
-         * @description What an event reports: `message.created`, a message was posted (its payload is the `Message`); `room.changed`, a room was created or renamed (its payload is the `RoomChange`); `occupancy.changed`, someone joined or left a room's voice, or a participant's new name reached it (its payload is the `OccupancyChange`); `access.revoked`, the guest link was replaced (its payload is the `AccessRevoked`), and the server closes the connection next; `visitor.colour.changed`, an explicit saved colour change (its payload is the `VisitorColour`) to all visitors; `attachments.expired`, posted files expired in this room (its payload is `AttachmentsExpired`). Private drafts are never broadcast.
+         * @description What an event reports: `message.created`, a message was posted (its payload is the `Message`); `room.changed`, a room was created or renamed (its payload is the `RoomChange`); `occupancy.changed`, someone joined or left a room's voice, or a participant's new name reached it (its payload is the `OccupancyChange`); `access.revoked`, kept for older clients and no longer sent (its payload is the `AccessRevoked`), and the server closes the connection next; `visitor.colour.changed`, an explicit saved colour change (its payload is the `VisitorColour`) to all visitors; `attachments.expired`, posted files expired in this room (its payload is `AttachmentsExpired`). Private drafts are never broadcast.
          * @example message.created
          * @enum {string}
          */
@@ -1414,7 +1161,7 @@ export interface components {
              */
             occupancy: components["schemas"]["Participant"][];
         };
-        /** @description Why guest-link access ended. The old guest cookie is refused; reentry through the current guest link creates a new guest identity. This event is not sent for account logout, recovery, disablement or session expiry; those close only the affected sessions with code 4001. */
+        /** @description Why guest-link access ended, from before accounts replaced guests; the server no longer sends it. This event is not sent for account logout, recovery, disablement or session expiry; those close only the affected sessions with code 4001. */
         AccessRevoked: {
             /**
              * @description `link_replaced`: the guest access link was replaced, ending old guest sessions while preserving account sessions.
@@ -1454,6 +1201,24 @@ export interface components {
         };
     };
     responses: {
+        /** @description This browser has not given the current access password (`access_required`); give it with `POST /api/access` first. */
+        AccessRequired: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description Too many attempts (`rate_limited`); try again later. */
+        RateLimited: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
         /** @description The request failed; the body says why. */
         Error: {
             headers: {
@@ -1472,7 +1237,7 @@ export interface components {
                 "application/json": components["schemas"]["Error"];
             };
         };
-        /** @description The name is reserved by another account or held by another guest (`name_taken`). */
+        /** @description Another account has this name (`name_taken`). */
         NameTaken: {
             headers: {
                 [name: string]: unknown;
@@ -1490,7 +1255,7 @@ export interface components {
                 "application/json": components["schemas"]["Error"];
             };
         };
-        /** @description The request has no current guest or account session (`visitor_required`). Guests may enter through the current guest link; accounts must obtain a valid session through authentication, registration or recovery. */
+        /** @description The request has no current account session (`visitor_required`); sign in, register or recover first. */
         VisitorRequired: {
             headers: {
                 [name: string]: unknown;
@@ -1512,511 +1277,265 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
-    beginRegistration: {
+    getAccess: {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** @description JSON input for beginRegistration. */
-        requestBody: {
-            content: {
-                /**
-                 * @example {
-                 *       "invitation": "invitation-bearer",
-                 *       "name": "Alice"
-                 *     }
-                 */
-                "application/json": components["schemas"]["RegistrationBegin"];
-            };
-        };
+        requestBody?: never;
         responses: {
-            /** @description Successful operation. Enrollment replaces the browser session; recovery codes appear only when generated. */
+            /** @description The browser's access. */
             200: {
                 headers: {
-                    /** @description Secure HttpOnly SameSite=Strict session or browser ceremony cookie, when needed. */
-                    "Set-Cookie"?: string;
                     [name: string]: unknown;
                 };
                 content: {
-                    /**
-                     * @example {
-                     *       "id": "ceremony-id",
-                     *       "expiresAt": "2026-11-09T12:05:00Z",
-                     *       "options": {
-                     *         "publicKey": {}
-                     *       }
-                     *     }
-                     */
-                    "application/json": components["schemas"]["AccountCeremony"];
+                    "application/json": components["schemas"]["Access"];
                 };
             };
             default: components["responses"]["Error"];
         };
     };
-    finishRegistration: {
+    passAccess: {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** @description JSON input for finishRegistration. */
+        /** @description The access password. */
         requestBody: {
             content: {
-                /**
-                 * @example {
-                 *       "ceremonyId": "ceremony-id",
-                 *       "credential": {
-                 *         "id": "base64url-id",
-                 *         "type": "public-key",
-                 *         "response": {}
-                 *       }
-                 *     }
-                 */
-                "application/json": components["schemas"]["AccountFinish"];
+                "application/json": components["schemas"]["AccessRequest"];
             };
         };
         responses: {
-            /** @description Successful operation. Enrollment replaces the browser session; recovery codes appear only when generated. */
+            /** @description The password is right; the body is the browser's access now. */
             200: {
                 headers: {
-                    /** @description Secure HttpOnly SameSite=Strict session or browser ceremony cookie, when needed. */
+                    /** @description The `falky_access` cookie. */
                     "Set-Cookie"?: string;
                     [name: string]: unknown;
                 };
                 content: {
-                    /**
-                     * @example {
-                     *       "session": {
-                     *         "visitor": {
-                     *           "id": "account-id",
-                     *           "name": "Alice",
-                     *           "nameTaken": false,
-                     *           "colour": {
-                     *             "visitorId": "account-id",
-                     *             "palette": "sky",
-                     *             "revision": 1
-                     *           }
-                     *         },
-                     *         "kind": "account",
-                     *         "expiresAt": "2027-02-07T12:00:00Z"
-                     *       },
-                     *       "recoveryCodes": [
-                     *         "acid acorn acre acts afar affix aged agent agile aging agony ahead"
-                     *       ]
-                     *     }
-                     */
+                    "application/json": components["schemas"]["Access"];
+                };
+            };
+            /** @description The access password is wrong (`invalid_access_password`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
+            /** @description The operator has not set the access password yet (`access_unset`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    register: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description The new account. */
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RegisterRequest"];
+            };
+        };
+        responses: {
+            /** @description Registered and signed in. */
+            200: {
+                headers: {
+                    /** @description The session cookie `falky_visitor`. */
+                    "Set-Cookie"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
                     "application/json": components["schemas"]["AccountEnrollment"];
                 };
             };
+            /** @description The login (`invalid_login`), password (`invalid_password`) or name (`invalid_name`) breaks its rules. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            403: components["responses"]["AccessRequired"];
+            /** @description Another account has this login (`login_taken`) or name (`name_taken`). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
             default: components["responses"]["Error"];
         };
     };
-    beginAuthentication: {
+    login: {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** @description JSON input for beginAuthentication. */
+        /** @description The login and password. */
         requestBody: {
             content: {
-                /** @example {} */
-                "application/json": components["schemas"]["AccountEmpty"];
+                "application/json": components["schemas"]["LoginRequest"];
             };
         };
         responses: {
-            /** @description Successful operation. Enrollment replaces the browser session; recovery codes appear only when generated. */
+            /** @description Signed in. */
             200: {
                 headers: {
-                    /** @description Secure HttpOnly SameSite=Strict session or browser ceremony cookie, when needed. */
+                    /** @description The session cookie `falky_visitor`. */
                     "Set-Cookie"?: string;
                     [name: string]: unknown;
                 };
                 content: {
-                    /**
-                     * @example {
-                     *       "id": "ceremony-id",
-                     *       "expiresAt": "2026-11-09T12:05:00Z",
-                     *       "options": {
-                     *         "publicKey": {}
-                     *       }
-                     *     }
-                     */
-                    "application/json": components["schemas"]["AccountCeremony"];
-                };
-            };
-            default: components["responses"]["Error"];
-        };
-    };
-    finishAuthentication: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** @description JSON input for finishAuthentication. */
-        requestBody: {
-            content: {
-                /**
-                 * @example {
-                 *       "ceremonyId": "ceremony-id",
-                 *       "credential": {
-                 *         "id": "base64url-id",
-                 *         "type": "public-key",
-                 *         "response": {}
-                 *       }
-                 *     }
-                 */
-                "application/json": components["schemas"]["AccountFinish"];
-            };
-        };
-        responses: {
-            /** @description Successful operation. Enrollment replaces the browser session; recovery codes appear only when generated. */
-            200: {
-                headers: {
-                    /** @description Secure HttpOnly SameSite=Strict session or browser ceremony cookie, when needed. */
-                    "Set-Cookie"?: string;
-                    [name: string]: unknown;
-                };
-                content: {
-                    /**
-                     * @example {
-                     *       "session": {
-                     *         "visitor": {
-                     *           "id": "account-id",
-                     *           "name": "Alice",
-                     *           "nameTaken": false,
-                     *           "colour": {
-                     *             "visitorId": "account-id",
-                     *             "palette": "sky",
-                     *             "revision": 1
-                     *           }
-                     *         },
-                     *         "kind": "account",
-                     *         "expiresAt": "2027-02-07T12:00:00Z"
-                     *       },
-                     *       "recoveryCodes": []
-                     *     }
-                     */
                     "application/json": components["schemas"]["AccountEnrollment"];
                 };
             };
+            /** @description The login or password is wrong (`invalid_credentials`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description No access pass (`access_required`), or the account is disabled (`account_disabled`), which is only said once the password is right. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
             default: components["responses"]["Error"];
         };
     };
-    beginReauthentication: {
+    recover: {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** @description JSON input for beginReauthentication. */
+        /** @description The proof and the new password. */
         requestBody: {
             content: {
-                /** @example {} */
-                "application/json": components["schemas"]["AccountEmpty"];
+                "application/json": components["schemas"]["RecoveryRequest"];
             };
         };
         responses: {
-            /** @description Successful operation. Enrollment replaces the browser session; recovery codes appear only when generated. */
+            /** @description Recovered and signed in. */
             200: {
                 headers: {
-                    /** @description Secure HttpOnly SameSite=Strict session or browser ceremony cookie, when needed. */
+                    /** @description The session cookie `falky_visitor`. */
                     "Set-Cookie"?: string;
                     [name: string]: unknown;
                 };
                 content: {
-                    /**
-                     * @example {
-                     *       "id": "ceremony-id",
-                     *       "expiresAt": "2026-11-09T12:05:00Z",
-                     *       "options": {
-                     *         "publicKey": {}
-                     *       }
-                     *     }
-                     */
-                    "application/json": components["schemas"]["AccountCeremony"];
-                };
-            };
-            default: components["responses"]["Error"];
-        };
-    };
-    finishReauthentication: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** @description JSON input for finishReauthentication. */
-        requestBody: {
-            content: {
-                /**
-                 * @example {
-                 *       "ceremonyId": "ceremony-id",
-                 *       "credential": {
-                 *         "id": "base64url-id",
-                 *         "type": "public-key",
-                 *         "response": {}
-                 *       }
-                 *     }
-                 */
-                "application/json": components["schemas"]["AccountFinish"];
-            };
-        };
-        responses: {
-            /** @description Successful operation. Enrollment replaces the browser session; recovery codes appear only when generated. */
-            200: {
-                headers: {
-                    /** @description Secure HttpOnly SameSite=Strict session or browser ceremony cookie, when needed. */
-                    "Set-Cookie"?: string;
-                    [name: string]: unknown;
-                };
-                content: {
-                    /**
-                     * @example {
-                     *       "visitor": {
-                     *         "id": "account-id",
-                     *         "name": "Alice",
-                     *         "nameTaken": false,
-                     *         "colour": {
-                     *           "visitorId": "account-id",
-                     *           "palette": "sky",
-                     *           "revision": 1
-                     *         }
-                     *       },
-                     *       "kind": "account",
-                     *       "expiresAt": "2027-02-07T12:00:00Z"
-                     *     }
-                     */
-                    "application/json": components["schemas"]["AccountSession"];
-                };
-            };
-            default: components["responses"]["Error"];
-        };
-    };
-    beginAddPasskey: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** @description JSON input for beginAddPasskey. */
-        requestBody: {
-            content: {
-                /** @example {} */
-                "application/json": components["schemas"]["AccountEmpty"];
-            };
-        };
-        responses: {
-            /** @description Successful operation. Enrollment replaces the browser session; recovery codes appear only when generated. */
-            200: {
-                headers: {
-                    /** @description Secure HttpOnly SameSite=Strict session or browser ceremony cookie, when needed. */
-                    "Set-Cookie"?: string;
-                    [name: string]: unknown;
-                };
-                content: {
-                    /**
-                     * @example {
-                     *       "id": "ceremony-id",
-                     *       "expiresAt": "2026-11-09T12:05:00Z",
-                     *       "options": {
-                     *         "publicKey": {}
-                     *       }
-                     *     }
-                     */
-                    "application/json": components["schemas"]["AccountCeremony"];
-                };
-            };
-            default: components["responses"]["Error"];
-        };
-    };
-    finishAddPasskey: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** @description JSON input for finishAddPasskey. */
-        requestBody: {
-            content: {
-                /**
-                 * @example {
-                 *       "ceremonyId": "ceremony-id",
-                 *       "credential": {
-                 *         "id": "base64url-id",
-                 *         "type": "public-key",
-                 *         "response": {}
-                 *       }
-                 *     }
-                 */
-                "application/json": components["schemas"]["AccountFinish"];
-            };
-        };
-        responses: {
-            /** @description Successful operation. Enrollment replaces the browser session; recovery codes appear only when generated. */
-            200: {
-                headers: {
-                    /** @description Secure HttpOnly SameSite=Strict session or browser ceremony cookie, when needed. */
-                    "Set-Cookie"?: string;
-                    [name: string]: unknown;
-                };
-                content: {
-                    /**
-                     * @example {
-                     *       "id": "base64url-id",
-                     *       "label": "Laptop",
-                     *       "createdAt": "2026-11-09T12:00:00Z"
-                     *     }
-                     */
-                    "application/json": components["schemas"]["AccountPasskey"];
-                };
-            };
-            default: components["responses"]["Error"];
-        };
-    };
-    beginRecovery: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** @description JSON input for beginRecovery. */
-        requestBody: {
-            content: {
-                /**
-                 * @example {
-                 *       "accountId": "account-id",
-                 *       "proof": "acid acorn acre acts afar affix aged agent agile aging agony ahead"
-                 *     }
-                 */
-                "application/json": components["schemas"]["RecoveryBegin"];
-            };
-        };
-        responses: {
-            /** @description Successful operation. Enrollment replaces the browser session; recovery codes appear only when generated. */
-            200: {
-                headers: {
-                    /** @description Secure HttpOnly SameSite=Strict session or browser ceremony cookie, when needed. */
-                    "Set-Cookie"?: string;
-                    [name: string]: unknown;
-                };
-                content: {
-                    /**
-                     * @example {
-                     *       "id": "ceremony-id",
-                     *       "expiresAt": "2026-11-09T12:05:00Z",
-                     *       "options": {
-                     *         "publicKey": {}
-                     *       }
-                     *     }
-                     */
-                    "application/json": components["schemas"]["AccountCeremony"];
-                };
-            };
-            default: components["responses"]["Error"];
-        };
-    };
-    finishRecovery: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** @description JSON input for finishRecovery. */
-        requestBody: {
-            content: {
-                /**
-                 * @example {
-                 *       "ceremonyId": "ceremony-id",
-                 *       "credential": {
-                 *         "id": "base64url-id",
-                 *         "type": "public-key",
-                 *         "response": {}
-                 *       }
-                 *     }
-                 */
-                "application/json": components["schemas"]["AccountFinish"];
-            };
-        };
-        responses: {
-            /** @description Successful operation. Enrollment replaces the browser session; recovery codes appear only when generated. */
-            200: {
-                headers: {
-                    /** @description Secure HttpOnly SameSite=Strict session or browser ceremony cookie, when needed. */
-                    "Set-Cookie"?: string;
-                    [name: string]: unknown;
-                };
-                content: {
-                    /**
-                     * @example {
-                     *       "session": {
-                     *         "visitor": {
-                     *           "id": "account-id",
-                     *           "name": "Alice",
-                     *           "nameTaken": false,
-                     *           "colour": {
-                     *             "visitorId": "account-id",
-                     *             "palette": "sky",
-                     *             "revision": 1
-                     *           }
-                     *         },
-                     *         "kind": "account",
-                     *         "expiresAt": "2027-02-07T12:00:00Z"
-                     *       },
-                     *       "recoveryCodes": [
-                     *         "acid acorn acre acts afar affix aged agent agile aging agony ahead"
-                     *       ]
-                     *     }
-                     */
                     "application/json": components["schemas"]["AccountEnrollment"];
                 };
             };
+            /** @description The password (`invalid_password`) or login (`invalid_login`) breaks its rules, or the account needs a login (`login_required`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description No access pass (`access_required`), or the account or code does not match a current, enabled account (`invalid_proof`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Another account has this login (`login_taken`). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
             default: components["responses"]["Error"];
         };
     };
-    regenerateRecoveryCodes: {
+    changePassword: {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** @description JSON input for regenerateRecoveryCodes. */
+        /** @description The current and new passwords. */
         requestBody: {
             content: {
-                /** @example {} */
-                "application/json": components["schemas"]["AccountEmpty"];
+                "application/json": components["schemas"]["PasswordChange"];
             };
         };
         responses: {
-            /** @description Successful operation. Enrollment replaces the browser session; recovery codes appear only when generated. */
+            /** @description Changed. */
             200: {
                 headers: {
-                    /** @description Secure HttpOnly SameSite=Strict session or browser ceremony cookie, when needed. */
-                    "Set-Cookie"?: string;
                     [name: string]: unknown;
                 };
                 content: {
-                    /**
-                     * @example {
-                     *       "recoveryCodes": [
-                     *         "acid acorn acre acts afar affix aged agent agile aging agony ahead"
-                     *       ]
-                     *     }
-                     */
-                    "application/json": components["schemas"]["RecoveryCodes"];
+                    "application/json": components["schemas"]["AccountEmpty"];
+                };
+            };
+            /** @description The new password breaks its rules (`invalid_password`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            401: components["responses"]["VisitorRequired"];
+            /** @description The current password is wrong (`invalid_credentials`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
                 };
             };
             default: components["responses"]["Error"];
@@ -2029,26 +1548,25 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        /** @description JSON input for logout. */
+        /** @description An empty object. */
         requestBody: {
             content: {
-                /** @example {} */
                 "application/json": components["schemas"]["AccountEmpty"];
             };
         };
         responses: {
-            /** @description Successful operation. Enrollment replaces the browser session; recovery codes appear only when generated. */
+            /** @description Signed out. */
             200: {
                 headers: {
-                    /** @description Secure HttpOnly SameSite=Strict session or browser ceremony cookie, when needed. */
+                    /** @description Clears the session cookie. */
                     "Set-Cookie"?: string;
                     [name: string]: unknown;
                 };
                 content: {
-                    /** @example {} */
                     "application/json": components["schemas"]["AccountEmpty"];
                 };
             };
+            401: components["responses"]["VisitorRequired"];
             default: components["responses"]["Error"];
         };
     };
@@ -2061,82 +1579,16 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Current owner result. */
+            /** @description The current session. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    /**
-                     * @example {
-                     *       "visitor": {
-                     *         "id": "account-id",
-                     *         "name": "Alice",
-                     *         "nameTaken": false,
-                     *         "colour": {
-                     *           "visitorId": "account-id",
-                     *           "palette": "sky",
-                     *           "revision": 1
-                     *         }
-                     *       },
-                     *       "kind": "account",
-                     *       "expiresAt": "2027-02-07T12:00:00Z"
-                     *     }
-                     */
                     "application/json": components["schemas"]["AccountSession"];
                 };
             };
-            default: components["responses"]["Error"];
-        };
-    };
-    listPasskeys: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Current owner result. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    /**
-                     * @example {
-                     *       "passkeys": []
-                     *     }
-                     */
-                    "application/json": components["schemas"]["AccountPasskeys"];
-                };
-            };
-            default: components["responses"]["Error"];
-        };
-    };
-    removePasskey: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description Base64url credential identifier. */
-                credentialId: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Current owner result. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    /** @example {} */
-                    "application/json": components["schemas"]["AccountEmpty"];
-                };
-            };
+            401: components["responses"]["VisitorRequired"];
             default: components["responses"]["Error"];
         };
     };
@@ -2404,54 +1856,6 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
-    enter: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** @description The secret and the name to enter under. */
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["EnterRequest"];
-            };
-        };
-        responses: {
-            /** @description Entered; the body is the new visitor. */
-            201: {
-                headers: {
-                    /** @description The visitor cookie `falky_visitor`: `HttpOnly`, `Secure`, `SameSite=Strict`, for `/api`. It is valid while the access link it was issued under is the current one. */
-                    "Set-Cookie"?: string;
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Visitor"];
-                };
-            };
-            400: components["responses"]["InvalidName"];
-            /** @description The secret is not the current access link's (`invalid_link`). No cookie is set. */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Error"];
-                };
-            };
-            409: components["responses"]["NameTaken"];
-            /** @description Too many attempts from this client IP (`rate_limited`); try again later. */
-            429: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Error"];
-                };
-            };
-            default: components["responses"]["Error"];
-        };
-    };
     getMe: {
         parameters: {
             query?: never;
@@ -2594,6 +1998,86 @@ export interface operations {
                 };
             };
             401: components["responses"]["VisitorRequired"];
+            default: components["responses"]["Error"];
+        };
+    };
+    createRoom: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description The room name. */
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RoomNameRequest"];
+            };
+        };
+        responses: {
+            /** @description Created; the body is the new, empty room. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Room"];
+                };
+            };
+            400: components["responses"]["InvalidName"];
+            401: components["responses"]["VisitorRequired"];
+            /** @description Another room has this name (`room_name_taken`), or the server has as many rooms as it allows (`room_limit`). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
+            default: components["responses"]["Error"];
+        };
+    };
+    renameRoom: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The room's ID. */
+                id: components["parameters"]["RoomId"];
+            };
+            cookie?: never;
+        };
+        /** @description The room name. */
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RoomNameRequest"];
+            };
+        };
+        responses: {
+            /** @description Renamed; the body is the room. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Room"];
+                };
+            };
+            400: components["responses"]["InvalidName"];
+            401: components["responses"]["VisitorRequired"];
+            404: components["responses"]["RoomNotFound"];
+            /** @description Another room has this name (`room_name_taken`). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
             default: components["responses"]["Error"];
         };
     };
@@ -2759,7 +2243,7 @@ export interface operations {
                 };
             };
             404: components["responses"]["RoomNotFound"];
-            /** @description The room's voice already has as many participants as it admits (`room_full`), or another connected guest holds this guest's name (`name_taken`; rename first). Existing connections are unchanged. */
+            /** @description The room's voice already has as many participants as it admits (`room_full`). Existing connections are unchanged. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -2809,7 +2293,7 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
-            /** @description Another connected guest holds this guest's name (`name_taken`), as `GET /api/me` reports; rename first. No WebSocket is opened. */
+            /** @description Another connection holds this identity's name (`name_taken`), as `GET /api/me` reports; rename first. No WebSocket is opened. */
             409: {
                 headers: {
                     [name: string]: unknown;

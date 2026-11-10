@@ -57,7 +57,7 @@ for (const width of [1440, 390]) {
       await selectableVersion(label);
     }
     await page.request.post(`${app.url}/__mock/action`, { data: { type: 'revoke' } });
-    await expect(page.locator('.message-screen')).toBeVisible();
+    await expect(page.locator('.enter')).toBeVisible();
     await expect(label).toHaveCount(0);
   });
 }

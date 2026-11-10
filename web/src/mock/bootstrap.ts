@@ -17,10 +17,6 @@ export async function bootstrap(navigation: Navigation = browserNavigation): Pro
   const url = new URL(navigation.href());
   const state = await bootstrapState(url.searchParams.get('scenario') ?? undefined);
   preparePreferences(state.instanceId, state.generation);
-  if (state.scenario === 'entry' && !state.visitor && !url.hash.includes('k=')) {
-    url.hash = new URL(state.accessLink, url).hash;
-    navigation.replaceURL(url.href);
-  }
   let stopped = false;
   let timer: ReturnType<typeof setTimeout>;
   const unsubscribe = subscribeMockState((next) => {

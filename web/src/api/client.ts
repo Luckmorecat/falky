@@ -12,6 +12,8 @@ export type OccupancyChange = Schemas['OccupancyChange'];
 export type AccessRevoked = Schemas['AccessRevoked'];
 export type Attachment = Schemas['Attachment'];
 export type AttachmentsExpired = Schemas['AttachmentsExpired'];
+export type Access = Schemas['Access'];
+export type AccountEnrollment = Schemas['AccountEnrollment'];
 
 /** A live update, narrowed by its type. Unknown types are ignored by callers. */
 export type LiveEvent = { eventId: string; timestamp: string; roomId?: string } & (
@@ -96,12 +98,22 @@ function uploadAttachment(roomId: string, file: File, onProgress: (sent: number)
 }
 
 export const api = {
-  enter: (secret: string, name: string) => call<Visitor>('POST', '/api/enter', { secret, name }),
+  access: () => call<Access>('GET', '/api/access'),
+  passAccess: (password: string) => call<Access>('POST', '/api/access', { password }),
+  register: (login: string, password: string, name: string) => call<AccountEnrollment>('POST', '/api/accounts/register', { login, password, name }),
+  login: (login: string, password: string) => call<AccountEnrollment>('POST', '/api/accounts/login', { login, password }),
+  /** With the operator's recovery code; `login`, when given, becomes the account's login. */
+  recover: (account: string, code: string, password: string, login?: string) =>
+    call<AccountEnrollment>('POST', '/api/accounts/recovery', { account, proof: code, password, ...(login ? { login } : {}) }),
+  changePassword: (currentPassword: string, newPassword: string) => call<void>('PUT', '/api/accounts/password', { currentPassword, newPassword }),
+  logout: () => call<void>('POST', '/api/accounts/logout', {}),
   me: () => call<Visitor>('GET', '/api/me'),
   rename: (name: string) => call<Visitor>('PATCH', '/api/me', { name }),
   setColour: (palette: Schemas['PaletteName']) => call<VisitorColour>('PUT', '/api/me/colour', { palette }),
   colours: (visitorIds: string[]) => call<Schemas['VisitorColourList']>('POST', '/api/visitor-colours', { visitorIds }).then((r) => r.colours),
   rooms: () => call<Schemas['RoomList']>('GET', '/api/rooms').then((r) => r.rooms),
+  createRoom: (name: string) => call<Room>('POST', '/api/rooms', { name }),
+  renameRoom: (roomId: string, name: string) => call<Room>('PATCH', `/api/rooms/${encodeURIComponent(roomId)}`, { name }),
   /** Newest first with `before` or neither; oldest first with `after`. */
   messages: (roomId: string, q: { before?: string; after?: string; limit?: number } = {}) => {
     const params = new URLSearchParams();

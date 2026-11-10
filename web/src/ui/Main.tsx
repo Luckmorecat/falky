@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { dismissNotice, setChatOpen } from '../app/controller';
 import { shortcuts } from '../app/shortcuts';
-import { useApp } from '../app/store';
+import { setState, useApp } from '../app/store';
 import { t } from '../strings';
+import { Button } from './Button';
 import { IconButton } from './IconButton';
 import { Chat } from './Chat';
 import { Dock } from './Dock';
@@ -62,12 +63,20 @@ export function Main() {
       <div className="main">
         <Rooms
           room={room}
-          status={!room ? <span>{t.noRoomsBody}</span>
+          status={!room ? null
             : inThisRoom && voiceState.joinedAt ? <Clock joinedAt={voiceState.joinedAt} />
               : inVoiceElsewhere ? <span>{t.inOtherRoom(voiceRoomName)}</span>
                 : <span>{room.occupancy.length ? t.notInVoice : t.nobodyInVoice}</span>}
         />
-        {room ? <Stage room={room} background={background} /> : <div className="stage" />}
+        {room ? <Stage room={room} background={background} /> : (
+          <div className="stage">
+            <div className="stage-empty no-rooms">
+              <h2>{t.noRoomsTitle}</h2>
+              <p>{t.noRoomsBody}</p>
+              <Button variant="primary" onClick={() => setState({ roomsOpen: true, roomEdit: 'new' })}>{t.createFirstRoom}</Button>
+            </div>
+          </div>
+        )}
         <div className="dock-space" />
         <Dock room={room} />
       </div>

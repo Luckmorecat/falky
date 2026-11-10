@@ -48,11 +48,19 @@ function scenarioName(value: unknown): Scenario {
   return value as Scenario;
 }
 
+/** What the mock asks for on the way in. */
+export const mockCredentials = { accessPassword: 'falky-mock', login: 'alex', password: 'mock-password', recoveryCode: 'mock-recovery-code' } as const;
+const loginPattern = /^[a-z0-9][a-z0-9._-]{2,31}$/;
+
 /** One process-memory visitor, isolated even when browsers share cookies across ports. */
 export async function startMockServer(options: { port?: number; scenario?: string } = {}) {
   const instanceId = randomBytes(8).toString('hex');
   const cookieName = `falky_mock_${instanceId}`;
   let token = randomBytes(24).toString('hex');
+  const accessCookieName = `falky_mock_access_${instanceId}`;
+  let accessToken = randomBytes(24).toString('hex');
+  /** Accounts by login; the browser is signed in to at most one, state.visitor. */
+  const accounts = new Map<string, { password: string; visitor: Schema['Visitor'] }>();
   let sequence = BigInt('0x' + randomBytes(10).toString('hex'));
   const id = () => encodeId((BigInt(Date.now()) << 80n) + sequence++);
   const roomIds = [id(), id(), id()];
@@ -101,7 +109,7 @@ export async function startMockServer(options: { port?: number; scenario?: strin
     visitor: null, voiceConnections: {},
     rooms: roomIds.map((roomId, i) => ({ id: roomId, name: ['Lounge', 'Games', 'Quiet'][i]!, occupancy: [] })),
     peers: {}, faults: { send: 'none', colourSave: 'none', colourDelayMs: 0, colourResponseDelayMs: 0, delayMs: 0, liveDisconnected: false, roomFull: null, micDenied: false, shareFailure: false, voiceReconnecting: false },
-    accessLink: '/#k=mock-access-link',
+    credentials: { ...mockCredentials },
   };
   if (state.scenario === 'entry') state.visitor = null;
   const samId = id();
@@ -110,7 +118,6 @@ export async function startMockServer(options: { port?: number; scenario?: strin
   state.peers[roomIds[0]!] = [sam, { connectionId: robinId + '.' + id(), visitorId: robinId, name: 'Robin', muted: true, deafened: false, sharing: false }];
   state.rooms[0]!.occupancy = state.peers[roomIds[0]!]!.map(({ connectionId, visitorId, name }) => ({ connectionId, visitorId, name }));
   let conflictName: string | null = null;
-  let accessSecret = 'mock-access-link';
   const requests = new Map<string, Schema['Message']>();
   const sockets = new WebSocketServer({ noServer: true, maxPayload: 32 * 1024 });
   function publish(type: Schema['EventType'], payload: Schema['Event']['payload'], roomId?: string) {
@@ -145,6 +152,39 @@ export async function startMockServer(options: { port?: number; scenario?: strin
     return !!state.visitor && req.headers.cookie?.split(';').some((part) => part.trim() === `${cookieName}=${token}`);
   }
   function setCookie(res: ServerResponse) { res.setHeader('Set-Cookie', `${cookieName}=${token}; Path=/api; HttpOnly; SameSite=Strict`); }
+  function passed(req: IncomingMessage) {
+    return !!req.headers.cookie?.split(';').some((part) => part.trim() === `${accessCookieName}=${accessToken}`);
+  }
+  /** Signs this browser in as account, ending whatever it held before. */
+  function signIn(res: ServerResponse, account: Schema['Visitor']) {
+    state.voiceConnections = {};
+    for (const socket of sockets.clients) socket.close(4000, 'Signed in again');
+    state.visitor = account;
+    occupancy();
+    requests.clear();
+    token = randomBytes(24).toString('hex');
+    setCookie(res);
+    state.revision++;
+  }
+  function enrollment(account: Schema['Visitor']): Schema['AccountEnrollment'] {
+    return { session: { visitor: account, kind: 'account', expiresAt: new Date(Date.now() + 90 * 86_400_000).toISOString() } };
+  }
+  function cleanLogin(input: unknown) {
+    const login = typeof input === 'string' ? input.trim().toLowerCase() : '';
+    if (!loginPattern.test(login)) throw new Refused(400, 'invalid_login', 'Login must have 3–32 latin letters, digits, dots, dashes or underscores');
+    return login;
+  }
+  function password(input: unknown) {
+    if (typeof input !== 'string' || [...input].length < 8 || [...input].length > 128) throw new Refused(400, 'invalid_password', 'Password must have 8–128 characters');
+    return input;
+  }
+  function roomName(input: unknown, except?: string) {
+    if (typeof input !== 'string') throw new Refused(400, 'invalid_request', 'Name must be a string');
+    const trimmed = input.trim();
+    if (!trimmed || [...trimmed].length > 32 || /[\p{Cc}\p{Cf}]/u.test(trimmed)) throw new Refused(400, 'invalid_name', 'Name must have 1–32 characters and no controls');
+    if (state.rooms.some((room) => room.id !== except && room.name.toLowerCase() === trimmed.toLowerCase())) throw new Refused(409, 'room_name_taken', 'Another room has this name');
+    return trimmed;
+  }
   function name(input: unknown) {
     if (input === undefined) throw new Refused(400, 'invalid_name', 'A name is required');
     if (typeof input !== 'string') throw new Refused(400, 'invalid_request', 'Name must be a string');
@@ -177,7 +217,11 @@ export async function startMockServer(options: { port?: number; scenario?: strin
     state.scenario = scenario;
     colours.clear();
     for (const history of fixtureMessages.values()) for (const message of history) assignColour(message.authorId);
-    state.visitor = scenario === 'entry' ? null : visitor('Alex');
+    accounts.clear();
+    const alex = visitor('Alex');
+    accounts.set(mockCredentials.login, { password: mockCredentials.password, visitor: alex });
+    state.visitor = scenario === 'entry' ? null : alex;
+    accessToken = randomBytes(24).toString('hex');
     state.voiceConnections = {};
     state.peers = scenario === 'quiet' ? {} : structuredClone(fixturePeers);
     for (const peers of Object.values(state.peers)) for (const peer of peers) peer.sharing = scenario === 'remote-share' && peer.name === 'Sam';
@@ -198,8 +242,6 @@ export async function startMockServer(options: { port?: number; scenario?: strin
     state.faults = { send: 'none', colourSave: 'none', colourDelayMs: 0, colourResponseDelayMs: 0, delayMs: 0, liveDisconnected: false, roomFull: null, micDenied: false, shareFailure: false, voiceReconnecting: false };
     requests.clear();
     conflictName = null;
-    accessSecret = 'mock-access-link';
-    state.accessLink = `${publicOrigin}/#k=${accessSecret}`;
     token = randomBytes(24).toString('hex');
   }
   function reset(scenario: Scenario) {
@@ -313,13 +355,11 @@ export async function startMockServer(options: { port?: number; scenario?: strin
           }
         }
       } else if (input.type === 'revoke') {
-        publish('access.revoked', { reason: 'link_replaced' });
+        // As when the account is disabled or its password changed elsewhere.
         for (const socket of sockets.clients) socket.close(4001, 'Access revoked');
         state.visitor = null;
         state.voiceConnections = {};
         token = randomBytes(24).toString('hex');
-        accessSecret = `mock-access-${state.generation}-${state.revision}`;
-        state.accessLink = `${publicOrigin}/#k=${accessSecret}`;
         requests.clear();
         occupancy();
       } else if (input.type === 'message') {
@@ -362,20 +402,77 @@ export async function startMockServer(options: { port?: number; scenario?: strin
       await new Promise((resolve) => setTimeout(resolve, delayMs));
       if (generation !== state.generation) throw new Refused(409, 'invalid_request', 'Mock generation changed');
     }
-    if (url.pathname === '/api/enter' && req.method === 'POST') {
-      if (input.secret !== accessSecret) throw new Refused(403, 'invalid_link', 'The access link is invalid');
-      const chosen = name(input.name);
-      state.voiceConnections = {};
-      for (const socket of sockets.clients) socket.close(4000, 'Visitor entered again');
-      state.visitor = visitor(chosen);
-      occupancy();
-      requests.clear();
-      token = randomBytes(24).toString('hex');
-      setCookie(res);
-      state.revision++;
-      return json(res, 201, state.visitor);
+    if (url.pathname === '/api/access' && req.method === 'GET') {
+      return json(res, 200, { passwordSet: true, passed: passed(req) } satisfies Schema['Access']);
     }
-    if (!authenticated(req) || !state.visitor) throw new Refused(401, 'visitor_required', 'Enter through the access link');
+    if (url.pathname === '/api/access' && req.method === 'POST') {
+      if (input.password !== mockCredentials.accessPassword) throw new Refused(403, 'invalid_access_password', 'The access password is wrong');
+      res.setHeader('Set-Cookie', `${accessCookieName}=${accessToken}; Path=/api; HttpOnly; SameSite=Strict`);
+      return json(res, 200, { passwordSet: true, passed: true } satisfies Schema['Access']);
+    }
+    if (url.pathname === '/api/accounts/register' && req.method === 'POST') {
+      if (!passed(req)) throw new Refused(403, 'access_required', 'Give the access password first');
+      const login = cleanLogin(input.login);
+      const secret = password(input.password);
+      const chosen = name(input.name);
+      if (accounts.has(login)) throw new Refused(409, 'login_taken', 'Another account has this login');
+      if ([...accounts.values()].some((a) => a.visitor.name.toLowerCase() === chosen.toLowerCase())) throw new Refused(409, 'name_taken', 'Another account has this name');
+      const account = { password: secret, visitor: visitor(chosen) };
+      accounts.set(login, account);
+      signIn(res, account.visitor);
+      return json(res, 200, enrollment(account.visitor));
+    }
+    if (url.pathname === '/api/accounts/login' && req.method === 'POST') {
+      if (!passed(req)) throw new Refused(403, 'access_required', 'Give the access password first');
+      const account = accounts.get(typeof input.login === 'string' ? input.login.trim().toLowerCase() : '');
+      if (!account || account.password !== input.password) throw new Refused(401, 'invalid_credentials', 'Wrong login or password');
+      signIn(res, account.visitor);
+      return json(res, 200, enrollment(account.visitor));
+    }
+    if (url.pathname === '/api/accounts/recovery' && req.method === 'POST') {
+      if (!passed(req)) throw new Refused(403, 'access_required', 'Give the access password first');
+      const account = accounts.get(typeof input.account === 'string' ? input.account.trim().toLowerCase() : '');
+      if (!account || input.proof !== mockCredentials.recoveryCode) throw new Refused(403, 'invalid_proof', 'The code does not match');
+      account.password = password(input.password);
+      signIn(res, account.visitor);
+      return json(res, 200, enrollment(account.visitor));
+    }
+    if (!authenticated(req) || !state.visitor) throw new Refused(401, 'visitor_required', 'Sign in first');
+    const own = [...accounts.values()].find((a) => a.visitor.id === state.visitor!.id);
+    if (url.pathname === '/api/accounts/session' && req.method === 'GET') return json(res, 200, enrollment(state.visitor).session);
+    if (url.pathname === '/api/accounts/logout' && req.method === 'POST') {
+      for (const socket of sockets.clients) socket.close(4001, 'Signed out');
+      state.visitor = null;
+      state.voiceConnections = {};
+      occupancy();
+      token = randomBytes(24).toString('hex');
+      res.setHeader('Set-Cookie', `${cookieName}=; Path=/api; HttpOnly; SameSite=Strict; Max-Age=0`);
+      state.revision++;
+      return json(res, 200, {});
+    }
+    if (url.pathname === '/api/accounts/password' && req.method === 'PUT') {
+      if (!own || own.password !== input.currentPassword) throw new Refused(403, 'invalid_credentials', 'The current password is wrong');
+      own.password = password(input.newPassword);
+      return json(res, 200, {});
+    }
+    if (url.pathname === '/api/rooms' && req.method === 'POST') {
+      if (state.rooms.length >= 50) throw new Refused(409, 'room_limit', 'The server has as many rooms as it allows');
+      const room: Schema['Room'] = { id: id(), name: roomName(input.name), occupancy: [] };
+      state.rooms.push(room);
+      messages.set(room.id, []);
+      publish('room.changed', { id: room.id, name: room.name });
+      state.revision++;
+      return json(res, 201, room);
+    }
+    const renaming = /^\/api\/rooms\/([^/]+)$/.exec(url.pathname);
+    if (renaming && req.method === 'PATCH') {
+      const room = state.rooms.find((r) => r.id === renaming[1]);
+      if (!room) throw new Refused(404, 'room_not_found', 'No such room');
+      room.name = roomName(input.name, room.id);
+      publish('room.changed', { id: room.id, name: room.name });
+      state.revision++;
+      return json(res, 200, room);
+    }
     if (url.pathname === '/api/visitor-colours' && req.method === 'POST') {
       if (!Array.isArray(input.visitorIds) || input.visitorIds.length > 100 || input.visitorIds.some((id) => typeof id !== 'string')) throw new Refused(400, 'invalid_request', 'Expected at most 100 visitor IDs');
       return json(res, 200, { colours: [...new Set(input.visitorIds as string[])].flatMap((id) => colours.has(id) ? [colours.get(id)!] : []) } satisfies Schema['VisitorColourList']);
@@ -390,7 +487,7 @@ export async function startMockServer(options: { port?: number; scenario?: strin
       state.revision++;
       if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
       if (generation !== state.generation) throw new Refused(409, 'invalid_request', 'Mock generation changed');
-      if (!authenticated(req) || state.visitor?.id !== visitorId) throw new Refused(401, 'visitor_required', 'Enter through the access link');
+      if (!authenticated(req) || state.visitor?.id !== visitorId) throw new Refused(401, 'visitor_required', 'Sign in first');
       if (failure === 'fail') throw new Refused(503, 'internal', 'Scripted colour save failure; retry the colour');
       const colour = changeColour(visitorId, input.palette);
       state.revision++;
@@ -520,6 +617,6 @@ export async function startMockServer(options: { port?: number; scenario?: strin
   const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   ownOrigins.add(url);
   publicOrigin = url;
-  return { url, setPublicOrigin(origin: string) { ownOrigins.add(origin); publicOrigin = origin; state.accessLink = `${publicOrigin}/#k=mock-access-link`; },
+  return { url, setPublicOrigin(origin: string) { ownOrigins.add(origin); publicOrigin = origin; },
     close: () => new Promise<void>((resolve, reject) => { for (const socket of sockets.clients) { socket.close(1001, 'Mock shutdown'); socket.terminate(); } sockets.close(); server.close((error) => error ? reject(error) : resolve()); server.closeAllConnections(); }) };
 }

@@ -7,7 +7,7 @@ afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); localStorage.clear(
 
 it('scopes prefs before app load and observes a reset independently of revoked or disconnected live state', async () => {
   vi.useFakeTimers();
-  let state = { instanceId: 'boot-test', generation: 1, revision: 1, scenario: 'entry', visitor: null, voiceConnections: {}, accessLink: '/#k=mock-access-link', rooms: [], peers: {}, faults: faultDefaults, scenarios: ['entry', 'quiet'] };
+  let state = { instanceId: 'boot-test', generation: 1, revision: 1, scenario: 'entry', visitor: null, voiceConnections: {}, credentials: { accessPassword: 'falky-mock', login: 'alex', password: 'mock-password', recoveryCode: 'mock-recovery-code' }, rooms: [], peers: {}, faults: faultDefaults, scenarios: ['entry', 'quiet'] };
   const bodies: unknown[] = [];
   vi.stubGlobal('fetch', async (_url: string, init?: RequestInit) => {
     if (init?.body) bodies.push(JSON.parse(init.body as string));
@@ -18,7 +18,7 @@ it('scopes prefs before app load and observes a reset independently of revoked o
   const navigation = { href: () => url, replaceURL: (next: string) => { url = next; }, reload };
   await bootstrap(navigation);
   expect(bodies[0]).toEqual({ scenario: 'entry' });
-  expect(new URL(url).hash).toBe('#k=mock-access-link');
+  expect(new URL(url).hash).toBe('');
   prefs.saveSettings({ ...prefs.settings(), theme: 'light', language: 'en' });
   // Both failure states leave the independent control channel available.
   state = { ...state, generation: 2, revision: 2, scenario: 'quiet', faults: { ...faultDefaults, liveDisconnected: true } };

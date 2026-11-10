@@ -1,7 +1,7 @@
 import { parseArgs } from 'node:util';
 import type { AddressInfo } from 'node:net';
 import { createServer } from 'vite';
-import { startMockServer } from './server.ts';
+import { mockCredentials, startMockServer } from './server.ts';
 import { scenarios } from './protocol.ts';
 
 const { values } = parseArgs({ options: {
@@ -45,7 +45,8 @@ try {
   await vite.listen();
   const origin = `http://127.0.0.1:${(vite.httpServer!.address() as AddressInfo).port}`;
   mock.setPublicOrigin(origin);
-  console.log(`\nMock app: ${origin}/?scenario=${values.scenario}#k=mock-access-link`);
+  console.log(`\nMock app: ${origin}/?scenario=${values.scenario}`);
+  console.log(`Sign in: server password ${mockCredentials.accessPassword}, login ${mockCredentials.login}, password ${mockCredentials.password}`);
   console.log(`Mock controls: ${origin}/__mock\nScenario: ${values.scenario} | memory only | no Go or LiveKit\n`);
 } catch (error) {
   await close();

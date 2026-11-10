@@ -11,8 +11,23 @@ export interface Notice {
   body?: string;
 }
 
+/** Where someone is on the way in: the access password, then their account. */
+export type AuthStep = 'access' | 'signin' | 'register' | 'recover';
+
+export interface AuthState {
+  step: AuthStep;
+  /** A guest from before accounts, whose browser may register without the access password. */
+  guestName: string | null;
+  /** Why someone is signing in again, said once above the form. */
+  reason: 'signedOut' | 'ended' | null;
+  /** From an operator's recovery link: the account and its one-time code. */
+  recovery: { account: string; code: string } | null;
+}
+
 export interface AppState {
-  phase: 'loading' | 'entry' | 'noaccess' | 'revoked' | 'ready';
+  /** `unset`: the operator has not set the access password, so no one can come in yet. */
+  phase: 'loading' | 'auth' | 'unset' | 'ready';
+  auth: AuthState;
   visitor: Visitor | null;
   rooms: Room[];
   viewedRoomId: string | null;
@@ -27,6 +42,8 @@ export interface AppState {
   newAfterId: string | null;
   chatOpen: boolean;
   roomsOpen: boolean;
+  /** A room name being typed in the room list: `new` for a new room, or the ID of the room being renamed. */
+  roomEdit: string | null;
   voice: VoiceSnapshot;
   notice: Notice | null;
   settings: Settings;
@@ -37,6 +54,7 @@ export interface AppState {
 
 let state: AppState = {
   phase: 'loading',
+  auth: { step: 'access', guestName: null, reason: null, recovery: null },
   visitor: null,
   rooms: [],
   viewedRoomId: null,
@@ -47,6 +65,7 @@ let state: AppState = {
   newAfterId: null,
   chatOpen: false,
   roomsOpen: false,
+  roomEdit: null,
   voice: idleVoice,
   notice: null,
   settings: prefs.settings(),

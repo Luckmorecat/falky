@@ -10,7 +10,7 @@ import type { VoiceClient } from '../voice/types';
 import { playSound, notificationPermission, requestNotificationPermission, notificationsAvailable, notify } from '@falky/browser';
 import { applyAppearance } from './appearance';
 import { prefs, type Settings } from './prefs';
-import { getState, setState } from './store';
+import { getState, setState, type AuthState, type AuthStep } from './store';
 
 const PAGE = 100;
 // A response from a previous access/boot must never populate the next visitor's state.
@@ -84,8 +84,6 @@ async function refreshColours(all = false): Promise<void> {
   }
 }
 
-/** The access link's secret, from the URL fragment, kept only while it is needed. */
-let linkSecret: string | null = null;
 let noticeSeq = 0;
 let noticeTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -119,7 +117,7 @@ const live = new LiveConnection({
     void catchUp();
   },
   onDown: () => setState({ live: 'reconnecting' }),
-  onRevoked: endAccess,
+  onRevoked: () => endAccess(),
   async shouldRetry() {
     const epoch = session;
     try {
@@ -139,13 +137,18 @@ const live = new LiveConnection({
   },
 });
 
-function endAccess(): void {
+/** Leaves the app for the sign-in screen, saying why: signed out here, or the session ended elsewhere. */
+function endAccess(reason: AuthState['reason'] = 'ended'): void {
   session++;
   resetColourRequests();
   live.stop();
   dropUploads();
-  setState({ phase: 'revoked', live: 'off', visitor: null, rooms: [], chats: {}, colours: {}, colourSave: null });
+  setState({
+    phase: 'auth', auth: { ...getState().auth, step: accessPassed ? 'signin' : 'access', reason },
+    live: 'off', visitor: null, rooms: [], chats: {}, colours: {}, colourSave: null, roomsOpen: false, chatOpen: false, roomEdit: null,
+  });
   voice.end();
+  void showAuth(reason);
 }
 
 /** Stops everything if a request found the access gone; says whether it did. */
@@ -168,20 +171,51 @@ export function dismissNotice(): void {
   setState({ notice: null });
 }
 
-/* ---------- Entering ---------- */
+/* ---------- Coming in ---------- */
+
+/** Whether this browser holds a pass for the current access password, as last heard. */
+let accessPassed = false;
+
+function setAuth(patch: Partial<AuthState>): void {
+  setState({ phase: 'auth', auth: { ...getState().auth, ...patch } });
+}
+
+/** Reads an operator's recovery link out of the address bar, keeping it only in memory. */
+function takeRecoveryLink(): void {
+  if (!location.hash) return;
+  const fragment = new URLSearchParams(location.hash.slice(1));
+  const code = fragment.get('recover');
+  const account = fragment.get('account');
+  history.replaceState(null, '', location.pathname + location.search);
+  if (code && account) setState({ auth: { ...getState().auth, recovery: { code, account } } });
+}
+
+/** Shows the right first step for this browser: the access password, a guest's upgrade, or signing in. */
+async function showAuth(reason: AuthState['reason'] = null): Promise<void> {
+  const epoch = session;
+  try {
+    const access = await api.access();
+    if (epoch !== session) return;
+    if (!access.passwordSet) {
+      setState({ phase: 'unset' });
+      return;
+    }
+    accessPassed = access.passed;
+    const { recovery } = getState().auth;
+    const step: AuthStep = access.guestName ? 'register' : !access.passed ? 'access' : recovery ? 'recover' : 'signin';
+    setAuth({ step, guestName: access.guestName ?? null, reason });
+  } catch {
+    if (epoch !== session) return;
+    setTimeout(() => { if (epoch === session) void showAuth(reason); }, 3000);
+  }
+}
 
 export async function boot(): Promise<void> {
   const epoch = ++session;
   resetColourRequests();
   dropUploads();
   setState({ visitor: null, rooms: [], chats: {}, colours: {}, colourSave: null });
-  const fragment = new URLSearchParams(location.hash.slice(1));
-  const secret = fragment.get('k');
-  if (secret) {
-    linkSecret = secret;
-    // Out of the address bar and the history at once.
-    history.replaceState(null, '', location.pathname + location.search);
-  }
+  takeRecoveryLink();
   live.stop();
   voice.end();
   try {
@@ -190,7 +224,7 @@ export async function boot(): Promise<void> {
   } catch (err) {
     if (epoch !== session) return;
     if (err instanceof ApiError && err.status === 401) {
-      setState({ phase: linkSecret ? 'entry' : getState().phase === 'revoked' ? 'revoked' : 'noaccess' });
+      await showAuth();
       return;
     }
     // Server unreachable: try again rather than pretend access is gone.
@@ -198,18 +232,111 @@ export async function boot(): Promise<void> {
   }
 }
 
-/** Tries to enter; answers the reason for the person, or null when in. */
-export async function enter(name: string): Promise<string | null> {
-  if (!linkSecret) return t.errors.invalid_link;
+/** A refusal on the way in: what to say, and which field it is about, if any. */
+export interface AuthProblem {
+  field?: 'login' | 'password' | 'name' | 'proof';
+  /** The contract's error code, or `other`. */
+  code?: string;
+  message: string;
+}
+
+function authProblem(err: unknown): AuthProblem {
+  const code = err instanceof ApiError ? err.code : 'other';
+  const message = (t.auth.errors as Record<string, string>)[code] ?? t.errors.other;
+  switch (code) {
+    case 'invalid_login': case 'login_taken': case 'login_required': return { field: 'login', code, message };
+    case 'invalid_password': case 'invalid_access_password': return { field: 'password', code, message };
+    case 'invalid_name': case 'name_taken': return { field: 'name', code, message };
+    case 'invalid_proof': return { field: 'proof', code, message };
+    default: return { code, message };
+  }
+}
+
+/** Goes to another step; steps behind the access password show it first. */
+export function goTo(step: AuthStep): void {
+  const { guestName } = getState().auth;
+  const allowed = step === 'access' || accessPassed || (step === 'register' && !!guestName);
+  setAuth({ step: allowed ? step : 'access', reason: null });
+}
+
+/** A refusal saying the pass is gone sends the person back to the access password. */
+function lostAccess(err: unknown): boolean {
+  if (err instanceof ApiError && err.code === 'access_required') {
+    accessPassed = false;
+    setAuth({ step: 'access', reason: null });
+    return true;
+  }
+  return false;
+}
+
+export async function passAccess(password: string): Promise<AuthProblem | null> {
   try {
-    const visitor = await api.enter(linkSecret, name);
-    linkSecret = null;
-    await startWith(visitor, ++session);
+    await api.passAccess(password);
+    accessPassed = true;
+    setAuth({ step: getState().auth.recovery ? 'recover' : 'signin' });
     return null;
   } catch (err) {
-    const code = err instanceof ApiError ? err.code : 'other';
-    if (code === 'invalid_link' || code === 'name_taken' || code === 'invalid_name' || code === 'rate_limited' || code === 'network') return t.errors[code];
-    return t.errors.other;
+    if (err instanceof ApiError && err.code === 'access_unset') {
+      setState({ phase: 'unset' });
+      return null;
+    }
+    return authProblem(err);
+  }
+}
+
+export async function signIn(login: string, password: string): Promise<AuthProblem | null> {
+  try {
+    const enrollment = await api.login(login, password);
+    await startWith(enrollment.session.visitor, ++session);
+    return null;
+  } catch (err) {
+    if (lostAccess(err)) return null;
+    return authProblem(err);
+  }
+}
+
+export async function register(login: string, password: string, name: string): Promise<AuthProblem | null> {
+  try {
+    const enrollment = await api.register(login, password, name);
+    await startWith(enrollment.session.visitor, ++session);
+    return null;
+  } catch (err) {
+    if (lostAccess(err)) return null;
+    return authProblem(err);
+  }
+}
+
+export async function recoverAccount(account: string, code: string, password: string, login?: string): Promise<AuthProblem | null> {
+  try {
+    const enrollment = await api.recover(account, code, password, login);
+    await startWith(enrollment.session.visitor, ++session);
+    return null;
+  } catch (err) {
+    if (lostAccess(err)) return null;
+    return authProblem(err);
+  }
+}
+
+export async function logout(): Promise<void> {
+  try {
+    await api.logout();
+  } catch (err) {
+    if (!(err instanceof ApiError && err.status === 401)) {
+      showNotice(t.account.logoutFailed);
+      return;
+    }
+  }
+  endAccess('signedOut');
+}
+
+/** Changes the password; answers the reason for the person, or null when done. */
+export async function changePassword(current: string, next: string): Promise<AuthProblem | null> {
+  try {
+    await api.changePassword(current, next);
+    return null;
+  } catch (err) {
+    if (accessEnded(err)) return null;
+    return authProblem(err);
   }
 }
 
@@ -218,7 +345,8 @@ async function startWith(visitor: Visitor, epoch: number): Promise<void> {
   if (epoch !== session) return;
   const remembered = prefs.viewedRoom();
   const viewedRoomId = rooms.some((r) => r.id === remembered) ? remembered : (rooms[0]?.id ?? null);
-  setState({ phase: 'ready', visitor, rooms, viewedRoomId, chats: Object.fromEntries(rooms.map((r) => [r.id, emptyChat()])), live: visitor.nameTaken ? 'off' : 'reconnecting' });
+  accessPassed = false;
+  setState({ phase: 'ready', auth: { step: 'signin', guestName: null, reason: null, recovery: null }, visitor, rooms, viewedRoomId, chats: Object.fromEntries(rooms.map((r) => [r.id, emptyChat()])), live: visitor.nameTaken ? 'off' : 'reconnecting' });
   mergeColours([visitor.colour]);
   void readAttachmentLimits(epoch);
   await Promise.all([refreshColours(), ...rooms.map(loadChat)]);
@@ -622,6 +750,49 @@ function notifyOfMessage(m: Message): void {
 }
 
 /* ---------- Navigation ---------- */
+
+/** Puts room into the list, or updates its name, as a room.changed event would. */
+function upsertRoom(room: Pick<Room, 'id' | 'name'>): void {
+  const s = getState();
+  const exists = s.rooms.some((r) => r.id === room.id);
+  setState({
+    rooms: exists ? s.rooms.map((r) => (r.id === room.id ? { ...r, name: room.name } : r)) : [...s.rooms, { id: room.id, name: room.name, occupancy: [] }],
+    chats: exists ? s.chats : { ...s.chats, [room.id]: { ...emptyChat(), loaded: true } },
+  });
+}
+
+function roomProblem(err: unknown): string {
+  const code = err instanceof ApiError ? err.code : 'other';
+  return (t.roomErrors as Record<string, string>)[code] ?? t.errors.other;
+}
+
+/** Creates a room and goes to it; answers the reason for the person, or null when done. */
+export async function createRoom(name: string): Promise<string | null> {
+  const epoch = session;
+  try {
+    const room = await api.createRoom(name);
+    if (epoch !== session) return null;
+    upsertRoom(room);
+    viewRoom(room.id);
+    return null;
+  } catch (err) {
+    if (epoch !== session || accessEnded(err)) return null;
+    return roomProblem(err);
+  }
+}
+
+/** Renames a room; answers the reason for the person, or null when done. */
+export async function renameRoom(roomId: string, name: string): Promise<string | null> {
+  const epoch = session;
+  try {
+    const room = await api.renameRoom(roomId, name);
+    if (epoch === session) upsertRoom(room);
+    return null;
+  } catch (err) {
+    if (epoch !== session || accessEnded(err)) return null;
+    return roomProblem(err);
+  }
+}
 
 export function viewRoom(roomId: string): void {
   const s = getState();

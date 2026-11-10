@@ -23,12 +23,15 @@ test('Node launcher prints a loopback URL, proxies fixture API, serves design an
     const state = await bootstrap.json();
     assert.equal(state.scenario, 'entry');
     assert.equal(state.visitor, null);
-    assert.equal(state.accessLink, origin + '/#k=mock-access-link');
+    assert.deepEqual(state.credentials, { accessPassword: 'falky-mock', login: 'alex', password: 'mock-password', recoveryCode: 'mock-recovery-code' });
     assert.equal((await fetch(origin + '/design.html')).status, 200);
     assert.equal((await fetch(origin + '/rtc')).status, 404);
     assert.equal((await fetch(origin + '/api/me')).status, 401);
-    const entered = await fetch(origin + '/api/enter', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ secret: 'mock-access-link', name: 'Node Only' }) });
-    assert.equal(entered.status, 201);
+    const passed = await fetch(origin + '/api/access', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password: 'falky-mock' }) });
+    assert.equal(passed.status, 200);
+    const access = passed.headers.get('set-cookie')!.split(';')[0]!;
+    const entered = await fetch(origin + '/api/accounts/register', { method: 'POST', headers: { 'Content-Type': 'application/json', cookie: access }, body: JSON.stringify({ login: 'node', password: 'password1', name: 'Node Only' }) });
+    assert.equal(entered.status, 200);
     const cookie = entered.headers.get('set-cookie')!.split(';')[0]!;
     assert.equal((await fetch(origin + '/api/rooms', { headers: { cookie } })).status, 200);
   } finally {

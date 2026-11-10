@@ -18,7 +18,7 @@ beforeEach(async () => {
     rooms: [{ id: 'lounge', name: 'Lounge', occupancy: [] }, { id: 'games', name: 'Games', occupancy: [] }],
     peers: { lounge: [{ connectionId: 'sam.connection', visitorId: 'sam', name: 'Sam', muted: false, deafened: false, sharing: false }] },
     faults: { send: 'none', colourSave: 'none', colourDelayMs: 0, colourResponseDelayMs: 0, delayMs: 0, liveDisconnected: false, roomFull: null, micDenied: false, shareFailure: false, voiceReconnecting: false },
-    accessLink: '/#k=mock',
+    credentials: { accessPassword: 'a', login: 'alex', password: 'b', recoveryCode: 'c' },
   };
   let issued = 0;
   // HTTP is the external boundary. Exercise the normal api.joinVoice client, never replace it.

@@ -7,18 +7,23 @@ afterEach(async () => { await Promise.all(running.splice(0).map((server) => serv
 async function client(scenario = 'populated') {
   const server = await startMockServer({ scenario });
   running.push(server);
-  let cookie = '';
+  const jar = new Map<string, string>();
+  const cookie = () => [...jar].map(([name, value]) => `${name}=${value}`).join('; ');
   const call = async (path: string, body?: unknown, method = body === undefined ? 'GET' : 'POST') => {
     const response = await fetch(server.url + path, {
-      method, headers: { cookie, 'Content-Type': 'application/json' },
+      method, headers: { cookie: cookie(), 'Content-Type': 'application/json' },
       body: body === undefined ? undefined : JSON.stringify(body),
     });
-    const nextCookie = response.headers.get('set-cookie');
-    if (nextCookie) cookie = nextCookie.split(';')[0]!;
+    for (const set of response.headers.getSetCookie()) {
+      const [pair] = set.split(';');
+      const at = pair!.indexOf('=');
+      if (/Max-Age=0/.test(set)) jar.delete(pair!.slice(0, at));
+      else jar.set(pair!.slice(0, at), pair!.slice(at + 1));
+    }
     return response;
   };
   const bootstrap = await (await call('/__mock/bootstrap', { scenario })).json();
-  return { server, call, bootstrap, cookie: () => cookie };
+  return { server, call, bootstrap, cookie };
 }
 
 test('populated bootstrap enters a visitor and pages the room history in contract order', async () => {
@@ -45,12 +50,17 @@ test('populated bootstrap enters a visitor and pages the room history in contrac
 test('entry, rename and retried sends keep historical names and publish exactly one event', async () => {
   const { call, server, cookie } = await client('entry');
   assert.equal((await call('/api/me')).status, 401);
-  assert.equal((await call('/api/enter', { secret: 'wrong', name: 'Taylor' })).status, 403);
-  assert.equal((await call('/api/enter', { secret: 'mock-access-link', name: '\u202e' })).status, 400);
-  assert.equal((await call('/api/enter', { secret: 'mock-access-link', name: ' sam ' })).status, 409);
-  const entered = await call('/api/enter', { secret: 'mock-access-link', name: ' Taylor ' });
-  assert.equal(entered.status, 201);
-  assert.equal((await entered.json()).name, 'Taylor');
+  const register = (name: string) => call('/api/accounts/register', { login: 'taylor', password: 'password1', name });
+  assert.equal((await register('Taylor')).status, 403);
+  assert.equal((await call('/api/access', { password: 'wrong' })).status, 403);
+  assert.equal((await call('/api/access', { password: 'falky-mock' })).status, 200);
+  assert.equal((await (await call('/api/access')).json()).passed, true);
+  assert.equal((await register('\u202e')).status, 400);
+  assert.equal((await register(' sam ')).status, 409);
+  const entered = await register(' Taylor ');
+  assert.equal(entered.status, 200);
+  assert.equal((await entered.json()).session.visitor.name, 'Taylor');
+  assert.equal((await register('Someone')).status, 409);
   const { WebSocket } = await import('ws');
   const ws = new WebSocket(server.url.replace('http', 'ws') + '/api/live', { origin: server.url, headers: { cookie: cookie() } });
   await new Promise<void>((resolve, reject) => { ws.once('open', resolve); ws.once('error', reject); });
@@ -176,10 +186,8 @@ test('voice moves retain the old room on failure and scripted peers, rename, lea
   const ws = new WebSocket(server.url.replace('http', 'ws') + '/api/live', { origin: server.url, headers: { cookie: cookie() } });
   await new Promise<void>((resolve, reject) => { ws.once('open', resolve); ws.once('error', reject); });
   await call(`/api/rooms/${games.id}/voice`, {});
-  const revoked = new Promise<{ type: string }>((resolve) => ws.on('message', (raw) => { const event = JSON.parse(String(raw)); if (event.type === 'access.revoked') resolve(event); }));
   const closed = new Promise<number>((resolve) => ws.once('close', resolve));
   await call('/__mock/action', { type: 'revoke' });
-  assert.equal((await revoked).type, 'access.revoked');
   assert.equal(await closed, 4001);
   assert.equal((await call('/api/me')).status, 401);
   const state = await (await call('/__mock/state')).json();
@@ -234,18 +242,20 @@ test('a restarted instance at the same origin has fresh identity and room histor
 test('malformed name and message field types are invalid_request while missing or blank values keep their domain errors', async () => {
   const { call, bootstrap } = await client();
   const messages = `/api/rooms/${bootstrap.rooms[0].id}/messages`;
+  await call('/api/access', { password: 'falky-mock' });
+  const register = (name: unknown) => ({ login: 'shape', password: 'password1', name });
   async function expectError(path: string, input: unknown, code: string, method = 'POST') {
     const response = await call(path, input, method);
     assert.equal(response.status, 400);
     assert.equal((await response.json()).code, code);
   }
   for (const value of [42, false, null, [], {}]) {
-    await expectError('/api/enter', { secret: 'mock-access-link', name: value }, 'invalid_request');
+    await expectError('/api/accounts/register', register(value), 'invalid_request');
     await expectError('/api/me', { name: value }, 'invalid_request', 'PATCH');
     await expectError(messages, { requestKey: 'shape-check', body: value }, 'invalid_request');
   }
   for (const value of [undefined, '', '   ']) {
-    await expectError('/api/enter', { secret: 'mock-access-link', name: value }, 'invalid_name');
+    await expectError('/api/accounts/register', register(value), 'invalid_name');
     await expectError('/api/me', { name: value }, 'invalid_name', 'PATCH');
     await expectError(messages, { requestKey: 'shape-check', body: value }, 'invalid_message');
   }
@@ -329,4 +339,45 @@ test('independent connections list the same person and exact mock disconnect pre
   assert.equal((await call('/__mock/action', { type: 'voice-disconnect', generation: bootstrap.generation })).status, 400);
   await call('/__mock/action', { type: 'voice-disconnect', generation: bootstrap.generation, connectionId: first.grantId });
   assert.deepEqual((await occupants()).map((p: { connectionId: string }) => p.connectionId), [bootstrap.peers[roomId][0].connectionId, bootstrap.peers[roomId][1].connectionId, second.grantId]);
+});
+
+test('accounts sign in, recover and sign out, and rooms are created and renamed for everyone', async () => {
+  const { call, server, cookie } = await client('entry');
+  assert.equal((await call('/api/accounts/login', { login: 'alex', password: 'mock-password' })).status, 403);
+  await call('/api/access', { password: 'falky-mock' });
+  assert.equal((await call('/api/accounts/login', { login: 'alex', password: 'wrong' })).status, 401);
+  const signed = await call('/api/accounts/login', { login: ' Alex ', password: 'mock-password' });
+  assert.equal(signed.status, 200);
+  assert.equal((await signed.json()).session.visitor.name, 'Alex');
+  assert.equal((await (await call('/api/me')).json()).name, 'Alex');
+  assert.equal((await call('/api/accounts/password', { currentPassword: 'wrong', newPassword: 'password2' }, 'PUT')).status, 403);
+  assert.equal((await call('/api/accounts/password', { currentPassword: 'mock-password', newPassword: 'password2' }, 'PUT')).status, 200);
+
+  const { WebSocket } = await import('ws');
+  const ws = new WebSocket(server.url.replace('http', 'ws') + '/api/live', { origin: server.url, headers: { cookie: cookie() } });
+  await new Promise<void>((resolve, reject) => { ws.once('open', resolve); ws.once('error', reject); });
+  const changes: { id: string; name: string }[] = [];
+  ws.on('message', (raw) => { const event = JSON.parse(String(raw)); if (event.type === 'room.changed') changes.push(event.payload); });
+  assert.equal((await call('/api/rooms', { name: ' lounge ' })).status, 409);
+  assert.equal((await call('/api/rooms', { name: '  ' })).status, 400);
+  const created = await call('/api/rooms', { name: ' Studio ' });
+  assert.equal(created.status, 201);
+  const studio = await created.json();
+  assert.deepEqual(studio.occupancy, []);
+  assert.equal((await call(`/api/rooms/${studio.id}`, { name: 'Games' }, 'PATCH')).status, 409);
+  assert.equal((await call(`/api/rooms/${studio.id}`, { name: 'Recording studio' }, 'PATCH')).status, 200);
+  assert.equal((await call('/api/rooms/01JBX6ZZZZZZZZZZZZZZZZZZZZ', { name: 'Nowhere' }, 'PATCH')).status, 404);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.deepEqual(changes, [{ id: studio.id, name: 'Studio' }, { id: studio.id, name: 'Recording studio' }]);
+  assert.ok((await (await call('/api/rooms')).json()).rooms.some((room: { name: string }) => room.name === 'Recording studio'));
+
+  const closed = new Promise<number>((resolve) => ws.once('close', resolve));
+  assert.equal((await call('/api/accounts/logout', {})).status, 200);
+  assert.equal(await closed, 4001);
+  assert.equal((await call('/api/me')).status, 401);
+  assert.equal((await call('/api/accounts/recovery', { account: 'alex', proof: 'not it', password: 'password3' })).status, 403);
+  const recovered = await call('/api/accounts/recovery', { account: 'alex', proof: 'mock-recovery-code', password: 'password3' });
+  assert.equal(recovered.status, 200);
+  assert.equal((await call('/api/accounts/login', { login: 'alex', password: 'password3' })).status, 200);
+  assert.equal((await call('/api/me')).status, 200);
 });

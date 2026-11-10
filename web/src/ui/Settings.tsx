@@ -1,5 +1,5 @@
 import { type KeyboardEvent as ReactKeyboardEvent, type ReactNode, useEffect, useRef, useState } from 'react';
-import { enableNotifications, rename, setVisitorColour, updateSettings, voice } from '../app/controller';
+import { type AuthProblem, changePassword, enableNotifications, logout, rename, setVisitorColour, updateSettings, voice } from '../app/controller';
 import type { Settings as SettingsValues } from '../app/prefs';
 import { shortcuts } from '../app/shortcuts';
 import { useApp } from '../app/store';
@@ -248,6 +248,82 @@ function ProfilePanel() {
   );
 }
 
+/** A password input in a settings row, with its own show button. */
+function PasswordRow({ id, label, value, autoComplete, error, onValue }: { id: string; label: string; value: string; autoComplete: string; error?: string; onValue(v: string): void }) {
+  const [shown, setShown] = useState(false);
+  return (
+    <div className="setrow">
+      <label htmlFor={id}>{label}</label>
+      <span className="field-box">
+        <input id={id} type={shown ? 'text' : 'password'} autoComplete={autoComplete} value={value} aria-invalid={error ? true : undefined} onChange={(e) => onValue(e.target.value)} />
+        <button type="button" className="field-eye" aria-label={shown ? t.auth.hide : t.auth.show} aria-pressed={shown} onClick={() => setShown(!shown)}>
+          <Icon name={shown ? 'eyeOff' : 'eye'} />
+        </button>
+      </span>
+      {error && <span className="field-err" role="alert">{error}</span>}
+    </div>
+  );
+}
+
+function ChangePasswordForm() {
+  const [current, setCurrent] = useState('');
+  const [next, setNext] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [problem, setProblem] = useState<AuthProblem | null>(null);
+  const [done, setDone] = useState(false);
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!current || !next || busy) return;
+    setBusy(true);
+    const result = await changePassword(current, next);
+    setBusy(false);
+    setProblem(result);
+    if (!result) {
+      setCurrent('');
+      setNext('');
+      setDone(true);
+    }
+  };
+  const wrongCurrent = problem?.code === 'invalid_credentials' ? t.account.wrongCurrent : undefined;
+  const otherProblem = problem && !problem.field && !wrongCurrent ? problem.message : undefined;
+  return (
+    <form onSubmit={(e) => void submit(e)}>
+      <PasswordRow id="set-pass-current" label={t.account.currentPassword} autoComplete="current-password" value={current} error={wrongCurrent}
+        onValue={(v) => { setCurrent(v); setProblem(null); setDone(false); }} />
+      <PasswordRow id="set-pass-next" label={t.account.newPassword} autoComplete="new-password" value={next} error={problem?.field === 'password' ? problem.message : undefined}
+        onValue={(v) => { setNext(v); setProblem(null); setDone(false); }} />
+      <div className="setrow">
+        <Button type="submit" disabled={!current || !next || busy}>{t.account.changePassword}</Button>
+        {done && <span className="set-note" role="status">{t.account.passwordChanged}</span>}
+        {otherProblem && <span className="field-err" role="alert">{otherProblem}</span>}
+      </div>
+    </form>
+  );
+}
+
+function AccountPanel() {
+  const [leaving, setLeaving] = useState(false);
+  return (
+    <div className="set-columns account">
+      <div>
+        <section>
+          <h3>{t.account.passwordSection}</h3>
+          <ChangePasswordForm />
+        </section>
+      </div>
+      <div>
+        <section>
+          <h3>{t.account.leaveSection}</h3>
+          <p className="set-note set-hint">{t.account.logoutNote}</p>
+          <div className="setrow">
+            <Button className="danger" disabled={leaving} onClick={() => { setLeaving(true); void logout().finally(() => setLeaving(false)); }}>{t.account.logout}</Button>
+          </div>
+        </section>
+      </div>
+    </div>
+  );
+}
+
 function Shortcut({ keys, label }: { keys: ReactNode; label: string }) {
   return (
     <div>
@@ -324,7 +400,7 @@ function SystemPanel() {
   );
 }
 
-type Tab = 'media' | 'share' | 'profile' | 'keys' | 'system';
+type Tab = 'media' | 'share' | 'profile' | 'account' | 'keys' | 'system';
 
 /** Everything a person can change, in one window with its parts along the top. */
 export function Settings({ open, onClose }: { open: boolean; onClose(): void }) {
@@ -339,6 +415,7 @@ export function Settings({ open, onClose }: { open: boolean; onClose(): void }) 
     ['media', t.tabAudioVideo],
     ...(showShare ? [['share', t.sectionShare] as const] : []),
     ['profile', t.sectionProfile],
+    ['account', t.account.tab],
     ...(showKeys ? [['keys', t.tabKeys] as const] : []),
     ['system', t.tabSystem],
   ];
@@ -399,6 +476,7 @@ export function Settings({ open, onClose }: { open: boolean; onClose(): void }) 
       {panel('media', <AudioVideoPanel active={open && tab === 'media'} />)}
       {showShare && panel('share', <SharePanel />)}
       {panel('profile', <ProfilePanel />)}
+      {panel('account', <AccountPanel />)}
       {showKeys && panel('keys', <KeysPanel />)}
       {panel('system', <SystemPanel />)}
     </dialog>
