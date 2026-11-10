@@ -214,21 +214,10 @@ func (s *Service) mayStay(ctx context.Context, p Participant) (v identity.Visito
 	if refused {
 		return identity.Visitor{}, "unknown or revoked voice grant", nil
 	}
-	if s.validate != nil {
-		var session identity.Session
-		session, err = s.validate(ctx, g.session)
-		v = session.Visitor
-	} else {
-		v, err = s.visitors.Visitor(ctx, g.session.Visitor.ID)
-	}
-	if errors.Is(err, identity.ErrNoVisitor) {
-		return identity.Visitor{}, "no current access", nil
-	}
-	if err != nil {
-		return identity.Visitor{}, "", err
-	}
-	err = s.rooms.Authorize(ctx, v, p.Room, rooms.JoinVoice)
+	v, err = s.authorizeGrant(ctx, g)
 	switch {
+	case errors.Is(err, identity.ErrNoVisitor):
+		return identity.Visitor{}, "no current access", nil
 	case errors.Is(err, rooms.ErrNotFound):
 		return identity.Visitor{}, "no such room", nil
 	case errors.Is(err, identity.ErrNameTaken):
