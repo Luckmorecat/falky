@@ -185,27 +185,29 @@ func TestEveryJoinIssuesAnIndependentTransport(t *testing.T) {
 	}
 }
 
-func TestJoiningAnotherRoomPreservesExistingConnections(t *testing.T) {
-	s, lk := newService(8)
-	lk.AddParticipant(roomA, bob.ID)
-	lk.AddParticipant(roomA, "alice")
-	if _, err := s.Join(t.Context(), bob, roomB); err != nil {
-		t.Fatalf("Join: %v", err)
-	}
-	var want []voice.Participant
-	if got := lk.Removed(); !slices.Equal(got, want) {
-		t.Errorf("removed = %+v, want %+v", got, want)
-	}
-}
-
-func TestJoiningTheSameRoomPreservesTheOldTransport(t *testing.T) {
-	s, lk := newService(8)
-	lk.AddParticipant(roomA, bob.ID)
-	if _, err := s.Join(t.Context(), bob, roomA); err != nil {
-		t.Fatalf("Join: %v", err)
-	}
-	if got := lk.Removed(); len(got) != 0 {
-		t.Errorf("removed = %+v, want no removal", got)
+func TestJoiningPreservesExistingConnections(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		room string
+	}{
+		{name: "same room", room: roomA},
+		{name: "another room", room: roomB},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, lk := newService(8)
+			first, err := s.Join(t.Context(), bob, roomA)
+			if err != nil {
+				t.Fatal(err)
+			}
+			lk.AddParticipant(roomA, first.GrantID)
+			lk.AddParticipant(roomA, "alice")
+			if _, err := s.Join(t.Context(), bob, tc.room); err != nil {
+				t.Fatalf("Join: %v", err)
+			}
+			if got := lk.Removed(); len(got) != 0 {
+				t.Errorf("removed = %+v, want no removal", got)
+			}
+		})
 	}
 }
 

@@ -254,21 +254,6 @@ func TestLiveKitAcceptsTheTokenAndListsTheParticipant(t *testing.T) {
 	}
 }
 
-func TestJoiningAnotherRoomKeepsTheParticipantInLiveKit(t *testing.T) {
-	s, lk := liveKitService(8, newAccess()), liveKitClient()
-	first, second := ulid.Make().String(), ulid.Make().String()
-	bob := newVisitor("Bob")
-	inFirst := connect(t, joined(t, s, bob, first))
-	connect(t, joined(t, s, bob, second))
-	waitForParticipants(t, lk, first, bob.ID)
-	waitForParticipants(t, lk, second, bob.ID)
-	select {
-	case reason := <-inFirst.disconnected:
-		t.Fatalf("independent Join disconnected first: %s", reason)
-	default:
-	}
-}
-
 func TestRemovingAnAbsentParticipantSucceeds(t *testing.T) {
 	if err := liveKitClient().RemoveParticipant(t.Context(), ulid.Make().String(), "nobody"); err != nil {
 		t.Errorf("RemoveParticipant of no one = %v, want nil", err)

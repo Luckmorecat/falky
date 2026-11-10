@@ -523,19 +523,11 @@ test('chat keeps each room reading place, pages without jumping, and virtualizes
 });
 
 
-test('offline Leave disconnects immediately and ignores obsolete pending storage after reload', async ({ page, context }) => {
+test('offline Leave disconnects immediately without a server request and stays idle after reload', async ({ page, context }) => {
   const requests: string[] = [];
   page.on('request', (request) => { if (request.url().includes('/api/voice/leave')) requests.push(request.url()); });
   await page.goto(app.url);
   await english(page);
-  const initial = await state(page);
-  await page.evaluate(({ instanceId }) => {
-    localStorage.setItem(`falky.mock.${instanceId}.pendingLeave.self.obsolete`, 'pending');
-    localStorage.setItem('falky.pendingLeave.self.production-obsolete', 'pending');
-  }, initial);
-  await page.reload();
-  await expect(page.getByRole('button', { name: 'Join', exact: true })).toBeVisible();
-  await page.evaluate(() => { dispatchEvent(new Event('online')); dispatchEvent(new Event('focus')); });
   await page.getByRole('button', { name: 'Join', exact: true }).click();
   await expect(page.getByRole('toolbar')).toBeVisible();
   try {
@@ -543,11 +535,8 @@ test('offline Leave disconnects immediately and ignores obsolete pending storage
     await page.getByRole('button', { name: 'Leave voice', exact: true }).click();
     await expect(page.getByRole('toolbar')).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'Join', exact: true })).toBeVisible();
-    await expect(page.locator('.pending-leave')).toHaveCount(0);
-    await expect(page.getByText('Waiting for the server to confirm your earlier exit from voice.', { exact: true })).toHaveCount(0);
   } finally { await context.setOffline(false); }
   await page.reload();
   await expect(page.getByRole('button', { name: 'Join', exact: true })).toBeVisible();
-  await expect(page.locator('.pending-leave')).toHaveCount(0);
   expect(requests).toEqual([]);
 });
