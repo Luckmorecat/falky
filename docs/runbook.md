@@ -656,10 +656,14 @@ remain unchanged in history.
 Keep `FALKY_PUBLIC_ORIGIN` and its hostname stable: passkeys bind to that RP
 hostname and exact origin. Accounts use discoverable passkeys with required user
 verification, never email/password/OAuth. Multiple individually labeled passkeys
-are supported. Management and code regeneration require a verified passkey proof
-in the same session within five minutes; last-key removal is refused. Removing
-one passkey blocks future sign-in/proof with that key, but normal existing
-sessions remain usable; recovery/disable ends the old sessions. Account cookies expire server-side
+are supported. Management and code regeneration require recent authentication in the same
+session within five minutes: an actual passkey proof, or device approval whose
+approver held such a proof at approval. Device approval cannot chain that proof.
+Last-key removal is refused. Removing a passkey revokes sessions originally
+signed in with it and sessions device-approved from that origin, including
+chains and unredeemed approvals. A credential used only for later
+reauthentication does not revoke that session, but its latest proof becomes
+unusable. Recovery/disable ends all affected account sessions. Account cookies expire server-side
 after 90 days absolute; logout ends only that browser's exact session and all of
 its grants, preserving other sessions of the same account. Guest-link rotation
 ends affected guest sessions and all their grants, preserving accounts.
@@ -681,7 +685,7 @@ All twelve words must match in order and spelling; there is no fuzzy correction
 or autocomplete. A phrase authorizes replacement-passkey enrollment, not
 ordinary access. Ordinary sign-in returns an empty `recoveryCodes` array, and
 sign-in or adding/removing a passkey does not rotate the phrase. Authorized
-regeneration requires recent passkey verification and invalidates the previous
+regeneration requires recent authentication and invalidates the previous
 phrase and pending phrase-based recovery ceremonies.
 
 An operator should issue `account recover` only after out-of-band human identity
@@ -737,6 +741,22 @@ pre-upgrade database snapshot. Snapshot before an upgrade; an older
 binary cannot restore the newer migration set. A deliberate reset would lose
 accounts, credentials, reservations, sessions and history: never delete a live
 database for this feature.
+
+**Migration `0013_device_approval.sql` signs out every existing account session.**
+Account holders must sign in again with an existing passkey after upgrade.
+Identities, account names, passkeys, recovery proofs, profiles and content are
+preserved. Guest sessions retain their exact token hashes, generations and
+absolute deadlines, with an initial guest authentication event backfilled.
+Existing account voice grants fail session validation and use the existing
+retryable cleanup; guest voice grants remain authorized. Snapshot before
+upgrading, and restore that snapshot with the older binary for a rollback.
+Never delete the database to apply this change.
+
+Device approval is implemented by the backend and does not add browser UI.
+A link issuer approves a candidate code; a QR approver explicitly confirms the
+request. The independent request-binding cookie survives logout. Approval and
+redelivery stop at the original five-minute deadline, while completed account
+sessions retain their normal absolute lifetime.
 
 ### Logs and host state
 
