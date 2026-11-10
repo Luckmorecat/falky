@@ -41,11 +41,12 @@ type Deps struct {
 	Health       *platform.Health
 	Metrics      http.Handler
 	Identity     *identity.Service
-	Lifecycle    *Lifecycle
-	AuthLimit    *platform.Limiter
-	Rooms        *rooms.Service
-	Chat         *chat.Service
-	Attachments  *attachments.Store
+	// Lifecycle must be dedicated to Identity and Live; New configures its maintenance dependencies.
+	Lifecycle   *Lifecycle
+	AuthLimit   *platform.Limiter
+	Rooms       *rooms.Service
+	Chat        *chat.Service
+	Attachments *attachments.Store
 	// Shutdown wakes blocked upload readers before the application waits for Store.Close.
 	Shutdown      context.Context
 	Voice         *voice.Service
@@ -63,8 +64,10 @@ type Deps struct {
 
 // New returns the handlers of both listeners. Every operation of the contract
 // is routed on one mux; each listener forwards only its own path prefixes to
-// it, so an operation is reachable on exactly one listener.
+// it, so an operation is reachable on exactly one listener. The supplied Lifecycle
+// is configured for Identity and Live and must keep those same dependencies.
 func New(deps Deps) Handlers {
+	signInBodyContract()
 	if deps.Lifecycle == nil {
 		deps.Lifecycle = &Lifecycle{}
 	}

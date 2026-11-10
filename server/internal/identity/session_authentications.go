@@ -3,7 +3,6 @@ package identity
 import (
 	"context"
 	"database/sql"
-	"errors"
 )
 
 type sessionAuthentication struct {
@@ -48,40 +47,15 @@ func (s *Service) initialPasskeyOrigin(ctx context.Context, tx *sql.Tx, sessionI
 // Cancel before session FKs are cleared so unfinished approvals cannot lose
 // their authorization dependency and remain redeemable.
 func (s *Service) cancelSessionApprovals(ctx context.Context, tx *sql.Tx, sessionID string, effects *Effects) error {
-	rows, err := tx.QueryContext(ctx, "SELECT id FROM account_signin_links WHERE issuer_session_id=? AND state IN ('open','approved')", sessionID)
-	if err != nil {
+	if err := s.cancelLinks(ctx, tx, effects, "issuer_session_id=? AND state IN ('open','approved')", sessionID); err != nil {
 		return err
-	}
-	var ids []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			_ = rows.Close()
-			return err
-		}
-		ids = append(ids, id)
-	}
-	if err = errors.Join(rows.Err(), rows.Close()); err != nil {
-		return err
-	}
-	for _, id := range ids {
-		l, err := readSignInLink(ctx, tx, "id=?", id)
-		if err != nil {
-			return err
-		}
-		if err = s.cancelLink(ctx, tx, l, effects); err != nil {
-			return err
-		}
 	}
 	requests, err := signInRequests(ctx, tx, "approved_by_session_id=? AND state IN ('pending','approved')", sessionID)
 	if err != nil {
 		return err
 	}
 	for _, r := range requests {
-		if _, err = tx.ExecContext(ctx, "UPDATE account_signin_requests SET state='cancelled',version=version+1 WHERE id=?", r.ID); err != nil {
-			return err
-		}
-		if err = s.appendRequestChange(ctx, tx, effects, r.ID, true); err != nil {
+		if err = s.cancelRequest(ctx, tx, effects, r.ID, true); err != nil {
 			return err
 		}
 	}

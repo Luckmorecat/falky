@@ -153,3 +153,32 @@ func TestDeviceMaintenancePrunesExpiredAndRotatedGuestSessionsAndRetriesFailure(
 		t.Fatal("current guest pruned", err)
 	}
 }
+
+func TestDeviceMaintenanceEmitsOneTerminalHintPerExpiringLinkRequest(t *testing.T) {
+	f := newFixture(t, filepath.Join(t.TempDir(), "falky.db"))
+	account, _ := enroll(t, f, "Account")
+	link, _, err := f.ident.CreateSignInLink(t.Context(), account.Token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 3 {
+		if _, _, err = f.ident.BeginSignInRequest(t.Context(), link.Token, "", "", ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f.clock.Advance(identity.SignInTTL)
+	effects, err := f.ident.MaintainSignIns(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := make(map[string]bool)
+	for _, change := range effects.SignInChanges {
+		if seen[change.Request.ID] || change.Request.State != "cancelled" || change.Request.Version != 2 {
+			t.Fatalf("duplicate or invalid terminal hint: %+v", change)
+		}
+		seen[change.Request.ID] = true
+	}
+	if len(seen) != 3 {
+		t.Fatalf("terminal requests=%d", len(seen))
+	}
+}

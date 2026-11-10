@@ -189,7 +189,7 @@ func TestSensitiveChangesRequireSessionSpecificRecentPasskeyProof(t *testing.T) 
 	if _, err := f.ident.RegenerateRecoveryCodes(t.Context(), account.Token); !errors.Is(err, identity.ErrRecentProof) {
 		t.Fatalf("codes without proof = %v", err)
 	}
-	if err := f.ident.RemovePasskey(t.Context(), account.Token, base64.RawURLEncoding.EncodeToString(key.ID)); !errors.Is(err, identity.ErrRecentProof) {
+	if _, err := f.ident.RemovePasskeyWithEffects(t.Context(), account.Token, base64.RawURLEncoding.EncodeToString(key.ID)); !errors.Is(err, identity.ErrRecentProof) {
 		t.Fatalf("remove without proof = %v", err)
 	}
 	c, err := f.ident.BeginReauthentication(t.Context(), account.Token, "browser")
@@ -244,10 +244,12 @@ func TestConcurrentPasskeyRemovalCannotRemoveTheLastCredential(t *testing.T) {
 	results := make(chan error, 2)
 	var wg sync.WaitGroup
 	wg.Go(func() {
-		results <- f.ident.RemovePasskey(t.Context(), account.Token, base64.RawURLEncoding.EncodeToString(first.ID))
+		_, err := f.ident.RemovePasskeyWithEffects(t.Context(), account.Token, base64.RawURLEncoding.EncodeToString(first.ID))
+		results <- err
 	})
 	wg.Go(func() {
-		results <- f.ident.RemovePasskey(t.Context(), phone.Token, base64.RawURLEncoding.EncodeToString(second.ID))
+		_, err := f.ident.RemovePasskeyWithEffects(t.Context(), phone.Token, base64.RawURLEncoding.EncodeToString(second.ID))
+		results <- err
 	})
 	wg.Wait()
 	close(results)
@@ -292,7 +294,7 @@ func TestOnlyCredentialOwnerCanManagePasskeysAndCredentialIDsCannotBeShared(t *t
 	f := newFixture(t, filepath.Join(t.TempDir(), "falky.db"))
 	first, key := enroll(t, f, "Alice")
 	second, _ := enroll(t, f, "Bob")
-	if err := f.ident.RemovePasskey(t.Context(), second.Token, base64.RawURLEncoding.EncodeToString(key.ID)); !errors.Is(err, identity.ErrInvalidProof) {
+	if _, err := f.ident.RemovePasskeyWithEffects(t.Context(), second.Token, base64.RawURLEncoding.EncodeToString(key.ID)); !errors.Is(err, identity.ErrInvalidProof) {
 		t.Fatalf("foreign key removal = %v", err)
 	}
 	c, err := f.ident.BeginAddPasskey(t.Context(), first.Token, "browser")
@@ -375,7 +377,7 @@ func TestRemovedInitialPasskeyRevokesSessionDespiteLaterReauthentication(t *test
 	if _, err := f.ident.FinishReauthentication(t.Context(), account.Token, reauth.ID, "laptop", replacement.Assertion(t, reauth.Assertion, "https://falky.example")); err != nil {
 		t.Fatal(err)
 	}
-	if err := f.ident.RemovePasskey(t.Context(), account.Token, base64.RawURLEncoding.EncodeToString(first.ID)); err != nil {
+	if _, err := f.ident.RemovePasskeyWithEffects(t.Context(), account.Token, base64.RawURLEncoding.EncodeToString(first.ID)); err != nil {
 		t.Fatal(err)
 	}
 	for _, token := range []string{other.Token, account.Token} {
@@ -403,7 +405,7 @@ func TestRemovedReauthenticationPasskeyKeepsInitialSessionWithoutOlderProofResur
 	if _, err := f.ident.FinishReauthentication(t.Context(), account.Token, reauth.ID, "browser", second.Assertion(t, reauth.Assertion, "https://falky.example")); err != nil {
 		t.Fatal(err)
 	}
-	if err := f.ident.RemovePasskey(t.Context(), account.Token, base64.RawURLEncoding.EncodeToString(second.ID)); err != nil {
+	if _, err := f.ident.RemovePasskeyWithEffects(t.Context(), account.Token, base64.RawURLEncoding.EncodeToString(second.ID)); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := f.ident.ResolveSession(t.Context(), account.Token); err != nil {

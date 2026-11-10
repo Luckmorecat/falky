@@ -2,7 +2,6 @@ package httpapi
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"math"
 	"net/http"
@@ -17,12 +16,15 @@ import (
 
 const signInCookie = "__Host-falky-signin"
 
-// SignInLimits separates anonymous attempts, actual allocations and phone operations.
+// SignInLimits separates anonymous attempts, actual allocations and approver operations.
 type SignInLimits struct {
-	LinkAttempts, QRAttempts, QRBrowserAllocations, QRIPAllocations, QRSessionAttempts, CandidateAttempts *platform.Limiter
+	LinkAttempts, QRAttempts, QRBrowserAllocations, QRIPAllocations, QRSessionAttempts, CandidateAttempts, RequestAttempts *platform.Limiter
 }
 
 func (l *SignInLimits) defaults(now func() time.Time) {
+	if l.RequestAttempts == nil {
+		l.RequestAttempts = platform.NewLimiter(20, 3*time.Second, now)
+	}
 	if l.LinkAttempts == nil {
 		l.LinkAttempts = platform.NewLimiter(20, 3*time.Second, now)
 	}
@@ -109,12 +111,10 @@ func (s *server) CreateSignInLink(ctx context.Context, req api.CreateSignInLinkR
 	if s.signInApplied(ctx, effects, err) {
 		return nil, nil
 	}
-	return api.CreateSignInLink200JSONResponse{Body: api.SignInLinkResult{Link: signInLinkBody(result.Link), Token: result.Token, Url: result.URL}}, nil
+	return api.CreateSignInLink200JSONResponse{Link: signInLinkBody(result.Link), Token: result.Token, Url: result.URL}, nil
 }
 
 func (s *server) GetSignInLink(ctx context.Context, req api.GetSignInLinkRequestObject) (api.GetSignInLinkResponseObject, error) {
-	s.lifecycle.Lock()
-	defer s.lifecycle.Unlock()
 	result, err := s.identity.SignInLink(ctx, accountToken(ctx), req.LinkId)
 	if s.signInError(ctx, err) {
 		return nil, nil
@@ -168,14 +168,15 @@ func (s *server) BeginQRSignIn(ctx context.Context, req api.BeginQRSignInRequest
 	defer s.lifecycle.Unlock()
 	r, _ := accountHTTP(ctx)
 	allocate := func(browserHash string) error {
-		if !s.signInLimits.QRBrowserAllocations.Allow(browserHash) {
-			return &identity.SignInCooldownError{RetryAfter: 100 * time.Second}
-		}
-		if !s.signInLimits.QRIPAllocations.Allow(clientIP(r)) {
-			return &identity.SignInCooldownError{RetryAfter: 30 * time.Second}
+		if wait := platform.TakeAll(
+			platform.LimitRequest{Limiter: s.signInLimits.QRBrowserAllocations, Key: browserHash},
+			platform.LimitRequest{Limiter: s.signInLimits.QRIPAllocations, Key: clientIP(r)},
+		); wait > 0 {
+			return &identity.SignInCooldownError{RetryAfter: wait}
 		}
 		return nil
 	}
+
 	result, effects, err := s.identity.BeginQRSignIn(ctx, signInBinding(r), accountToken(ctx), r.UserAgent(), req.Body.Replace, allocate)
 	if s.signInApplied(ctx, effects, err) {
 		return nil, nil
@@ -184,9 +185,7 @@ func (s *server) BeginQRSignIn(ctx context.Context, req api.BeginQRSignInRequest
 }
 
 func (s *server) PreviewQRSignIn(ctx context.Context, req api.PreviewQRSignInRequestObject) (api.PreviewQRSignInResponseObject, error) {
-	s.lifecycle.Lock()
-	defer s.lifecycle.Unlock()
-	if !s.signInPhoneAllowed(ctx) {
+	if !s.signInApproverAllowed(ctx) {
 		return nil, nil
 	}
 	result, err := s.identity.PreviewQRSignIn(ctx, accountToken(ctx), req.Body.Token)
@@ -199,7 +198,7 @@ func (s *server) PreviewQRSignIn(ctx context.Context, req api.PreviewQRSignInReq
 func (s *server) ApproveQRSignIn(ctx context.Context, req api.ApproveQRSignInRequestObject) (api.ApproveQRSignInResponseObject, error) {
 	s.lifecycle.Lock()
 	defer s.lifecycle.Unlock()
-	if !s.signInPhoneAllowed(ctx) {
+	if !s.signInApproverAllowed(ctx) {
 		return nil, nil
 	}
 	result, effects, err := s.identity.ApproveQRSignIn(ctx, accountToken(ctx), req.Body.Token)
@@ -212,7 +211,7 @@ func (s *server) ApproveQRSignIn(ctx context.Context, req api.ApproveQRSignInReq
 func (s *server) DenyQRSignIn(ctx context.Context, req api.DenyQRSignInRequestObject) (api.DenyQRSignInResponseObject, error) {
 	s.lifecycle.Lock()
 	defer s.lifecycle.Unlock()
-	if !s.signInPhoneAllowed(ctx) {
+	if !s.signInApproverAllowed(ctx) {
 		return nil, nil
 	}
 	effects, err := s.identity.DenyQRSignIn(ctx, accountToken(ctx), req.Body.Token)
@@ -234,8 +233,6 @@ func (s *server) CancelQRSignIn(ctx context.Context, req api.CancelQRSignInReque
 }
 
 func (s *server) GetSignInRequest(ctx context.Context, req api.GetSignInRequestRequestObject) (api.GetSignInRequestResponseObject, error) {
-	s.lifecycle.Lock()
-	defer s.lifecycle.Unlock()
 	r, _ := accountHTTP(ctx)
 	result, err := s.identity.SignInRequest(ctx, req.RequestId, signInBinding(r))
 	if s.signInError(ctx, err) {
@@ -272,7 +269,7 @@ func (s *server) FinishSignInRequest(ctx context.Context, req api.FinishSignInRe
 	return api.FinishSignInRequest200JSONResponse{Body: s.sessionBody(result.Session), Headers: api.FinishSignInRequest200ResponseHeaders{SetCookie: cookie}}, nil
 }
 
-func (s *server) signInPhoneAllowed(ctx context.Context) bool {
+func (s *server) signInApproverAllowed(ctx context.Context) bool {
 	session, err := s.identity.ResolveSession(ctx, accountToken(ctx))
 	if s.signInError(ctx, err) {
 		return false
@@ -281,65 +278,10 @@ func (s *server) signInPhoneAllowed(ctx context.Context) bool {
 		s.signInError(ctx, identity.ErrNoVisitor)
 		return false
 	}
-	if !s.signInLimits.QRSessionAttempts.Allow(session.ID) {
+	if wait := s.signInLimits.QRSessionAttempts.Take(session.ID); wait > 0 {
 		_, w := accountHTTP(ctx)
-		signInRateLimited(w, 6*time.Second)
+		signInRateLimited(w, wait)
 		return false
-	}
-	return true
-}
-
-func validateSignInBody(path string, raw []byte) bool {
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &fields); err != nil {
-		return false
-	}
-	var allowed, required string
-	switch {
-	case path == "/api/accounts/qr-signins":
-		allowed = "replace"
-	case path == "/api/accounts/signin-requests" || path == "/api/accounts/qr-signins/preview" || path == "/api/accounts/qr-signins/approve" || path == "/api/accounts/qr-signins/deny" || strings.HasSuffix(path, "/resend"):
-		allowed = "token"
-		required = "token"
-	case strings.HasSuffix(path, "/finish"):
-		allowed = "token"
-	case strings.HasSuffix(path, "/approve"):
-		allowed = "code"
-		required = "code"
-	}
-	if required != "" {
-		if _, ok := fields[required]; !ok {
-			return false
-		}
-	}
-	for key, value := range fields {
-		if key != allowed || string(value) == "null" {
-			return false
-		}
-		if key == "replace" {
-			var v bool
-			if json.Unmarshal(value, &v) != nil {
-				return false
-			}
-			continue
-		}
-		var v string
-		if json.Unmarshal(value, &v) != nil || len(v) > 256 {
-			return false
-		}
-		if key == "token" && v == "" {
-			return false
-		}
-		if key == "code" {
-			if len(v) != 4 {
-				return false
-			}
-			for _, c := range v {
-				if c < '0' || c > '9' {
-					return false
-				}
-			}
-		}
 	}
 	return true
 }

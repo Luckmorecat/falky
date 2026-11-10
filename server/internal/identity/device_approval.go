@@ -14,8 +14,14 @@ import (
 )
 
 const (
-	SignInTTL            = 5 * time.Minute
-	SignInResendCooldown = 10 * time.Second
+	SignInTTL                 = 5 * time.Minute
+	SignInResendCooldown      = 10 * time.Second
+	signInPendingLimit        = 3
+	signInCodeAttemptLimit    = 5
+	signInCodeDigits          = 4
+	signInCodeSpace           = 10000
+	signInBrowserSecretLength = 52
+	signInUserAgentLimit      = 256
 )
 
 var (
@@ -86,10 +92,10 @@ type SignInAllocation func(browserHash string) error
 
 type signInLink struct {
 	SignInLinkView
-	owner, issuer string
-	hash          []byte
-	failures      int
-	notified      sql.NullInt64
+	accountID, issuer string
+	hash              []byte
+	failures          int
+	notified          sql.NullInt64
 }
 type signInRequest struct {
 	SignInRequestView
@@ -104,9 +110,30 @@ const (
 )
 
 func readSignInLink(ctx context.Context, q queryer, where string, args ...any) (signInLink, error) {
+	return scanSignInLink(q.QueryRowContext(ctx, "SELECT "+signInLinkColumns+" FROM account_signin_links WHERE "+where, args...))
+}
+
+func signInLinks(ctx context.Context, q queryer, where string, args ...any) ([]signInLink, error) {
+	rows, err := q.QueryContext(ctx, "SELECT "+signInLinkColumns+" FROM account_signin_links WHERE "+where+" ORDER BY created_at,id", args...)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var links []signInLink
+	for rows.Next() {
+		link, err := scanSignInLink(rows)
+		if err != nil {
+			return nil, err
+		}
+		links = append(links, link)
+	}
+	return links, rows.Err()
+}
+
+func scanSignInLink(row interface{ Scan(...any) error }) (signInLink, error) {
 	var l signInLink
 	var created, expires int64
-	err := q.QueryRowContext(ctx, "SELECT "+signInLinkColumns+" FROM account_signin_links WHERE "+where, args...).Scan(&l.ID, &l.State, &l.Version, &created, &expires, &l.owner, &l.issuer, &l.hash, &l.failures, &l.notified)
+	err := row.Scan(&l.ID, &l.State, &l.Version, &created, &expires, &l.accountID, &l.issuer, &l.hash, &l.failures, &l.notified)
 	l.CreatedAt, l.ExpiresAt = unixTime(created), unixTime(expires)
 	if errors.Is(err, sql.ErrNoRows) {
 		err = ErrInvalidProof
@@ -166,7 +193,7 @@ func (s *Service) currentToken(ctx context.Context, tx *sql.Tx, token string) (S
 	return s.sessionByID(ctx, tx, id)
 }
 
-func (s *Service) signInAccountConflict(ctx context.Context, tx *sql.Tx, token, owner, exact string) error {
+func (s *Service) signInAccountConflict(ctx context.Context, tx *sql.Tx, token, accountID, exact string) error {
 	current, err := s.currentToken(ctx, tx, token)
 	if errors.Is(err, ErrNoVisitor) {
 		return nil
@@ -183,7 +210,7 @@ func (s *Service) signInAccountConflict(ctx context.Context, tx *sql.Tx, token, 
 		}
 		return nil
 	}
-	if current.Visitor.ID != owner && owner != "" {
+	if current.Visitor.ID != accountID && accountID != "" {
 		return ErrAccountSwitchRequired
 	}
 	return ErrAlreadySignedIn
@@ -203,7 +230,7 @@ func (s *Service) liveSignInLink(ctx context.Context, tx *sql.Tx, l signInLink) 
 	if err != nil {
 		return err
 	}
-	if issuer.Kind != Account || issuer.Visitor.ID != l.owner {
+	if issuer.Kind != Account || issuer.Visitor.ID != l.accountID {
 		return ErrInvalidProof
 	}
 	return nil
@@ -218,7 +245,7 @@ func (s *Service) issuerLink(ctx context.Context, tx *sql.Tx, token, id string) 
 	if err != nil {
 		return l, issuer, err
 	}
-	if l.issuer != issuer.ID || l.owner != issuer.Visitor.ID {
+	if l.issuer != issuer.ID || l.accountID != issuer.Visitor.ID {
 		return l, issuer, ErrInvalidProof
 	}
 	if !s.now().Before(l.ExpiresAt) {
@@ -274,6 +301,31 @@ func (s *Service) appendRequestChange(ctx context.Context, tx *sql.Tx, e *Effect
 	return err
 }
 
+func (s *Service) cancelRequest(ctx context.Context, tx *sql.Tx, effects *Effects, id string, notify bool) error {
+	result, err := tx.ExecContext(ctx, "UPDATE account_signin_requests SET state='cancelled',version=version+1 WHERE id=? AND state IN ('pending','approved')", id)
+	if err != nil {
+		return err
+	}
+	changed, err := result.RowsAffected()
+	if err != nil || changed == 0 {
+		return err
+	}
+	return s.appendRequestChange(ctx, tx, effects, id, notify)
+}
+
+func (s *Service) cancelLinks(ctx context.Context, tx *sql.Tx, effects *Effects, where string, args ...any) error {
+	links, err := signInLinks(ctx, tx, where, args...)
+	if err != nil {
+		return err
+	}
+	for _, link := range links {
+		if err := s.cancelLink(ctx, tx, link, effects); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (s *Service) cancelLink(ctx context.Context, tx *sql.Tx, l signInLink, e *Effects) error {
 	if l.State == "consumed" || l.State == "revoked" {
 		return nil
@@ -282,14 +334,11 @@ func (s *Service) cancelLink(ctx context.Context, tx *sql.Tx, l signInLink, e *E
 	if err != nil {
 		return err
 	}
-	if _, err = tx.ExecContext(ctx, "UPDATE account_signin_requests SET state='cancelled',version=version+1 WHERE link_id=? AND state IN ('pending','approved')", l.ID); err != nil {
-		return err
-	}
 	if _, err = tx.ExecContext(ctx, "UPDATE account_signin_links SET state='revoked',revoked_at=?,version=version+1 WHERE id=?", s.now().Unix(), l.ID); err != nil {
 		return err
 	}
 	for _, r := range rs {
-		if err = s.appendRequestChange(ctx, tx, e, r.ID, true); err != nil {
+		if err = s.cancelRequest(ctx, tx, e, r.ID, true); err != nil {
 			return err
 		}
 	}
@@ -304,33 +353,11 @@ func (s *Service) CreateSignInLink(ctx context.Context, token string) (SignInLin
 		if err != nil {
 			return err
 		}
-		rows, err := tx.QueryContext(ctx, "SELECT id FROM account_signin_links WHERE issuer_session_id=? AND state IN ('open','approved')", issuer.ID)
-		if err != nil {
+		if err = s.cancelLinks(ctx, tx, &e, "issuer_session_id=? AND state IN ('open','approved')", issuer.ID); err != nil {
 			return err
-		}
-		var ids []string
-		for rows.Next() {
-			var id string
-			if err := rows.Scan(&id); err != nil {
-				_ = rows.Close()
-				return err
-			}
-			ids = append(ids, id)
-		}
-		if err = errors.Join(rows.Err(), rows.Close()); err != nil {
-			return err
-		}
-		for _, id := range ids {
-			l, err := readSignInLink(ctx, tx, "id=?", id)
-			if err != nil {
-				return err
-			}
-			if err = s.cancelLink(ctx, tx, l, &e); err != nil {
-				return err
-			}
 		}
 		id, secret, now := opaque(), opaque(), s.now().Unix()
-		if _, err = tx.ExecContext(ctx, "INSERT INTO account_signin_links(id,identity_id,issuer_session_id,token_hash,state,created_at,expires_at) VALUES(?,?,?,?,'open',?,?)", id, issuer.Visitor.ID, issuer.ID, hashToken(secret), now, now+300); err != nil {
+		if _, err = tx.ExecContext(ctx, "INSERT INTO account_signin_links(id,identity_id,issuer_session_id,token_hash,state,created_at,expires_at) VALUES(?,?,?,?,'open',?,?)", id, issuer.Visitor.ID, issuer.ID, hashToken(secret), now, now+int64(SignInTTL/time.Second)); err != nil {
 			return err
 		}
 		l, err := readSignInLink(ctx, tx, "id=?", id)
@@ -348,9 +375,20 @@ func (s *Service) CreateSignInLink(ctx context.Context, token string) (SignInLin
 	return result, e, nil
 }
 
+// A read transaction gives multi-query views one snapshot without queuing behind
+// the serialized writer. Stream registration still holds the lifecycle gate.
+func (s *Service) readSignInState(ctx context.Context, read func(*sql.Tx) error) error {
+	tx, err := s.db.Read().BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	return read(tx)
+}
+
 func (s *Service) SignInLink(ctx context.Context, token, id string) (SignInLinkView, error) {
 	var result SignInLinkView
-	err := s.db.Write(ctx, func(tx *sql.Tx) error {
+	err := s.readSignInState(ctx, func(tx *sql.Tx) error {
 		l, _, err := s.issuerLink(ctx, tx, token, id)
 		if err != nil {
 			return err
@@ -364,32 +402,16 @@ func (s *Service) SignInLink(ctx context.Context, token, id string) (SignInLinkV
 // SignInLinks supplies exact-session reconnect state without recovering bearer tokens.
 func (s *Service) SignInLinks(ctx context.Context, token string) ([]SignInLinkView, error) {
 	result := []SignInLinkView{}
-	err := s.db.Write(ctx, func(tx *sql.Tx) error {
+	err := s.readSignInState(ctx, func(tx *sql.Tx) error {
 		issuer, err := s.ownerSession(ctx, tx, token, false)
 		if err != nil {
 			return err
 		}
-		rows, err := tx.QueryContext(ctx, "SELECT id FROM account_signin_links WHERE issuer_session_id=? AND expires_at>? ORDER BY created_at,id", issuer.ID, s.now().Unix())
+		links, err := signInLinks(ctx, tx, "issuer_session_id=? AND expires_at>?", issuer.ID, s.now().Unix())
 		if err != nil {
 			return err
 		}
-		var ids []string
-		for rows.Next() {
-			var id string
-			if err := rows.Scan(&id); err != nil {
-				_ = rows.Close()
-				return err
-			}
-			ids = append(ids, id)
-		}
-		if err = errors.Join(rows.Err(), rows.Close()); err != nil {
-			return err
-		}
-		for _, id := range ids {
-			l, err := readSignInLink(ctx, tx, "id=?", id)
-			if err != nil {
-				return err
-			}
+		for _, l := range links {
 			v, err := s.linkView(ctx, tx, l)
 			if err != nil {
 				return err
@@ -423,7 +445,7 @@ func signInBrowser(browser string) (string, error) {
 	if browser == "" {
 		return opaque(), nil
 	}
-	if len(browser) != 52 {
+	if len(browser) != signInBrowserSecretLength {
 		return "", ErrInvalidProof
 	}
 	return browser, nil
@@ -431,8 +453,8 @@ func signInBrowser(browser string) (string, error) {
 
 func signInUA(ua string) string {
 	ua = strings.ToValidUTF8(ua, "")
-	if utf8.RuneCountInString(ua) > 256 {
-		ua = string([]rune(ua)[:256])
+	if utf8.RuneCountInString(ua) > signInUserAgentLimit {
+		ua = string([]rune(ua)[:signInUserAgentLimit])
 	}
 	return ua
 }
@@ -443,7 +465,7 @@ func (s *Service) newSignInCode(ctx context.Context, tx *sql.Tx, linkID string) 
 		if err != nil {
 			return "", err
 		}
-		if len(code) != 4 || strings.Trim(code, "0123456789") != "" {
+		if len(code) != signInCodeDigits || strings.Trim(code, "0123456789") != "" {
 			return "", ErrInvalidProof
 		}
 		var exists bool
@@ -471,7 +493,7 @@ func (s *Service) BeginSignInRequest(ctx context.Context, linkToken, browser, cu
 		if err = s.liveSignInLink(ctx, tx, l); err != nil {
 			return err
 		}
-		if err = s.signInAccountConflict(ctx, tx, currentToken, l.owner, ""); err != nil {
+		if err = s.signInAccountConflict(ctx, tx, currentToken, l.accountID, ""); err != nil {
 			return err
 		}
 		r, err := readSignInRequest(ctx, tx, "link_id=? AND browser_token_hash=?", l.ID, hashToken(browser))
@@ -492,7 +514,7 @@ func (s *Service) BeginSignInRequest(ctx context.Context, linkToken, browser, cu
 		if err = tx.QueryRowContext(ctx, "SELECT count(*) FROM account_signin_requests WHERE link_id=? AND state='pending'", l.ID).Scan(&count); err != nil {
 			return err
 		}
-		if count >= 3 {
+		if count >= signInPendingLimit {
 			return ErrSignInPendingCap
 		}
 		code, err := s.newSignInCode(ctx, tx, l.ID)
@@ -553,7 +575,7 @@ func (s *Service) ApproveSignInLink(ctx context.Context, token, id, code string)
 				return err
 			}
 			rejection = ErrInvalidProof
-			if l.failures+1 >= 5 {
+			if l.failures+1 >= signInCodeAttemptLimit {
 				return s.cancelLink(ctx, tx, l, &e)
 			}
 			return nil
@@ -675,7 +697,7 @@ func (s *Service) validRequest(ctx context.Context, tx *sql.Tx, r signInRequest)
 // SignInRequest is also the candidate stream admission/reconnect authorization seam.
 func (s *Service) SignInRequest(ctx context.Context, id, browser string) (SignInRequestView, error) {
 	var result SignInRequestView
-	err := s.db.Write(ctx, func(tx *sql.Tx) error {
+	err := s.readSignInState(ctx, func(tx *sql.Tx) error {
 		r, err := s.boundRequest(ctx, tx, id, browser)
 		if err != nil {
 			return err
@@ -850,10 +872,7 @@ func (s *Service) BeginQRSignIn(ctx context.Context, browser, currentToken, ua s
 			}
 		}
 		if exists && (old.State == "pending" || old.State == "approved") {
-			if _, err = tx.ExecContext(ctx, "UPDATE account_signin_requests SET state='cancelled',version=version+1 WHERE id=?", old.ID); err != nil {
-				return err
-			}
-			if err = s.appendRequestChange(ctx, tx, &e, old.ID, false); err != nil {
+			if err = s.cancelRequest(ctx, tx, &e, old.ID, false); err != nil {
 				return err
 			}
 		}
@@ -862,7 +881,7 @@ func (s *Service) BeginQRSignIn(ctx context.Context, browser, currentToken, ua s
 		if err != nil {
 			return err
 		}
-		if _, err = tx.ExecContext(ctx, "INSERT INTO account_signin_requests(id,type,state,browser_token_hash,qr_token_hash,requester_user_agent,created_at,expires_at) VALUES(?,'qr','pending',?,?,?,?,?)", id, hashToken(browser), hashToken(token), signInUA(ua), now, now+300); err != nil {
+		if _, err = tx.ExecContext(ctx, "INSERT INTO account_signin_requests(id,type,state,browser_token_hash,qr_token_hash,requester_user_agent,created_at,expires_at) VALUES(?,'qr','pending',?,?,?,?,?)", id, hashToken(browser), hashToken(token), signInUA(ua), now, now+int64(SignInTTL/time.Second)); err != nil {
 			return err
 		}
 		r, err := readSignInRequest(ctx, tx, "id=?", id)
@@ -897,8 +916,8 @@ func (s *Service) pendingQR(ctx context.Context, tx *sql.Tx, token string) (sign
 
 func (s *Service) PreviewQRSignIn(ctx context.Context, token, qr string) (SignInPreview, error) {
 	var result SignInPreview
-	err := s.db.Write(ctx, func(tx *sql.Tx) error {
-		owner, err := s.ownerSession(ctx, tx, token, false)
+	err := s.readSignInState(ctx, func(tx *sql.Tx) error {
+		approver, err := s.ownerSession(ctx, tx, token, false)
 		if err != nil {
 			return err
 		}
@@ -907,7 +926,7 @@ func (s *Service) PreviewQRSignIn(ctx context.Context, token, qr string) (SignIn
 			return err
 		}
 		result.Request = r.SignInRequestView
-		result.ApprovalGrantsRecentProof, err = s.recentAuthentication(ctx, tx, owner, true)
+		result.ApprovalGrantsRecentProof, err = s.recentAuthentication(ctx, tx, approver, true)
 		return err
 	})
 	return result, err
@@ -917,7 +936,7 @@ func (s *Service) ApproveQRSignIn(ctx context.Context, token, qr string) (SignIn
 	var result SignInRequestView
 	var e Effects
 	err := s.db.Write(ctx, func(tx *sql.Tx) error {
-		owner, err := s.ownerSession(ctx, tx, token, false)
+		approver, err := s.ownerSession(ctx, tx, token, false)
 		if err != nil {
 			return err
 		}
@@ -925,7 +944,7 @@ func (s *Service) ApproveQRSignIn(ctx context.Context, token, qr string) (SignIn
 		if err != nil {
 			return err
 		}
-		if err = s.approveRequest(ctx, tx, r, owner, &e); err != nil {
+		if err = s.approveRequest(ctx, tx, r, approver, &e); err != nil {
 			return err
 		}
 		r, err = readSignInRequest(ctx, tx, "id=?", r.ID)
@@ -975,10 +994,7 @@ func (s *Service) CancelQRSignIn(ctx context.Context, id, browser string) (Effec
 		if r.State == "cancelled" || r.State == "denied" {
 			return nil
 		}
-		if _, err = tx.ExecContext(ctx, "UPDATE account_signin_requests SET state='cancelled',version=version+1 WHERE id=?", r.ID); err != nil {
-			return err
-		}
-		return s.appendRequestChange(ctx, tx, &e, r.ID, false)
+		return s.cancelRequest(ctx, tx, &e, r.ID, false)
 	})
 	if err != nil {
 		return Effects{}, err
@@ -987,9 +1003,9 @@ func (s *Service) CancelQRSignIn(ctx context.Context, id, browser string) (Effec
 }
 
 func randomSignInCode() (string, error) {
-	n, err := rand.Int(rand.Reader, big.NewInt(10000))
+	n, err := rand.Int(rand.Reader, big.NewInt(signInCodeSpace))
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("%04d", n.Int64()), nil
+	return fmt.Sprintf("%0*d", signInCodeDigits, n.Int64()), nil
 }

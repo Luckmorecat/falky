@@ -19,6 +19,8 @@ import (
 
 // Event is one live update, as published.
 type Event struct {
+	// SessionID targets one authenticated session. RequestID targets one anonymous
+	// request instead; private events are never ordinary broadcasts.
 	SessionID string
 	RequestID string
 	// RoomID, when set, is the room the event is about: only connections
@@ -29,18 +31,24 @@ type Event struct {
 	Data []byte
 }
 
-// Subscriber is the visitor a connection serves.
+// Subscriber selects either an authenticated browser or a private request scope.
 type Subscriber struct {
-	RequestID   string
+	// RequestID selects a candidate connection, excluded from ordinary events and presence.
+	RequestID string
+	// CandidateIP groups candidate admission quotas; it is not identity evidence.
 	CandidateIP string
-	Initial     []Event
-	Deadline    time.Time
-	Terminal    bool
-	VisitorID   string
-	Session     identity.Session
+	// Initial is queued during registration before the admission gate is released.
+	Initial []Event
+	// Deadline bounds request authorization independently of heartbeat and maintenance.
+	Deadline time.Time
+	// Terminal delivers the initial state and closes instead of retaining a subscription.
+	Terminal  bool
+	VisitorID string
+	Session   identity.Session
 	// Registered releases the admission gate after the hub can fence this
 	// connection, including an upgrade that has not completed yet.
 	Registered func()
+	// Authorized rechecks current access before delivery and during maintenance.
 	Authorized func(context.Context) bool
 	// Ticket is what Hub.Ticket returned before the visitor's access was
 	// checked.
@@ -49,6 +57,8 @@ type Subscriber struct {
 	// visitor. It is asked again for each such event; nil allows every room.
 	MayReceive func(ctx context.Context, roomID string) bool
 }
+
+func (s Subscriber) isCandidate() bool { return s.RequestID != "" }
 
 // StatusBehind is the close code of a connection whose client fell behind:
 // its queue of events waiting to be sent filled up.
@@ -181,7 +191,7 @@ func (h *Hub) Publish(e Event) {
 }
 
 func eventMatches(e Event, sub Subscriber) bool {
-	if sub.RequestID != "" {
+	if sub.isCandidate() {
 		return e.RequestID == sub.RequestID && e.SessionID == ""
 	}
 	if e.RequestID != "" {
@@ -324,11 +334,11 @@ func (h *Hub) add(c *conn) bool {
 		c.status, c.reason = StatusRevoked, "access revoked"
 		return false
 	}
-	if c.sub.RequestID != "" {
+	if c.sub.isCandidate() {
 		var previous *conn
 		total, perIP := 0, 0
 		for existing := range h.conns {
-			if existing.sub.RequestID == "" {
+			if !existing.sub.isCandidate() {
 				continue
 			}
 			if existing.sub.RequestID == c.sub.RequestID {
@@ -381,7 +391,7 @@ func (h *Hub) opened(c *conn, ws *websocket.Conn) bool {
 	}
 	c.ws = ws
 	c.open = true
-	if c.sub.RequestID != "" {
+	if c.sub.isCandidate() {
 		return true
 	}
 	h.visitors[c.sub.VisitorID]++
@@ -407,7 +417,7 @@ func (h *Hub) removeLocked(c *conn, status websocket.StatusCode, reason string) 
 	delete(h.conns, c)
 	c.status, c.reason = status, reason
 	close(c.ended)
-	if !c.open || c.sub.RequestID != "" {
+	if !c.open || c.sub.isCandidate() {
 		return
 	}
 	id := c.sub.VisitorID
@@ -493,7 +503,7 @@ func (h *Hub) validateSessions(ctx context.Context, browserOnly bool) {
 	h.mu.Lock()
 	var conns []*conn
 	for c := range h.conns {
-		if browserOnly && c.sub.RequestID != "" {
+		if browserOnly && c.sub.isCandidate() {
 			continue
 		}
 		conns = append(conns, c)

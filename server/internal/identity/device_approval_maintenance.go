@@ -49,45 +49,31 @@ func (s *Service) MaintainSignIns(ctx context.Context) (Effects, error) {
 			}
 			e.RevokedSessions = append(e.RevokedSessions, session)
 		}
-		rows, err = tx.QueryContext(ctx, "SELECT id FROM account_signin_links WHERE expires_at<=? AND state IN ('open','approved')", s.now().Unix())
-		if err != nil {
+		if err = s.cancelLinks(ctx, tx, &e, "expires_at<=? AND state IN ('open','approved')", s.now().Unix()); err != nil {
 			return err
 		}
-		var linkIDs []string
-		for rows.Next() {
-			var id string
-			if err = rows.Scan(&id); err != nil {
-				_ = rows.Close()
-				return err
-			}
-			linkIDs = append(linkIDs, id)
-		}
-		if err = errors.Join(rows.Err(), rows.Close()); err != nil {
-			return err
-		}
-		for _, id := range linkIDs {
-			l, err := readSignInLink(ctx, tx, "id=?", id)
-			if err != nil {
-				return err
-			}
-			if err = s.cancelLink(ctx, tx, l, &e); err != nil {
-				return err
-			}
+		notified := make(map[string]bool, len(e.SignInChanges))
+		for _, change := range e.SignInChanges {
+			notified[change.Request.ID] = true
 		}
 		expired, err := signInRequests(ctx, tx, "expires_at<=? AND state!='consumed'", s.now().Unix())
 		if err != nil {
 			return err
 		}
 		for _, r := range expired {
-			if r.State == "pending" || r.State == "approved" {
-				if _, err = tx.ExecContext(ctx, "UPDATE account_signin_requests SET state='cancelled',version=version+1 WHERE id=?", r.ID); err != nil {
-					return err
-				}
+			if notified[r.ID] {
+				continue
 			}
-			if err = s.appendRequestChange(ctx, tx, &e, r.ID, true); err != nil {
+			if r.State == "pending" || r.State == "approved" {
+				err = s.cancelRequest(ctx, tx, &e, r.ID, true)
+			} else {
+				err = s.appendRequestChange(ctx, tx, &e, r.ID, true)
+			}
+			if err != nil {
 				return err
 			}
 		}
+
 		if _, err = tx.ExecContext(ctx, "UPDATE account_signin_requests SET browser_token_hash=NULL,code=NULL,qr_token_hash=NULL,delivery_ciphertext=NULL WHERE expires_at<=?", s.now().Unix()); err != nil {
 			return err
 		}

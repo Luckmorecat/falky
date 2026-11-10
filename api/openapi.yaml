@@ -52,12 +52,6 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/SignInLinkResult'
-          headers:
-            Set-Cookie:
-              description: Secure HttpOnly Strict cookie; binding uses Path=/ and Max-Age=600, session uses
-                Path=/api and remaining absolute lifetime.
-              schema:
-                type: string
         default:
           $ref: '#/components/responses/Error'
         '429':
@@ -332,6 +326,10 @@ paths:
         additionally charge browser-hash burst 3/refill one per 100 seconds and IP burst 10/refill one per
         30 seconds. Resume consumes no allocation quota; rejected quota preserves the old request. Sets
         or refreshes the dedicated secure ten-minute binding cookie.
+        Denied or cancelled bound requests require replace=true before their original deadline;
+        ordinary begin returns 403 invalid_proof. Replacement allocates a new request and deadline.
+        Browser quota is per client-controlled binding and can be reset with that cookie; the IP quota
+        bounds fresh bindings. Quotas are charged together or not at all; Retry-After reflects actual refill time.
       security: []
       requestBody:
         required: true
@@ -505,6 +503,8 @@ paths:
         Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict.
         Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie.
         Original binding required. Consumed replacement or cancellation conflicts.
+        Uses the independent anonymous request IP bucket with burst 20, refill one per 3 seconds,
+        shared across finish, resend and QR cancellation, separate from passkey/recovery attempts.
       security:
       - signInBindingCookie: []
       parameters:
@@ -642,7 +642,7 @@ paths:
         Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict.
         Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie.
         Link token plus binding required. Reject QR flow. Persisted shared link cooldown 10 seconds returns
-        429 with Retry-After rounded upward; account IP attempt limit also applies.
+        429 with Retry-After rounded upward; independent anonymous request IP attempt limit also applies.
       security:
       - signInBindingCookie: []
       parameters:
@@ -696,7 +696,7 @@ paths:
         Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie.
         Independent binding required. Link requires token, QR omits it. Creates exactly one 90-day session.
         Retries until the original request deadline return the same cookie using remaining session lifetime.
-        Any different active session is protected, including a newer guest (409 signin_conflict). Uses account
+        Any different active session is protected, including a newer guest (409 signin_conflict). Uses the independent anonymous request
         IP attempt limit.
       security:
       - signInBindingCookie: []

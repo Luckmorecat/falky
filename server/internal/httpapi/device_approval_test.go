@@ -10,7 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kisshot/falky/server/internal/identity"
 	"github.com/kisshot/falky/server/internal/identity/passkeytest"
 	"github.com/kisshot/falky/server/internal/platform"
 	"github.com/kisshot/falky/server/internal/realtime"
@@ -136,13 +135,31 @@ func TestDeviceQRHTTPControlsAndGuestRetryConflict(t *testing.T) {
 	accountRequest(t, p, other, "GET", "/api/accounts/signin-requests/"+denied.Request.ID, nil, "", 200)
 }
 
+func unallocatedSignInCode(waiting []wireSignInBegin) string {
+	for candidate := 9999; candidate >= 0; candidate-- {
+		code := fmt.Sprintf("%04d", candidate)
+		found := false
+		for _, b := range waiting {
+			if b.Code == code {
+				found = true
+			}
+		}
+		if !found {
+			return code
+		}
+	}
+	return ""
+}
+
+func TestWrongSignInCodeSelectionAdvancesThroughCollisions(t *testing.T) {
+	waiting := []wireSignInBegin{{Code: "9999"}, {Code: "9998"}, {Code: "9997"}}
+	if code := unallocatedSignInCode(waiting); code != "9996" {
+		t.Fatalf("wrong code=%q", code)
+	}
+}
+
 func TestDeviceLinkHTTPErrorsCooldownAndCommittedRejection(t *testing.T) {
-	nextCode := 9999
-	p := startPublicLimited(t, 100, 1000, identity.WithSignInCodeGenerator(func() (string, error) {
-		code := fmt.Sprintf("%04d", nextCode)
-		nextCode--
-		return code, nil
-	}))
+	p := startPublicLimited(t, 100, 1000)
 	_, issuer := p.browserWithHTTP(t)
 	key := passkeytest.New(t)
 	enrollAccount(t, p, issuer, "Account", key)
@@ -154,13 +171,11 @@ func TestDeviceLinkHTTPErrorsCooldownAndCommittedRejection(t *testing.T) {
 	accountRequest(t, p, peer, "POST", base+"/approve", map[string]any{"code": "0000"}, testOrigin, 403)
 	var waiting []wireSignInBegin
 	var browsers []*http.Client
-	for i := range 3 {
+	for range 3 {
 		_, b := p.browserWithHTTP(t)
 		raw, _ = accountRequest(t, p, b, "POST", "/api/accounts/signin-requests", map[string]any{"token": link.Token}, testOrigin, 200)
 		begin := decodeSignIn[wireSignInBegin](t, raw)
-		if begin.Code != fmt.Sprintf("%04d", 9999-i) {
-			t.Fatalf("allocated code = %s, want deterministic collision case", begin.Code)
-		}
+
 		waiting = append(waiting, begin)
 		browsers = append(browsers, b)
 	}
@@ -180,22 +195,9 @@ func TestDeviceLinkHTTPErrorsCooldownAndCommittedRejection(t *testing.T) {
 	accountRequest(t, p, browsers[2], "POST", "/api/accounts/signin-requests", map[string]any{"token": link.Token}, testOrigin, 403)
 	ws := connectSignIn(t, p, browsers[0], waiting[0].Request.ID)
 	signInEvent(t, ws)
-	wrong := ""
-	for candidate := 9999; candidate >= 0; candidate-- {
-		code := fmt.Sprintf("%04d", candidate)
-		found := false
-		for _, b := range waiting {
-			if b.Code == code {
-				found = true
-			}
-		}
-		if !found {
-			wrong = code
-			break
-		}
-	}
-	if wrong != "9996" {
-		t.Fatalf("wrong-code selection = %q, want 9996 after three collisions", wrong)
+	wrong := unallocatedSignInCode(waiting)
+	if wrong == "" {
+		t.Fatal("no unallocated code")
 	}
 	for range 5 {
 		accountRequest(t, p, issuer, "POST", base+"/approve", map[string]any{"code": wrong}, testOrigin, 403)

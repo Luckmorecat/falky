@@ -119,7 +119,7 @@ export interface paths {
         put?: never;
         /**
          * Create, resume or replace a QR request.
-         * @description Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Independent HTTP IP bucket burst 20/refill one per 3 seconds. Actual allocations including replacement additionally charge browser-hash burst 3/refill one per 100 seconds and IP burst 10/refill one per 30 seconds. Resume consumes no allocation quota; rejected quota preserves the old request. Sets or refreshes the dedicated secure ten-minute binding cookie.
+         * @description Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Independent HTTP IP bucket burst 20/refill one per 3 seconds. Actual allocations including replacement additionally charge browser-hash burst 3/refill one per 100 seconds and IP burst 10/refill one per 30 seconds. Resume consumes no allocation quota; rejected quota preserves the old request. Sets or refreshes the dedicated secure ten-minute binding cookie. Denied or cancelled bound requests require replace=true before their original deadline; ordinary begin returns 403 invalid_proof. Replacement allocates a new request and deadline. Browser quota is per client-controlled binding and can be reset with that cookie; the IP quota bounds fresh bindings. Quotas are charged together or not at all; Retry-After reflects actual refill time.
          */
         post: operations["beginQRSignIn"];
         delete?: never;
@@ -200,7 +200,7 @@ export interface paths {
         post?: never;
         /**
          * Cancel a bound unconsumed QR.
-         * @description Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Original binding required. Consumed replacement or cancellation conflicts.
+         * @description Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Original binding required. Consumed replacement or cancellation conflicts. Uses the independent anonymous request IP bucket with burst 20, refill one per 3 seconds, shared across finish, resend and QR cancellation, separate from passkey/recovery attempts.
          */
         delete: operations["cancelQRSignIn"];
         options?: never;
@@ -259,7 +259,7 @@ export interface paths {
         put?: never;
         /**
          * Resend a pending link notification.
-         * @description Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Link token plus binding required. Reject QR flow. Persisted shared link cooldown 10 seconds returns 429 with Retry-After rounded upward; account IP attempt limit also applies.
+         * @description Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Link token plus binding required. Reject QR flow. Persisted shared link cooldown 10 seconds returns 429 with Retry-After rounded upward; independent anonymous request IP attempt limit also applies.
          */
         post: operations["resendSignInRequest"];
         delete?: never;
@@ -279,7 +279,7 @@ export interface paths {
         put?: never;
         /**
          * Redeem approval or retry exact cookie delivery.
-         * @description Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Independent binding required. Link requires token, QR omits it. Creates exactly one 90-day session. Retries until the original request deadline return the same cookie using remaining session lifetime. Any different active session is protected, including a newer guest (409 signin_conflict). Uses account IP attempt limit.
+         * @description Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Independent binding required. Link requires token, QR omits it. Creates exactly one 90-day session. Retries until the original request deadline return the same cookie using remaining session lifetime. Any different active session is protected, including a newer guest (409 signin_conflict). Uses the independent anonymous request IP attempt limit.
          */
         post: operations["finishSignInRequest"];
         delete?: never;
@@ -1990,8 +1990,6 @@ export interface operations {
             /** @description Authorized durable result. */
             200: {
                 headers: {
-                    /** @description Secure HttpOnly Strict cookie; binding uses Path=/ and Max-Age=600, session uses Path=/api and remaining absolute lifetime. */
-                    "Set-Cookie"?: string;
                     [name: string]: unknown;
                 };
                 content: {

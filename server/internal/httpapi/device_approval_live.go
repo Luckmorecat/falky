@@ -28,8 +28,8 @@ func (l signInLive) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 403, "origin_forbidden", "sign-in events require this server's exact origin")
 		return
 	}
-	if !l.limits.CandidateAttempts.Allow(clientIP(r)) {
-		signInRateLimited(w, 3*time.Second)
+	if wait := l.limits.CandidateAttempts.Take(clientIP(r)); wait > 0 {
+		signInRateLimited(w, wait)
 		return
 	}
 	if !strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {

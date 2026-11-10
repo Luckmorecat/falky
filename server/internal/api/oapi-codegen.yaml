@@ -2,6 +2,7 @@
 package: api
 generate:
   models: true
+  embedded-spec: true
   std-http-server: true
   strict-server: true
   client: true

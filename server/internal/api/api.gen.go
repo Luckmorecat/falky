@@ -7,16 +7,20 @@ package api
 
 import (
 	"bytes"
+	"compress/flate"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"path"
 	"strings"
 	"time"
 
+	"github.com/getkin/kin-openapi/openapi3"
 	"github.com/oapi-codegen/runtime"
 )
 
@@ -1646,7 +1650,7 @@ type ClientInterface interface {
 
 	// BeginQRSignInWithBody Create, resume or replace a QR request.
 	//
-	// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Independent HTTP IP bucket burst 20/refill one per 3 seconds. Actual allocations including replacement additionally charge browser-hash burst 3/refill one per 100 seconds and IP burst 10/refill one per 30 seconds. Resume consumes no allocation quota; rejected quota preserves the old request. Sets or refreshes the dedicated secure ten-minute binding cookie.
+	// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Independent HTTP IP bucket burst 20/refill one per 3 seconds. Actual allocations including replacement additionally charge browser-hash burst 3/refill one per 100 seconds and IP burst 10/refill one per 30 seconds. Resume consumes no allocation quota; rejected quota preserves the old request. Sets or refreshes the dedicated secure ten-minute binding cookie. Denied or cancelled bound requests require replace=true before their original deadline; ordinary begin returns 403 invalid_proof. Replacement allocates a new request and deadline. Browser quota is per client-controlled binding and can be reset with that cookie; the IP quota bounds fresh bindings. Quotas are charged together or not at all; Retry-After reflects actual refill time.
 	//
 	// Takes any type of body and a specified content type.
 	//
@@ -1655,7 +1659,7 @@ type ClientInterface interface {
 
 	// BeginQRSignIn Create, resume or replace a QR request.
 	//
-	// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Independent HTTP IP bucket burst 20/refill one per 3 seconds. Actual allocations including replacement additionally charge browser-hash burst 3/refill one per 100 seconds and IP burst 10/refill one per 30 seconds. Resume consumes no allocation quota; rejected quota preserves the old request. Sets or refreshes the dedicated secure ten-minute binding cookie.
+	// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Independent HTTP IP bucket burst 20/refill one per 3 seconds. Actual allocations including replacement additionally charge browser-hash burst 3/refill one per 100 seconds and IP burst 10/refill one per 30 seconds. Resume consumes no allocation quota; rejected quota preserves the old request. Sets or refreshes the dedicated secure ten-minute binding cookie. Denied or cancelled bound requests require replace=true before their original deadline; ordinary begin returns 403 invalid_proof. Replacement allocates a new request and deadline. Browser quota is per client-controlled binding and can be reset with that cookie; the IP quota bounds fresh bindings. Quotas are charged together or not at all; Retry-After reflects actual refill time.
 	//
 	// Takes a body of the `application/json` content type.
 	//
@@ -1718,7 +1722,7 @@ type ClientInterface interface {
 
 	// CancelQRSignIn Cancel a bound unconsumed QR.
 	//
-	// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Original binding required. Consumed replacement or cancellation conflicts.
+	// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Original binding required. Consumed replacement or cancellation conflicts. Uses the independent anonymous request IP bucket with burst 20, refill one per 3 seconds, shared across finish, resend and QR cancellation, separate from passkey/recovery attempts.
 	//
 	// Corresponds with DELETE /api/accounts/qr-signins/{requestId} (the `CancelQRSignIn` operationId).
 	CancelQRSignIn(ctx context.Context, requestId string, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -1951,7 +1955,7 @@ type ClientInterface interface {
 
 	// FinishSignInRequestWithBody Redeem approval or retry exact cookie delivery.
 	//
-	// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Independent binding required. Link requires token, QR omits it. Creates exactly one 90-day session. Retries until the original request deadline return the same cookie using remaining session lifetime. Any different active session is protected, including a newer guest (409 signin_conflict). Uses account IP attempt limit.
+	// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Independent binding required. Link requires token, QR omits it. Creates exactly one 90-day session. Retries until the original request deadline return the same cookie using remaining session lifetime. Any different active session is protected, including a newer guest (409 signin_conflict). Uses the independent anonymous request IP attempt limit.
 	//
 	// Takes any type of body and a specified content type.
 	//
@@ -1960,7 +1964,7 @@ type ClientInterface interface {
 
 	// FinishSignInRequest Redeem approval or retry exact cookie delivery.
 	//
-	// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Independent binding required. Link requires token, QR omits it. Creates exactly one 90-day session. Retries until the original request deadline return the same cookie using remaining session lifetime. Any different active session is protected, including a newer guest (409 signin_conflict). Uses account IP attempt limit.
+	// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Independent binding required. Link requires token, QR omits it. Creates exactly one 90-day session. Retries until the original request deadline return the same cookie using remaining session lifetime. Any different active session is protected, including a newer guest (409 signin_conflict). Uses the independent anonymous request IP attempt limit.
 	//
 	// Takes a body of the `application/json` content type.
 	//
@@ -1969,7 +1973,7 @@ type ClientInterface interface {
 
 	// ResendSignInRequestWithBody Resend a pending link notification.
 	//
-	// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Link token plus binding required. Reject QR flow. Persisted shared link cooldown 10 seconds returns 429 with Retry-After rounded upward; account IP attempt limit also applies.
+	// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Link token plus binding required. Reject QR flow. Persisted shared link cooldown 10 seconds returns 429 with Retry-After rounded upward; independent anonymous request IP attempt limit also applies.
 	//
 	// Takes any type of body and a specified content type.
 	//
@@ -1978,7 +1982,7 @@ type ClientInterface interface {
 
 	// ResendSignInRequest Resend a pending link notification.
 	//
-	// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Link token plus binding required. Reject QR flow. Persisted shared link cooldown 10 seconds returns 429 with Retry-After rounded upward; account IP attempt limit also applies.
+	// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Link token plus binding required. Reject QR flow. Persisted shared link cooldown 10 seconds returns 429 with Retry-After rounded upward; independent anonymous request IP attempt limit also applies.
 	//
 	// Takes a body of the `application/json` content type.
 	//
@@ -2363,7 +2367,7 @@ func (c *Client) RemovePasskey(ctx context.Context, credentialId string, reqEdit
 
 // BeginQRSignInWithBody Create, resume or replace a QR request.
 //
-// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Independent HTTP IP bucket burst 20/refill one per 3 seconds. Actual allocations including replacement additionally charge browser-hash burst 3/refill one per 100 seconds and IP burst 10/refill one per 30 seconds. Resume consumes no allocation quota; rejected quota preserves the old request. Sets or refreshes the dedicated secure ten-minute binding cookie.
+// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Independent HTTP IP bucket burst 20/refill one per 3 seconds. Actual allocations including replacement additionally charge browser-hash burst 3/refill one per 100 seconds and IP burst 10/refill one per 30 seconds. Resume consumes no allocation quota; rejected quota preserves the old request. Sets or refreshes the dedicated secure ten-minute binding cookie. Denied or cancelled bound requests require replace=true before their original deadline; ordinary begin returns 403 invalid_proof. Replacement allocates a new request and deadline. Browser quota is per client-controlled binding and can be reset with that cookie; the IP quota bounds fresh bindings. Quotas are charged together or not at all; Retry-After reflects actual refill time.
 //
 // Takes any type of body and a specified content type.
 //
@@ -2382,7 +2386,7 @@ func (c *Client) BeginQRSignInWithBody(ctx context.Context, contentType string, 
 
 // BeginQRSignIn Create, resume or replace a QR request.
 //
-// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Independent HTTP IP bucket burst 20/refill one per 3 seconds. Actual allocations including replacement additionally charge browser-hash burst 3/refill one per 100 seconds and IP burst 10/refill one per 30 seconds. Resume consumes no allocation quota; rejected quota preserves the old request. Sets or refreshes the dedicated secure ten-minute binding cookie.
+// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Independent HTTP IP bucket burst 20/refill one per 3 seconds. Actual allocations including replacement additionally charge browser-hash burst 3/refill one per 100 seconds and IP burst 10/refill one per 30 seconds. Resume consumes no allocation quota; rejected quota preserves the old request. Sets or refreshes the dedicated secure ten-minute binding cookie. Denied or cancelled bound requests require replace=true before their original deadline; ordinary begin returns 403 invalid_proof. Replacement allocates a new request and deadline. Browser quota is per client-controlled binding and can be reset with that cookie; the IP quota bounds fresh bindings. Quotas are charged together or not at all; Retry-After reflects actual refill time.
 //
 // Takes a body of the `application/json` content type.
 //
@@ -2515,7 +2519,7 @@ func (c *Client) PreviewQRSignIn(ctx context.Context, body PreviewQRSignInJSONRe
 
 // CancelQRSignIn Cancel a bound unconsumed QR.
 //
-// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Original binding required. Consumed replacement or cancellation conflicts.
+// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Original binding required. Consumed replacement or cancellation conflicts. Uses the independent anonymous request IP bucket with burst 20, refill one per 3 seconds, shared across finish, resend and QR cancellation, separate from passkey/recovery attempts.
 //
 // Corresponds with DELETE /api/accounts/qr-signins/{requestId} (the `CancelQRSignIn` operationId).
 func (c *Client) CancelQRSignIn(ctx context.Context, requestId string, reqEditors ...RequestEditorFn) (*http.Response, error) {
@@ -3018,7 +3022,7 @@ func (c *Client) GetSignInRequest(ctx context.Context, requestId string, reqEdit
 
 // FinishSignInRequestWithBody Redeem approval or retry exact cookie delivery.
 //
-// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Independent binding required. Link requires token, QR omits it. Creates exactly one 90-day session. Retries until the original request deadline return the same cookie using remaining session lifetime. Any different active session is protected, including a newer guest (409 signin_conflict). Uses account IP attempt limit.
+// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Independent binding required. Link requires token, QR omits it. Creates exactly one 90-day session. Retries until the original request deadline return the same cookie using remaining session lifetime. Any different active session is protected, including a newer guest (409 signin_conflict). Uses the independent anonymous request IP attempt limit.
 //
 // Takes any type of body and a specified content type.
 //
@@ -3037,7 +3041,7 @@ func (c *Client) FinishSignInRequestWithBody(ctx context.Context, requestId stri
 
 // FinishSignInRequest Redeem approval or retry exact cookie delivery.
 //
-// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Independent binding required. Link requires token, QR omits it. Creates exactly one 90-day session. Retries until the original request deadline return the same cookie using remaining session lifetime. Any different active session is protected, including a newer guest (409 signin_conflict). Uses account IP attempt limit.
+// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Independent binding required. Link requires token, QR omits it. Creates exactly one 90-day session. Retries until the original request deadline return the same cookie using remaining session lifetime. Any different active session is protected, including a newer guest (409 signin_conflict). Uses the independent anonymous request IP attempt limit.
 //
 // Takes a body of the `application/json` content type.
 //
@@ -3056,7 +3060,7 @@ func (c *Client) FinishSignInRequest(ctx context.Context, requestId string, body
 
 // ResendSignInRequestWithBody Resend a pending link notification.
 //
-// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Link token plus binding required. Reject QR flow. Persisted shared link cooldown 10 seconds returns 429 with Retry-After rounded upward; account IP attempt limit also applies.
+// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Link token plus binding required. Reject QR flow. Persisted shared link cooldown 10 seconds returns 429 with Retry-After rounded upward; independent anonymous request IP attempt limit also applies.
 //
 // Takes any type of body and a specified content type.
 //
@@ -3075,7 +3079,7 @@ func (c *Client) ResendSignInRequestWithBody(ctx context.Context, requestId stri
 
 // ResendSignInRequest Resend a pending link notification.
 //
-// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Link token plus binding required. Reject QR flow. Persisted shared link cooldown 10 seconds returns 429 with Retry-After rounded upward; account IP attempt limit also applies.
+// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Link token plus binding required. Reject QR flow. Persisted shared link cooldown 10 seconds returns 429 with Retry-After rounded upward; independent anonymous request IP attempt limit also applies.
 //
 // Takes a body of the `application/json` content type.
 //
@@ -5145,7 +5149,7 @@ type ClientWithResponsesInterface interface {
 
 	// BeginQRSignInWithBodyWithResponse Create, resume or replace a QR request.
 	//
-	// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Independent HTTP IP bucket burst 20/refill one per 3 seconds. Actual allocations including replacement additionally charge browser-hash burst 3/refill one per 100 seconds and IP burst 10/refill one per 30 seconds. Resume consumes no allocation quota; rejected quota preserves the old request. Sets or refreshes the dedicated secure ten-minute binding cookie.
+	// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Independent HTTP IP bucket burst 20/refill one per 3 seconds. Actual allocations including replacement additionally charge browser-hash burst 3/refill one per 100 seconds and IP burst 10/refill one per 30 seconds. Resume consumes no allocation quota; rejected quota preserves the old request. Sets or refreshes the dedicated secure ten-minute binding cookie. Denied or cancelled bound requests require replace=true before their original deadline; ordinary begin returns 403 invalid_proof. Replacement allocates a new request and deadline. Browser quota is per client-controlled binding and can be reset with that cookie; the IP quota bounds fresh bindings. Quotas are charged together or not at all; Retry-After reflects actual refill time.
 	//
 	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
 	//
@@ -5154,7 +5158,7 @@ type ClientWithResponsesInterface interface {
 
 	// BeginQRSignInWithResponse Create, resume or replace a QR request.
 	//
-	// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Independent HTTP IP bucket burst 20/refill one per 3 seconds. Actual allocations including replacement additionally charge browser-hash burst 3/refill one per 100 seconds and IP burst 10/refill one per 30 seconds. Resume consumes no allocation quota; rejected quota preserves the old request. Sets or refreshes the dedicated secure ten-minute binding cookie.
+	// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Independent HTTP IP bucket burst 20/refill one per 3 seconds. Actual allocations including replacement additionally charge browser-hash burst 3/refill one per 100 seconds and IP burst 10/refill one per 30 seconds. Resume consumes no allocation quota; rejected quota preserves the old request. Sets or refreshes the dedicated secure ten-minute binding cookie. Denied or cancelled bound requests require replace=true before their original deadline; ordinary begin returns 403 invalid_proof. Replacement allocates a new request and deadline. Browser quota is per client-controlled binding and can be reset with that cookie; the IP quota bounds fresh bindings. Quotas are charged together or not at all; Retry-After reflects actual refill time.
 	//
 	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
 	//
@@ -5217,7 +5221,7 @@ type ClientWithResponsesInterface interface {
 
 	// CancelQRSignInWithResponse Cancel a bound unconsumed QR.
 	//
-	// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Original binding required. Consumed replacement or cancellation conflicts.
+	// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Original binding required. Consumed replacement or cancellation conflicts. Uses the independent anonymous request IP bucket with burst 20, refill one per 3 seconds, shared across finish, resend and QR cancellation, separate from passkey/recovery attempts.
 	//
 	// Returns a wrapper object for the known response body format(s).
 	//
@@ -5460,7 +5464,7 @@ type ClientWithResponsesInterface interface {
 
 	// FinishSignInRequestWithBodyWithResponse Redeem approval or retry exact cookie delivery.
 	//
-	// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Independent binding required. Link requires token, QR omits it. Creates exactly one 90-day session. Retries until the original request deadline return the same cookie using remaining session lifetime. Any different active session is protected, including a newer guest (409 signin_conflict). Uses account IP attempt limit.
+	// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Independent binding required. Link requires token, QR omits it. Creates exactly one 90-day session. Retries until the original request deadline return the same cookie using remaining session lifetime. Any different active session is protected, including a newer guest (409 signin_conflict). Uses the independent anonymous request IP attempt limit.
 	//
 	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
 	//
@@ -5469,7 +5473,7 @@ type ClientWithResponsesInterface interface {
 
 	// FinishSignInRequestWithResponse Redeem approval or retry exact cookie delivery.
 	//
-	// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Independent binding required. Link requires token, QR omits it. Creates exactly one 90-day session. Retries until the original request deadline return the same cookie using remaining session lifetime. Any different active session is protected, including a newer guest (409 signin_conflict). Uses account IP attempt limit.
+	// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Independent binding required. Link requires token, QR omits it. Creates exactly one 90-day session. Retries until the original request deadline return the same cookie using remaining session lifetime. Any different active session is protected, including a newer guest (409 signin_conflict). Uses the independent anonymous request IP attempt limit.
 	//
 	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
 	//
@@ -5478,7 +5482,7 @@ type ClientWithResponsesInterface interface {
 
 	// ResendSignInRequestWithBodyWithResponse Resend a pending link notification.
 	//
-	// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Link token plus binding required. Reject QR flow. Persisted shared link cooldown 10 seconds returns 429 with Retry-After rounded upward; account IP attempt limit also applies.
+	// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Link token plus binding required. Reject QR flow. Persisted shared link cooldown 10 seconds returns 429 with Retry-After rounded upward; independent anonymous request IP attempt limit also applies.
 	//
 	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
 	//
@@ -5487,7 +5491,7 @@ type ClientWithResponsesInterface interface {
 
 	// ResendSignInRequestWithResponse Resend a pending link notification.
 	//
-	// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Link token plus binding required. Reject QR flow. Persisted shared link cooldown 10 seconds returns 429 with Retry-After rounded upward; account IP attempt limit also applies.
+	// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Link token plus binding required. Reject QR flow. Persisted shared link cooldown 10 seconds returns 429 with Retry-After rounded upward; independent anonymous request IP attempt limit also applies.
 	//
 	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
 	//
@@ -6777,11 +6781,6 @@ func (r GetAccountSessionResponse) ContentType() string {
 	return ""
 }
 
-// CreateSignInLinkResponse200Headers the declared response headers of an HTTP 200 response for CreateSignInLink
-type CreateSignInLinkResponse200Headers struct {
-	SetCookie string
-}
-
 // CreateSignInLinkResponse429Headers the declared response headers of an HTTP 429 response for CreateSignInLink
 type CreateSignInLinkResponse429Headers struct {
 	RetryAfter int
@@ -6796,8 +6795,6 @@ type CreateSignInLinkResponse struct {
 	JSON429 *Error
 	// JSONDefault the response for an HTTP default `application/json` response
 	JSONDefault *Error
-	// Headers200 the parsed response headers for an HTTP 200 response
-	Headers200 *CreateSignInLinkResponse200Headers
 	// Headers429 the parsed response headers for an HTTP 429 response
 	Headers429 *CreateSignInLinkResponse429Headers
 }
@@ -8276,7 +8273,7 @@ func (c *ClientWithResponses) RemovePasskeyWithResponse(ctx context.Context, cre
 
 // BeginQRSignInWithBodyWithResponse Create, resume or replace a QR request.
 //
-// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Independent HTTP IP bucket burst 20/refill one per 3 seconds. Actual allocations including replacement additionally charge browser-hash burst 3/refill one per 100 seconds and IP burst 10/refill one per 30 seconds. Resume consumes no allocation quota; rejected quota preserves the old request. Sets or refreshes the dedicated secure ten-minute binding cookie.
+// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Independent HTTP IP bucket burst 20/refill one per 3 seconds. Actual allocations including replacement additionally charge browser-hash burst 3/refill one per 100 seconds and IP burst 10/refill one per 30 seconds. Resume consumes no allocation quota; rejected quota preserves the old request. Sets or refreshes the dedicated secure ten-minute binding cookie. Denied or cancelled bound requests require replace=true before their original deadline; ordinary begin returns 403 invalid_proof. Replacement allocates a new request and deadline. Browser quota is per client-controlled binding and can be reset with that cookie; the IP quota bounds fresh bindings. Quotas are charged together or not at all; Retry-After reflects actual refill time.
 //
 // Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
 //
@@ -8291,7 +8288,7 @@ func (c *ClientWithResponses) BeginQRSignInWithBodyWithResponse(ctx context.Cont
 
 // BeginQRSignInWithResponse Create, resume or replace a QR request.
 //
-// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Independent HTTP IP bucket burst 20/refill one per 3 seconds. Actual allocations including replacement additionally charge browser-hash burst 3/refill one per 100 seconds and IP burst 10/refill one per 30 seconds. Resume consumes no allocation quota; rejected quota preserves the old request. Sets or refreshes the dedicated secure ten-minute binding cookie.
+// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Independent HTTP IP bucket burst 20/refill one per 3 seconds. Actual allocations including replacement additionally charge browser-hash burst 3/refill one per 100 seconds and IP burst 10/refill one per 30 seconds. Resume consumes no allocation quota; rejected quota preserves the old request. Sets or refreshes the dedicated secure ten-minute binding cookie. Denied or cancelled bound requests require replace=true before their original deadline; ordinary begin returns 403 invalid_proof. Replacement allocates a new request and deadline. Browser quota is per client-controlled binding and can be reset with that cookie; the IP quota bounds fresh bindings. Quotas are charged together or not at all; Retry-After reflects actual refill time.
 //
 // Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
 //
@@ -8396,7 +8393,7 @@ func (c *ClientWithResponses) PreviewQRSignInWithResponse(ctx context.Context, b
 
 // CancelQRSignInWithResponse Cancel a bound unconsumed QR.
 //
-// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Original binding required. Consumed replacement or cancellation conflicts.
+// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Original binding required. Consumed replacement or cancellation conflicts. Uses the independent anonymous request IP bucket with burst 20, refill one per 3 seconds, shared across finish, resend and QR cancellation, separate from passkey/recovery attempts.
 //
 // Returns a wrapper object for the known response body format(s).
 //
@@ -8801,7 +8798,7 @@ func (c *ClientWithResponses) GetSignInRequestWithResponse(ctx context.Context, 
 
 // FinishSignInRequestWithBodyWithResponse Redeem approval or retry exact cookie delivery.
 //
-// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Independent binding required. Link requires token, QR omits it. Creates exactly one 90-day session. Retries until the original request deadline return the same cookie using remaining session lifetime. Any different active session is protected, including a newer guest (409 signin_conflict). Uses account IP attempt limit.
+// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Independent binding required. Link requires token, QR omits it. Creates exactly one 90-day session. Retries until the original request deadline return the same cookie using remaining session lifetime. Any different active session is protected, including a newer guest (409 signin_conflict). Uses the independent anonymous request IP attempt limit.
 //
 // Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
 //
@@ -8816,7 +8813,7 @@ func (c *ClientWithResponses) FinishSignInRequestWithBodyWithResponse(ctx contex
 
 // FinishSignInRequestWithResponse Redeem approval or retry exact cookie delivery.
 //
-// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Independent binding required. Link requires token, QR omits it. Creates exactly one 90-day session. Retries until the original request deadline return the same cookie using remaining session lifetime. Any different active session is protected, including a newer guest (409 signin_conflict). Uses account IP attempt limit.
+// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Independent binding required. Link requires token, QR omits it. Creates exactly one 90-day session. Retries until the original request deadline return the same cookie using remaining session lifetime. Any different active session is protected, including a newer guest (409 signin_conflict). Uses the independent anonymous request IP attempt limit.
 //
 // Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
 //
@@ -8831,7 +8828,7 @@ func (c *ClientWithResponses) FinishSignInRequestWithResponse(ctx context.Contex
 
 // ResendSignInRequestWithBodyWithResponse Resend a pending link notification.
 //
-// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Link token plus binding required. Reject QR flow. Persisted shared link cooldown 10 seconds returns 429 with Retry-After rounded upward; account IP attempt limit also applies.
+// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Link token plus binding required. Reject QR flow. Persisted shared link cooldown 10 seconds returns 429 with Retry-After rounded upward; independent anonymous request IP attempt limit also applies.
 //
 // Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
 //
@@ -8846,7 +8843,7 @@ func (c *ClientWithResponses) ResendSignInRequestWithBodyWithResponse(ctx contex
 
 // ResendSignInRequestWithResponse Resend a pending link notification.
 //
-// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Link token plus binding required. Reject QR flow. Persisted shared link cooldown 10 seconds returns 429 with Retry-After rounded upward; account IP attempt limit also applies.
+// Exact configured Origin is required for mutations; JSON objects are limited to 64 KiB. Responses use no-store. Unknown, expired, revoked, wrong-flow or wrong-bound proofs return 403 invalid_proof. Conflicts return 409 account_switch_required, already_signed_in, pending_request_cap or signin_conflict. Limits return 429 rate_limited and Retry-After seconds. No response event delivers a session cookie. Link token plus binding required. Reject QR flow. Persisted shared link cooldown 10 seconds returns 429 with Retry-After rounded upward; independent anonymous request IP attempt limit also applies.
 //
 // Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
 //
@@ -10086,16 +10083,6 @@ func ParseCreateSignInLinkResponse(rsp *http.Response) (*CreateSignInLinkRespons
 	}
 
 	switch {
-	case rsp.StatusCode == 200:
-		var headers CreateSignInLinkResponse200Headers
-		if values := rsp.Header.Values("Set-Cookie"); len(values) > 0 {
-			var value string
-			if err := runtime.BindStyledParameterWithOptions("simple", "Set-Cookie", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""}); err != nil {
-				return nil, err
-			}
-			headers.SetCookie = value
-		}
-		response.Headers200 = &headers
 	case rsp.StatusCode == 429:
 		var headers CreateSignInLinkResponse429Headers
 		if values := rsp.Header.Values("Retry-After"); len(values) > 0 {
@@ -13196,23 +13183,15 @@ type CreateSignInLinkResponseObject interface {
 	VisitCreateSignInLinkResponse(w http.ResponseWriter) error
 }
 
-type CreateSignInLink200ResponseHeaders struct {
-	SetCookie string
-}
-
-type CreateSignInLink200JSONResponse struct {
-	Body    SignInLinkResult
-	Headers CreateSignInLink200ResponseHeaders
-}
+type CreateSignInLink200JSONResponse SignInLinkResult
 
 func (response CreateSignInLink200JSONResponse) VisitCreateSignInLinkResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
-	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
 		return err
 	}
 	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Set-Cookie", fmt.Sprint(response.Headers.SetCookie))
 	w.WriteHeader(200)
 	_, err := buf.WriteTo(w)
 	return err
@@ -15954,4 +15933,386 @@ func (sh *strictHandler) GetReadiness(w http.ResponseWriter, r *http.Request) {
 	} else if response != nil {
 		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
 	}
+}
+
+// Base64 encoded, compressed with deflate, json marshaled OpenAPI spec.
+// Stored as a slice of fixed-width chunks rather than one concatenated
+// const string: with thousands of chunks the chained `+` fold is several
+// times slower for the Go compiler than parsing a slice literal.
+var swaggerSpec = []string{
+	"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",
+}
+
+// decodeSpec returns the embedded OpenAPI spec as raw JSON bytes,
+// after base64-decoding and flate-decompressing the embedded blob.
+func decodeSpec() ([]byte, error) {
+	encoded := strings.Join(swaggerSpec, "")
+	compressed, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		return nil, fmt.Errorf("error base64 decoding spec: %w", err)
+	}
+	zr := flate.NewReader(bytes.NewReader(compressed))
+	var buf bytes.Buffer
+	if _, err := buf.ReadFrom(zr); err != nil {
+		return nil, fmt.Errorf("read flate: %w", err)
+	}
+	if err := zr.Close(); err != nil {
+		return nil, fmt.Errorf("close flate reader: %w", err)
+	}
+
+	return buf.Bytes(), nil
+}
+
+var rawSpec = decodeSpecCached()
+
+// a naive cache of the decoded OpenAPI spec
+func decodeSpecCached() func() ([]byte, error) {
+	data, err := decodeSpec()
+	return func() ([]byte, error) {
+		return data, err
+	}
+}
+
+// Constructs a synthetic filesystem for resolving external references when loading openapi specifications.
+func PathToRawSpec(pathToFile string) map[string]func() ([]byte, error) {
+	res := make(map[string]func() ([]byte, error))
+	if len(pathToFile) > 0 {
+		res[pathToFile] = rawSpec
+	}
+
+	return res
+}
+
+// GetSpec returns the OpenAPI specification corresponding to the generated
+// code in this file. External references in the spec are resolved through
+// PathToRawSpec; externally-referenced files must be embedded in their
+// corresponding Go packages (via the import-mapping feature). URL-based
+// external refs are not supported.
+func GetSpec() (swagger *openapi3.T, err error) {
+	resolvePath := PathToRawSpec("")
+
+	loader := openapi3.NewLoader()
+	loader.IsExternalRefsAllowed = true
+	loader.ReadFromURIFunc = func(loader *openapi3.Loader, url *url.URL) ([]byte, error) {
+		pathToFile := url.String()
+		pathToFile = path.Clean(pathToFile)
+		getSpec, ok := resolvePath[pathToFile]
+		if !ok {
+			err1 := fmt.Errorf("path not found: %s", pathToFile)
+			return nil, err1
+		}
+		return getSpec()
+	}
+	var specData []byte
+	specData, err = rawSpec()
+	if err != nil {
+		return
+	}
+	swagger, err = loader.LoadFromData(specData)
+	if err != nil {
+		return
+	}
+	return
+}
+
+// GetSpecJSON returns the raw JSON bytes of the embedded OpenAPI
+// specification: decompressed but not unmarshaled. External references
+// are not resolved here; the bytes are the spec exactly as embedded by
+// codegen. The result is cached at package init time, so repeated calls
+// are cheap.
+func GetSpecJSON() ([]byte, error) {
+	return rawSpec()
+}
+
+// GetSwagger returns the OpenAPI specification corresponding to the
+// generated code in this file.
+//
+// Deprecated: GetSwagger predates kin-openapi renaming openapi3.Swagger
+// to openapi3.T. Use [GetSpec] instead. This wrapper is retained for
+// backwards compatibility.
+func GetSwagger() (*openapi3.T, error) {
+	return GetSpec()
 }

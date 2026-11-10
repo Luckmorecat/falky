@@ -53,12 +53,6 @@ func WithClock(now func() time.Time) Option {
 // New returns the service over db. publicOrigin is where visitors reach the
 // server, for example https://falky.example; links are built on it. After applying
 // migrations, call InitializeColours and check its error before serving requests.
-// WithSignInCodeGenerator supplies a deterministic code source for tests.
-// Production callers should retain the cryptographically random default.
-func WithSignInCodeGenerator(generate func() (string, error)) Option {
-	return func(s *Service) { s.signInCode = generate }
-}
-
 func New(db *platform.DB, publicOrigin string, opts ...Option) *Service {
 	s := &Service{db: db, origin: publicOrigin, now: time.Now, reservations: newReservations(), connected: make(map[string]bool), chooseColour: func(n int) int {
 		value, err := rand.Int(rand.Reader, big.NewInt(int64(n)))

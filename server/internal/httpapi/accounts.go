@@ -9,9 +9,7 @@ import (
 	"io"
 	"mime"
 	"net/http"
-	"strconv"
 	"strings"
-	"time"
 
 	"github.com/kisshot/falky/server/internal/api"
 	"github.com/kisshot/falky/server/internal/identity"
@@ -31,18 +29,20 @@ func accountProtection(next http.Handler, origin string, limit *platform.Limiter
 					return
 				}
 				attempts := limit
-				wait := 3 * time.Second
 				if r.URL.Path == "/api/accounts/signin-requests" && r.Method == http.MethodPost {
 					attempts = signIns.LinkAttempts
 				}
 				if r.URL.Path == "/api/accounts/qr-signins" && r.Method == http.MethodPost {
 					attempts = signIns.QRAttempts
 				}
-				if !attempts.Allow(clientIP(r)) {
-					w.Header().Set("Retry-After", strconv.Itoa(int(wait/time.Second)))
-					writeError(w, 429, "rate_limited", "too many account attempts; try again later")
+				if strings.HasPrefix(r.URL.Path, "/api/accounts/signin-requests/") || r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/api/accounts/qr-signins/") {
+					attempts = signIns.RequestAttempts
+				}
+				if wait := attempts.Take(clientIP(r)); wait > 0 {
+					signInRateLimited(w, wait)
 					return
 				}
+
 				if r.Method == http.MethodPost {
 					media, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
 					if err != nil || media != "application/json" {
@@ -59,7 +59,7 @@ func accountProtection(next http.Handler, origin string, limit *platform.Limiter
 						writeError(w, 400, "invalid_request", "account requests require one JSON object")
 						return
 					}
-					if isSignInPath(r.URL.Path) && !validateSignInBody(r.URL.Path, raw) {
+					if isSignInPath(r.URL.Path) && !validateSignInBody(r, raw) {
 						writeError(w, 400, "invalid_request", "sign-in body does not match the operation")
 						return
 					}

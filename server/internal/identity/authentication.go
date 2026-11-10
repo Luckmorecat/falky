@@ -324,11 +324,6 @@ func (s *Service) FinishAddPasskey(ctx context.Context, token, id, browser strin
 	return result, err
 }
 
-func (s *Service) RemovePasskey(ctx context.Context, token, credentialID string) error {
-	_, err := s.RemovePasskeyWithEffects(ctx, token, credentialID)
-	return err
-}
-
 func (s *Service) RemovePasskeyWithEffects(ctx context.Context, token, credentialID string) (Effects, error) {
 	var effects Effects
 	raw, err := base64.RawURLEncoding.DecodeString(credentialID)
@@ -378,10 +373,7 @@ func (s *Service) RemovePasskeyWithEffects(ctx context.Context, token, credentia
 			return err
 		}
 		for _, r := range originRequests {
-			if _, err = tx.ExecContext(ctx, "UPDATE account_signin_requests SET state='cancelled',version=version+1 WHERE id=?", r.ID); err != nil {
-				return err
-			}
-			if err = s.appendRequestChange(ctx, tx, &effects, r.ID, true); err != nil {
+			if err = s.cancelRequest(ctx, tx, &effects, r.ID, true); err != nil {
 				return err
 			}
 		}
