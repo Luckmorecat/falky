@@ -48,6 +48,7 @@ check-web:
 		diff -u $(WEB_API_GEN) $(WEB_API_FRESH) || \
 		{ echo "web/$(WEB_API_GEN) is stale: run make generate-web" >&2; exit 1; }
 	$(IN_WEB) pnpm test
+	$(IN_WEB) pnpm run test:runtime
 	$(IN_WEB) pnpm run build
 
 fmt:

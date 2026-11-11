@@ -10,10 +10,11 @@ function buildVersion(): string {
   // Never replace a malformed deployment identity with a plausible local label.
   if (revision !== undefined || ref !== undefined) {
     if (!revision || !/^[a-f0-9]{40}$/.test(revision)
-      || !ref || !/^(refs\/heads\/master|refs\/tags\/v[0-9][A-Za-z0-9.+-]*)$/.test(ref)) {
-      throw new Error('Invalid Falky build metadata: provide a full revision and master or a v* tag ref.');
+      || !ref || !/^(refs\/heads\/(?:master|staging)|refs\/tags\/v[0-9][A-Za-z0-9.+-]*)$/.test(ref)) {
+      throw new Error('Invalid Falky build metadata: provide a full revision and master, staging, or a v* tag ref.');
     }
-    return ref.startsWith('refs/tags/') ? ref.slice('refs/tags/'.length) : `dev ${revision.slice(0, 7)}`;
+    if (ref.startsWith('refs/tags/')) return ref.slice('refs/tags/'.length);
+    return `${ref === 'refs/heads/staging' ? 'staging' : 'dev'} ${revision.slice(0, 7)}`;
   }
   // Snapshot local HEAD at server start/build time; source archives can lack Git.
   try {

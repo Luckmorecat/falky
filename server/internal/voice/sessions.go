@@ -133,19 +133,7 @@ func (s *Service) ValidateGrants(ctx context.Context) error {
 		revoked := g.revoked
 		s.mu.Unlock()
 		if !revoked {
-			var v identity.Visitor
-			var checkErr error
-			if s.validate != nil {
-				var current identity.Session
-				current, checkErr = s.validate(ctx, g.session)
-				v = current.Visitor
-			} else {
-				v, checkErr = s.visitors.Visitor(ctx, g.session.Visitor.ID)
-			}
-			if checkErr == nil {
-				checkErr = s.rooms.Authorize(ctx, v, g.room, rooms.JoinVoice)
-			}
-			if checkErr != nil {
+			if _, checkErr := s.authorizeGrant(ctx, g); checkErr != nil {
 				if !errors.Is(checkErr, identity.ErrNoVisitor) && !errors.Is(checkErr, identity.ErrNameTaken) && !errors.Is(checkErr, rooms.ErrNotFound) {
 					err = errors.Join(err, checkErr)
 					continue

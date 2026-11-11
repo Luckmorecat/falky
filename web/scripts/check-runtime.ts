@@ -16,6 +16,9 @@ try {
   process.env.FALKY_BUILD_REF = 'refs/heads/master';
   const development = await resolveConfig({}, 'build');
   assert.equal(development.define?.['import.meta.env.VITE_BUILD_VERSION'], JSON.stringify('dev abcdef0'));
+  process.env.FALKY_BUILD_REF = 'refs/heads/staging';
+  const staging = await resolveConfig({}, 'build');
+  assert.equal(staging.define?.['import.meta.env.VITE_BUILD_VERSION'], JSON.stringify('staging abcdef0'));
   process.env.FALKY_BUILD_REF = 'refs/tags/v1.2.3+build.4';
   const production = await resolveConfig({}, 'build');
   assert.equal(production.define?.['import.meta.env.VITE_BUILD_VERSION'], JSON.stringify('v1.2.3+build.4'));
@@ -35,7 +38,7 @@ try {
   assert.equal(withoutGit.define?.['import.meta.env.VITE_BUILD_VERSION'], JSON.stringify('dev unknown'));
   const normal = await resolveConfig({}, 'serve');
   assert.match(String(normal.define?.['import.meta.env.VITE_BUILD_VERSION']), /^"dev [a-f0-9]{7}"$/);
-  console.log('Build identity: development SHA, exact release tag, missing/invalid metadata rejection, and local archive fallback verified.');
+  console.log('Build identity: development/staging SHA, exact release tag, missing/invalid metadata rejection, and local archive fallback verified.');
   assert.deepEqual(normal.server.proxy, {
     '/api': { target: 'http://127.0.0.1:8080', ws: true },
     '/rtc': { target: 'http://127.0.0.1:7880', ws: true },
@@ -46,16 +49,18 @@ try {
   console.log('Ordinary dev uses real adapters and unchanged Go/LiveKit proxies.');
   // Resolving serve mode sets NODE_ENV; mirror a fresh production build process.
   process.env.NODE_ENV = 'production';
-  for (const mode of ['production', 'mock']) {
+  for (const mode of ['production', 'staging', 'mock']) {
     if (mode === 'mock') process.env.FALKY_MOCK = '1';
     process.env.FALKY_BUILD_REVISION = revision;
-    process.env.FALKY_BUILD_REF = mode === 'production' ? 'refs/heads/master' : 'refs/tags/v1.2.3+build.4';
-    const version = mode === 'production' ? 'dev abcdef0' : 'v1.2.3+build.4';
+    process.env.FALKY_BUILD_REF = mode === 'production' ? 'refs/heads/master'
+      : mode === 'staging' ? 'refs/heads/staging' : 'refs/tags/v1.2.3+build.4';
+    const version = mode === 'production' ? 'dev abcdef0'
+      : mode === 'staging' ? 'staging abcdef0' : 'v1.2.3+build.4';
     const modules = new Set<string>();
     const chunks = new Map<string, { imports: string[]; modules: string[] }>();
     let assets = '';
     await build({
-      mode,
+      mode: mode === 'staging' ? 'production' : mode,
       build: { outDir: join(temporary, mode), emptyOutDir: true },
       plugins: [{
         name: 'verify-production-boundary',
@@ -92,7 +97,9 @@ try {
     assert.ok([...modules].some((id) => id.endsWith('/src/voice/session.ts')), 'Real voice must be emitted');
     assert.ok([...modules].some((id) => id.endsWith('/src/runtime/browser.ts')), 'Real browser adapter must be emitted');
     assert.deepEqual([...modules].filter((id) => /\/(?:src\/)?mock\//.test(id)), []);
-    assert.doesNotMatch(assets, /__mock|mock-access-link|Simulated microphone|falky\.mock\./);
+    assert.ok([...modules].some((id) => id.endsWith('/src/api/webauthn.ts')), 'Native WebAuthn adapter must be emitted');
+    assert.ok(![...modules].some((id) => /entry\.prototype|account-fixture|\/smoke\//.test(id)), 'Prototype and auth fixtures stay outside production');
+    assert.doesNotMatch(assets, /__mock|mock-access-link|mock-invitation|Mock-Operator-Proof|acorn actor adapt|entry\.prototype|Simulated microphone|falky\.mock\./);
     console.log(`${mode} build: inspected ${modules.size} emitted modules and JS assets; real adapters present, mock/control code absent.`);
   }
 } finally {

@@ -29,7 +29,7 @@ async function capture(args: string[], environment: NodeJS.ProcessEnv = {}, inte
       child.once('error', reject);
       child.once('close', resolve);
     });
-    const url = /Mock: (http:\/\/127\.0\.0\.1:\d+)/.exec(stderr)?.[1];
+    const url = /Mock: (http:\/\/(?:127\.0\.0\.1|localhost):\d+)/.exec(stderr)?.[1];
     if (url) await assert.rejects(fetch(`${url}/__mock/state`), 'Capture must close its mock server');
     return { code, stdout, stderr, url };
   } finally { clearTimeout(timeout); }
@@ -38,7 +38,7 @@ async function capture(args: string[], environment: NodeJS.ProcessEnv = {}, inte
 test('all presets produce PNGs and terminate their isolated servers', { timeout: 180_000 }, async () => {
   const directory = await mkdtemp(join(tmpdir(), 'falky-screenshots-'));
   try {
-    for (const preset of ['room', 'chat', 'unread', 'voice', 'screen-share', 'settings', 'profile', 'entry']) {
+    for (const preset of ['room', 'chat', 'unread', 'voice', 'screen-share', 'settings', 'profile', 'entry', 'welcome', 'invitation', 'recovery', 'recovery-kit', 'account']) {
       const output = join(directory, 'nested', `${preset}.png`);
       const result = await capture(['--preset', preset, '--output', output]);
       assert.equal(result.code, 0, result.stderr);

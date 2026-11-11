@@ -150,6 +150,16 @@ class DeploymentTests(unittest.TestCase):
         self.assertTrue((self.root/'active/release.py').is_file())
         up=[args for args in self.calls() if 'up' in args]
         self.assertEqual(up[0][up[0].index('up'):],['up','--detach','--no-build','--wait','--wait-timeout','180'])
+    def test_staging_instance_refuses_a_release_from_another_environment(self):
+        request=self.request()
+        request['release'].update(environment='staging',ref='refs/heads/staging')
+        self.call('install',encode(request),data=self.archive.read_bytes())
+        self.assertEqual(self.snapshot()['release'],request['release'])
+        other=self.request('b')
+        result=self.call('install',encode(other),data=self.archive.read_bytes(),fail=True)
+        self.assertIn(b'Release environment differs from this instance',result.stderr)
+        self.assertEqual(self.snapshot()['release'],request['release'])
+        self.assertIsNone(self.snapshot()['pending'])
     def test_exact_retry_after_failed_apply_preserves_original_backup(self):
         self.install()
         request=self.install('b',fail=True,env={'FAIL_UP':'1'})

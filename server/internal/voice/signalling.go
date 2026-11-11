@@ -241,11 +241,7 @@ func (s *Service) admit(r *http.Request) (*voiceGrant, error) {
 	if requested := r.URL.Query().Get("room"); requested != "" && requested != g.room {
 		return nil, identity.ErrNoVisitor
 	}
-	current, err := s.validate(r.Context(), g.session)
-	if err != nil {
-		return nil, err
-	}
-	if err := s.rooms.Authorize(r.Context(), current.Visitor, g.room, rooms.JoinVoice); err != nil {
+	if _, err := s.authorizeGrant(r.Context(), g); err != nil {
 		if errors.Is(err, rooms.ErrNotFound) || errors.Is(err, identity.ErrNameTaken) {
 			return nil, identity.ErrNoVisitor
 		}
