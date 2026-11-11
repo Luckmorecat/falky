@@ -19,21 +19,36 @@ import (
 
 // Event is one live update, as published.
 type Event struct {
+	// SessionID targets one authenticated session. RequestID targets one anonymous
+	// request instead; private events are never ordinary broadcasts.
+	SessionID string
+	RequestID string
 	// RoomID, when set, is the room the event is about: only connections
 	// whose subscriber may receive events about that room get it. When
-	// empty, every connection gets it.
+	// empty, every ordinary connection gets it. Private scopes take precedence.
 	RoomID string
 	// Data is the encoded event, sent as one text message.
 	Data []byte
 }
 
-// Subscriber is the visitor a connection serves.
+// Subscriber selects either an authenticated browser or a private request scope.
 type Subscriber struct {
+	// RequestID selects a candidate connection, excluded from ordinary events and presence.
+	RequestID string
+	// CandidateIP groups candidate admission quotas; it is not identity evidence.
+	CandidateIP string
+	// Initial is queued during registration before the admission gate is released.
+	Initial []Event
+	// Deadline bounds request authorization independently of heartbeat and maintenance.
+	Deadline time.Time
+	// Terminal delivers the initial state and closes instead of retaining a subscription.
+	Terminal  bool
 	VisitorID string
 	Session   identity.Session
 	// Registered releases the admission gate after the hub can fence this
 	// connection, including an upgrade that has not completed yet.
 	Registered func()
+	// Authorized rechecks current access before delivery and during maintenance.
 	Authorized func(context.Context) bool
 	// Ticket is what Hub.Ticket returned before the visitor's access was
 	// checked.
@@ -42,6 +57,8 @@ type Subscriber struct {
 	// visitor. It is asked again for each such event; nil allows every room.
 	MayReceive func(ctx context.Context, roomID string) bool
 }
+
+func (s Subscriber) isCandidate() bool { return s.RequestID != "" }
 
 // StatusBehind is the close code of a connection whose client fell behind:
 // its queue of events waiting to be sent filled up.
@@ -68,10 +85,12 @@ const (
 
 // Hub fans events out to the open connections.
 type Hub struct {
-	logger      *slog.Logger
-	pongTimeout time.Duration
-	queueSize   int
-	connected   func(visitorID string, connected bool)
+	logger         *slog.Logger
+	pongTimeout    time.Duration
+	queueSize      int
+	candidateIPCap int
+	candidateCap   int
+	connected      func(visitorID string, connected bool)
 
 	mu    sync.Mutex
 	conns map[*conn]struct{}
@@ -112,15 +131,21 @@ func WithConnectedFunc(f func(visitorID string, connected bool)) Option {
 	return func(h *Hub) { h.connected = f }
 }
 
+// WithCandidateCaps bounds registered and in-flight candidate upgrades.
+func WithCandidateCaps(perIP, global int) Option {
+	return func(h *Hub) { h.candidateIPCap = perIP; h.candidateCap = global }
+}
+
 // New returns a Hub with no connections.
 func New(opts ...Option) *Hub {
 	h := &Hub{
-		logger:      slog.New(slog.DiscardHandler),
-		pongTimeout: defaultPongTimeout,
-		queueSize:   defaultQueueSize,
-		connected:   func(string, bool) {},
-		conns:       make(map[*conn]struct{}),
-		visitors:    make(map[string]int),
+		logger:         slog.New(slog.DiscardHandler),
+		pongTimeout:    defaultPongTimeout,
+		queueSize:      defaultQueueSize,
+		candidateIPCap: 16, candidateCap: 1024,
+		connected: func(string, bool) {},
+		conns:     make(map[*conn]struct{}),
+		visitors:  make(map[string]int),
 	}
 	for _, opt := range opts {
 		opt(h)
@@ -138,7 +163,8 @@ type conn struct {
 	status websocket.StatusCode
 	reason string
 	// notice, when set, is sent before closing.
-	notice []byte
+	notice  []byte
+	limited bool
 	// open is set once the upgrade has succeeded and the connection counts
 	// as one of its visitor's.
 	open bool
@@ -152,6 +178,9 @@ func (h *Hub) Publish(e Event) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	for c := range h.conns {
+		if !eventMatches(e, c.sub) {
+			continue
+		}
 		select {
 		case c.queue <- e:
 		default:
@@ -159,6 +188,16 @@ func (h *Hub) Publish(e Event) {
 			h.removeLocked(c, StatusBehind, "fell behind; catch up and reconnect")
 		}
 	}
+}
+
+func eventMatches(e Event, sub Subscriber) bool {
+	if sub.isCandidate() {
+		return e.RequestID == sub.RequestID && e.SessionID == ""
+	}
+	if e.RequestID != "" {
+		return false
+	}
+	return e.SessionID == "" || e.SessionID == sub.Session.ID
 }
 
 // Revoke ends every connection whose visitor's access was checked before it:
@@ -215,10 +254,17 @@ func (h *Hub) Ticket() Ticket {
 // connection opened: false when the upgrade failed, the Hub was shut down, or
 // the visitor's access was revoked since sub's ticket was taken.
 func (h *Hub) Serve(w http.ResponseWriter, r *http.Request, sub Subscriber) (opened bool) {
-	c := &conn{sub: sub, queue: make(chan Event, h.queueSize), ended: make(chan struct{})}
+	c := &conn{sub: sub, queue: make(chan Event, max(h.queueSize, len(sub.Initial))), ended: make(chan struct{})}
 	registered := h.add(c)
 	if sub.Registered != nil {
 		sub.Registered()
+	}
+	if c.limited {
+		w.Header().Set("Retry-After", "1")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"code":"rate_limited","message":"candidate connection capacity reached"}`))
+		return false
 	}
 	ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{InsecureSkipVerify: true})
 	if err != nil {
@@ -241,6 +287,21 @@ func (h *Hub) Serve(w http.ResponseWriter, r *http.Request, sub Subscriber) (ope
 	var wg sync.WaitGroup
 	wg.Go(func() { h.send(ctx, c, ws) })
 	wg.Go(func() {
+		var deadline <-chan time.Time
+		if !sub.Deadline.IsZero() {
+			timer := time.NewTimer(time.Until(sub.Deadline))
+			defer timer.Stop()
+			deadline = timer.C
+		}
+		select {
+		case <-deadline:
+			h.mu.Lock()
+			h.removeLocked(c, StatusRevoked, "request deadline reached")
+			h.mu.Unlock()
+		case <-ctx.Done():
+			return
+		case <-c.ended:
+		}
 		select {
 		case <-ctx.Done():
 		case <-c.ended:
@@ -273,8 +334,49 @@ func (h *Hub) add(c *conn) bool {
 		c.status, c.reason = StatusRevoked, "access revoked"
 		return false
 	}
+	if c.sub.isCandidate() {
+		var previous *conn
+		total, perIP := 0, 0
+		for existing := range h.conns {
+			if !existing.sub.isCandidate() {
+				continue
+			}
+			if existing.sub.RequestID == c.sub.RequestID {
+				previous = existing
+				continue
+			}
+			total++
+			if existing.sub.CandidateIP == c.sub.CandidateIP {
+				perIP++
+			}
+		}
+		if total >= h.candidateCap || perIP >= h.candidateIPCap {
+			c.limited = true
+			return false
+		}
+		if previous != nil {
+			h.removeLocked(previous, websocket.StatusGoingAway, "candidate replaced; reconnect")
+		}
+	}
 	h.serving.Add(1)
 	h.conns[c] = struct{}{}
+	for _, e := range c.sub.Initial {
+		if !eventMatches(e, c.sub) {
+			continue
+		}
+		select {
+		case c.queue <- e:
+		default:
+			h.removeLocked(c, StatusBehind, "snapshot exceeds queue")
+			return true
+		}
+	}
+	if c.sub.Terminal {
+		if len(c.sub.Initial) > 0 {
+			c.notice = c.sub.Initial[len(c.sub.Initial)-1].Data
+		}
+		h.removeLocked(c, StatusRevoked, "request terminal")
+	}
 	return true
 }
 
@@ -289,6 +391,9 @@ func (h *Hub) opened(c *conn, ws *websocket.Conn) bool {
 	}
 	c.ws = ws
 	c.open = true
+	if c.sub.isCandidate() {
+		return true
+	}
 	h.visitors[c.sub.VisitorID]++
 	if h.visitors[c.sub.VisitorID] == 1 {
 		h.connected(c.sub.VisitorID, true)
@@ -312,7 +417,7 @@ func (h *Hub) removeLocked(c *conn, status websocket.StatusCode, reason string) 
 	delete(h.conns, c)
 	c.status, c.reason = status, reason
 	close(c.ended)
-	if !c.open {
+	if !c.open || c.sub.isCandidate() {
 		return
 	}
 	id := c.sub.VisitorID
@@ -385,9 +490,22 @@ func (h *Hub) Heartbeat(ctx context.Context) {
 // ValidateSessions closes invalid established access. The caller holds the
 // lifecycle gate, while validation itself never holds the hub's socket lock.
 func (h *Hub) ValidateSessions(ctx context.Context) {
+	h.validateSessions(ctx, false)
+}
+
+// ValidateBrowserSessions fences ordinary access before maintenance needs the
+// writer. Candidate terminal hints come from committed approval cleanup.
+func (h *Hub) ValidateBrowserSessions(ctx context.Context) {
+	h.validateSessions(ctx, true)
+}
+
+func (h *Hub) validateSessions(ctx context.Context, browserOnly bool) {
 	h.mu.Lock()
 	var conns []*conn
 	for c := range h.conns {
+		if browserOnly && c.sub.isCandidate() {
+			continue
+		}
 		conns = append(conns, c)
 	}
 	h.mu.Unlock()

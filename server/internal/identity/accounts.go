@@ -49,6 +49,7 @@ type Session struct {
 // Effects are committed changes that the caller must enforce before reporting
 // success. Displaced visitors need retryable refresh, never access.revoked.
 type Effects struct {
+	SignInChanges      []SignInChange
 	RevokedSessions    []Session
 	RevokedIdentity    string
 	SecurityGeneration int64
@@ -373,7 +374,15 @@ func (s *Service) replaceCodes(ctx context.Context, tx *sql.Tx, id string, gener
 }
 
 func (s *Service) issueSession(ctx context.Context, tx *sql.Tx, id string, kind Kind, credential []byte) (Session, string, error) {
-	var accountID, proofAt, proofCredential any
+	auth := sessionAuthentication{method: "guest_link", authenticatedAt: s.now().Unix()}
+	if kind == Account {
+		auth.method, auth.credential, auth.recentProof = "passkey", credential, true
+	}
+	return s.issueAuthenticatedSession(ctx, tx, id, kind, auth)
+}
+
+func (s *Service) issueAuthenticatedSession(ctx context.Context, tx *sql.Tx, id string, kind Kind, auth sessionAuthentication) (Session, string, error) {
+	var accountID any
 	var generation int64
 	var err error
 	ttl := GuestSessionTTL
@@ -383,7 +392,7 @@ func (s *Service) issueSession(ctx context.Context, tx *sql.Tx, id string, kind 
 		err = tx.QueryRowContext(ctx, "SELECT generation FROM access WHERE id=1").Scan(&generation)
 	case Account:
 		err = tx.QueryRowContext(ctx, "SELECT generation FROM accounts WHERE identity_id=? AND disabled=0", id).Scan(&generation)
-		accountID, proofAt, proofCredential = id, now, credential
+		accountID = id
 		ttl = AccountSessionTTL
 	default:
 		return Session{}, "", ErrNoVisitor
@@ -395,9 +404,12 @@ func (s *Service) issueSession(ctx context.Context, tx *sql.Tx, id string, kind 
 		return Session{}, "", err
 	}
 	token, sessionID := opaque(), opaque()
-	_, err = tx.ExecContext(ctx, `INSERT INTO sessions(id,token_hash,identity_id,account_id,generation,created_at,expires_at,proof_at,proof_credential)
-        VALUES(?,?,?,?,?,?,?,?,?)`, sessionID, hashToken(token), id, accountID, generation, now, now+int64(ttl/time.Second), proofAt, proofCredential)
+	_, err = tx.ExecContext(ctx, `INSERT INTO sessions(id,token_hash,identity_id,account_id,generation,created_at,expires_at)
+        VALUES(?,?,?,?,?,?,?)`, sessionID, hashToken(token), id, accountID, generation, now, now+int64(ttl/time.Second))
 	if err != nil {
+		return Session{}, "", err
+	}
+	if err := s.recordAuthentication(ctx, tx, sessionID, "sign_in", auth); err != nil {
 		return Session{}, "", err
 	}
 	session, err := s.sessionByID(ctx, tx, sessionID)

@@ -454,6 +454,13 @@ func serveOn(ctx context.Context, logger *slog.Logger, cfg platform.Config, db *
 					logger.WarnContext(ctx, "access maintenance failed", "error", err)
 				}
 			}},
+			scheduler.Job{Interval: 12 * time.Hour, Startup: true, Run: func(ctx context.Context) {
+				operationCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+				defer cancel()
+				if err := ident.PurgeSignIns(operationCtx); err != nil && ctx.Err() == nil {
+					logger.WarnContext(ctx, "sign-in history purge failed", "error", err)
+				}
+			}},
 			scheduler.Job{Interval: time.Minute, Run: func(ctx context.Context) {
 				if err := store.Recover(ctx); err != nil && ctx.Err() == nil {
 					logger.ErrorContext(ctx, "attachment cleanup failed", "error", err)

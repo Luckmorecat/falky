@@ -1,0 +1,3 @@
+DROP INDEX account_signin_requests_by_expiry;
+DROP INDEX session_authentications_initial_passkey;
+DROP INDEX session_authentications_initial_origin;

@@ -38,6 +38,7 @@ type Service struct {
 	colourMu     sync.Mutex
 	connected    map[string]bool
 	chooseColour func(int) int
+	signInCode   func() (string, error)
 }
 
 // Option changes how New sets up the Service.
@@ -60,6 +61,7 @@ func New(db *platform.DB, publicOrigin string, opts ...Option) *Service {
 		}
 		return int(value.Int64())
 	}}
+	s.signInCode = randomSignInCode
 	for _, opt := range opts {
 		opt(s)
 	}

@@ -130,8 +130,7 @@ func (s *Service) ownerSession(ctx context.Context, tx *sql.Tx, token string, re
 		return Session{}, err
 	}
 	if recent {
-		var valid bool
-		err = tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM sessions t JOIN passkeys p ON p.credential_id=t.proof_credential AND p.identity_id=t.identity_id WHERE t.id=? AND t.proof_at>? AND t.proof_at<=?)", id, s.now().Add(-RecentProofTTL).Unix(), s.now().Unix()).Scan(&valid)
+		valid, err := s.recentAuthentication(ctx, tx, current)
 		if err != nil {
 			return Session{}, err
 		}
@@ -206,7 +205,7 @@ func (s *Service) FinishReauthentication(ctx context.Context, token, id, browser
 		if err = s.updateCredential(ctx, tx, []byte(c.id), credential); err != nil {
 			return err
 		}
-		if _, err = tx.ExecContext(ctx, "UPDATE sessions SET proof_at=?,proof_credential=? WHERE id=?", s.now().Unix(), credential.ID, owner.ID); err != nil {
+		if err = s.recordAuthentication(ctx, tx, owner.ID, "reauthentication", sessionAuthentication{method: "passkey", authenticatedAt: s.now().Unix(), credential: credential.ID, recentProof: true}); err != nil {
 			return err
 		}
 		if _, err = tx.ExecContext(ctx, "DELETE FROM account_ceremonies WHERE id=?", id); err != nil {
@@ -325,12 +324,13 @@ func (s *Service) FinishAddPasskey(ctx context.Context, token, id, browser strin
 	return result, err
 }
 
-func (s *Service) RemovePasskey(ctx context.Context, token, credentialID string) error {
+func (s *Service) RemovePasskeyWithEffects(ctx context.Context, token, credentialID string) (Effects, error) {
+	var effects Effects
 	raw, err := base64.RawURLEncoding.DecodeString(credentialID)
 	if err != nil {
-		return ErrInvalidProof
+		return Effects{}, ErrInvalidProof
 	}
-	return s.db.Write(ctx, func(tx *sql.Tx) error {
+	err = s.db.Write(ctx, func(tx *sql.Tx) error {
 		owner, err := s.ownerSession(ctx, tx, token, true)
 		if err != nil {
 			return err
@@ -349,9 +349,47 @@ func (s *Service) RemovePasskey(ctx context.Context, token, credentialID string)
 		if count <= 1 {
 			return ErrLastPasskey
 		}
+		rows, err := tx.QueryContext(ctx, `SELECT t.id,t.generation,t.expires_at FROM sessions t
+ JOIN session_authentications e ON e.session_id=t.id AND e.purpose='sign_in'
+ WHERE t.identity_id=? AND (e.passkey_credential_id=? OR e.origin_passkey_credential_id=?)`, owner.Visitor.ID, raw, raw)
+		if err != nil {
+			return err
+		}
+		var revoked []Session
+		for rows.Next() {
+			session := Session{Visitor: owner.Visitor, Kind: Account}
+			var expires int64
+			if err := rows.Scan(&session.ID, &session.Generation, &expires); err != nil {
+				_ = rows.Close()
+				return err
+			}
+			session.ExpiresAt = unixTime(expires)
+			revoked = append(revoked, session)
+		}
+		if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+			return err
+		}
+		originRequests, err := signInRequests(ctx, tx, "state IN ('pending','approved') AND origin_passkey_credential_id=?", raw)
+		if err != nil {
+			return err
+		}
+		for _, r := range originRequests {
+			if err = s.cancelRequest(ctx, tx, &effects, r.ID, true); err != nil {
+				return err
+			}
+		}
+		for _, session := range revoked {
+			if err = s.revokeSession(ctx, tx, session, &effects); err != nil {
+				return err
+			}
+		}
 		_, err = tx.ExecContext(ctx, "DELETE FROM passkeys WHERE identity_id=? AND credential_id=?", owner.Visitor.ID, raw)
 		return err
 	})
+	if err != nil {
+		return Effects{}, err
+	}
+	return effects, nil
 }
 
 func (s *Service) RegenerateRecoveryCodes(ctx context.Context, token string) ([]string, error) {
@@ -385,9 +423,7 @@ func (s *Service) Logout(ctx context.Context, token string) (Effects, error) {
 		if err != nil {
 			return err
 		}
-		effects.RevokedSessions = []Session{current}
-		_, err = tx.ExecContext(ctx, "DELETE FROM sessions WHERE id=?", id)
-		return err
+		return s.revokeSession(ctx, tx, current, &effects)
 	})
 	if err != nil {
 		return Effects{}, err

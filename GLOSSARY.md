@@ -21,6 +21,24 @@ An identity with durable access established by accepting an account invitation a
 **Session**:
 A browser's time-limited access to an identity, admitted as a guest or authenticated through an account. Several open tabs can share one session.
 
+**Device approval**:
+Signing another browser into an account with explicit consent from an existing account session, using a sign-in link and code or a QR code.
+
+**Sign-in link**:
+A temporary link whose issuer can approve one candidate using its confirmation code. It is separate from the guest access link and account invitation.
+_Avoid_: Access link, account invitation
+
+**Issuer**:
+The account session that created a sign-in link and approves its candidate requests. A QR request has no issuer.
+
+**Candidate**:
+The browser asking to sign in through device approval.
+_Avoid_: Target device
+
+**Approver**:
+The existing account session granting account access to a candidate. A sign-in link's issuer is its approver; a QR request selects its approver only on approval.
+_Avoid_: Phone, owner
+
 **Account invitation**:
 A single-use invitation from the operator to become an account. It is separate from the shared access link.
 _Avoid_: Access link, recovery link

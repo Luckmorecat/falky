@@ -52,7 +52,7 @@ func TestGuestSessionHasIndependentIDAndFourHundredDayAbsoluteExpiry(t *testing.
 	}
 }
 
-func TestSessionConstraintsProtectAccountOwnershipAndRecentProof(t *testing.T) {
+func TestSessionConstraintsProtectAccountOwnershipAndLifetime(t *testing.T) {
 	f := newFixture(t, filepath.Join(t.TempDir(), "sessions.db"))
 	guest, _ := f.enter(t, "Guest")
 	account, _ := enroll(t, f, "Account")
@@ -61,20 +61,16 @@ func TestSessionConstraintsProtectAccountOwnershipAndRecentProof(t *testing.T) {
 		name       string
 		identityID string
 		accountID  any
-		proofAt    any
-		credential any
 		expiry     int64
 	}{
-		{"missing account", guest.ID, guest.ID, nil, nil, now + 60},
-		{"another identity's account", guest.ID, account.Session.Visitor.ID, nil, nil, now + 60},
-		{"guest proof", guest.ID, nil, now, []byte("credential"), now + 60},
-		{"incomplete proof", account.Session.Visitor.ID, account.Session.Visitor.ID, now, nil, now + 60},
-		{"nonpositive lifetime", guest.ID, nil, nil, nil, now},
+		{"missing account", guest.ID, guest.ID, now + 60},
+		{"another identity's account", guest.ID, account.Session.Visitor.ID, now + 60},
+		{"nonpositive lifetime", guest.ID, nil, now},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			err := f.db.Write(t.Context(), func(tx *sql.Tx) error {
-				_, err := tx.ExecContext(t.Context(), `INSERT INTO sessions(id,token_hash,identity_id,account_id,generation,created_at,expires_at,proof_at,proof_credential)
-                    VALUES('invalid',?,?,?,?,?,?,?,?)`, make([]byte, 32), tt.identityID, tt.accountID, 1, now, tt.expiry, tt.proofAt, tt.credential)
+				_, err := tx.ExecContext(t.Context(), `INSERT INTO sessions(id,token_hash,identity_id,account_id,generation,created_at,expires_at)
+                    VALUES('invalid',?,?,?,?,?,?)`, make([]byte, 32), tt.identityID, tt.accountID, 1, now, tt.expiry)
 				return err
 			})
 			if err == nil {

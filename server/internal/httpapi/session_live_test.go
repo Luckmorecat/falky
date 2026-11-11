@@ -3,6 +3,7 @@ package httpapi
 import (
 	"bufio"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"net"
@@ -676,4 +677,52 @@ func TestShutdownJoinsMaintenanceBeforeClosingAdmissionBlockedOnSQLite(t *testin
 		t.Fatal("admission retained the lifecycle gate after HTTP shutdown")
 	}
 	gate.Unlock()
+}
+
+func TestPasskeyRemovalRevokesOnlyInitialCredentialSessionsIncludingCallerLiveAndVoice(t *testing.T) {
+	p := startPublic(t, 100)
+	room := p.createRoom(t, "Voice")
+	firstAPI, first := p.browserWithHTTP(t)
+	key := passkeytest.New(t)
+	enrollAccount(t, p, first, "Account", key)
+	ceremony := beginAccount(t, p, first, "/api/accounts/passkeys/begin", map[string]any{})
+	var creation protocol.CredentialCreation
+	if err := json.Unmarshal(ceremony.Options, &creation); err != nil {
+		t.Fatal(err)
+	}
+	replacement := passkeytest.New(t)
+	accountRequest(t, p, first, "POST", "/api/accounts/passkeys/finish", map[string]any{"ceremonyId": ceremony.ID, "credential": json.RawMessage(replacement.Registration(t, &creation, testOrigin)), "label": "Replacement"}, testOrigin, 200)
+	otherAPI, other := loginAccountBrowser(t, p, key)
+	survivorAPI, survivor := loginAccountBrowser(t, p, replacement)
+	// Changing the caller's latest proof must not change its initial credential.
+	reauth := beginAccount(t, p, first, "/api/accounts/reauthentication/begin", map[string]any{})
+	var assertion protocol.CredentialAssertion
+	if err := json.Unmarshal(reauth.Options, &assertion); err != nil {
+		t.Fatal(err)
+	}
+	accountRequest(t, p, first, "POST", "/api/accounts/reauthentication/finish", map[string]any{"ceremonyId": reauth.ID, "credential": json.RawMessage(replacement.Assertion(t, &assertion, testOrigin))}, testOrigin, 200)
+	firstLive, otherLive, survivorLive := p.connectLive(t, first), p.connectLive(t, other), p.connectLive(t, survivor)
+	firstVoice, otherVoice, survivorVoice := joinedVoice(t, firstAPI, room.ID), joinedVoice(t, otherAPI, room.ID), joinedVoice(t, survivorAPI, room.ID)
+	p.livekit.AddParticipant(room.ID, firstVoice.GrantId)
+	p.livekit.AddParticipant(room.ID, otherVoice.GrantId)
+	survivorParticipant := p.livekit.AddParticipant(room.ID, survivorVoice.GrantId)
+	accountRequest(t, p, first, "DELETE", "/api/accounts/passkeys/"+base64.RawURLEncoding.EncodeToString(key.ID), nil, testOrigin, 200)
+	readClosed(t, firstLive, realtime.StatusRevoked)
+	readClosed(t, otherLive, realtime.StatusRevoked)
+	accountRequest(t, p, first, "GET", "/api/accounts/session", nil, "", 401)
+	accountRequest(t, p, other, "GET", "/api/accounts/session", nil, "", 401)
+	accountRequest(t, p, survivor, "GET", "/api/accounts/session", nil, "", 200)
+	listed, err := p.livekit.Participants(t.Context())
+	if err != nil || len(listed) != 1 || listed[0] != survivorParticipant {
+		t.Fatalf("exact credential voice enforcement = %v,%v", listed, err)
+	}
+	accountRequest(t, p, survivor, "DELETE", "/api/accounts/passkeys/"+base64.RawURLEncoding.EncodeToString(replacement.ID), nil, testOrigin, 409)
+	p.createRoom(t, "Survivor still receives events")
+	for event := nextEvent(t, survivorLive); event.Type != "room.changed"; event = nextEvent(t, survivorLive) {
+	}
+	accountRequest(t, p, survivor, "GET", "/api/accounts/session", nil, "", 200)
+	p = restartVoice(t, p)
+	checkVoiceValidation(t, p, firstVoice.Token, http.StatusForbidden)
+	checkVoiceValidation(t, p, otherVoice.Token, http.StatusForbidden)
+	checkVoiceValidation(t, p, survivorVoice.Token, http.StatusOK)
 }
