@@ -106,8 +106,8 @@ networks, host setup and backup timers. Falky owns its runtime package and app
 operations. For a new staging instance follow its current
 [staging first-install procedure](https://github.com/Luckmorecat/netcup-infra/blob/main/README.md#staging-first-install).
 It covers exact artifact/source verification, operator bootstrap, health/RTC and
-backup checks before enabling automatic staging deploys. `MIGRATION.md` records
-historical adoption of existing data; it is not the staging install procedure.
+restricted-key checks before enabling automatic staging deploys. `MIGRATION.md`
+records historical adoption of existing data; it is not the staging install procedure.
 The local tests prove configuration behavior; they do not prove live activation.
 Changing a timer or another hosted site needs no Falky release or release-state edit.
 
@@ -410,10 +410,9 @@ Verify the host fingerprint through a trusted administrative channel before
 writing `VPS_KNOWN_HOSTS`; an unverified `ssh-keyscan` alone is insufficient.
 Keep the staging private key only in its environment's `VPS_SSH_KEY` secret and
 the operator's private key store. After first-install status, public API/web,
-RTC/browser media and a complete backup pass, verify a `release` baseline read
-through this forced key, enable `falky-staging-backup.timer`, then set the
-**repository** variable `STAGING_DEPLOY_ENABLED=true`. The gate is not a secret
-or an environment variable. GitHub compares its value to `true` case
+RTC/browser media pass, verify a `release` baseline read through this forced key,
+then set the **repository** variable `STAGING_DEPLOY_ENABLED=true`. The gate is
+not a secret or an environment variable. GitHub compares its value to `true` case
 insensitively; leave it unset or set it to `false` to keep automatic staging
 deploys closed. This does not change development or production activation.
 
@@ -471,7 +470,9 @@ have no automatic garbage collection; monitor disk usage.
 Host-owned timers call the stable `/srv/<instance>/manage.sh backup`, wait up to
 15 minutes for the lock and have a 20-minute timeout. Production runs at 03:00 UTC,
 development at 03:30 UTC, each with up to 15 minutes randomized delay. Timer files
-and installation commands live in netcup-infra. Inspect with:
+and installation commands live in netcup-infra. Staging has no scheduled backups;
+deployments still take recovery snapshots and manual backups remain available.
+Inspect with:
 
 ```sh
 systemctl list-timers falky-backup.timer falky-dev-backup.timer
