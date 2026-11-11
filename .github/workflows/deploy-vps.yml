@@ -2,20 +2,20 @@ name: Deploy VPS
 
 on:
   pull_request:
-    branches: [master]
+    branches: [master, staging]
     # Body edits must revalidate the ban on release-note commit overrides.
     types: [opened, synchronize, reopened, edited]
   push:
-    branches: [master]
+    branches: [master, staging]
     tags: ['v*']
   workflow_dispatch:
     inputs:
       environment:
-        description: Prepare artifacts only; use master for development or a v* tag for production
+        description: Prepare artifacts only; use master for development, staging for staging, or a v* tag for production
         required: true
         type: choice
         default: development
-        options: [development, production]
+        options: [development, staging, production]
 
 permissions:
   contents: read
@@ -23,7 +23,7 @@ permissions:
 # Serialize the whole build/deploy sequence for each environment, so a slower
 # old build cannot overtake a newer deployment. Never cancel an active deploy.
 concurrency:
-  group: vps-${{ github.event_name }}-${{ github.event_name == 'pull_request' && github.ref || (github.ref_type == 'tag' && 'production' || 'development') }}
+  group: vps-${{ github.event_name }}-${{ github.event_name == 'pull_request' && github.ref || (github.ref_type == 'tag' && 'production' || github.ref == 'refs/heads/staging' && 'staging' || 'development') }}
   cancel-in-progress: false
 
 jobs:
@@ -91,14 +91,15 @@ jobs:
           CHECK_RESULT: ${{ needs.checks.result }}
         run: test "$CHECK_RESULT" = success
 
+  # Operator bootstrap must establish staging before CI can read its host baseline.
   plan:
     name: Plan release
-    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && (github.ref != 'refs/heads/staging' || vars.STAGING_DEPLOY_ENABLED == 'true'))
     needs: check
     runs-on: ubuntu-latest
     timeout-minutes: 20
     environment:
-      name: ${{ github.ref_type == 'tag' && 'production' || 'development' }}
+      name: ${{ github.ref_type == 'tag' && 'production' || github.ref == 'refs/heads/staging' && 'staging' || 'development' }}
     outputs:
       server: ${{ steps.plan.outputs.server }}
       web: ${{ steps.plan.outputs.web }}
@@ -151,7 +152,7 @@ jobs:
       packages: write
 
   deploy:
-    name: ${{ github.event_name == 'workflow_dispatch' && 'Prepare' || 'Deploy' }} ${{ github.ref_type == 'tag' && 'production' || 'development' }}
+    name: ${{ github.event_name == 'workflow_dispatch' && 'Prepare' || 'Deploy' }} ${{ github.ref_type == 'tag' && 'production' || github.ref == 'refs/heads/staging' && 'staging' || 'development' }}
     # Only exact pending retries skip both builds. New releases require both.
     if: >-
       !cancelled() && needs.check.result == 'success' &&
@@ -164,7 +165,7 @@ jobs:
     permissions:
       contents: read
     environment:
-      name: ${{ github.ref_type == 'tag' && 'production' || 'development' }}
+      name: ${{ github.ref_type == 'tag' && 'production' || github.ref == 'refs/heads/staging' && 'staging' || 'development' }}
       url: ${{ vars.APP_URL }}
     steps:
       - name: Check out source
@@ -187,7 +188,7 @@ jobs:
         if: needs.plan.outputs.mode != 'retry'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: falky-runtime-${{ github.ref_type == 'tag' && 'production' || 'development' }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          name: falky-runtime-${{ github.ref_type == 'tag' && 'production' || github.ref == 'refs/heads/staging' && 'staging' || 'development' }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/runtime-artifact/
           if-no-files-found: error
           retention-days: 90

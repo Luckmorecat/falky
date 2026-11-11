@@ -1,5 +1,6 @@
 """Render real Compose configurations to check instance isolation without Docker."""
 
+from itertools import combinations
 import json
 import os
 from pathlib import Path
@@ -36,11 +37,13 @@ def render(project, domain, tcp, udp, production=True):
 
 class IsolationTests(unittest.TestCase):
     def test_instances_have_separate_volumes_networks_origins_and_media_ports(self):
-        configs = [render("falky", "falky.lunari.win", 7881, 7882),
-                   render("falky-dev", "dev.falky.lunari.win", 7891, 7892)]
-        volume_names = []
-        for config, domain, tcp, udp in zip(configs,
-                ("falky.lunari.win", "dev.falky.lunari.win"), (7881, 7891), (7882, 7892)):
+        instances = [("falky", "falky.lunari.win", 7881, 7882),
+                     ("falky-dev", "dev.falky.lunari.win", 7891, 7892),
+                     ("falky-staging", "staging.falky.lunari.win", 7901, 7902)]
+        resources = []
+        for project, domain, tcp, udp in instances:
+            config = render(project, domain, tcp, udp)
+            self.assertEqual(config["name"], project)
             services = config["services"]
             self.assertFalse(services["caddy"].get("ports"))
             self.assertFalse(services["falky"].get("ports"))
@@ -65,11 +68,16 @@ class IsolationTests(unittest.TestCase):
             for key, value in (("LIVEKIT_RTC_TCP_PORT", tcp),
                                ("LIVEKIT_RTC_UDP_PORT_START", udp), ("LIVEKIT_RTC_UDP_PORT_END", udp)):
                 self.assertEqual(int(livekit["environment"][key]), value)
-            volume_names.append({v["name"] for v in config["volumes"].values()})
-        self.assertTrue(volume_names[0].isdisjoint(volume_names[1]))
-        self.assertIn("falky_falky_data", volume_names[0])
-        self.assertIn("falky-dev_falky_data", volume_names[1])
-        self.assertNotEqual(configs[0]["networks"]["default"]["name"], configs[1]["networks"]["default"]["name"])
+            self.assertEqual(services["falky"]["environment"]["FALKY_ATTACHMENT_ROOT"], "/data/attachments")
+            self.assertEqual({m["target"]: m["source"] for m in services["falky"]["volumes"]},
+                             {"/data": "falky_data", "/snapshots": "falky_snapshots"})
+            volumes = {v["name"] for v in config["volumes"].values()}
+            self.assertEqual(volumes, {project + "_falky_data", project + "_falky_snapshots"})
+            resources.append((volumes, {config["networks"]["default"]["name"]},
+                              {int(p["published"]) for p in livekit["ports"]}))
+        for left, right in combinations(resources, 2):
+            for left_names, right_names in zip(left, right):
+                self.assertTrue(left_names.isdisjoint(right_names))
 
     def test_local_stack_still_serves_https_directly(self):
         config = render("falky", "localhost", 7881, 7882, production=False)

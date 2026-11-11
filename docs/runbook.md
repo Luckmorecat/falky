@@ -59,19 +59,24 @@ and run `docker compose up -d --build --wait` again. The server applies new
 database migrations when it starts. An older `falky` cannot restore a
 snapshot taken after an upgrade that added migrations.
 
-## Development and production releases
+## VPS environment releases
 
-The VPS already has two independent instances behind a shared HTTPS edge:
+Production and development run independently behind a shared HTTPS edge. Staging
+uses the same package after its separately authorized first installation:
 
 | Environment | Domain | Directory / project | Media ports |
 | --- | --- | --- | --- |
 | Production | `falky.lunari.win` | `/srv/falky` / `falky` | TCP 7881, UDP 7882 |
 | Development | `dev.falky.lunari.win` | `/srv/falky-dev` / `falky-dev` | TCP 7891, UDP 7892 |
+| Staging | `staging.falky.lunari.win` | `/srv/falky-staging` / `falky-staging` | TCP 7901, UDP 7902 |
 
-Preserve both instances' settings, credentials and data. Their database volumes
-are `falky_falky_data` and `falky-dev_falky_data`; snapshot volumes have the same
-prefix and end in `_falky_snapshots`. Never rename a project to change its domain.
-The external networks are `falky_default` and `falky-dev_default` (override with
+Preserve existing settings, credentials and data. Each project has its own
+`<project>_falky_data` volume for the database and `/data/attachments`, and its own
+`<project>_falky_snapshots` volume. Staging therefore uses
+`falky-staging_falky_data` and `falky-staging_falky_snapshots`; it starts empty
+with fresh LiveKit credentials, without copying another instance's database.
+Never rename a project to change its domain. The external networks are
+`falky_default`, `falky-dev_default` and `falky-staging_default` (override with
 `FALKY_NETWORK` only when coordinating host routing). The app publishes only
 LiveKit media ports. The edge reaches `<project>-api:8080`, `<project>-voice:7880`
 and `<project>-web:80` directly, keeping one trusted proxy hop.
@@ -93,16 +98,18 @@ unchanged LiveKit packages retain the normal no-recreation behavior. These are
 future rollout instructions, not evidence that any instance has been deployed.
 Ordinary release health checks database, direct LiveKit API and public web/API;
 it alone does not prove RTC guard routing. The package's configuration/listener
-tests separately cover unique aliases for both projects, unchanged edge targets,
+tests separately cover unique aliases for all three projects, unchanged edge targets,
 startup failures and management-path refusal.
 
 [Private netcup-infra](https://github.com/Luckmorecat/netcup-infra) owns the edge,
 networks, host setup and backup timers. Falky owns its runtime package and app
-operations. Follow its [migration procedure](https://github.com/Luckmorecat/netcup-infra/blob/main/MIGRATION.md)
-for the coordinated first merge, artifact preparation and development-first
-activation. The local tests prove configuration behavior; they do not mean the
-live host has migrated. Changing a timer or another hosted site needs no Falky
-release or release-state edit.
+operations. For a new staging instance follow its current
+[staging first-install procedure](https://github.com/Luckmorecat/netcup-infra/blob/main/README.md#staging-first-install).
+It covers exact artifact/source verification, operator bootstrap, health/RTC and
+backup checks before enabling automatic staging deploys. `MIGRATION.md` records
+historical adoption of existing data; it is not the staging install procedure.
+The local tests prove configuration behavior; they do not prove live activation.
+Changing a timer or another hosted site needs no Falky release or release-state edit.
 
 `Deploy VPS` validates backend, frontend and deployment inputs. The stable
 aggregate `Check` succeeds only when all three jobs pass. PR checks also validate
@@ -111,16 +118,21 @@ fork code never runs through `pull_request_target`. `make check` runs the two
 application suites locally; `make check-deploy` adds deployment/release-policy
 checks and actionlint (Python, Compose CLI, Node 24 and npm required).
 
-Master pushes target development; `v*` tag pushes target production. Any changed
+Master pushes target development; `staging` pushes target staging once the
+repository variable `STAGING_DEPLOY_ENABLED` equals `true` (GitHub compares
+strings case insensitively, so `True` and `TRUE` also enable it); `v*` tag pushes
+target production. Leave this staging gate unset during branch creation and
+first install. Checks on staging pushes and PRs targeting staging, plus manual
+artifact preparation, remain available while the gate is closed. Any changed
 runtime/application/unknown input builds **both** images. Docs-only development
-revisions compare the complete tracked release inputs against the last successful
+and staging revisions compare the complete tracked release inputs against the last successful
 release, so failed or coalesced runs cannot hide a change. Known documentation
-and root release metadata alone do not rebuild development. Every new version
-tag builds both images. Frontend statistics are enabled only for development.
+and root release metadata alone do not rebuild development or staging. Every new
+version tag builds both images. Frontend statistics are enabled only on master.
 Both the server (`ghcr.io/luckmorecat/falky`) and web
 (`ghcr.io/luckmorecat/falky-web`) images use the full source commit SHA as the
-development image tag and the Git version tag (for example, `v1.2.3`) as the
-production image tag. For Docker compatibility, `+` in version tags becomes `_`
+development/staging image tag and the Git version tag (for example, `v1.2.3`)
+as the production image tag. For Docker compatibility, `+` in version tags becomes `_`
 (for example, `v1.2.3+build.1` becomes `v1.2.3_build.1`), and image tags are
 limited to the first 128 characters. Images are built for `linux/amd64`; CI pins
 deployments to their actual digests. Both GHCR packages must support anonymous
@@ -171,10 +183,15 @@ Actions uploads `runtime.tar` and `manifest.json` before activation, named
 `falky-runtime-ENVIRONMENT-FULL_SHA-RUN_ID-RUN_ATTEMPT`, retained for 90 days.
 Host caches/backups preserve exact artifacts independently. `workflow_dispatch`
 prepares these artifacts with all checks and both builds but **never contacts or
-changes the VPS**. Use actual `master` for development and an existing `v*` tag
-containing the new workflow for production; feature refs cannot masquerade as
-these sources. Concrete download, verification, ancestry and bootstrap commands
-are in the host migration guide.
+changes the VPS**. Use actual `master` for development, `staging` for staging,
+and an existing `v*` tag containing the new workflow for production; feature refs
+cannot masquerade as these sources. Concrete staging download, verification,
+baseline/request and bootstrap commands are in the current host first-install
+procedure linked above. A fresh instance has no `manage.sh` or `ci-deploy.sh`;
+its restricted CI key cannot perform the first install. Use operator SSH with
+an independently verified bootstrap and archive instead. Do not pre-create its
+database volume: the fresh-install guard refuses a retained database without a
+snapshot path. The shared edge must already be running for public health checks.
 
 ### Pending attempts
 
@@ -316,9 +333,10 @@ rules, publish a release, or change VPS files.
    and has no auto-merge or branch-protection bypass. Protect version tags against
    movement/deletion while allowing this App to create them. Confirm repository
    Actions policy allows the pinned actions in the workflows.
-4. Retain the development/production environment restrictions and secrets below.
-   Complete the [host migration](https://github.com/Luckmorecat/netcup-infra/blob/main/MIGRATION.md)
-   for both instances; release automation does not install host files.
+4. Retain the environment restrictions and secrets below.
+   Follow the [current host setup](https://github.com/Luckmorecat/netcup-infra/blob/main/README.md)
+   and its staging first-install procedure; release automation does not install
+   host files. Existing-data migration remains a historical procedure.
    Release metadata alone does not rebuild development; a new tag builds both images.
 5. Merge the automation change. Once the App is configured, a master push or
    manual **Release Please → Run workflow → master** reconciles release state.
@@ -354,9 +372,9 @@ remain published. Once the cause is resolved, rerun the **whole original tag's
 Deploy VPS workflow**, not just a failed deployment job with old outputs. Existing
 ancestry and baseline checks reject a stale retry after a newer deployment.
 A matching pending attempt retries its exact cached package and images. A different
-source or operator recovery requires explicit [pending resolution](#pending-attempts). No automatic rollback is added. Development
-and production retain separate concurrency, and pending production runs may
-coalesce: publishing a version does not guarantee every intermediate version
+source or operator recovery requires explicit [pending resolution](#pending-attempts).
+No automatic rollback is added. All three environments retain separate
+concurrency, and pending production runs may coalesce: publishing a version does not guarantee every intermediate version
 will reach the VPS.
 
 Do not move or reuse a release tag. The tagged commit must contain these
@@ -364,26 +382,40 @@ workflows; a tag on an older commit uses that older commit's workflow files.
 
 ### GitHub environments and SSH
 
-Configure two GitHub environments with **selected branches and tags**:
+Configure three GitHub environments with **selected branches and tags**:
 
 | Environment | Allowed ref | Secret | Variables |
 | --- | --- | --- | --- |
 | `development` | Branch `master` only | `VPS_SSH_KEY` | `APP_URL`, `VPS_HOST`, `VPS_KNOWN_HOSTS` |
+| `staging` | Branch `staging` only (no tag rule) | `VPS_SSH_KEY` | `APP_URL`, `VPS_HOST`, `VPS_KNOWN_HOSTS` |
 | `production` | Tags `v*` only (remove branch `master`) | `VPS_SSH_KEY` | `APP_URL`, `VPS_HOST`, `VPS_KNOWN_HOSTS` |
 
-Set `APP_URL=https://dev.falky.lunari.win` in `development` and
+Set `APP_URL=https://dev.falky.lunari.win` in `development`,
+`APP_URL=https://staging.falky.lunari.win` in `staging` and
 `APP_URL=https://falky.lunari.win` in `production`. The workflow uses this
 environment variable for GitHub's deployment link. It is separate from the SSH
 host and does not configure VPS routing, certificates or application origins.
 
-Use a different dedicated SSH key for each environment. Both use
+Use a different dedicated SSH key for each environment. All three use
 `VPS_HOST=falky.lunari.win` and the verified host key in `VPS_KNOWN_HOSTS`.
 Bind each public key in `/home/deployer/.ssh/authorized_keys` to its own path:
 
 ```text
 restrict,command="/srv/falky/ci-deploy.sh" ssh-ed25519 <production-public-key> falky-github-actions-production
 restrict,command="/srv/falky-dev/ci-deploy.sh" ssh-ed25519 <development-public-key> falky-github-actions-development
+restrict,command="/srv/falky-staging/ci-deploy.sh" ssh-ed25519 <staging-public-key> falky-github-actions-staging
 ```
+
+Verify the host fingerprint through a trusted administrative channel before
+writing `VPS_KNOWN_HOSTS`; an unverified `ssh-keyscan` alone is insufficient.
+Keep the staging private key only in its environment's `VPS_SSH_KEY` secret and
+the operator's private key store. After first-install status, public API/web,
+RTC/browser media and a complete backup pass, verify a `release` baseline read
+through this forced key, enable `falky-staging-backup.timer`, then set the
+**repository** variable `STAGING_DEPLOY_ENABLED=true`. The gate is not a secret
+or an environment variable. GitHub compares its value to `true` case
+insensitively; leave it unset or set it to `false` to keep automatic staging
+deploys closed. This does not change development or production activation.
 
 The wrapper accepts only `status`, `release` (a non-secret baseline snapshot),
 `deploy-release <encoded request>` with the bounded runtime archive on stdin,
@@ -395,8 +427,8 @@ Application secrets stay in each instance's private `.env`.
 
 ## VPS operations and recovery
 
-Run these as `deployer` from `/srv/falky-dev` or `/srv/falky`. Use `./compose.sh`
-for all app Compose operations: it selects the installed package/settings and
+Run these as `deployer` from `/srv/falky-dev`, `/srv/falky-staging` or `/srv/falky`.
+Use `./compose.sh` for all app Compose operations: it selects the installed package/settings and
 protects mutations with the same lock as deployment and backup.
 
 ```sh
