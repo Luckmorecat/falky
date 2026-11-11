@@ -67,7 +67,8 @@ export function createDeviceCandidate() {
   function errorState(error: unknown) {
     const reason = problem(error);
     update({ busy: false, problem: reason, retryAt: reason.retryAt,
-      ...(state.request && expired(state.request) ? { phase: 'expired' as const }
+      ...(deliveryUncertain ? { phase: 'waiting' as const }
+        : state.request && expired(state.request) ? { phase: 'expired' as const }
         : reason.code === 'invalid_proof' ? { phase: 'unavailable' as const } : {}) });
   }
   function accept(request: SignInRequest) {
@@ -76,7 +77,7 @@ export function createDeviceCandidate() {
   }
   function schedule() {
     clearTimeout(timer);
-    if (disposed || state.phase !== 'waiting') return;
+    if (disposed || deliveryUncertain || state.phase !== 'waiting') return;
     timer = setTimeout(() => { void refresh().catch(() => {}); }, Math.max(1000, (state.retryAt ?? 0) - Date.now(), 2000));
   }
   function begin(type: 'qr' | 'link', bearer?: string, replace = false, recoverBinding = false): Promise<void> {
@@ -116,7 +117,7 @@ export function createDeviceCandidate() {
   }
   function refresh(): Promise<void> {
     if (refreshing) return refreshing;
-    if (!state.request || disposed || state.phase !== 'waiting') return Promise.resolve();
+    if (!state.request || disposed || deliveryUncertain || state.phase !== 'waiting') return Promise.resolve();
     const version = generation;
     const id = state.request.id;
     if (expired(state.request)) { update({ phase: 'expired' }); return Promise.resolve(); }
@@ -132,7 +133,8 @@ export function createDeviceCandidate() {
     try { cooldown(state.retryAt); } catch (error) { return Promise.reject(error); }
     stop();
     const version = generation;
-    const id = state.request.id;
+    const request = state.request;
+    const id = request.id;
     update({ phase: 'finishing', busy: true, problem: undefined });
     finishing = runSessionAction(async (context) => {
       check(version);
@@ -148,6 +150,12 @@ export function createDeviceCandidate() {
       const local = getState().accountSession;
       if (before?.visitor.id !== local?.visitor.id || before?.kind !== local?.kind || before?.expiresAt !== local?.expiresAt) {
         await reconcileSession(); stale();
+      }
+      if (expired(request)) {
+        deliveryUncertain = false;
+        resumeSession(epoch);
+        update({ phase: 'expired', busy: false, problem: undefined });
+        return;
       }
       ownSessionChange = true;
       context.epoch = epoch = beginSessionChange();

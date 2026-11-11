@@ -403,6 +403,54 @@ it.each(['before-delivery', 'lost-response', 'lost-session-read'] as const)('ret
   } finally { candidate.dispose(); }
 });
 
+it.each([
+  ['link', 'lost-response', 'before-error'], ['qr', 'lost-response', 'after-error'],
+  ['link', 'lost-session-read', 'after-error'], ['qr', 'lost-session-read', 'before-error'],
+  ['link', 'before-delivery', 'after-error'], ['qr', 'before-delivery', 'before-error'],
+] as const)('reconciles uncertain %s %s delivery after expiry %s', async (type, failure, expiry) => {
+  const { createDeviceCandidate } = await import('./deviceSignIn');
+  const approved = { ...request, type, state: 'approved', expiresAt: new Date(Date.now() + 1000).toISOString() };
+  const actual = { kind: 'account', visitor: { id: 'approved-account' }, expiresAt: '2099-12-01T00:00:00Z' };
+  let offline = false, delivered = false, finishes = 0, allocations = 0, polls = 0;
+  vi.stubGlobal('fetch', async (path: string) => {
+    if (path.endsWith('/session')) {
+      if (offline) throw new TypeError('Offline');
+      return delivered ? Response.json(actual) : Response.json({ code: 'visitor_required' }, { status: 401 });
+    }
+    if (path.endsWith('/finish')) {
+      finishes++; offline = true; delivered = failure !== 'before-delivery';
+      if (expiry === 'before-error') vi.setSystemTime(Date.now() + 2000);
+      if (failure !== 'lost-session-read') throw new TypeError('Offline');
+      return Response.json(actual);
+    }
+    if (path === '/api/accounts/signin-requests' || path === '/api/accounts/qr-signins') {
+      allocations++;
+      return Response.json({ request: approved, code: '0007', url: `${location.origin}/#qr-signin=qr` });
+    }
+    polls++;
+    return Response.json({ code: 'invalid_proof' }, { status: 403 });
+  });
+  const candidate = createDeviceCandidate();
+  try {
+    await (type === 'link' ? candidate.beginLink('same-link') : candidate.beginQR());
+    await expect(candidate.finish()).rejects.toMatchObject({ code: 'outcome_unknown' });
+    expect(session.paused).toBe(true);
+    await candidate.refresh();
+    expect(polls).toBe(0);
+    await vi.advanceTimersByTimeAsync(3000);
+    await expect(candidate.finish()).rejects.toMatchObject({ code: 'outcome_unknown' });
+    expect(candidate.getSnapshot()).toMatchObject({ phase: 'waiting', request: approved, problem: { code: 'outcome_unknown' } });
+    offline = false;
+    await candidate.finish();
+    expect(candidate.getSnapshot()).toMatchObject({ phase: delivered ? 'complete' : 'expired', busy: false });
+    expect(session.value).toEqual(delivered ? actual : null);
+    expect(session.paused).toBe(false);
+    expect(finishes).toBe(1);
+    expect(allocations).toBe(1);
+    expect(polls).toBe(0);
+  } finally { candidate.dispose(); }
+});
+
 it('still abandons an uncertain link when the session changes externally, and reconciles on exit', async () => {
   const { createDeviceCandidate } = await import('./deviceSignIn');
   const { beginSessionChange, reconcileSession } = await import('./controller');

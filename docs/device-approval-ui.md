@@ -59,7 +59,7 @@ selection keeps its normal tab focus.
 
 ## Verification and limits
 
-- `make check-web`: frozen install, generated-schema freshness, 231 Vitest tests,
+- `make check-web`: frozen install, generated-schema freshness, 237 Vitest tests,
   runtime selection/production mock-exclusion assertions and production build.
 - `pnpm run typecheck` includes production, mock, browser helpers and tooling;
   `pnpm run test:mock` covers 19 fixture tests.
@@ -78,6 +78,11 @@ selection keeps its normal tab focus.
   changes, exit reconciliation, late poll responses/errors and overlapping previews.
   Failed session reads preserve the original request and bearer; confirmed session
   changes still invalidate them. Finish invalidates pending polls before delivery.
+- Uncertain delivery keeps its explicit session-recovery action past request
+  expiry and pauses request polling. Retry adopts an already-delivered account;
+  if no account was delivered, an expired request resumes the prior session without
+  another finish call. Controller and browser regressions cover both outcomes,
+  offline retries, and expiry before or after the initial delivery error.
 - Opening a different link while allocation is pending supersedes the old begin;
   only equivalent begins share a promise. Controller regressions cover late success
   and failure, rapid replacements, cancellation and disposal. A failed replacement

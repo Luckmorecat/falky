@@ -333,6 +333,39 @@ test('pasted links retry their allocation and retain the same request after offl
   } finally { await receiver.context().close(); }
 });
 
+for (const delivered of [true, false]) test(`uncertain finish after expiry recovers ${delivered ? 'the delivered session' : 'without another finish'}`, async ({ page, browser }) => {
+  const { state, identity } = await issuer(page);
+  const receiver = await devicePage(browser, state);
+  let offline = false, allocations = 0, finishes = 0;
+  try {
+    await receiver.clock.install();
+    receiver.on('request', request => {
+      if (request.method() === 'POST' && request.url().endsWith('/accounts/signin-requests')) allocations++;
+    });
+    const code = await receiveLink(receiver, await createLink(page));
+    await receiver.route('**/api/accounts/session', route => offline ? route.abort('failed') : route.continue());
+    await receiver.route('**/api/accounts/signin-requests/*/finish', async route => {
+      finishes++; offline = true;
+      if (delivered) await route.continue(); else await route.abort('failed');
+    });
+    await page.getByRole('textbox', { name: 'Four-digit code', exact: true }).fill(code);
+    await page.getByRole('button', { name: 'Approve sign-in', exact: true }).click();
+    await expect(receiver.getByRole('alert')).toContainText('Could not confirm sign-in');
+    await receiver.clock.fastForward(6 * 60 * 1000);
+    await receiver.getByRole('button', { name: 'Try again', exact: true }).click();
+    await expect(receiver.getByRole('alert')).toContainText('Could not confirm sign-in');
+    await expect(receiver.getByRole('heading', { name: /expired/i })).toHaveCount(0);
+    offline = false;
+    await receiver.getByRole('button', { name: 'Try again', exact: true }).click();
+    await expect(receiver.getByRole('heading', { name: delivered ? 'You’re in.' : /expired/i })).toBeVisible();
+    expect(allocations).toBe(1);
+    expect(finishes).toBe(1);
+    const actual = await session(receiver, app.url);
+    if (delivered) expect(actual.visitor.id).toBe(identity.visitor.id);
+    else expect(actual.kind).not.toBe('account');
+  } finally { await receiver.context().close(); }
+});
+
 test('a replacement link opened during allocation completes with the new link', async ({ page, browser }) => {
   const { state, identity } = await issuer(page);
   const firstLink = await createLink(page);
