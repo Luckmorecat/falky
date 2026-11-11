@@ -5,9 +5,12 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"path/filepath"
+	"reflect"
+	"strings"
 	"testing"
 	"testing/fstest"
 	"time"
@@ -72,7 +75,7 @@ func TestIdentityAndSessionMigrationsPreserveGuestsAndResetAccountAccess(t *test
 			}); err != nil {
 				t.Fatal(err)
 			}
-			expected := 3
+			expected := 4
 			if name != "before_identity_rename" {
 				body, err := fs.ReadFile(identity.Migrations(), "0008_identity_profiles.sql")
 				if err != nil {
@@ -86,7 +89,7 @@ func TestIdentityAndSessionMigrationsPreserveGuestsAndResetAccountAccess(t *test
 				if applied, err := db.Migrate(t.Context(), intermediate); err != nil || applied != 1 {
 					t.Fatalf("identity rename = %d, %v", applied, err)
 				}
-				expected = 2
+				expected = 3
 			}
 			var beforeID string
 			var beforeHash []byte
@@ -107,7 +110,7 @@ func TestIdentityAndSessionMigrationsPreserveGuestsAndResetAccountAccess(t *test
 				if err := db.Read().QueryRowContext(t.Context(), "SELECT id,token_hash,generation,created_at,expires_at FROM sessions WHERE identity_id='guest'").Scan(&beforeID, &beforeHash, &beforeGeneration, &beforeCreated, &beforeExpiry); err != nil {
 					t.Fatal(err)
 				}
-				expected = 1
+				expected = 2
 			}
 			all, err := platform.LoadMigrations(identity.Migrations())
 			if err != nil {
@@ -287,3 +290,115 @@ func TestSessionResetPreservesPasskeysAndAllowsFreshSignedLogin(t *testing.T) {
 }
 
 func sha256Bytes(token string) []byte { hash := sha256.Sum256([]byte(token)); return hash[:] }
+
+func TestSignInIndexUpgradePreservesAlreadyMigratedAccessAndHistory(t *testing.T) {
+	legacy := fstest.MapFS{}
+	entries, err := fs.ReadDir(identity.Migrations(), ".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if entry.Name() >= "0014" {
+			continue
+		}
+		body, err := fs.ReadFile(identity.Migrations(), entry.Name())
+		if err != nil {
+			t.Fatal(err)
+		}
+		legacy[entry.Name()] = &fstest.MapFile{Data: body}
+	}
+	db, err := platform.OpenDB(t.Context(), filepath.Join(t.TempDir(), "upgrade.db"), platform.NewLogger(io.Discard, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	previous, err := platform.LoadMigrations(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Migrate(t.Context(), previous); err != nil {
+		t.Fatal(err)
+	}
+	c := &clock{now: time.Date(2026, 11, 9, 12, 0, 0, 0, time.UTC)}
+	service := identity.New(db, "https://falky.example", identity.WithClock(c.Now))
+	if _, err := service.EnsureLink(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	access, err := service.Link(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := fixture{db: db, ident: service, clock: c, secret: strings.TrimPrefix(access, "https://falky.example/#k=")}
+	_, guest := f.enter(t, "Guest")
+	account, _ := enroll(t, f, "Alice")
+	link, _, err := service.CreateSignInLink(t.Context(), account.Token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, _, err := service.BeginSignInRequest(t.Context(), link.Token, "", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := service.ApproveSignInLink(t.Context(), account.Token, link.Link.ID, request.Code); err != nil {
+		t.Fatal(err)
+	}
+	result, err := service.FinishSignInRequest(t.Context(), request.Request.ID, request.BrowserSecret, link.Token, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := func() map[string][]string {
+		t.Helper()
+		out := make(map[string][]string)
+		for _, table := range []string{"sessions", "session_authentications", "account_signin_links", "account_signin_requests", "passkeys"} {
+			rows, err := db.Read().QueryContext(t.Context(), "SELECT * FROM "+table+" ORDER BY rowid")
+			if err != nil {
+				t.Fatal(err)
+			}
+			columns, err := rows.Columns()
+			if err != nil {
+				t.Fatal(err)
+			}
+			for rows.Next() {
+				values := make([]any, len(columns))
+				pointers := make([]any, len(columns))
+				for i := range values {
+					pointers[i] = &values[i]
+				}
+				if err := rows.Scan(pointers...); err != nil {
+					t.Fatal(err)
+				}
+				out[table] = append(out[table], fmt.Sprintf("%#v", values))
+			}
+			if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return out
+	}
+	before := snapshot()
+	all, err := platform.LoadMigrations(identity.Migrations())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if applied, err := db.Migrate(t.Context(), all); err != nil || applied != 1 {
+		t.Fatalf("index upgrade=%d %v", applied, err)
+	}
+	if after := snapshot(); !reflect.DeepEqual(before, after) {
+		t.Fatalf("index upgrade changed access or history:\nbefore=%v\nafter=%v", before, after)
+	}
+	for _, token := range []string{guest, account.Token, result.Token} {
+		if _, err := service.ResolveSession(t.Context(), token); err != nil {
+			t.Fatal("index upgrade revoked access", err)
+		}
+	}
+	if retry, err := service.FinishSignInRequest(t.Context(), request.Request.ID, request.BrowserSecret, link.Token, ""); err != nil || retry.Token != result.Token {
+		t.Fatalf("upgrade broke redelivery: %v", err)
+	}
+	if applied, err := db.Migrate(t.Context(), all); err != nil || applied != 0 {
+		t.Fatalf("repeated upgrade=%d %v", applied, err)
+	}
+}

@@ -1014,8 +1014,8 @@ export interface components {
              */
             expiresAt: string;
             /**
-             * @description Whether approving now would carry recent actual passkey proof.
-             * @example true
+             * @description Always false; sensitive changes require passkey reauthentication in the receiving session.
+             * @example false
              */
             approvalGrantsRecentProof: boolean;
             /**
@@ -1061,8 +1061,8 @@ export interface components {
         SignInPreview: {
             request: components["schemas"]["SignInRequest"];
             /**
-             * @description Whether approving now grants recent authentication.
-             * @example true
+             * @description Always false; sensitive changes require passkey reauthentication in the receiving session.
+             * @example false
              */
             approvalGrantsRecentProof: boolean;
         };

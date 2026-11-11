@@ -57,7 +57,7 @@ func TestDeviceLinkApprovalAndBoundRedelivery(t *testing.T) {
 	if count != 1 || authenticated != approvedAt.Unix() {
 		t.Fatalf("events=%d authenticated=%d", count, authenticated)
 	}
-	if _, err := f.ident.BeginAddPasskey(t.Context(), finish.Token, "browser"); err != nil {
+	if _, err := f.ident.BeginAddPasskey(t.Context(), finish.Token, "browser"); !errors.Is(err, identity.ErrRecentProof) {
 		t.Fatal(err)
 	}
 	if _, err := f.ident.FinishSignInRequest(t.Context(), begin.Request.ID, "", link.Token, ""); !errors.Is(err, identity.ErrInvalidProof) {
@@ -259,12 +259,12 @@ func deviceQR(t *testing.T, f fixture, approver string) (identity.SignInBeginRes
 	return q, finish
 }
 
-func TestDeviceFreshnessCannotChainAndUsesApprovalTime(t *testing.T) {
+func TestDeviceApprovalNeverGrantsRecentProof(t *testing.T) {
 	f := newFixture(t, filepath.Join(t.TempDir(), "falky.db"))
 	a, _ := enroll(t, f, "Alice")
 	_, first := deviceQR(t, f, a.Token)
-	if _, err := f.ident.BeginAddPasskey(t.Context(), first.Token, "add"); err != nil {
-		t.Fatal("fresh actual passkey proof not copied", err)
+	if _, err := f.ident.BeginAddPasskey(t.Context(), first.Token, "add"); !errors.Is(err, identity.ErrRecentProof) {
+		t.Fatal("fresh approver granted sensitive access", err)
 	}
 	q, _, err := f.ident.BeginQRSignIn(t.Context(), "", "", "", false, nil)
 	if err != nil {
@@ -297,8 +297,8 @@ func TestDeviceFreshnessCannotChainAndUsesApprovalTime(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Freshness begins at approval, even though the original passkey proof is older now.
-	if _, err = f.ident.BeginAddPasskey(t.Context(), delayed.Token, "add"); err != nil {
+	// Delayed redemption cannot turn approval into receiving-session passkey proof.
+	if _, err = f.ident.BeginAddPasskey(t.Context(), delayed.Token, "add"); !errors.Is(err, identity.ErrRecentProof) {
 		t.Fatal(err)
 	}
 	stale, _, err := f.ident.BeginQRSignIn(t.Context(), "", "", "", false, nil)

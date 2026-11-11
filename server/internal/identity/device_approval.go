@@ -265,11 +265,7 @@ func (s *Service) linkView(ctx context.Context, tx *sql.Tx, l signInLink) (SignI
 		view.Requests = append(view.Requests, r.SignInRequestView)
 	}
 	if l.issuer != "" {
-		issuer, err := s.sessionByID(ctx, tx, l.issuer)
-		if err != nil {
-			return view, err
-		}
-		view.ApprovalGrantsRecentProof, err = s.recentAuthentication(ctx, tx, issuer, true)
+		_, err := s.sessionByID(ctx, tx, l.issuer)
 		if err != nil {
 			return view, err
 		}
@@ -542,15 +538,11 @@ func (s *Service) BeginSignInRequest(ctx context.Context, linkToken, browser, cu
 }
 
 func (s *Service) approveRequest(ctx context.Context, tx *sql.Tx, r signInRequest, issuer Session, e *Effects) error {
-	recent, err := s.recentAuthentication(ctx, tx, issuer, true)
-	if err != nil {
-		return err
-	}
 	origin, err := s.initialPasskeyOrigin(ctx, tx, issuer.ID)
 	if err != nil {
 		return err
 	}
-	res, err := tx.ExecContext(ctx, "UPDATE account_signin_requests SET state='approved',version=version+1,approved_at=?,approved_by_session_id=?,approver_recent_proof=?,origin_passkey_credential_id=? WHERE id=? AND state='pending'", s.now().Unix(), issuer.ID, recent, origin, r.ID)
+	res, err := tx.ExecContext(ctx, "UPDATE account_signin_requests SET state='approved',version=version+1,approved_at=?,approved_by_session_id=?,approver_recent_proof=?,origin_passkey_credential_id=? WHERE id=? AND state='pending'", s.now().Unix(), issuer.ID, false, origin, r.ID)
 	if err = affected(res, err, ErrSignInConflict); err != nil {
 		return err
 	}
@@ -799,7 +791,7 @@ func (s *Service) FinishSignInRequest(ctx context.Context, id, browser, linkToke
 		if err = s.signInAccountConflict(ctx, tx, currentToken, approver.Visitor.ID, ""); err != nil {
 			return err
 		}
-		result.Session, result.Token, err = s.issueAuthenticatedSession(ctx, tx, approver.Visitor.ID, Account, sessionAuthentication{method: "device_approval", authenticatedAt: r.ApprovedAt.Unix(), requestID: r.ID, originCredential: r.origin, recentProof: r.recent})
+		result.Session, result.Token, err = s.issueAuthenticatedSession(ctx, tx, approver.Visitor.ID, Account, sessionAuthentication{method: "device_approval", authenticatedAt: r.ApprovedAt.Unix(), requestID: r.ID, originCredential: r.origin})
 		if err != nil {
 			return err
 		}
@@ -917,7 +909,7 @@ func (s *Service) pendingQR(ctx context.Context, tx *sql.Tx, token string) (sign
 func (s *Service) PreviewQRSignIn(ctx context.Context, token, qr string) (SignInPreview, error) {
 	var result SignInPreview
 	err := s.readSignInState(ctx, func(tx *sql.Tx) error {
-		approver, err := s.ownerSession(ctx, tx, token, false)
+		_, err := s.ownerSession(ctx, tx, token, false)
 		if err != nil {
 			return err
 		}
@@ -926,8 +918,7 @@ func (s *Service) PreviewQRSignIn(ctx context.Context, token, qr string) (SignIn
 			return err
 		}
 		result.Request = r.SignInRequestView
-		result.ApprovalGrantsRecentProof, err = s.recentAuthentication(ctx, tx, approver, true)
-		return err
+		return nil
 	})
 	return result, err
 }

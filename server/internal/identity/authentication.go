@@ -130,7 +130,7 @@ func (s *Service) ownerSession(ctx context.Context, tx *sql.Tx, token string, re
 		return Session{}, err
 	}
 	if recent {
-		valid, err := s.recentAuthentication(ctx, tx, current, false)
+		valid, err := s.recentAuthentication(ctx, tx, current)
 		if err != nil {
 			return Session{}, err
 		}
@@ -355,6 +355,7 @@ func (s *Service) RemovePasskeyWithEffects(ctx context.Context, token, credentia
 		if err != nil {
 			return err
 		}
+		var revoked []Session
 		for rows.Next() {
 			session := Session{Visitor: owner.Visitor, Kind: Account}
 			var expires int64
@@ -363,7 +364,7 @@ func (s *Service) RemovePasskeyWithEffects(ctx context.Context, token, credentia
 				return err
 			}
 			session.ExpiresAt = unixTime(expires)
-			effects.RevokedSessions = append(effects.RevokedSessions, session)
+			revoked = append(revoked, session)
 		}
 		if err := errors.Join(rows.Err(), rows.Close()); err != nil {
 			return err
@@ -377,11 +378,8 @@ func (s *Service) RemovePasskeyWithEffects(ctx context.Context, token, credentia
 				return err
 			}
 		}
-		for _, session := range effects.RevokedSessions {
-			if err := s.cancelSessionApprovals(ctx, tx, session.ID, &effects); err != nil {
-				return err
-			}
-			if _, err = tx.ExecContext(ctx, "DELETE FROM sessions WHERE id=?", session.ID); err != nil {
+		for _, session := range revoked {
+			if err = s.revokeSession(ctx, tx, session, &effects); err != nil {
 				return err
 			}
 		}
@@ -425,12 +423,7 @@ func (s *Service) Logout(ctx context.Context, token string) (Effects, error) {
 		if err != nil {
 			return err
 		}
-		effects.RevokedSessions = []Session{current}
-		if err = s.cancelSessionApprovals(ctx, tx, id, &effects); err != nil {
-			return err
-		}
-		_, err = tx.ExecContext(ctx, "DELETE FROM sessions WHERE id=?", id)
-		return err
+		return s.revokeSession(ctx, tx, current, &effects)
 	})
 	if err != nil {
 		return Effects{}, err

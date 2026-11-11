@@ -2323,8 +2323,8 @@ components:
           format: date-time
         approvalGrantsRecentProof:
           type: boolean
-          description: Whether approving now would carry recent actual passkey proof.
-          example: true
+          description: Always false; sensitive changes require passkey reauthentication in the receiving session.
+          example: false
         requests:
           type: array
           example: []
@@ -2385,8 +2385,8 @@ components:
           $ref: '#/components/schemas/SignInRequest'
         approvalGrantsRecentProof:
           type: boolean
-          description: Whether approving now grants recent authentication.
-          example: true
+          description: Always false; sensitive changes require passkey reauthentication in the receiving session.
+          example: false
     SignInToken:
       type: object
       description: Bearer input; never place it in a path or query.

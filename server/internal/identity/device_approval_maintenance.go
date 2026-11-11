@@ -41,13 +41,9 @@ func (s *Service) MaintainSignIns(ctx context.Context) (Effects, error) {
 			return err
 		}
 		for _, session := range stale {
-			if err = s.cancelSessionApprovals(ctx, tx, session.ID, &e); err != nil {
+			if err = s.revokeSession(ctx, tx, session, &e); err != nil {
 				return err
 			}
-			if _, err = tx.ExecContext(ctx, "DELETE FROM sessions WHERE id=?", session.ID); err != nil {
-				return err
-			}
-			e.RevokedSessions = append(e.RevokedSessions, session)
 		}
 		if err = s.cancelLinks(ctx, tx, &e, "expires_at<=? AND state IN ('open','approved')", s.now().Unix()); err != nil {
 			return err
@@ -56,7 +52,7 @@ func (s *Service) MaintainSignIns(ctx context.Context) (Effects, error) {
 		for _, change := range e.SignInChanges {
 			notified[change.Request.ID] = true
 		}
-		expired, err := signInRequests(ctx, tx, "expires_at<=? AND state!='consumed'", s.now().Unix())
+		expired, err := signInRequests(ctx, tx, "expires_at<=? AND state!='consumed' AND (state IN ('pending','approved') OR browser_token_hash IS NOT NULL OR code IS NOT NULL OR qr_token_hash IS NOT NULL OR delivery_ciphertext IS NOT NULL)", s.now().Unix())
 		if err != nil {
 			return err
 		}
@@ -74,16 +70,10 @@ func (s *Service) MaintainSignIns(ctx context.Context) (Effects, error) {
 			}
 		}
 
-		if _, err = tx.ExecContext(ctx, "UPDATE account_signin_requests SET browser_token_hash=NULL,code=NULL,qr_token_hash=NULL,delivery_ciphertext=NULL WHERE expires_at<=?", s.now().Unix()); err != nil {
+		if _, err = tx.ExecContext(ctx, "UPDATE account_signin_requests SET browser_token_hash=NULL,code=NULL,qr_token_hash=NULL,delivery_ciphertext=NULL WHERE expires_at<=? AND (state IN ('pending','approved') OR browser_token_hash IS NOT NULL OR code IS NOT NULL OR qr_token_hash IS NOT NULL OR delivery_ciphertext IS NOT NULL)", s.now().Unix()); err != nil {
 			return err
 		}
-		if _, err = tx.ExecContext(ctx, "UPDATE account_signin_links SET token_hash=NULL WHERE expires_at<=?", s.now().Unix()); err != nil {
-			return err
-		}
-		if _, err = tx.ExecContext(ctx, "DELETE FROM account_signin_requests WHERE expires_at<=? AND state!='consumed'", s.now().Unix()); err != nil {
-			return err
-		}
-		_, err = tx.ExecContext(ctx, "DELETE FROM account_signin_links WHERE (expires_at<=? OR state IN ('revoked','consumed')) AND NOT EXISTS(SELECT 1 FROM account_signin_requests r WHERE r.link_id=account_signin_links.id)", s.now().Unix())
+		_, err = tx.ExecContext(ctx, "UPDATE account_signin_links SET token_hash=NULL WHERE expires_at<=? AND token_hash IS NOT NULL", s.now().Unix())
 		return err
 	})
 	if err != nil {

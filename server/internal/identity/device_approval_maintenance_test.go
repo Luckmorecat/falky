@@ -1,6 +1,7 @@
 package identity_test
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"path/filepath"
@@ -57,7 +58,7 @@ func TestDeviceMaintenanceWipesSecretsRetainsSuccessAndPrunesStaleSessions(t *te
 	if err = f.db.Read().QueryRowContext(t.Context(), "SELECT count(*),count(browser_token_hash)+count(code)+count(qr_token_hash)+count(delivery_ciphertext) FROM account_signin_requests").Scan(&requests, &secrets); err != nil {
 		t.Fatal(err)
 	}
-	if requests != 1 || secrets != 0 {
+	if requests != 3 || secrets != 0 {
 		t.Fatalf("retention requests=%d secrets=%d", requests, secrets)
 	}
 	if err = f.db.Read().QueryRowContext(t.Context(), "SELECT count(*) FROM account_signin_links WHERE token_hash IS NULL").Scan(&links); err != nil || links != 1 {
@@ -68,6 +69,39 @@ func TestDeviceMaintenanceWipesSecretsRetainsSuccessAndPrunesStaleSessions(t *te
 	}
 	if _, err = f.ident.ResolveSession(t.Context(), finish.Token); err != nil {
 		t.Fatal(err)
+	}
+	if err = f.db.Write(t.Context(), func(tx *sql.Tx) error {
+		for _, table := range []string{"account_signin_requests", "account_signin_links"} {
+			if _, err := tx.ExecContext(t.Context(), "CREATE TRIGGER reject_repeated_"+table+" BEFORE UPDATE ON "+table+" BEGIN SELECT RAISE(ABORT,'cleared history updated'); END"); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	repeated, err := f.ident.MaintainSignIns(t.Context())
+	if err != nil || len(repeated.SignInChanges) != 0 {
+		t.Fatalf("repeated maintenance=%+v %v", repeated, err)
+	}
+	if err = f.db.Write(t.Context(), func(tx *sql.Tx) error {
+		for _, table := range []string{"account_signin_requests", "account_signin_links"} {
+			if _, err := tx.ExecContext(t.Context(), "DROP TRIGGER reject_repeated_"+table); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err = f.ident.PurgeSignIns(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err = f.db.Read().QueryRowContext(t.Context(), "SELECT count(*) FROM account_signin_requests").Scan(&requests); err != nil || requests != 1 {
+		t.Fatalf("purge retained requests=%d %v", requests, err)
+	}
+	if err = f.db.Read().QueryRowContext(t.Context(), "SELECT count(*) FROM account_signin_links").Scan(&links); err != nil || links != 1 {
+		t.Fatalf("purge removed successful parent: links=%d %v", links, err)
 	}
 	// Generation changes can be persisted before startup maintenance runs.
 	if err = f.db.Write(t.Context(), func(tx *sql.Tx) error {
@@ -82,6 +116,9 @@ func TestDeviceMaintenanceWipesSecretsRetainsSuccessAndPrunesStaleSessions(t *te
 	}
 	if len(effects.RevokedSessions) != 2 {
 		t.Fatalf("stale sessions=%+v", effects.RevokedSessions)
+	}
+	if err = f.ident.PurgeSignIns(t.Context()); err != nil {
+		t.Fatal(err)
 	}
 	for _, query := range []string{"SELECT count(*) FROM sessions", "SELECT count(*) FROM account_signin_requests", "SELECT count(*) FROM account_signin_links", "SELECT count(*) FROM session_authentications", "SELECT count(*) FROM pragma_foreign_key_check"} {
 		if err = f.db.Read().QueryRowContext(t.Context(), query).Scan(&violations); err != nil || violations != 0 {
@@ -180,5 +217,64 @@ func TestDeviceMaintenanceEmitsOneTerminalHintPerExpiringLinkRequest(t *testing.
 	}
 	if len(seen) != 3 {
 		t.Fatalf("terminal requests=%d", len(seen))
+	}
+}
+
+func TestDevicePurgeBatchesRetriesAndWaitsForSanitization(t *testing.T) {
+	f := newFixture(t, filepath.Join(t.TempDir(), "falky.db"))
+	for range 300 {
+		if _, _, err := f.ident.BeginQRSignIn(t.Context(), "", "", "", false, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	count := func() int {
+		t.Helper()
+		var n int
+		if err := f.db.Read().QueryRowContext(t.Context(), "SELECT count(*) FROM account_signin_requests").Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	f.clock.Advance(identity.SignInTTL)
+	if err := f.ident.PurgeSignIns(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if got := count(); got != 300 {
+		t.Fatalf("unsanitized requests purged: %d", got)
+	}
+	if _, err := f.ident.MaintainSignIns(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err := f.ident.PurgeSignIns(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled purge: %v", err)
+	}
+	if got := count(); got != 300 {
+		t.Fatalf("cancelled purge changed data: %d", got)
+	}
+	if err := f.db.Write(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(), "CREATE TRIGGER interrupt_purge BEFORE DELETE ON account_signin_requests WHEN (SELECT count(*) FROM account_signin_requests)<100 BEGIN SELECT RAISE(ABORT,'interrupted purge'); END")
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.ident.PurgeSignIns(t.Context()); err == nil {
+		t.Fatal("purge ignored interruption")
+	}
+	if got := count(); got >= 300 || got < 100 {
+		t.Fatalf("purge did not commit bounded batches: %d", got)
+	}
+	if err := f.db.Write(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(), "DROP TRIGGER interrupt_purge")
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.ident.PurgeSignIns(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if got := count(); got != 0 {
+		t.Fatalf("retry left %d requests", got)
 	}
 }

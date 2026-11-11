@@ -28,13 +28,14 @@ func (s *Service) recordAuthentication(ctx context.Context, tx *sql.Tx, sessionI
 
 // Only the latest event can authorize a sensitive action. Missing evidence never
 // resurrects an older event, including when both were recorded in one second.
-func (s *Service) recentAuthentication(ctx context.Context, tx *sql.Tx, session Session, actualPasskey bool) (bool, error) {
+// Legacy device-approval freshness flags never establish receiving-session proof.
+func (s *Service) recentAuthentication(ctx context.Context, tx *sql.Tx, session Session) (bool, error) {
 	var valid bool
 	err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM session_authentications e
  LEFT JOIN passkeys p ON p.credential_id=e.passkey_credential_id AND p.identity_id=?
  WHERE e.id=(SELECT id FROM session_authentications WHERE session_id=? ORDER BY id DESC LIMIT 1)
  AND e.authenticated_at>? AND e.authenticated_at<=? AND e.recent_proof=1
- AND (e.method='passkey' AND p.credential_id IS NOT NULL OR e.method='device_approval' AND ?=0))`, session.Visitor.ID, session.ID, s.now().Add(-RecentProofTTL).Unix(), s.now().Unix(), actualPasskey).Scan(&valid)
+ AND e.method='passkey' AND p.credential_id IS NOT NULL)`, session.Visitor.ID, session.ID, s.now().Add(-RecentProofTTL).Unix(), s.now().Unix()).Scan(&valid)
 	return valid, err
 }
 
@@ -42,6 +43,18 @@ func (s *Service) initialPasskeyOrigin(ctx context.Context, tx *sql.Tx, sessionI
 	var origin []byte
 	err := tx.QueryRowContext(ctx, `SELECT CASE method WHEN 'passkey' THEN passkey_credential_id WHEN 'device_approval' THEN origin_passkey_credential_id END FROM session_authentications WHERE session_id=? AND purpose='sign_in'`, sessionID).Scan(&origin)
 	return origin, err
+}
+
+// Keep dependency cancellation and terminal snapshots ahead of session FK cascades.
+func (s *Service) revokeSession(ctx context.Context, tx *sql.Tx, session Session, effects *Effects) error {
+	if err := s.cancelSessionApprovals(ctx, tx, session.ID, effects); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, "DELETE FROM sessions WHERE id=?", session.ID); err != nil {
+		return err
+	}
+	effects.RevokedSessions = append(effects.RevokedSessions, session)
+	return nil
 }
 
 // Cancel before session FKs are cleared so unfinished approvals cannot lose

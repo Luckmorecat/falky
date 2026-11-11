@@ -31,6 +31,16 @@ func TestDeviceOriginChainsAndUnredeemedApprovalRevokedAfterOriginalLogout(t *te
 	}
 	_, first := deviceQR(t, f, a.Token)
 	_, chain := deviceQR(t, f, first.Token)
+	reauth, err := f.ident.BeginReauthentication(t.Context(), chain.Token, "reauth")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = f.ident.FinishReauthentication(t.Context(), chain.Token, reauth.ID, "reauth", replacement.Assertion(t, reauth.Assertion, "https://falky.example")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = f.ident.RegenerateRecoveryCodes(t.Context(), chain.Token); err != nil {
+		t.Fatal("receiving-session proof did not authorize credential changes", err)
+	}
 	if _, err = f.ident.Logout(t.Context(), a.Token); err != nil {
 		t.Fatal(err)
 	}
