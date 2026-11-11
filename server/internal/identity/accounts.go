@@ -323,7 +323,9 @@ func (s *Service) verifyCreation(u accountUser, data webauthn.SessionData, respo
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrInvalidProof, err)
 	}
-	if credential.Extensions.RK == nil || !*credential.Extensions.RK {
+	// Discoverability is required in the creation options; credProps is optional
+	// and Safari omits it. Only an explicit negative result contradicts the request.
+	if credential.Extensions.RK != nil && !*credential.Extensions.RK {
 		return nil, ErrInvalidProof
 	}
 	return credential, nil
