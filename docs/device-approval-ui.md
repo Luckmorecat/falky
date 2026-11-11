@@ -59,7 +59,7 @@ selection keeps its normal tab focus.
 
 ## Verification and limits
 
-- `make check-web`: frozen install, generated-schema freshness, 225 Vitest tests,
+- `make check-web`: frozen install, generated-schema freshness, 231 Vitest tests,
   runtime selection/production mock-exclusion assertions and production build.
 - `pnpm run typecheck` includes production, mock, browser helpers and tooling;
   `pnpm run test:mock` covers 19 fixture tests.
@@ -78,6 +78,11 @@ selection keeps its normal tab focus.
   changes, exit reconciliation, late poll responses/errors and overlapping previews.
   Failed session reads preserve the original request and bearer; confirmed session
   changes still invalidate them. Finish invalidates pending polls before delivery.
+- Opening a different link while allocation is pending supersedes the old begin;
+  only equivalent begins share a promise. Controller regressions cover late success
+  and failure, rapid replacements, cancellation and disposal. A failed replacement
+  cannot restore the previous link's request or code. The browser regression opens
+  two links in the same tab during allocation and completes with the replacement.
 - Issuer polling remembers authoritative link rejection for the current session,
   so retained hints cannot revive expired links or contaminate a replacement link
   with repeated unavailable errors. Network failures remain retryable.

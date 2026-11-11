@@ -122,6 +122,93 @@ it('deduplicates allocation, ignores a late result after exit, and never cancels
   expect(fetcher).toHaveBeenCalledTimes(1);
 });
 
+it.each(['success', 'failure'])('allocates the replacement link after a superseded begin returns %s', async outcome => {
+  const { createDeviceCandidate } = await import('./deviceSignIn');
+  let release!: (response: Response) => void;
+  let started!: () => void;
+  const reached = new Promise<void>(resolve => { started = resolve; });
+  const bearers: string[] = [];
+  vi.stubGlobal('fetch', async (_path: string, init: RequestInit) => {
+    const bearer = JSON.parse(String(init.body)).token;
+    bearers.push(bearer);
+    if (bearer === 'first') {
+      started();
+      return new Promise<Response>(resolve => { release = resolve; });
+    }
+    return Response.json({ request: { ...request, id: bearer, type: 'link' }, code: '0012' });
+  });
+  const candidate = createDeviceCandidate();
+  const snapshots: string[] = [];
+  candidate.subscribe(() => { if (candidate.getSnapshot().request) snapshots.push(candidate.getSnapshot().request!.id); });
+  try {
+    const first = candidate.beginLink('first').catch(error => error);
+    await reached;
+    const replacement = candidate.beginLink('replacement');
+    release(outcome === 'success' ? Response.json({ request: { ...request, id: 'first', type: 'link' }, code: '0007' })
+      : Response.json({ code: 'invalid_proof', message: 'Unavailable' }, { status: 403 }));
+    await Promise.all([first, replacement]);
+    expect(bearers).toEqual(['first', 'replacement']);
+    expect(snapshots).not.toContain('first');
+    expect(candidate.getSnapshot()).toMatchObject({ phase: 'waiting', request: { id: 'replacement' }, code: '0012', busy: false });
+    expect(candidate.getSnapshot().problem).toBeUndefined();
+  } finally { candidate.dispose(); }
+});
+
+it.each(['complete', 'cancel', 'dispose'])('keeps only the latest queued link allocation on %s', async action => {
+  const { createDeviceCandidate } = await import('./deviceSignIn');
+  let release!: (response: Response) => void;
+  let started!: () => void;
+  const reached = new Promise<void>(resolve => { started = resolve; });
+  const bearers: string[] = [];
+  let latestStarted!: () => void;
+  const latestReached = new Promise<void>(resolve => { latestStarted = resolve; });
+  vi.stubGlobal('fetch', async (_path: string, init: RequestInit) => {
+    const bearer = JSON.parse(String(init.body)).token;
+    bearers.push(bearer);
+    if (bearer === 'first') started(); else latestStarted();
+    return new Promise<Response>(resolve => { release = resolve; });
+  });
+  const candidate = createDeviceCandidate();
+  try {
+    const first = candidate.beginLink('first').catch(error => error);
+    await reached;
+    const middle = candidate.beginLink('middle').catch(error => error);
+    const latest = candidate.beginLink('latest');
+    const settledLatest = latest.catch(error => error);
+    if (action === 'cancel') await candidate.cancel();
+    if (action === 'dispose') candidate.dispose();
+    release(Response.json({ request: { ...request, id: 'first', type: 'link' }, code: '0007' }));
+    await Promise.all([first, middle]);
+    if (action === 'complete') {
+      await latestReached;
+      expect(candidate.beginLink('latest')).toBe(latest);
+      release(Response.json({ request: { ...request, id: 'latest', type: 'link' }, code: '0012' }));
+      await latest;
+      expect(candidate.getSnapshot()).toMatchObject({ phase: 'waiting', request: { id: 'latest' }, code: '0012' });
+    } else {
+      await settledLatest;
+      expect(candidate.getSnapshot()).toEqual({ phase: 'idle', busy: false });
+    }
+    expect(bearers).toEqual(action === 'complete' ? ['first', 'latest'] : ['first']);
+  } finally { candidate.dispose(); }
+});
+
+it('does not restore the old request or code when a different link fails to allocate', async () => {
+  const { createDeviceCandidate } = await import('./deviceSignIn');
+  vi.stubGlobal('fetch', async (_path: string, init: RequestInit) => {
+    if (JSON.parse(String(init.body)).token !== 'first') throw new TypeError('Offline');
+    return Response.json({ request: { ...request, type: 'link' }, code: '0007' });
+  });
+  const candidate = createDeviceCandidate();
+  try {
+    await candidate.beginLink('first');
+    await expect(candidate.beginLink('replacement')).rejects.toMatchObject({ code: 'network' });
+    expect(candidate.getSnapshot()).toMatchObject({ phase: 'unavailable', busy: false });
+    expect(candidate.getSnapshot().request).toBeUndefined();
+    expect(candidate.getSnapshot().code).toBeUndefined();
+  } finally { candidate.dispose(); }
+});
+
 it('finishes using the bound request and adopts only the authoritative cookie session', async () => {
   const { createDeviceCandidate } = await import('./deviceSignIn');
   const { adoptSession } = await import('./controller');

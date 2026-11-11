@@ -48,7 +48,7 @@ export function createDeviceCandidate() {
   let generation = 0;
   let control = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
-  let pending: Promise<void> | undefined;
+  let pending: { promise: Promise<void>; type: 'qr' | 'link'; bearer?: string; replace: boolean; recoverBinding: boolean; version: number } | undefined;
   let refreshing: Promise<void> | undefined;
   let finishing: Promise<void> | undefined;
   let ownSessionChange = false;
@@ -80,15 +80,16 @@ export function createDeviceCandidate() {
     timer = setTimeout(() => { void refresh().catch(() => {}); }, Math.max(1000, (state.retryAt ?? 0) - Date.now(), 2000));
   }
   function begin(type: 'qr' | 'link', bearer?: string, replace = false, recoverBinding = false): Promise<void> {
-    if (pending) return pending;
     if (disposed) return Promise.reject(new AccountFlowError('stale'));
+    if (pending?.version === generation && pending.type === type && pending.bearer === bearer && pending.replace === replace && pending.recoverBinding === recoverBinding) return pending.promise;
     try { cooldown(state.retryAt); } catch (error) { return Promise.reject(error); }
-    const previous = state;
+    const previous: CandidateState = state.request?.type === type && (type === 'qr' || token === bearer) ? state : { phase: 'idle', busy: false };
     stop(); epoch = currentSessionEpoch(); token = type === 'link' ? bearer : undefined;
     const version = generation;
+    state = previous;
     update({ phase: 'starting', busy: true, problem: undefined });
     const signal = control.signal;
-    pending = allocate(async () => {
+    const operation = allocate(async () => {
       check(version);
       let result: SignInBegin;
       try { result = await (type === 'qr' ? api.beginQRSignIn(replace, signal) : api.beginSignInRequest(bearer!, signal)); }
@@ -109,8 +110,9 @@ export function createDeviceCandidate() {
         errorState(error); schedule();
       }
       throw error;
-    }).finally(() => { pending = undefined; });
-    return pending;
+    }).finally(() => { if (pending?.promise === operation) pending = undefined; });
+    pending = { promise: operation, type, bearer, replace, recoverBinding, version };
+    return operation;
   }
   function refresh(): Promise<void> {
     if (refreshing) return refreshing;

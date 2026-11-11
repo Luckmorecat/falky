@@ -333,6 +333,43 @@ test('pasted links retry their allocation and retain the same request after offl
   } finally { await receiver.context().close(); }
 });
 
+test('a replacement link opened during allocation completes with the new link', async ({ page, browser }) => {
+  const { state, identity } = await issuer(page);
+  const firstLink = await createLink(page);
+  const receiver = await devicePage(browser, state);
+  let release!: () => void;
+  const blocked = new Promise<void>(resolve => { release = resolve; });
+  let started!: () => void;
+  const reached = new Promise<void>(resolve => { started = resolve; });
+  const bearers: string[] = [];
+  try {
+    await receiver.route('**/api/accounts/signin-requests', async route => {
+      bearers.push(route.request().postDataJSON().token);
+      if (bearers.length === 1) { started(); await blocked; await route.abort('failed'); }
+      else await route.continue();
+    });
+    await receiver.goto(firstLink);
+    await reached;
+    await createLink(page);
+    const linkField = page.getByRole('textbox', { name: 'Sign-in link', exact: true });
+    await expect(linkField).not.toHaveValue(firstLink);
+    const replacementLink = await linkField.inputValue();
+    const replacement = receiver.waitForResponse(r => r.request().method() === 'POST' && r.url().endsWith('/accounts/signin-requests') && r.status() === 200);
+    await receiver.evaluate(url => { location.hash = new URL(url).hash; }, replacementLink);
+    await expect(receiver).not.toHaveURL(/signin=/);
+    release();
+    const allocated = await (await replacement).json();
+    await expect(receiver.locator('.device-code')).toHaveText(allocated.code);
+    expect(bearers).toEqual([firstLink, replacementLink].map(url => new URL(url).hash.slice('#signin='.length)));
+    const finish = receiver.waitForRequest(r => r.url().endsWith(`/signin-requests/${allocated.request.id}/finish`));
+    await page.getByRole('textbox', { name: 'Four-digit code', exact: true }).fill(allocated.code);
+    await page.getByRole('button', { name: 'Approve sign-in', exact: true }).click();
+    expect((await finish).postDataJSON().token).toBe(bearers[1]);
+    await expect(receiver.getByRole('heading', { name: 'You’re in.', exact: true })).toBeVisible();
+    expect((await session(receiver, app.url)).visitor.id).toBe(identity.visitor.id);
+  } finally { release(); await receiver.context().close(); }
+});
+
 test('a second QR entry in the same tab replaces the preview and remains actionable', async ({ page, browser }) => {
   const { state } = await issuer(page);
   const first = await devicePage(browser, state), second = await devicePage(browser, state);
