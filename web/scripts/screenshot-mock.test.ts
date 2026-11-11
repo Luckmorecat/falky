@@ -91,7 +91,7 @@ test('GPU opt-in requests hardware-capable headless Chromium while retaining exe
 test('device presets use production flows at narrow Ukrainian light and dark sizes', { timeout: 90_000 }, async () => {
   const directory = await mkdtemp(join(tmpdir(), 'falky-device-captures-'));
   try {
-    for (const [preset, width, theme] of [['device-qr', 320, 'light'], ['device-code', 390, 'dark'], ['device-issuer', 390, 'light'], ['device-scanner', 320, 'dark']] as const) {
+    for (const [preset, width, theme] of [['device-qr', 320, 'light'], ['device-code', 390, 'dark'], ['device-issuer', 390, 'light'], ['device-approved', 320, 'light'], ['device-scanner', 320, 'dark']] as const) {
       const output = join(directory, `${preset}.png`);
       const result = await capture(['--preset', preset, '--viewport', `${width}x844`, '--theme', theme, '--lang', 'uk', '--output', output]);
       assert.equal(result.code, 0, result.stderr);

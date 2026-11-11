@@ -8,7 +8,7 @@ import { chromiumOptions } from '../smoke/browser';
 import { launchMock } from '../smoke/launcher';
 import { setLanguage, t } from '../src/strings';
 
-const presets = ['room', 'chat', 'unread', 'voice', 'screen-share', 'settings', 'profile', 'entry', 'welcome', 'invitation', 'recovery', 'recovery-kit', 'account', 'device-qr', 'device-code', 'device-issuer', 'device-scanner'] as const;
+const presets = ['room', 'chat', 'unread', 'voice', 'screen-share', 'settings', 'profile', 'entry', 'welcome', 'invitation', 'recovery', 'recovery-kit', 'account', 'device-qr', 'device-code', 'device-issuer', 'device-approved', 'device-scanner'] as const;
 const { values } = parseArgs({ options: {
   preset: { type: 'string' }, scenario: { type: 'string' }, output: { type: 'string' },
   viewport: { type: 'string', default: '1440x1000' }, theme: { type: 'string', default: 'dark' },
@@ -126,7 +126,14 @@ Existing browser: PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/path/to/chromium`);
                 await candidate.goto(link);
                 await expect(candidate.locator('.device-code')).toBeVisible();
                 await expect(page.getByRole('textbox', { name: t.device.codeLabel, exact: true })).toBeVisible();
-                if (preset === 'device-code') page = candidate;
+                if (preset === 'device-approved') {
+                  await candidate.route('**/api/accounts/signin-requests/*/finish', route => route.abort('failed'));
+                  const code = (await candidate.locator('.device-code').innerText()).replace(/\s/g, '');
+                  await page.getByRole('textbox', { name: t.device.codeLabel, exact: true }).fill(code);
+                  await page.getByRole('button', { name: t.device.approve, exact: true }).click();
+                  await expect(page.getByText(t.device.linkApproved, { exact: true })).toBeVisible();
+                  await page.getByRole('button', { name: t.device.revoke, exact: true }).scrollIntoViewIfNeeded();
+                } else if (preset === 'device-code') page = candidate;
                 else await page.getByRole('textbox', { name: t.device.codeLabel, exact: true }).scrollIntoViewIfNeeded();
               }
             } else {

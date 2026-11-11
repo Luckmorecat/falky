@@ -48,11 +48,13 @@ export function DeviceReceiver({ token, onClose }: { token?: string; onClose(): 
   const session = useApp(s => s.accountSession);
   const [consent, setConsent] = useState(!session);
   const [method, setMethod] = useState<'qr' | 'link'>(token ? 'link' : 'qr');
+  const [pastedToken, setPastedToken] = useState<string>();
+  const linkToken = token ?? pastedToken;
   const [input, setInput] = useState('');
   const [badLink, setBadLink] = useState(false);
   const now = useDeviceClock();
   useEffect(() => () => candidate.dispose(), [candidate]);
-  useEffect(() => { if (consent && (method === 'qr' || token)) void (token ? candidate.beginLink(token) : candidate.beginQR()).catch(() => {}); }, [candidate, consent, token]);
+  useEffect(() => { if (consent && (method === 'qr' || linkToken)) void (linkToken ? candidate.beginLink(linkToken) : candidate.beginQR()).catch(() => {}); }, [candidate, consent, linkToken]);
   const finish = () => {
     finishAttempted.current = state.request?.id ?? '';
     setFinishProblem(undefined);
@@ -67,18 +69,18 @@ export function DeviceReceiver({ token, onClose }: { token?: string; onClose(): 
     <div className="auth-heading"><h1 tabIndex={-1}>{title}</h1>{!terminal && state.phase !== 'complete' && <p>{method === 'qr' ? t.device.qrHint : t.device.codeHint}</p>}</div>
     {!consent ? <><p className="device-note">{t.device.switchWarning}</p><Button variant="primary" onClick={() => setConsent(true)}>{t.account.continue}</Button></>
       : state.phase === 'complete' ? <Button variant="primary" onClick={onClose}>{t.device.done}</Button>
-      : terminal ? <Button disabled={blocked} onClick={() => { if (token) void candidate.beginLink(token).catch(() => {}); else { setMethod('qr'); void candidate.retryQR().catch(() => {}); } }}>{t.device.retry}</Button>
+      : terminal ? <Button disabled={blocked} onClick={() => { if (linkToken) void candidate.beginLink(linkToken).catch(() => {}); else { setMethod('qr'); void candidate.retryQR().catch(() => {}); } }}>{t.device.retry}</Button>
       : <>
         {method === 'qr' && state.url && <QR value={state.url} />}
         {state.code && <p className="device-code" aria-label={`${t.device.codeLabel}: ${state.code}`}>{[...state.code].map((digit, i) => <span key={i}>{digit}</span>)}</p>}
         {state.request && <p className="device-wait" role="status">{t.device.waiting} · <DeviceDeadline at={state.request.expiresAt} now={now} /></p>}
         {method === 'qr' && <><p className="device-note">{t.device.qrInstructions}</p><button className="auth-text" disabled={blocked} onClick={() => { void candidate.cancel().catch(() => {}); setMethod('link'); }}>{t.device.useLink}</button></>}
-        {method === 'link' && !state.code && <form className="auth-fields" onSubmit={e => { e.preventDefault(); const entry = parseDeviceSignInURL(input); if (entry?.type !== 'link') { setBadLink(true); return; } setInput(''); setBadLink(false); void candidate.beginLink(entry.token).catch(() => {}); }}><label>{t.device.pasteLink}<input value={input} autoComplete="off" autoCapitalize="none" spellCheck={false} onChange={e => setInput(e.target.value)} /></label><Button type="submit" variant="primary" disabled={blocked || !input}>{t.account.continue}</Button></form>}
+        {method === 'link' && !state.code && <form className="auth-fields" onSubmit={e => { e.preventDefault(); const entry = parseDeviceSignInURL(input); if (entry?.type !== 'link') { setBadLink(true); return; } setInput(''); setBadLink(false); setPastedToken(entry.token); }}><label>{t.device.pasteLink}<input value={input} autoComplete="off" autoCapitalize="none" spellCheck={false} onChange={e => setInput(e.target.value)} /></label><Button type="submit" variant="primary" disabled={blocked || !input}>{t.account.continue}</Button></form>}
         {state.code && <button className="auth-text" disabled={blocked} onClick={() => void candidate.resend().catch(() => {})}>{t.device.resend}</button>}
       </>}
     {badLink && <p className="auth-error" role="alert">{t.device.unavailable}</p>}
     <DeviceError problem={state.problem ?? finishProblem} now={now} />
-    {(state.problem || finishProblem) && !terminal && <Button disabled={blocked} onClick={() => { if (state.request?.state === 'approved' || state.request?.state === 'consumed') finish(); else void (state.request ? candidate.refresh() : token ? candidate.beginLink(token) : candidate.beginQR()).catch(() => {}); }}>{t.device.retry}</Button>}
+    {(state.problem || finishProblem) && !terminal && <Button disabled={blocked} onClick={() => { if (state.request?.state === 'approved' || state.request?.state === 'consumed') finish(); else void (state.request ? candidate.refresh() : linkToken ? candidate.beginLink(linkToken) : candidate.beginQR()).catch(() => {}); }}>{t.device.retry}</Button>}
   </div>;
 }
 
@@ -94,7 +96,8 @@ export function DeviceScanner({ token, onClose }: { token?: string; onClose(): v
   const [input, setInput] = useState('');
   const video = useRef<HTMLVideoElement>(null);
   const now = useDeviceClock();
-  useEffect(() => { if (token) void approver.preview(token).catch(() => {}); return () => approver.dispose(); }, [approver, token]);
+  useEffect(() => () => approver.dispose(), [approver]);
+  useEffect(() => { setScanning(false); if (token) void approver.preview(token).catch(() => {}); }, [approver, token]);
   useEffect(() => subscribeSessionEpoch(onClose), [onClose]);
   const read = (value: string) => { setScanning(false); const entry = parseDeviceSignInURL(value); if (entry?.type !== 'qr') { setError(t.device.invalidQR); return; } setError(''); setInput(''); void approver.preview(entry.token).catch(() => {}); };
   useEffect(() => {
@@ -139,7 +142,7 @@ export function DeviceIssuer({ active, disabled, onScan, scanFocusRequested, onS
     {links.some(l => l.state === 'open') && <p className="set-note">{t.device.replaceHint}</p>}
     {links.map(link => { const expired = Date.parse(link.expiresAt) <= now; const url = state.urls[link.id]; const pending = link.requests.filter(request => request.state === 'pending' && Date.parse(request.expiresAt) > now); return <div className="device-inline-link" key={link.id}>
       <p className="device-wait">{expired ? t.device.expired : link.state === 'revoked' ? t.device.revoked : link.state === 'approved' ? t.device.linkApproved : link.state === 'consumed' ? t.device.consumed : <DeviceDeadline at={link.expiresAt} now={now} />}</p>
-      {link.state === 'open' && !expired && <><div className="account-actions">{url && <Button disabled={blocked} onClick={() => { void (navigator.clipboard?.writeText(url) ?? Promise.reject(new Error('clipboard unavailable'))).then(() => setCopied(link.id), () => setFallback(link.id)); }}>{copied === link.id ? t.device.copied : t.device.copy}</Button>}<Button disabled={blocked} onClick={() => void deviceIssuer.revoke(link.id).catch(() => {})}>{t.device.revoke}</Button></div>{url ? <label className="device-copy"><span>{fallback === link.id ? t.device.copyFallback : t.device.link}</span><input readOnly value={url} onFocus={e => e.target.select()} /></label> : <p className="set-note">{t.device.lostLink}</p>}</>}
+      {(link.state === 'open' || link.state === 'approved') && !expired && <><div className="account-actions">{link.state === 'open' && url && <Button disabled={blocked} onClick={() => { void (navigator.clipboard?.writeText(url) ?? Promise.reject(new Error('clipboard unavailable'))).then(() => setCopied(link.id), () => setFallback(link.id)); }}>{copied === link.id ? t.device.copied : t.device.copy}</Button>}<Button disabled={blocked} onClick={() => void deviceIssuer.revoke(link.id).catch(() => {})}>{t.device.revoke}</Button></div>{link.state === 'open' && (url ? <label className="device-copy"><span>{fallback === link.id ? t.device.copyFallback : t.device.link}</span><input readOnly value={url} onFocus={e => e.target.select()} /></label> : <p className="set-note">{t.device.lostLink}</p>)}</>}
       {pending.length > 0 && <><h4>{t.device.pending}</h4>{pending.map(request => <div className="device-pending" key={request.id}><p>{request.requesterUserAgent || t.device.noBrowser}</p><Button disabled={blocked} onClick={() => void deviceIssuer.deny(link.id, request.id).catch(() => {})}>{t.device.deny}</Button></div>)}<p className="set-note">{t.device.selfWarning}</p><form className="device-code-form" onSubmit={e => { e.preventDefault(); const code = codes[link.id] ?? ''; if (/^[0-9]{4}$/.test(code)) { setCodeIssue(link.id); void deviceIssuer.approve(link.id, code).then(() => setCodes(current => ({ ...current, [link.id]: '' }))).catch(() => {}); } }}><label>{t.device.codeLabel}<input inputMode="numeric" autoComplete="off" pattern="[0-9]{4}" maxLength={4} value={codes[link.id] ?? ''} onChange={e => setCodes(current => ({ ...current, [link.id]: e.target.value.replace(/[^0-9]/g, '') }))} /></label><Button variant="primary" type="submit" disabled={blocked || !/^[0-9]{4}$/.test(codes[link.id] ?? '')}>{t.device.approve}</Button></form><p className="set-note">{t.device.codePolicy}</p></>}
     </div>; })}<DeviceError problem={state.problem?.code === 'invalid_proof' && state.links.some(link => link.id === codeIssue && link.state === 'open' && Date.parse(link.expiresAt) > now) ? { code: 'invalid_code' } : state.problem} now={now} />
   </section>;

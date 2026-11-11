@@ -1,14 +1,15 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { api } from '../api/client';
 
-const session = vi.hoisted(() => ({ epoch: 1, value: null as { kind: string; visitor: { id: string } } | null, paused: false }));
+const session = vi.hoisted(() => ({ epoch: 1, value: null as { kind: string; visitor: { id: string } } | null, paused: false, listeners: new Set<() => void>() }));
 vi.mock('./store', () => ({ getState: () => ({ sessionPaused: session.paused, accountSession: session.value }) }));
 vi.mock('./controller', () => ({ currentSessionEpoch: () => session.epoch,
-  subscribeSessionEpoch: () => () => {}, handleAccountError() {}, beginSessionChange: () => ++session.epoch,
-  adoptSession: vi.fn(async (value) => { session.value = value; }), resumeSession: vi.fn(),
-  reconcileSession: vi.fn(async () => session.value),
+  subscribeSessionEpoch: (listener: () => void) => { session.listeners.add(listener); return () => session.listeners.delete(listener); },
+  handleAccountError() {}, beginSessionChange: () => { session.paused = true; ++session.epoch; session.listeners.forEach(listener => listener()); return session.epoch; },
+  adoptSession: vi.fn(async (value) => { session.value = value; session.paused = false; }), resumeSession: vi.fn(() => { session.paused = false; }),
+  reconcileSession: vi.fn(async () => { ++session.epoch; session.listeners.forEach(listener => listener()); return session.value; }),
 }));
-beforeEach(() => { session.epoch = 1; session.value = null; vi.useFakeTimers(); });
+beforeEach(() => { session.epoch = 1; session.value = null; session.paused = false; vi.useFakeTimers(); });
 afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers(); vi.clearAllMocks(); });
 
 it('retains server Retry-After and sends QR bearers only in JSON bodies', async () => {
@@ -275,4 +276,125 @@ it('serializes fallback allocations but fails closed when another no-cookie tab 
   expect(second.getSnapshot().phase).toBe('waiting');
   expect(allocated).toBe(2);
   first.dispose(); second.dispose();
+});
+
+
+it.each(['before-delivery', 'lost-response', 'lost-session-read'] as const)('retains an uncertain link through offline reconciliation (%s)', async failure => {
+  const { createDeviceCandidate } = await import('./deviceSignIn');
+  const { reconcileSession } = await import('./controller');
+  const approved = { ...request, type: 'link', state: 'approved' };
+  const actual = { kind: 'account', visitor: { id: 'approved-account' }, expiresAt: '2099-12-01T00:00:00Z' };
+  let offline = false, delivered = false, finishes = 0, allocations = 0;
+  vi.stubGlobal('fetch', async (path: string, init?: RequestInit) => {
+    if (path.endsWith('/session')) {
+      if (offline) throw new TypeError('Offline');
+      return delivered ? Response.json(actual) : Response.json({ code: 'visitor_required' }, { status: 401 });
+    }
+    if (path.endsWith('/finish')) {
+      expect(JSON.parse(String(init?.body))).toEqual({ token: 'same-link' });
+      if (++finishes === 1) {
+        offline = true; delivered = failure !== 'before-delivery';
+        if (failure !== 'lost-session-read') throw new TypeError('Offline');
+      }
+      delivered = true; return Response.json(actual);
+    }
+    allocations++;
+    return Response.json({ request: approved, code: '0007' });
+  });
+  const candidate = createDeviceCandidate();
+  try {
+    await candidate.beginLink('same-link');
+    await expect(candidate.finish()).rejects.toMatchObject({ code: 'outcome_unknown' });
+    expect(candidate.getSnapshot()).toMatchObject({ phase: 'waiting', request: approved, code: '0007', problem: { code: 'outcome_unknown' } });
+    expect(reconcileSession).not.toHaveBeenCalled();
+    offline = false;
+    await candidate.finish();
+    expect(candidate.getSnapshot()).toMatchObject({ phase: 'complete', busy: false });
+    expect(session.value).toEqual(actual);
+    expect(finishes).toBe(failure === 'before-delivery' ? 2 : 1);
+    expect(allocations).toBe(1);
+  } finally { candidate.dispose(); }
+});
+
+it('still abandons an uncertain link when the session changes externally, and reconciles on exit', async () => {
+  const { createDeviceCandidate } = await import('./deviceSignIn');
+  const { beginSessionChange, reconcileSession } = await import('./controller');
+  for (const exit of ['session-change', 'dispose'] as const) {
+    let finishing = false;
+    vi.stubGlobal('fetch', async (path: string) => {
+      if (path.endsWith('/session') && !finishing) return Response.json({ code: 'visitor_required' }, { status: 401 });
+      if (path.endsWith('/finish')) finishing = true;
+      if (finishing) throw new TypeError('Offline');
+      return Response.json({ request: { ...request, type: 'link', state: 'approved' }, code: '0007' });
+    });
+    const candidate = createDeviceCandidate();
+    await candidate.beginLink('same-link');
+    await expect(candidate.finish()).rejects.toMatchObject({ code: 'outcome_unknown' });
+    if (exit === 'session-change') {
+      beginSessionChange();
+      expect(candidate.getSnapshot()).toMatchObject({ phase: 'unavailable', problem: { code: 'stale' } });
+      expect(candidate.getSnapshot().request).toBeUndefined();
+      await expect(candidate.finish()).rejects.toMatchObject({ code: 'stale' });
+    }
+    candidate.dispose();
+  }
+  expect(reconcileSession).toHaveBeenCalledOnce();
+});
+
+it.each(['response', 'error'])('ignores a poll %s arriving after successful finish', async result => {
+  const { createDeviceCandidate } = await import('./deviceSignIn');
+  const approved = { ...request, state: 'approved' };
+  let release!: (response: Response) => void, reject!: (error: Error) => void;
+  let pollSignal: AbortSignal | undefined;
+  let delivered = false;
+  const actual = { kind: 'account', visitor: { id: 'approved-account' }, expiresAt: '2099-12-01T00:00:00Z' };
+  const fetcher = vi.fn(async (path: string, init?: RequestInit) => {
+    if (path.endsWith('/session')) return delivered ? Response.json(actual) : Response.json({ code: 'visitor_required' }, { status: 401 });
+    if (path.endsWith('/finish')) { delivered = true; return Response.json(actual); }
+    if (path === '/api/accounts/qr-signins') return Response.json({ request: approved, url: `${location.origin}/#qr-signin=qr` });
+    pollSignal = init?.signal as AbortSignal;
+    return new Promise<Response>((resolve, fail) => { release = resolve; reject = fail; });
+  });
+  vi.stubGlobal('fetch', fetcher);
+  const candidate = createDeviceCandidate();
+  try {
+    await candidate.beginQR();
+    const polling = candidate.refresh().catch(() => {});
+    await candidate.finish();
+    expect(pollSignal?.aborted).toBe(true);
+    if (result === 'response') release(Response.json(approved)); else reject(new TypeError('late failure'));
+    await polling;
+    expect(candidate.getSnapshot()).toMatchObject({ phase: 'complete', busy: false, problem: undefined });
+    const calls = fetcher.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(6000);
+    await candidate.refresh();
+    expect(fetcher).toHaveBeenCalledTimes(calls);
+  } finally { candidate.dispose(); }
+});
+
+it('replaces an in-flight QR preview without allowing its late result to authorize another request', async () => {
+  const { createQRApprover } = await import('./deviceSignIn');
+  session.value = { kind: 'account', visitor: { id: 'owner' } };
+  let release!: (response: Response) => void;
+  let reached!: () => void;
+  const firstReached = new Promise<void>(resolve => { reached = resolve; });
+  const approved: string[] = [];
+  vi.stubGlobal('fetch', async (path: string, init?: RequestInit) => {
+    if (path.endsWith('/session')) return Response.json(session.value);
+    const token = JSON.parse(String(init?.body)).token;
+    if (path.endsWith('/approve')) { approved.push(token); return Response.json({}); }
+    if (token === 'first') { reached(); return new Promise<Response>(resolve => { release = resolve; }); }
+    return Response.json({ request: { ...request, id: token }, approvalGrantsRecentProof: false });
+  });
+  const approver = createQRApprover();
+  try {
+    const first = approver.preview('first').catch(() => {});
+    await firstReached;
+    const second = approver.preview('second');
+    release(Response.json({ request: { ...request, id: 'first' }, approvalGrantsRecentProof: false }));
+    await Promise.all([first, second]);
+    expect(approver.getSnapshot()).toMatchObject({ phase: 'preview', preview: { request: { id: 'second' } } });
+    await approver.approve();
+    expect(approved).toEqual(['second']);
+  } finally { approver.dispose(); }
 });

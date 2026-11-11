@@ -250,6 +250,7 @@ test('guest receiving browser needs explicit consent; a different signed-in acco
     await guest.getByRole('textbox', { name: 'Name', exact: true }).fill('Guest browser');
     await guest.getByRole('button', { name: 'Join as a guest', exact: true }).click();
     await expect(guest.getByRole('button', { name: 'Settings', exact: true })).toBeVisible();
+    await expect(guest.locator('dialog.auth-dialog')).not.toBeVisible();
     const guestIdentity = await session(guest, app.url);
     expect(guestIdentity.kind).toBe('guest');
     await guest.goto(link);
@@ -291,4 +292,75 @@ test('scanner abandons preview after a shared-cookie logout in another tab witho
     await expect(page.getByRole('heading', { name: 'Come on in.', exact: true })).toBeVisible();
     expect((await session(receiver, app.url)).kind).not.toBe('account');
   } finally { await sibling.close(); await receiver.context().close(); }
+});
+
+test('pasted links retry their allocation and retain the same request after offline finish reconciliation', async ({ page, browser }) => {
+  const { state, identity } = await issuer(page);
+  const link = await createLink(page);
+  const receiver = await devicePage(browser, state);
+  let allocations = 0, offline = false;
+  const finishes: string[] = [];
+  try {
+    await requestQR(receiver, app.url);
+    await receiver.getByRole('button', { name: 'Use a link instead', exact: true }).click();
+    await receiver.route('**/api/accounts/signin-requests', async route => {
+      if (++allocations === 1) await route.abort('failed'); else await route.continue();
+    });
+    await receiver.getByRole('textbox', { name: 'Paste a sign-in link', exact: true }).fill(link);
+    await receiver.getByRole('button', { name: 'Continue', exact: true }).click();
+    await expect(receiver.getByRole('heading', { name: /unavailable/i })).toBeVisible();
+    await receiver.getByRole('button', { name: 'Try again', exact: true }).click();
+    await expect(receiver.locator('.device-code')).toBeVisible();
+    expect(allocations).toBe(2);
+    const code = (await receiver.locator('.device-code').innerText()).replace(/\s/g, '');
+    await receiver.route('**/api/accounts/session', route => offline ? route.abort('failed') : route.continue());
+    await receiver.route('**/api/accounts/signin-requests/*/finish', async route => {
+      finishes.push(route.request().url());
+      expect(route.request().postDataJSON().token).toBe(new URL(link).hash.slice('#signin='.length));
+      if (finishes.length === 1) { offline = true; await route.abort('failed'); } else await route.continue();
+    });
+    await page.getByRole('textbox', { name: 'Four-digit code', exact: true }).fill(code);
+    await page.getByRole('button', { name: 'Approve sign-in', exact: true }).click();
+    await expect(receiver.getByRole('alert')).toContainText('Could not confirm sign-in');
+    await expect(receiver.locator('.device-code')).toBeVisible();
+    offline = false;
+    await receiver.getByRole('button', { name: 'Try again', exact: true }).click();
+    await expect(receiver.getByRole('heading', { name: 'You’re in.', exact: true })).toBeVisible();
+    expect(finishes).toHaveLength(2);
+    expect(finishes[0]).toBe(finishes[1]);
+    expect(allocations).toBe(2);
+    expect((await session(receiver, app.url)).visitor.id).toBe(identity.visitor.id);
+  } finally { await receiver.context().close(); }
+});
+
+test('a second QR entry in the same tab replaces the preview and remains actionable', async ({ page, browser }) => {
+  const { state } = await issuer(page);
+  const first = await devicePage(browser, state), second = await devicePage(browser, state);
+  try {
+    const firstQR = await requestQR(first, app.url), secondQR = await requestQR(second, app.url);
+    await page.evaluate(url => { location.hash = new URL(url).hash; }, firstQR.url);
+    await expect(page.getByRole('button', { name: 'Approve sign-in', exact: true })).toBeVisible();
+    const preview = page.waitForResponse(r => r.url().endsWith('/qr-signins/preview') && r.status() === 200);
+    await page.evaluate(url => { location.hash = new URL(url).hash; }, secondQR.url);
+    await preview;
+    await page.getByRole('button', { name: 'Deny', exact: true }).click();
+    await expect(second.getByRole('heading', { name: /denied/i })).toBeVisible();
+    await expect(first.getByText('Waiting for approval', { exact: false })).toBeVisible();
+  } finally { await first.context().close(); await second.context().close(); }
+});
+
+test('an issuer can revoke an approved link before the receiver consumes it', async ({ page, browser }) => {
+  const { state } = await issuer(page);
+  const receiver = await devicePage(browser, state);
+  try {
+    await receiver.route('**/api/accounts/signin-requests/*/finish', route => route.abort('failed'));
+    const code = await receiveLink(receiver, await createLink(page));
+    await page.getByRole('textbox', { name: 'Four-digit code', exact: true }).fill(code);
+    await page.getByRole('button', { name: 'Approve sign-in', exact: true }).click();
+    await expect(page.getByText('Sign-in approved. Waiting for the other browser.', { exact: true })).toBeVisible();
+    await page.getByRole('button', { name: 'Revoke link', exact: true }).click();
+    await expect(page.getByText('Link revoked.', { exact: true })).toBeVisible();
+    await expect(receiver.getByRole('heading', { name: /cancelled|unavailable/i })).toBeVisible();
+    expect((await session(receiver, app.url)).kind).not.toBe('account');
+  } finally { await receiver.context().close(); }
 });

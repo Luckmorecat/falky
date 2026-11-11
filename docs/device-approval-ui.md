@@ -59,7 +59,7 @@ selection keeps its normal tab focus.
 
 ## Verification and limits
 
-- `make check-web`: frozen install, generated-schema freshness, 211 Vitest tests,
+- `make check-web`: frozen install, generated-schema freshness, 223 Vitest tests,
   runtime selection/production mock-exclusion assertions and production build.
 - `pnpm run typecheck` includes production, mock, browser helpers and tooling;
   `pnpm run test:mock` covers 19 fixture tests.
@@ -71,6 +71,13 @@ selection keeps its normal tab focus.
   denial/expiry/revoke/cooldown, passkey auth-resume, uncertain finish, guest/account
   conflicts, shared-cookie scanner exit and accessible scanner failure/late exit.
   The mock camera event proves UI plumbing, not physical capture or decoding.
+- Device retry regressions exercise pasted-link allocation failure followed by
+  offline finish/session reads, a replacement QR entry in the same tab, and
+  revocation after approval but before consumption. Controller tests propagate
+  epoch notifications and cover lost delivery/read responses, external session
+  changes, exit reconciliation, late poll responses/errors and overlapping previews.
+  Failed session reads preserve the original request and bearer; confirmed session
+  changes still invalidate them. Finish invalidates pending polls before delivery.
 - Camera runtime tests independently cover late permission release, ordinary bad
   frames, fatal decoder cleanup, stopped tracks and suppressed late callbacks.
 - The unchanged Go backend was also exercised with a fresh SQLite database,
@@ -107,10 +114,12 @@ pnpm run screenshot:mock --preset device-qr --viewport 320x844 --theme light --l
 pnpm run screenshot:mock --preset device-code --viewport 390x844 --theme dark
 pnpm run screenshot:mock --preset device-issuer --viewport 320x844 --theme light --lang uk
 pnpm run screenshot:mock --preset device-scanner --viewport 390x844 --theme dark
+pnpm run screenshot:mock --preset device-approved --viewport 390x844 --theme light
 ```
 
-The device presets use actual production UI and mock HTTP clients. Issuer captures
-scroll its actual pending request/code into view. Each command owns and closes its
+The device presets use actual production UI and mock HTTP clients. The approved
+link preset blocks receiving delivery to expose the still-available revoke action.
+Issuer captures scroll the actual pending request/code into view. Each command owns and closes its
 mock/browser. Screenshots belong in ignored `web/screenshots/` or `/tmp`.
 
 For interactive mock review, run `pnpm run dev:mock`, open its printed app URL using

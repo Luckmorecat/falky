@@ -52,8 +52,9 @@ export function createDeviceCandidate() {
   let refreshing: Promise<void> | undefined;
   let finishing: Promise<void> | undefined;
   let ownSessionChange = false;
+  let deliveryUncertain = false;
   let disposed = false;
-  function stop() { clearTimeout(timer); control.abort(); control = new AbortController(); generation++; }
+  function stop() { clearTimeout(timer); control.abort(); control = new AbortController(); generation++; refreshing = undefined; }
   function check(version: number) {
     if (disposed || generation !== version || epoch !== currentSessionEpoch() || control.signal.aborted) stale();
   }
@@ -113,23 +114,23 @@ export function createDeviceCandidate() {
   }
   function refresh(): Promise<void> {
     if (refreshing) return refreshing;
-    if (!state.request || disposed) return Promise.resolve();
+    if (!state.request || disposed || state.phase !== 'waiting') return Promise.resolve();
     const version = generation;
     const id = state.request.id;
     if (expired(state.request)) { update({ phase: 'expired' }); return Promise.resolve(); }
     try { cooldown(state.retryAt); } catch (error) { schedule(); return Promise.reject(error); }
     refreshing = api.signInRequest(id, control.signal).then(request => { check(version); accept(request); })
       .catch(error => { if (generation === version && !disposed) errorState(error); throw error; })
-      .finally(() => { refreshing = undefined; schedule(); });
+      .finally(() => { if (generation === version) { refreshing = undefined; schedule(); } });
     return refreshing;
   }
   function finish(): Promise<void> {
     if (finishing) return finishing;
     if (!state.request || disposed || !['approved', 'consumed'].includes(state.request.state)) return Promise.reject(new AccountFlowError('stale'));
     try { cooldown(state.retryAt); } catch (error) { return Promise.reject(error); }
+    stop();
     const version = generation;
     const id = state.request.id;
-    clearTimeout(timer);
     update({ phase: 'finishing', busy: true, problem: undefined });
     finishing = runSessionAction(async (context) => {
       check(version);
@@ -138,6 +139,10 @@ export function createDeviceCandidate() {
       try { before = await api.accountSession(context.signal); }
       catch (error) { if (!(error instanceof ApiError && error.status === 401)) throw error; }
       check(version);
+      if (deliveryUncertain && before?.kind === 'account') {
+        await complete(before, version);
+        return;
+      }
       const local = getState().accountSession;
       if (before?.visitor.id !== local?.visitor.id || before?.kind !== local?.kind || before?.expiresAt !== local?.expiresAt) {
         await reconcileSession(); stale();
@@ -146,6 +151,7 @@ export function createDeviceCandidate() {
       context.epoch = epoch = beginSessionChange();
       ownSessionChange = false;
       let delivered: AccountSession;
+      deliveryUncertain = true;
       try { delivered = await api.finishSignInRequest(id, token); }
       catch (error) {
         if (unknownOutcome(error) && epoch === currentSessionEpoch()) {
@@ -153,26 +159,24 @@ export function createDeviceCandidate() {
           try { actual = await api.accountSession(); }
           catch (restoreError) {
             if (!(restoreError instanceof ApiError && restoreError.status === 401)) {
-              await reconcileSession().catch(() => {});
               throw new AccountFlowError('outcome_unknown');
             }
             actual = null;
           }
           if (epoch !== currentSessionEpoch()) stale();
           if (actual?.kind === 'account') {
-            await adoptSession(actual, epoch);
-            if (!disposed && generation === version) {
-              token = undefined;
-              update({ phase: 'complete', busy: false, code: undefined, url: undefined });
-            }
+            if (disposed || generation !== version) { await reconcileSession(); stale(); }
+            await complete(actual, version);
             return;
           }
+          deliveryUncertain = false;
           const previous = getState().accountSession;
           if (actual?.visitor.id !== previous?.visitor.id || actual?.kind !== previous?.kind) await reconcileSession();
           else resumeSession(epoch);
           if (!disposed && generation === version) { update({ phase: 'waiting', busy: false, problem: { code: 'outcome_unknown' } }); schedule(); }
           throw new AccountFlowError('outcome_unknown');
         }
+        deliveryUncertain = false;
         if (epoch === currentSessionEpoch()) resumeSession(epoch);
         check(version);
         throw error;
@@ -186,29 +190,38 @@ export function createDeviceCandidate() {
       if (actual.kind !== 'account' || actual.visitor.id !== delivered.visitor.id || actual.expiresAt !== delivered.expiresAt) {
         await reconcileSession(); stale();
       }
-      await adoptSession(actual, epoch);
-      check(version);
-      token = undefined;
-      update({ phase: 'complete', busy: false, code: undefined, url: undefined });
-    }, control.signal).catch(async error => {
+      await complete(actual, version);
+    }, control.signal).catch(error => {
       if (generation === version && !disposed) {
-        if (state.phase === 'finishing' && (unknownOutcome(error) || error instanceof AccountFlowError && error.code === 'stale')) {
-          await reconcileSession().catch(() => {});
-        }
-        if (generation === version && !disposed) {
-          if (state.phase === 'finishing') update({ phase: 'waiting' });
-          errorState(error); schedule();
-        }
+        if (deliveryUncertain && unknownOutcome(error)) error = new AccountFlowError('outcome_unknown', error);
+        if (state.phase === 'finishing') update({ phase: 'waiting' });
+        errorState(error); schedule();
       }
       throw error;
-    }).finally(() => { ownSessionChange = false; finishing = undefined; });
+    }).finally(() => {
+      ownSessionChange = false; finishing = undefined;
+      if (disposed || generation !== version) reconcileAfterExit();
+    });
     return finishing;
+  }
+  async function complete(actual: AccountSession, version: number) {
+    await adoptSession(actual, epoch);
+    check(version);
+    deliveryUncertain = false; token = undefined;
+    update({ phase: 'complete', busy: false, code: undefined, url: undefined });
+  }
+  function reconcileAfterExit() {
+    if (!deliveryUncertain || finishing || epoch !== currentSessionEpoch()) return;
+    deliveryUncertain = false;
+    void reconcileSession().catch(() => {});
   }
   async function cancel(): Promise<void> {
     const request = state.request;
     stop(); token = undefined;
     state = { phase: 'idle', busy: false }; listeners.forEach(listener => listener());
-    if (request?.type === 'qr' && epoch === currentSessionEpoch() && !['consumed', 'denied', 'cancelled'].includes(request.state)) await api.cancelQRSignIn(request.id);
+    try {
+      if (request?.type === 'qr' && epoch === currentSessionEpoch() && !['consumed', 'denied', 'cancelled'].includes(request.state)) await api.cancelQRSignIn(request.id);
+    } finally { reconcileAfterExit(); }
   }
   async function resend(): Promise<void> {
     if (!state.request || state.request.type !== 'link' || !token || state.busy) throw new AccountFlowError('stale');
@@ -224,7 +237,7 @@ export function createDeviceCandidate() {
     beginQR: (replace = false) => begin('qr', undefined, replace),
     retryQR: () => begin('qr', undefined, state.request?.type === 'qr', true),
     beginLink: (bearer: string) => begin('link', bearer), refresh, finish, resend, cancel,
-    dispose() { disposed = true; stop(); token = undefined; state = { phase: 'idle', busy: false }; unsubscribe(); listeners.clear(); },
+    dispose() { disposed = true; stop(); token = undefined; state = { phase: 'idle', busy: false }; unsubscribe(); listeners.clear(); reconcileAfterExit(); },
   };
 }
 
@@ -322,6 +335,7 @@ export interface ApproverState {
   retryAt?: number;
 }
 export function createQRApprover() {
+  let previewing: Promise<void> | undefined;
   let state: ApproverState = { phase: 'idle', busy: false };
   let disposed = false;
   let token: string | undefined;
@@ -349,10 +363,23 @@ export function createQRApprover() {
   return {
     getSnapshot: () => state,
     subscribe(listener: () => void) { listeners.add(listener); return () => { listeners.delete(listener); }; },
-    preview: (bearer: string) => action(async (signal, check) => {
-      const preview = await api.previewQRSignIn(bearer, signal); check();
-      token = bearer; update({ preview, phase: 'preview' });
-    }),
+    preview: async (bearer: string) => {
+      if (disposed) stale();
+      cooldown(state.retryAt);
+      const previous = previewing;
+      clear();
+      const version = generation;
+      const operation = (async () => {
+        await previous?.catch(() => {});
+        if (disposed || generation !== version) stale();
+        await action(async (signal, check) => {
+          const preview = await api.previewQRSignIn(bearer, signal); check();
+          token = bearer; update({ preview, phase: 'preview' });
+        });
+      })();
+      previewing = operation;
+      return operation.finally(() => { if (previewing === operation) previewing = undefined; });
+    },
     approve: () => action(async (signal, check) => {
       if (!token || state.phase !== 'preview') stale();
       await api.approveQRSignIn(token, signal); check(); token = undefined; update({ phase: 'approved' });
