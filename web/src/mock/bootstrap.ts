@@ -1,3 +1,4 @@
+import { getDeviceEntry, getEntryLinks } from '../app/entryLinks';
 import { preparePreferences } from './preferences';
 import { bootstrapState, refreshMockState, subscribeMockState } from './state';
 
@@ -17,7 +18,7 @@ export async function bootstrap(navigation: Navigation = browserNavigation): Pro
   const url = new URL(navigation.href());
   const state = await bootstrapState(url.searchParams.get('scenario') ?? undefined);
   preparePreferences(state.instanceId, state.generation);
-  if (state.scenario === 'entry' && !state.visitor && !['k', 'invite', 'recover'].some((key) => new URLSearchParams(url.hash.slice(1)).has(key))) {
+  if (state.scenario === 'entry' && !state.visitor && !getDeviceEntry() && !Object.keys(getEntryLinks()).length && !['k', 'invite', 'recover', 'signin', 'qr-signin'].some((key) => new URLSearchParams(url.hash.slice(1)).has(key))) {
     url.hash = new URL(state.accessLink, url).hash;
     navigation.replaceURL(url.href);
   }

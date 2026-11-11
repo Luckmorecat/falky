@@ -657,3 +657,66 @@ kbd { min-width: 34px; height: 34px; padding: 0 10px; display: inline-grid; plac
   .auth-kit-actions { align-items: stretch; flex-direction: column; }
   .account-key { align-items: flex-start; flex-direction: column; }
 }
+
+/* Device approval shares the account entrance and Settings surface. */
+.device-choice { display: flex; align-items: center; gap: 14px; text-align: left; background: var(--fill); padding: 16px 20px; border-radius: 27px; }
+.device-choice > span:first-child { flex: 1; }
+.device-choice strong { display: block; font-size: 14px; font-weight: 500; }
+.device-choice small { display: block; margin-top: 5px; color: var(--text-2); font-size: 12px; line-height: 1.5; }
+.device-dialog { width: 100%; max-width: none; height: 100dvh; max-height: none; margin: 0; border: 0; border-radius: 0; padding: max(60px, env(safe-area-inset-top)) 24px 40px; background: var(--bg); color: var(--text); }
+.device-dialog::backdrop { background: var(--bg); }
+.device-task { width: min(100%, 350px); min-height: calc(100dvh - 100px); display: flex; flex-direction: column; align-items: stretch; justify-content: center; text-align: center; gap: 20px; margin: auto; }
+.device-task .auth-back { position: absolute; left: 24px; top: 24px; }
+.device-task .auth-fields { width: 100%; margin-top: 0; }
+.device-task .go { min-height: 54px; height: auto; padding: 14px 20px; }
+.auth-back { display: inline-flex; align-items: center; gap: 6px; }
+.auth-back .i { width: 16px; height: 16px; }
+.device-note { font-size: 13px; line-height: 1.7; color: var(--text-2); text-wrap: pretty; }
+.device-qr { width: 228px; height: 228px; padding: 14px; background: white; border-radius: 36px; align-self: center; shape-rendering: crispEdges; }
+.device-wait { font-size: 12px; color: var(--text-2); line-height: 1.7; font-variant-numeric: tabular-nums; }
+.device-code { display: flex; gap: 10px; justify-content: center; font-size: 44px; font-weight: 500; font-variant-numeric: tabular-nums; }
+.device-code span { display: grid; place-items: center; width: 64px; height: 78px; border-radius: 27px; background: var(--fill); }
+.device-dialog-scanner { padding: 0; background: #161615; color: #fff; color-scheme: dark; --text: #fff; --text-2: rgba(255,255,255,.65); --text-3: rgba(255,255,255,.5); --invert: #fff; --on-invert: #000; --raised: #2a2a29; --fill: rgba(255,255,255,.09); --level: #fff; }
+.device-scanner { min-height: 100%; display: flex; flex-direction: column; padding: max(24px, env(safe-area-inset-top)) 32px max(32px, env(safe-area-inset-bottom)); }
+.device-scanner header { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.device-scanner header > span { font-size: 12px; color: var(--text-2); }
+.device-scanner-content { flex: 1; display: flex; flex-direction: column; align-items: stretch; gap: 18px; width: min(100%, 390px); text-align: center; margin: 40px auto 0; }
+.device-scanner-content .go { min-height: 54px; height: auto; padding: 14px 20px; width: 100%; }
+.device-camera { width: 100%; position: relative; min-height: 280px; display: grid; place-items: center; overflow: hidden; border-radius: 32px; }
+.device-camera video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.device-scan-frame { position: relative; width: min(68vw, 270px); aspect-ratio: 1; display: grid; place-items: center; }
+.device-scan-frame > span { position: absolute; width: 26px; height: 26px; border: solid rgba(255,255,255,.7); border-width: 0; border-radius: 10px; }
+.device-scan-frame > span:nth-child(1) { top: 0; left: 0; border-top-width: 2px; border-left-width: 2px; }
+.device-scan-frame > span:nth-child(2) { top: 0; right: 0; border-top-width: 2px; border-right-width: 2px; }
+.device-scan-frame > span:nth-child(3) { bottom: 0; left: 0; border-bottom-width: 2px; border-left-width: 2px; }
+.device-scan-frame > span:nth-child(4) { bottom: 0; right: 0; border-bottom-width: 2px; border-right-width: 2px; }
+.device-scan-frame .i { width: 38px; height: 38px; color: var(--text-2); }
+.device-scanner .auth-fields { width: 100%; margin: 0; max-width: none; }
+.device-request { padding: 24px; text-align: left; border-radius: 28px; background: var(--fill); overflow-wrap: anywhere; }
+.device-request small { color: var(--text-2); font-size: 12px; }
+.device-request p { margin-block: 12px; font-size: 14px; line-height: 1.6; }
+.device-request > span { font-size: 12px; color: var(--text-2); }
+.device-issuer .account-actions { margin-block: 16px; }
+.device-issuer .account-actions button { display: flex; align-items: center; justify-content: center; gap: 8px; }
+.device-issuer .account-actions .i { width: 18px; height: 18px; }
+.device-inline-link { margin-top: 20px; padding-top: 20px; border-top: 1px solid var(--fill); }
+.device-copy, .device-code-form label { display: flex; flex-direction: column; gap: 10px; font-size: 12px; color: var(--text-2); }
+.device-copy input, .device-code-form input { min-width: 0; width: 100%; height: 50px; border: 0; border-radius: 25px; background: var(--fill); color: var(--text); padding: 0 18px; font-size: 13px; }
+.device-inline-link h4 { font-size: 13px; font-weight: 500; margin-top: 24px; }
+.device-pending { display: flex; align-items: center; gap: 12px; margin-block: 12px; }
+.device-pending p { min-width: 0; flex: 1; font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+.device-code-form { display: flex; align-items: end; gap: 12px; margin-block: 16px; }
+.device-code-form label { flex: 1; min-width: 0; max-width: 220px; }
+.device-code-form input { font-size: 26px; letter-spacing: .25em; text-align: center; padding-left: calc(18px + .25em); font-variant-numeric: tabular-nums; }
+@media (max-width: 560px) {
+  .device-scanner { padding-inline: 20px; }
+  .device-scanner-content { margin-top: 28px; }
+  .device-scanner .auth-heading h1 { font-size: 29px; }
+  .device-code-form { align-items: stretch; flex-direction: column; }
+  .device-code-form label { max-width: none; }
+  .device-issuer .account-actions { flex-direction: column; align-items: stretch; }
+}
+.device-scanner-identity { display: flex; align-items: center; gap: 10px; text-align: left; }
+.device-scanner-identity .orb { width: 36px; flex: none; }
+.device-scanner-identity small { display: block; font-size: 11px; margin-top: 2px; }
+.device-scanner-content > .auth-text { padding-block: 5px; }

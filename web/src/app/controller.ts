@@ -11,12 +11,18 @@ import { playSound, notificationPermission, requestNotificationPermission, notif
 import { applyAppearance } from './appearance';
 import { prefs, type Settings } from './prefs';
 import { getState, setState } from './store';
+import { clearSignInHints, retainSignInHint } from './signInHints';
 import { captureEntryLinks, clearEntryLinks, getEntryLinks } from './entryLinks';
 
 const PAGE = 100;
 // A response from a previous access/boot must never populate the next visitor's state.
 let session = 0;
 let sessionChanging = false;
+const sessionListeners = new Set<() => void>();
+export function subscribeSessionEpoch(listener: () => void): () => void {
+  sessionListeners.add(listener);
+  return () => { sessionListeners.delete(listener); };
+}
 let colourSaveSequence = 0;
 const colourRequests = new Map<string, number>();
 let colourRetryTimer: ReturnType<typeof setTimeout> | null = null;
@@ -195,6 +201,8 @@ export function dismissNotice(): void {
 export function beginSessionChange(): number {
   const epoch = ++session;
   sessionChanging = true;
+  clearSignInHints();
+  sessionListeners.forEach(listener => listener());
   setState({ sessionPaused: true });
   resetColourRequests();
   live.stop();
@@ -319,7 +327,7 @@ async function refreshIdentity(epoch: number): Promise<boolean> {
   const resolved = await api.accountSession();
   if (epoch !== session) return false;
   const current = getState().accountSession;
-  if (current?.visitor.id !== resolved.visitor.id || current.kind !== resolved.kind) {
+  if (current?.visitor.id !== resolved.visitor.id || current.kind !== resolved.kind || current.expiresAt !== resolved.expiresAt) {
     await reconcileSession();
     return false;
   }
@@ -362,6 +370,9 @@ export async function rename(name: string): Promise<string | null> {
 function handleEvent(event: LiveEvent): void {
   const s = getState();
   switch (event.type) {
+    case 'account.signin.requested':
+      retainSignInHint(event.payload);
+      break;
     case 'visitor.colour.changed':
       mergeColours([event.payload]);
       break;
@@ -834,3 +845,23 @@ export function setParticipantVolume(connectionId: string, value: number): void 
   prefs.setVolume(connectionId, value);
   voice.applyVolumes();
 }
+
+
+// A tab's cookies can change without this tab sending a mutation.
+let checkingCookie = false;
+async function checkCookieSession(): Promise<void> {
+  if (checkingCookie || sessionChanging && getState().phase !== 'entry') return;
+  checkingCookie = true;
+  const epoch = session;
+  try {
+    const actual = await api.accountSession();
+    const previous = getState().accountSession;
+    if (epoch === session && (actual.kind !== previous?.kind || actual.visitor.id !== previous?.visitor.id || actual.expiresAt !== previous?.expiresAt)) await reconcileSession();
+  } catch (error) {
+    if (epoch === session && error instanceof ApiError && error.status === 401 && getState().accountSession) await reconcileSession();
+  } finally { checkingCookie = false; }
+}
+addEventListener('focus', () => { void checkCookieSession(); });
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') void checkCookieSession();
+});

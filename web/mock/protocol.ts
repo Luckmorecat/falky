@@ -21,6 +21,8 @@ export interface MockFaults {
   liveDisconnected: boolean;
   roomFull: string | null;
   micDenied: boolean;
+  scannerError?: 'NotAllowedError' | 'NotFoundError' | 'NotReadableError' | 'DecodeError' | '';
+  scannerDelayMs?: number;
   shareFailure: boolean;
   voiceReconnecting: boolean;
 }
@@ -40,6 +42,8 @@ export interface MockState {
 }
 /** Generation is required for asynchronous browser voice operations. */
 export type MockAction =
+  | { type: 'device-fault'; fault: 'none' | 'rate-limited' | 'finish-lost' }
+  | { type: 'device-expire'; requestId?: string; linkId?: string }
   | { type: 'account-fault'; fault: 'none' | 'finish-expired' | 'finish-lost' | 'regenerate-lost' | 'last-passkey' | 'invalid-proof' }
   | { type: 'expire-proof' }
   | { type: 'colour'; visitorId: string; palette: Schema['PaletteName'] }

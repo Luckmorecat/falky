@@ -18,7 +18,7 @@ export class AccountFixture {
   private rotation = 0;
   private usedInvitations = new Set<string>();
   fault: 'none' | 'finish-expired' | 'finish-lost' | 'regenerate-lost' | 'last-passkey' | 'invalid-proof' = 'none';
-  constructor(private hooks: { id(): string; visitor(name: string): Schema['Visitor']; name(value: unknown): string; token(req: IncomingMessage): string; issue(res: ServerResponse, visitor: Schema['Visitor'] | null): string }) {}
+  constructor(private hooks: { id(): string; visitor(name: string): Schema['Visitor']; name(value: unknown): string; token(req: IncomingMessage): string; issue(res: ServerResponse, visitor: Schema['Visitor'] | null, token?: string): string }) {}
   reset() { this.sessions.clear(); this.accounts.clear(); this.ceremonies.clear(); this.rotation = 0; this.usedInvitations.clear(); this.fault = 'none'; }
   guest(token: string, visitor: Schema['Visitor']) { this.sessions.set(token, { visitor, kind: 'guest', expiresAt: new Date(Date.now() + 86400_000).toISOString(), proofAt: 0 }); }
   resolve(req: IncomingMessage) { return this.sessions.get(this.hooks.token(req)); }
@@ -48,6 +48,11 @@ export class AccountFixture {
     const session: Session = { visitor: account.visitor, kind: 'account', expiresAt: new Date(Date.now() + 90 * 86400_000).toISOString(), proofAt: Date.now(), proofKey: key };
     this.sessions.set(token, session);
     return this.publicSession(session);
+  }
+  deviceSession(res: ServerResponse, visitor: Schema['Visitor'], existingToken?: string) {
+    const token = this.hooks.issue(res, visitor, existingToken);
+    if (!existingToken) this.sessions.set(token, { visitor, kind: 'account', expiresAt: new Date(Date.now() + 90 * 86400_000).toISOString(), proofAt: 0 });
+    return { token, session: this.publicSession(this.sessions.get(token)!) };
   }
   handle(path: string, req: IncomingMessage, res: ServerResponse, input: Record<string, unknown>, origin: string): { status: number; value?: unknown; lost?: boolean } | undefined {
     if (!path.startsWith('/api/accounts/')) return;
