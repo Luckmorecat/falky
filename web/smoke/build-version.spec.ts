@@ -29,7 +29,7 @@ for (const width of [1440, 390]) {
     await expect(label).toHaveCount(0);
     await page.unroute('**/__mock/bootstrap');
     await page.goto(`${app.url}/?scenario=entry`);
-    await expect(page.locator('.enter')).toBeVisible();
+    await expect(page.getByRole('textbox', { name: "Ім'я", exact: true })).toBeVisible();
     await expect(label).toHaveCount(0);
     await page.goto(`${app.url}/?scenario=populated`);
     await expect(page.locator('.dock')).toBeVisible();
@@ -57,7 +57,7 @@ for (const width of [1440, 390]) {
       await selectableVersion(label);
     }
     await page.request.post(`${app.url}/__mock/action`, { data: { type: 'revoke' } });
-    await expect(page.locator('.message-screen')).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Заходь.', exact: true })).toBeVisible();
     await expect(label).toHaveCount(0);
   });
 }

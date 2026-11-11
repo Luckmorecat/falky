@@ -134,3 +134,21 @@ Capture Profile directly with the existing isolated screenshot utility:
 pnpm run screenshot:mock --preset profile
 pnpm run screenshot:mock --preset profile --viewport 390x844 --theme light --lang uk
 ```
+
+## Account integration checks
+
+The shared app uses native WebAuthn for invitation enrollment, sign-in, recovery
+and account settings. Guest links remain supported. Recovery kits contain both
+the permanent account ID and the server's twelve-word phrase.
+
+`pnpm test:browser` exercises the production credential adapter with Chromium's
+virtual authenticator against disposable mock HTTP account/session/ceremony
+fixtures. Open account scenarios on `localhost`: Chromium rejects IP-address
+relying-party IDs. The simulator checks ceremony context and credential JSON
+structure; it does not verify authenticator signatures. Backend identity/HTTP
+tests independently cover the real verifier. These are separate evidence seams.
+
+The screenshot utility also accepts `welcome`, `invitation`, `recovery`,
+`recovery-kit` and `account` presets. Each owns and closes its mock server and
+browser; exported phrases in these captures are disposable fixtures. Existing
+guest/chat/voice presets and mock controls remain available.

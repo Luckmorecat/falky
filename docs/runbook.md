@@ -714,12 +714,15 @@ required voice removal; a postcommit enforcement error means persistent identity
 state already changed. Inspect logs and LiveKit connectivity; do not assume the
 transaction was rolled back or media removal succeeded.
 
-The current frontend provides the legacy guest flow; these backend invitation
-and recovery links do not add account UI. Client integration must implement the
-[account/WebAuthn API](../api/openapi.yaml), including five-minute context-bound
-ceremonies, same-origin mutations and recovery-phrase storage. Voice uses the
-independent connection model above for both guests and accounts; no new account
-UI is included.
+The frontend supports guest links, invitation enrollment, passkey sign-in and
+account recovery through the [account/WebAuthn API](../api/openapi.yaml). Recovery
+requires the permanent account ID and twelve-word phrase, both included in the
+recovery kit; operator recovery links preserve their exact bearer proof. After
+enrollment, recovery or phrase regeneration, the person must acknowledge saving
+both fields before continuing. Settings provides sign out, account switching,
+passkey list/add/remove and phrase regeneration. Sensitive mutations follow the
+server's recent-verification requirement. Voice retains the independent
+connection model above for both guests and accounts.
 
 The additive `0007_accounts.sql` migration retains existing IDs, guest history
 and ownership. `0008_identity_profiles.sql` renames the lasting identity table to

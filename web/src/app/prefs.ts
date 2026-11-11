@@ -80,6 +80,12 @@ export const prefs = {
   saveSettings(s: Settings): void {
     for (const [key, value] of Object.entries(s)) write(key, typeof value === 'boolean' ? (value ? 'on' : 'off') : Array.isArray(value) ? value.join(',') : value);
   },
+  clearIdentity(): void {
+    try {
+      const keys = Object.keys(localStorage).filter((key) => key === `${preferencePrefix}viewedRoom` || key.startsWith(`${preferencePrefix}read.`));
+      for (const key of keys) localStorage.removeItem(key);
+    } catch { /* Private storage may be unavailable. */ }
+  },
   lastRead: (roomId: string) => read(`read.${roomId}`),
   setLastRead: (roomId: string, messageId: string) => write(`read.${roomId}`, messageId),
   viewedRoom: () => read('viewedRoom'),

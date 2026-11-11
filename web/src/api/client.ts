@@ -1,6 +1,10 @@
 import type { components } from './schema.gen';
 
 type Schemas = components['schemas'];
+export type AccountSession = Schemas['AccountSession'];
+export type AccountEnrollment = Schemas['AccountEnrollment'];
+export type AccountCeremony = Schemas['AccountCeremony'];
+export type AccountPasskey = Schemas['AccountPasskey'];
 export type Visitor = Schemas['Visitor'];
 export type VisitorColour = Schemas['VisitorColour'];
 export type Room = Schemas['Room'];
@@ -45,10 +49,14 @@ async function call<T>(method: string, path: string, body?: unknown, signal?: Ab
       signal,
     });
   } catch {
+    if (signal?.aborted) throw new ApiError(0, 'aborted', 'Request cancelled');
     throw new ApiError(0, 'network', 'the server cannot be reached');
   }
   if (res.status === 204) return undefined as T;
-  if (res.ok) return (await res.json()) as T;
+  if (res.ok) {
+    try { return (await res.json()) as T; }
+    catch { throw new ApiError(res.status, 'invalid_response', 'Invalid server response'); }
+  }
   let code = 'internal';
   let message = res.statusText;
   try {
@@ -96,6 +104,21 @@ function uploadAttachment(roomId: string, file: File, onProgress: (sent: number)
 }
 
 export const api = {
+  accountSession: (signal?: AbortSignal) => call<AccountSession>('GET', '/api/accounts/session', undefined, signal),
+  beginRegistration: (invitation: string, name: string, signal?: AbortSignal) => call<AccountCeremony>('POST', '/api/accounts/registration/begin', { invitation, name }, signal),
+  finishRegistration: (body: Schemas['AccountFinish'], signal?: AbortSignal) => call<AccountEnrollment>('POST', '/api/accounts/registration/finish', body, signal),
+  beginAuthentication: (signal?: AbortSignal) => call<AccountCeremony>('POST', '/api/accounts/authentication/begin', {}, signal),
+  finishAuthentication: (body: Schemas['AccountFinish'], signal?: AbortSignal) => call<AccountEnrollment>('POST', '/api/accounts/authentication/finish', body, signal),
+  beginRecovery: (accountId: string, proof: string, signal?: AbortSignal) => call<AccountCeremony>('POST', '/api/accounts/recovery/begin', { accountId, proof }, signal),
+  finishRecovery: (body: Schemas['AccountFinish'], signal?: AbortSignal) => call<AccountEnrollment>('POST', '/api/accounts/recovery/finish', body, signal),
+  beginReauthentication: (signal?: AbortSignal) => call<AccountCeremony>('POST', '/api/accounts/reauthentication/begin', {}, signal),
+  finishReauthentication: (body: Schemas['AccountFinish'], signal?: AbortSignal) => call<AccountSession>('POST', '/api/accounts/reauthentication/finish', body, signal),
+  passkeys: (signal?: AbortSignal) => call<Schemas['AccountPasskeys']>('GET', '/api/accounts/passkeys', undefined, signal).then((r) => r.passkeys),
+  beginAddPasskey: (signal?: AbortSignal) => call<AccountCeremony>('POST', '/api/accounts/passkeys/begin', {}, signal),
+  finishAddPasskey: (body: Schemas['AccountFinish'], signal?: AbortSignal) => call<AccountPasskey>('POST', '/api/accounts/passkeys/finish', body, signal),
+  removePasskey: (id: string, signal?: AbortSignal) => call<Schemas['AccountEmpty']>('DELETE', `/api/accounts/passkeys/${encodeURIComponent(id)}`, undefined, signal),
+  regenerateRecovery: (signal?: AbortSignal) => call<Schemas['RecoveryCodes']>('POST', '/api/accounts/recovery-codes', {}, signal),
+  logout: () => call<Schemas['AccountEmpty']>('POST', '/api/accounts/logout', {}),
   enter: (secret: string, name: string) => call<Visitor>('POST', '/api/enter', { secret, name }),
   me: () => call<Visitor>('GET', '/api/me'),
   rename: (name: string) => call<Visitor>('PATCH', '/api/me', { name }),

@@ -1,3 +1,4 @@
+import { AccountFixture, FixtureError } from './account-fixture.ts';
 import { randomBytes, randomInt } from 'node:crypto';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -48,7 +49,7 @@ function scenarioName(value: unknown): Scenario {
   return value as Scenario;
 }
 
-/** One process-memory visitor, isolated even when browsers share cookies across ports. */
+/** Process-memory fixtures, isolated even when browsers share cookies across ports. */
 export async function startMockServer(options: { port?: number; scenario?: string } = {}) {
   const instanceId = randomBytes(8).toString('hex');
   const cookieName = `falky_mock_${instanceId}`;
@@ -141,10 +142,20 @@ export async function startMockServer(options: { port?: number; scenario?: strin
       }
     }
   }
+  function requestToken(req: IncomingMessage) { return req.headers.cookie?.split(';').map((part) => part.trim()).find((part) => part.startsWith(cookieName + '='))?.slice(cookieName.length + 1) ?? ''; }
+  const accounts = new AccountFixture({ id, visitor, name, token: requestToken,
+    issue: (res, next) => {
+      token = randomBytes(24).toString('hex'); state.visitor = next; state.voiceConnections = {};
+      for (const socket of sockets.clients) socket.close(4000, 'Session changed');
+      occupancy(); setCookie(res); state.revision++; return token;
+    },
+  });
   function authenticated(req: IncomingMessage) {
-    return !!state.visitor && req.headers.cookie?.split(';').some((part) => part.trim() === `${cookieName}=${token}`);
+    const session = accounts.resolve(req);
+    if (session) state.visitor = session.visitor;
+    return !!session;
   }
-  function setCookie(res: ServerResponse) { res.setHeader('Set-Cookie', `${cookieName}=${token}; Path=/api; HttpOnly; SameSite=Strict`); }
+  function setCookie(res: ServerResponse) { res.setHeader('Set-Cookie', `${cookieName}=${token}; Path=/; HttpOnly; SameSite=Strict`); }
   function name(input: unknown) {
     if (input === undefined) throw new Refused(400, 'invalid_name', 'A name is required');
     if (typeof input !== 'string') throw new Refused(400, 'invalid_request', 'Name must be a string');
@@ -173,11 +184,13 @@ export async function startMockServer(options: { port?: number; scenario?: strin
   const fixtureAttachmentIds = new Set(attachments.keys());
   const fixturePeers = structuredClone(state.peers);
   let publicOrigin = '';
+  let bootstrapVisitor: Schema['Visitor'] | null = null;
   function seed(scenario: Scenario) {
     state.scenario = scenario;
     colours.clear();
     for (const history of fixtureMessages.values()) for (const message of history) assignColour(message.authorId);
-    state.visitor = scenario === 'entry' ? null : visitor('Alex');
+    state.visitor = ['entry', 'signed-out'].includes(scenario) ? null : visitor('Alex');
+    bootstrapVisitor = state.visitor;
     state.voiceConnections = {};
     state.peers = scenario === 'quiet' ? {} : structuredClone(fixturePeers);
     for (const peers of Object.values(state.peers)) for (const peer of peers) peer.sharing = scenario === 'remote-share' && peer.name === 'Sam';
@@ -201,6 +214,8 @@ export async function startMockServer(options: { port?: number; scenario?: strin
     accessSecret = 'mock-access-link';
     state.accessLink = `${publicOrigin}/#k=${accessSecret}`;
     token = randomBytes(24).toString('hex');
+    accounts.reset();
+    if (state.visitor) accounts.guest(token, state.visitor);
   }
   function reset(scenario: Scenario) {
     state.generation++;
@@ -211,12 +226,12 @@ export async function startMockServer(options: { port?: number; scenario?: strin
   seed(state.scenario);
   const ownOrigins = new Set<string>();
   const server = createServer((req, res) => { void handle(req, res).catch((error: unknown) => {
-    const failure = error instanceof Refused ? error : new Refused(500, 'internal', 'Mock request failed');
+    const failure = error instanceof Refused || error instanceof FixtureError ? error : new Refused(500, 'internal', 'Mock request failed');
     json(res, failure.status, { code: failure.code, message: failure.message } satisfies Schema['Error']);
   }); });
   server.on('upgrade', (req, socket, head) => {
     let status = 0;
-    if (!ownOrigins.has(`http://${req.headers.host}`) || req.headers.origin !== publicOrigin) status = 403;
+    if (!ownOrigins.has(`http://${req.headers.host}`) || !ownOrigins.has(req.headers.origin ?? '')) status = 403;
     else if (req.url !== '/api/live') status = 404;
     else if (!authenticated(req)) status = 401;
     else if (state.visitor?.nameTaken) status = 409;
@@ -244,13 +259,21 @@ export async function startMockServer(options: { port?: number; scenario?: strin
     const input = (req.method === 'POST' || req.method === 'PATCH' || req.method === 'PUT') && hasBody && !multipart ? await body(req) : {};
     if (generation !== state.generation) throw new Refused(409, 'invalid_request', 'Mock generation changed');
     if (url.pathname === '/__mock/bootstrap' && req.method === 'POST') {
-      if (input.scenario !== undefined && scenarioName(input.scenario) !== state.scenario) reset(scenarioName(input.scenario));
-      setCookie(res);
+      const switched = input.scenario !== undefined && scenarioName(input.scenario) !== state.scenario;
+      if (switched) reset(scenarioName(input.scenario));
+      const session = accounts.resolve(req);
+      if (session) state.visitor = session.visitor;
+      else if (switched || !requestToken(req)) {
+        token = randomBytes(24).toString('hex');
+        state.visitor = bootstrapVisitor;
+        if (state.visitor) accounts.guest(token, state.visitor);
+        setCookie(res);
+      }
       return json(res, 200, state);
     }
     if (url.pathname === '/__mock' && req.method === 'GET') return json(res, 200, {
       scenarios, endpoints: { bootstrap: 'POST /__mock/bootstrap {scenario?}', state: 'GET /__mock/state', reset: 'POST /__mock/reset {scenario?}', action: 'POST /__mock/action' },
-      actions: ['colour', 'message', 'participants', 'faults', 'name-conflict', 'revoke', 'voice-disconnect', 'expire-attachments'],
+      actions: ['colour', 'message', 'participants', 'faults', 'name-conflict', 'revoke', 'voice-disconnect', 'expire-attachments', 'account-fault', 'expire-proof'],
       faults: state.faults,
       lifecycle: 'Same-scenario bootstrap preserves state. Reset advances generation; poll state independently of /api/live. Mock media disconnect releases exact connected presence in the current generation; it does not model durable authorization.',
     });
@@ -261,7 +284,11 @@ export async function startMockServer(options: { port?: number; scenario?: strin
       return json(res, 200, state);
     }
     if (url.pathname === '/__mock/action' && req.method === 'POST') {
-      if (input.type === 'faults') {
+      if (input.type === 'account-fault') {
+        if (!['none', 'finish-expired', 'finish-lost', 'regenerate-lost', 'last-passkey', 'invalid-proof'].includes(String(input.fault))) throw new Refused(400, 'invalid_request', 'Invalid account fault');
+        accounts.fault = input.fault as typeof accounts.fault;
+      } else if (input.type === 'expire-proof') accounts.expireProof();
+      else if (input.type === 'faults') {
         const faults = input.faults;
         if (!faults || typeof faults !== 'object' || Array.isArray(faults)) throw new Refused(400, 'invalid_request', 'Expected faults object');
         for (const [key, value] of Object.entries(faults)) {
@@ -313,6 +340,7 @@ export async function startMockServer(options: { port?: number; scenario?: strin
           }
         }
       } else if (input.type === 'revoke') {
+        accounts.sessions.clear();
         publish('access.revoked', { reason: 'link_replaced' });
         for (const socket of sockets.clients) socket.close(4001, 'Access revoked');
         state.visitor = null;
@@ -371,9 +399,18 @@ export async function startMockServer(options: { port?: number; scenario?: strin
       occupancy();
       requests.clear();
       token = randomBytes(24).toString('hex');
+      accounts.guest(token, state.visitor);
       setCookie(res);
       state.revision++;
       return json(res, 201, state.visitor);
+    }
+    const accountResult = accounts.handle(url.pathname, req, res, input, req.headers.origin ?? publicOrigin);
+    if (accountResult) {
+      if (accountResult.lost) {
+        // Keep the committed cookie, but withhold a readable once-only result.
+        res.writeHead(accountResult.status, { 'Content-Type': 'application/json' }); res.end('{'); return;
+      }
+      return json(res, accountResult.status, accountResult.value);
     }
     if (!authenticated(req) || !state.visitor) throw new Refused(401, 'visitor_required', 'Enter through the access link');
     if (url.pathname === '/api/visitor-colours' && req.method === 'POST') {
@@ -428,18 +465,19 @@ export async function startMockServer(options: { port?: number; scenario?: strin
     if (upload && req.method === 'POST') {
       if (!messages.has(upload[1]!)) throw new Refused(404, 'room_not_found', 'No such room');
       if (!multipart) throw new Refused(400, 'invalid_request', 'Multipart body required');
+      const uploaderId = state.visitor.id;
       const raw = await rawBody(req, attachmentLimits.maxFileBytes + attachmentLimits.multipartOverheadBytes);
       const part = parseMultipart(req.headers['content-type']!, raw);
       if (!part) throw new Refused(400, 'invalid_request', 'Expected one file part');
       if (part.data.length > attachmentLimits.maxFileBytes) throw new Refused(413, 'attachment_too_large', 'The file is too large');
-      const owned = [...attachments.values()].filter((a) => a.ownerId === state.visitor!.id && a.meta.availability === 'ready');
+      const owned = [...attachments.values()].filter((a) => a.ownerId === uploaderId && a.meta.availability === 'ready');
       if (owned.length >= attachmentLimits.maxPending) throw new Refused(429, 'attachment_busy', 'Too many pending drafts');
       // Long enough to watch the progress on a fast machine.
       await new Promise((resolve) => setTimeout(resolve, 350));
       const sniffed = sniffImage(part.data);
       const filename = sniffed && sniffed.contentType !== 'image/gif' && sniffed.contentType !== 'image/svg+xml' ? part.filename.replace(/\.[^.]*$/, '') + '.webp' : part.filename;
       state.revision++;
-      return json(res, 201, storeAttachment(upload[1]!, state.visitor.id, filename, part.data, 'ready'));
+      return json(res, 201, storeAttachment(upload[1]!, uploaderId, filename, part.data, 'ready'));
     }
     const attachmentRoute = /^\/api\/attachments\/([0-9a-f]{32})(\/content)?$/.exec(url.pathname);
     if (attachmentRoute) {
@@ -478,7 +516,7 @@ export async function startMockServer(options: { port?: number; scenario?: strin
       if (!Array.isArray(ids) || ids.length > attachmentLimits.maxAttachments || ids.some((x) => typeof x !== 'string') || new Set(ids).size !== ids.length) throw new Refused(400, 'invalid_attachments', 'Invalid attachment IDs');
       const text = input.body ?? '';
       if (typeof text !== 'string' || (!text.trim() && !ids.length) || [...text].length > 4000) throw new Refused(400, 'invalid_message', 'Message must have text or attachments, and at most 4000 characters');
-      const previous = requests.get(input.requestKey);
+      const previous = requests.get(state.visitor.id + ':' + input.requestKey);
       if (previous) {
         if (previous.roomId !== match[1] || previous.body !== text || previous.attachments.map((a) => a.id).join() !== ids.join()) throw new Refused(409, 'request_key_reused', 'Request key was used for another message');
         return json(res, 200, previous);
@@ -494,7 +532,7 @@ export async function startMockServer(options: { port?: number; scenario?: strin
       }
       const message: Schema['Message'] = { id: id(), roomId: match[1]!, authorId: state.visitor.id, authorName: state.visitor.name, body: text, attachments: drafts.map((d) => structuredClone(d!.meta)), createdAt: new Date().toISOString() };
       history.push(message);
-      requests.set(input.requestKey, message);
+      requests.set(state.visitor.id + ':' + input.requestKey, message);
       publish('message.created', message, message.roomId);
       state.revision++;
       if (sendFault === 'lost-response') { res.destroy(); return; }
@@ -520,6 +558,6 @@ export async function startMockServer(options: { port?: number; scenario?: strin
   const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   ownOrigins.add(url);
   publicOrigin = url;
-  return { url, setPublicOrigin(origin: string) { ownOrigins.add(origin); publicOrigin = origin; state.accessLink = `${publicOrigin}/#k=mock-access-link`; },
+  return { url, setPublicOrigin(origin: string) { ownOrigins.add(origin); ownOrigins.add(origin.replace('127.0.0.1', 'localhost')); publicOrigin = origin; state.accessLink = `${publicOrigin}/#k=mock-access-link`; },
     close: () => new Promise<void>((resolve, reject) => { for (const socket of sockets.clients) { socket.close(1001, 'Mock shutdown'); socket.terminate(); } sockets.close(); server.close((error) => error ? reject(error) : resolve()); server.closeAllConnections(); }) };
 }

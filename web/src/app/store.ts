@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from 'react';
-import type { Room, Visitor, VisitorColour } from '../api/client';
+import type { AccountSession, Room, Visitor, VisitorColour } from '../api/client';
 import type { ComposerUpload, RoomChat } from '../chat/timeline';
 import type { PaletteName } from '../fx/palette';
 import { idleVoice, type VoiceSnapshot } from '../voice/types';
@@ -14,6 +14,11 @@ export interface Notice {
 export interface AppState {
   phase: 'loading' | 'entry' | 'noaccess' | 'revoked' | 'ready';
   visitor: Visitor | null;
+  accountSession: AccountSession | null;
+  /** Changes only when the owner changes, for resetting owner-local UI state. */
+  ownerRevision: number;
+  /** Cookie transition/save gate: identity-bound actions remain paused. */
+  sessionPaused: boolean;
   rooms: Room[];
   viewedRoomId: string | null;
   /** The live-update connection, as far as the person needs to know. */
@@ -38,6 +43,9 @@ export interface AppState {
 let state: AppState = {
   phase: 'loading',
   visitor: null,
+  accountSession: null,
+  ownerRevision: 0,
+  sessionPaused: false,
   rooms: [],
   viewedRoomId: null,
   live: 'off',

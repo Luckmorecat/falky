@@ -1,7 +1,7 @@
 /** Dev-only simulator protocol. Public API responses retain the generated contract. */
 import type { components } from '../src/api/schema.gen';
 export type Schema = components['schemas'];
-export const scenarios = ['populated', 'entry', 'quiet', 'remote-share', 'same-person'] as const;
+export const scenarios = ['populated', 'entry', 'quiet', 'remote-share', 'same-person', 'signed-out'] as const;
 export type Scenario = (typeof scenarios)[number];
 export interface MockPeer {
   connectionId: string;
@@ -40,6 +40,8 @@ export interface MockState {
 }
 /** Generation is required for asynchronous browser voice operations. */
 export type MockAction =
+  | { type: 'account-fault'; fault: 'none' | 'finish-expired' | 'finish-lost' | 'regenerate-lost' | 'last-passkey' | 'invalid-proof' }
+  | { type: 'expire-proof' }
   | { type: 'colour'; visitorId: string; palette: Schema['PaletteName'] }
   | { type: 'message'; roomId: string; body?: string; authorName?: string; images?: number }
   | { type: 'expire-attachments'; roomId: string }
