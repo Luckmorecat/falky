@@ -5,6 +5,7 @@
   "type": "module",
   "packageManager": "pnpm@12.11.2",
   "scripts": {
+    "prototype:signin": "tsx scripts/prototype-device-sign-in.ts --scenario signed-out --port 5178",
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.mock.json",

@@ -14,6 +14,7 @@ const { values } = parseArgs({ options: {
   viewport: { type: 'string', default: '1440x1000' }, theme: { type: 'string', default: 'dark' },
   lang: { type: 'string', default: 'en' }, 'full-page': { type: 'boolean', default: false },
   gpu: { type: 'boolean', default: false }, help: { type: 'boolean', default: false },
+  'prototype-variant': { type: 'string' }, 'prototype-scene': { type: 'string', default: 'welcome' },
 } });
 
 async function main() {
@@ -27,6 +28,8 @@ async function main() {
   --lang en|uk                 Default: en
   --full-page                  Capture the full page
   --gpu                        Request hardware GPU with full headless Chromium
+  --prototype-variant A|B|C    Capture throwaway device sign-in prototype
+  --prototype-scene SCENE     Prototype scene (default: welcome)
 
 Each capture owns and closes a fresh mock server and browser. Unread enables the
 live background and injects one message to show Beacon. Screen-share uses
@@ -85,8 +88,11 @@ Existing browser: PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/path/to/chromium`);
       if (unread) localStorage.setItem(prefix + 'liveBackground', 'on');
     }, { state, lang: values.lang, theme: values.theme, unread: preset === 'unread' });
     const authenticator = authPreset ? await virtualAuthenticator(page) : undefined;
-    await page.goto(`${app.url}/?scenario=${scenario}${['invitation', 'recovery-kit', 'account'].includes(preset) ? '#invite=mock-invitation' : ''}`);
-    if (authPreset) {
+    const prototypeSearch = values['prototype-variant'] ? `&prototype=device-sign-in&variant=${encodeURIComponent(values['prototype-variant'])}&scene=${encodeURIComponent(values['prototype-scene'])}` : '';
+    await page.goto(`${app.url}/?scenario=${scenario}${prototypeSearch}${['invitation', 'recovery-kit', 'account'].includes(preset) ? '#invite=mock-invitation' : ''}`);
+    if (prototypeSearch) {
+      await expect(page.locator('.dsp-task')).toBeVisible();
+    } else if (authPreset) {
       if (preset === 'welcome' || preset === 'recovery') {
         await expect(page.getByRole('button', { name: t.account.signIn, exact: true })).toBeVisible();
         if (preset === 'recovery') {

@@ -1,4 +1,4 @@
-import { createContext, type ReactNode, useContext, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { createContext, lazy, type ReactNode, Suspense, useContext, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { authenticate, cancelAccountFlow, completeEnrollment, recover, recoveryPhrase, register, type PendingEnrollment } from '../app/accounts';
 import { enter, reconcileSession } from '../app/controller';
 import { clearEntryLinks, getEntryLinks, subscribeEntryLinks } from '../app/entryLinks';
@@ -110,7 +110,16 @@ export function AccountFlowProvider({ children }: { children: ReactNode }) {
 }
 const EnrollmentContext = createContext<(result: PendingEnrollment) => void>(() => {});
 
+const DeviceSignInPrototype = import.meta.env.DEV ? lazy(() => import('./prototype/DeviceSignInPrototype')) : null;
+
 export function AccountEntrance({ overlay = false }: { overlay?: boolean }) {
+  if (DeviceSignInPrototype && new URLSearchParams(location.search).get('prototype') === 'device-sign-in') {
+    return <Suspense fallback={<div className="screen" />}><DeviceSignInPrototype /></Suspense>;
+  }
+  return <AccountEntranceContent overlay={overlay} />;
+}
+
+function AccountEntranceContent({ overlay = false }: { overlay?: boolean }) {
   const ui = useAccountUI();
   const enroll = useContext(EnrollmentContext);
   const links = useSyncExternalStore(subscribeEntryLinks, getEntryLinks);
