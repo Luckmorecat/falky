@@ -244,7 +244,7 @@ test('settings window: keyboard stays inside, tabs move by arrows, one confirmed
   await opener.click();
   const settings = page.getByRole('dialog', { name: 'Settings' });
   const tabs = settings.getByRole('tab');
-  await expect(tabs).toHaveText(['Audio & video', 'Screen sharing', 'Profile', 'Shortcuts', 'System']);
+  await expect(tabs).toHaveText(['Audio & video', 'Screen sharing', 'Profile', 'Account', 'Shortcuts', 'System']);
 
   await settingsTab(page, 'Audio & video');
   await page.keyboard.press('ArrowRight');
@@ -317,7 +317,7 @@ test('chat and avatars render the same authoritative colour for each visitor', a
 test('entry, history/unread, conflict and reset after revoked or disconnected access', async ({ page }) => {
   await page.goto(`${app.url}/?scenario=entry`);
   await page.getByRole('textbox', { name: "Ім'я", exact: true }).fill('Taylor');
-  await page.getByRole('button', { name: 'Увійти', exact: true }).click();
+  await page.getByRole('button', { name: 'Увійти як гість', exact: true }).click();
   await english(page);
   await expect(page.getByText('Welcome back! Try sending a message or joining voice.', { exact: true })).toBeVisible();
   // The first trip to the top loads the older page and keeps the message that was already there.
@@ -341,7 +341,7 @@ test('entry, history/unread, conflict and reset after revoked or disconnected ac
   await page.getByRole('button', { name: 'Change name', exact: true }).click();
   await expect(page.getByRole('alertdialog')).toHaveCount(0);
   await action(page, { type: 'revoke' });
-  await expect(page.getByRole('heading', { name: 'The link was replaced', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Come on in.', exact: true })).toBeVisible();
   await page.request.post(`${app.url}/__mock/reset`, { data: { scenario: 'populated' } });
   await expect(page.getByRole('button', { name: 'Налаштування', exact: true })).toBeVisible();
   await expect(page).toHaveURL(/scenario=populated/);
@@ -368,7 +368,7 @@ test('two instances in one browser context isolate visitors and survive a fresh 
     await send(page, 'Only the first instance');
     await other.goto(`${second.url}/?scenario=entry`);
     await other.getByRole('textbox', { name: "Ім'я", exact: true }).fill('Second visitor');
-    await other.getByRole('button', { name: 'Увійти', exact: true }).click();
+    await other.getByRole('button', { name: 'Увійти як гість', exact: true }).click();
     await english(other);
     await other.getByRole('button', { name: 'Settings', exact: true }).click();
     await settingsTab(other, 'System');

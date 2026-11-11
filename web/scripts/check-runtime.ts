@@ -97,7 +97,9 @@ try {
     assert.ok([...modules].some((id) => id.endsWith('/src/voice/session.ts')), 'Real voice must be emitted');
     assert.ok([...modules].some((id) => id.endsWith('/src/runtime/browser.ts')), 'Real browser adapter must be emitted');
     assert.deepEqual([...modules].filter((id) => /\/(?:src\/)?mock\//.test(id)), []);
-    assert.doesNotMatch(assets, /__mock|mock-access-link|Simulated microphone|falky\.mock\./);
+    assert.ok([...modules].some((id) => id.endsWith('/src/api/webauthn.ts')), 'Native WebAuthn adapter must be emitted');
+    assert.ok(![...modules].some((id) => /entry\.prototype|account-fixture|\/smoke\//.test(id)), 'Prototype and auth fixtures stay outside production');
+    assert.doesNotMatch(assets, /__mock|mock-access-link|mock-invitation|Mock-Operator-Proof|acorn actor adapt|entry\.prototype|Simulated microphone|falky\.mock\./);
     console.log(`${mode} build: inspected ${modules.size} emitted modules and JS assets; real adapters present, mock/control code absent.`);
   }
 } finally {

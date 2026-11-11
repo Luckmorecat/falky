@@ -16,6 +16,8 @@ import { IconButton } from './IconButton';
 import { Orb } from './Orb';
 import { Segmented } from './Segmented';
 import { Toggle } from './Toggle';
+import { AccountPanel } from './AccountPanel';
+import { useAccountUI } from './AccountFlow';
 import { useMediaQuery } from './useMediaQuery';
 
 function useDevices(kind: MediaDeviceKind, active: boolean): MediaDeviceInfo[] {
@@ -324,12 +326,14 @@ function SystemPanel() {
   );
 }
 
-type Tab = 'media' | 'share' | 'profile' | 'keys' | 'system';
+type Tab = 'media' | 'share' | 'profile' | 'account' | 'keys' | 'system';
 
 /** Everything a person can change, in one window with its parts along the top. */
 export function Settings({ open, onClose }: { open: boolean; onClose(): void }) {
   // Words are read when rendering, so a new language needs only this render.
   useApp((s) => s.settings.language);
+  const accountUI = useAccountUI();
+  const close = () => { if (!accountUI.locked) onClose(); };
   const dialog = useRef<HTMLDialogElement>(null);
   const tabList = useRef<HTMLDivElement>(null);
   // Too narrow for the screen-share button, its settings mean nothing without it; no keyboard, no shortcuts.
@@ -339,6 +343,7 @@ export function Settings({ open, onClose }: { open: boolean; onClose(): void }) 
     ['media', t.tabAudioVideo],
     ...(showShare ? [['share', t.sectionShare] as const] : []),
     ['profile', t.sectionProfile],
+    ['account', t.account.account],
     ...(showKeys ? [['keys', t.tabKeys] as const] : []),
     ['system', t.tabSystem],
   ];
@@ -381,13 +386,14 @@ export function Settings({ open, onClose }: { open: boolean; onClose(): void }) 
       ref={dialog}
       className="settings"
       aria-labelledby="set-title"
-      onClose={onClose}
+      onClose={close}
+      onCancel={e => { e.preventDefault(); close(); }}
       // Pressing on the dialog itself, not on anything in it, is pressing on what lies around it.
-      onPointerDown={(e) => { if (e.target === e.currentTarget) onClose(); }}
+      onPointerDown={(e) => { if (e.target === e.currentTarget) close(); }}
     >
       <header className="settings-head">
         <h2 id="set-title">{t.settings}</h2>
-        <IconButton aria-label={t.close} data-cue="close" onClick={onClose}><Icon name="x" /></IconButton>
+        <IconButton aria-label={t.close} data-cue="close" disabled={accountUI.locked} onClick={close}><Icon name="x" /></IconButton>
       </header>
       <div ref={tabList} className="tabs" role="tablist" aria-label={t.settings} onKeyDown={onTabKey}>
         {tabs.map(([id, label]) => (
@@ -399,6 +405,7 @@ export function Settings({ open, onClose }: { open: boolean; onClose(): void }) 
       {panel('media', <AudioVideoPanel active={open && tab === 'media'} />)}
       {showShare && panel('share', <SharePanel />)}
       {panel('profile', <ProfilePanel />)}
+      {panel('account', <AccountPanel active={open && tab === 'account' && !accountUI.entryOpen} />)}
       {showKeys && panel('keys', <KeysPanel />)}
       {panel('system', <SystemPanel />)}
     </dialog>

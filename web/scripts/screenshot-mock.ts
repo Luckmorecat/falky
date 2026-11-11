@@ -3,11 +3,12 @@ import { dirname, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { chromium, expect, type Browser } from '@playwright/test';
 import { scenarios, type MockState } from '../mock/protocol';
+import { virtualAuthenticator } from '../smoke/account-browser';
 import { chromiumOptions } from '../smoke/browser';
 import { launchMock } from '../smoke/launcher';
 import { setLanguage, t } from '../src/strings';
 
-const presets = ['room', 'chat', 'unread', 'voice', 'screen-share', 'settings', 'profile', 'entry'] as const;
+const presets = ['room', 'chat', 'unread', 'voice', 'screen-share', 'settings', 'profile', 'entry', 'welcome', 'invitation', 'recovery', 'recovery-kit', 'account'] as const;
 const { values } = parseArgs({ options: {
   preset: { type: 'string' }, scenario: { type: 'string' }, output: { type: 'string' },
   viewport: { type: 'string', default: '1440x1000' }, theme: { type: 'string', default: 'dark' },
@@ -36,7 +37,8 @@ Existing browser: PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/path/to/chromium`);
     return;
   }
   const preset = values.preset ?? (values.scenario === 'entry' ? 'entry' : 'room');
-  const scenario = values.scenario ?? (preset === 'entry' ? 'entry' : preset === 'screen-share' ? 'remote-share' : 'populated');
+  const authPreset = ['welcome', 'invitation', 'recovery', 'recovery-kit', 'account'].includes(preset);
+  const scenario = values.scenario ?? (authPreset ? 'signed-out' : undefined) ?? (preset === 'entry' ? 'entry' : preset === 'screen-share' ? 'remote-share' : 'populated');
   if (!presets.includes(preset as typeof presets[number])) throw new Error(`Unknown preset: ${preset}`);
   if (!scenarios.includes(scenario as typeof scenarios[number])) throw new Error(`Unknown scenario: ${scenario}`);
   if ((preset === 'entry') !== (scenario === 'entry')) throw new Error('The entry scenario requires the entry preset, and vice versa.');
@@ -63,6 +65,7 @@ Existing browser: PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/path/to/chromium`);
   cancellation.signal.addEventListener('abort', closeBrowser);
   try {
     app = await launchMock(0, { signal: cancellation.signal, stats: false });
+    if (authPreset) app.url = app.url.replace('127.0.0.1', 'localhost');
     console.error(`Mock: ${app.url} | preset: ${preset} | scenario: ${scenario}${values.gpu ? ' | GPU requested' : ''}`);
     browser = await chromium.launch({ ...chromiumOptions(values.gpu), headless: true,
       handleSIGINT: false, handleSIGTERM: false, handleSIGHUP: false });
@@ -81,7 +84,36 @@ Existing browser: PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/path/to/chromium`);
       localStorage.setItem(prefix + 'theme', theme);
       if (unread) localStorage.setItem(prefix + 'liveBackground', 'on');
     }, { state, lang: values.lang, theme: values.theme, unread: preset === 'unread' });
-    await page.goto(`${app.url}/?scenario=${scenario}`);
+    const authenticator = authPreset ? await virtualAuthenticator(page) : undefined;
+    await page.goto(`${app.url}/?scenario=${scenario}${['invitation', 'recovery-kit', 'account'].includes(preset) ? '#invite=mock-invitation' : ''}`);
+    if (authPreset) {
+      if (preset === 'welcome' || preset === 'recovery') {
+        await expect(page.getByRole('button', { name: t.account.signIn, exact: true })).toBeVisible();
+        if (preset === 'recovery') {
+          await page.getByRole('button', { name: t.account.recover, exact: true }).click();
+          await expect(page.getByRole('textbox', { name: `${t.account.word} 12`, exact: true })).toBeVisible();
+        }
+      } else {
+        await page.getByRole('textbox', { name: t.name, exact: true }).fill('Taylor');
+        if (preset !== 'invitation') {
+          await page.getByRole('button', { name: t.account.register, exact: true }).click();
+          await expect(page.getByRole('dialog', { name: t.account.saveTitle, exact: true })).toBeVisible();
+          if (preset === 'account') {
+            await page.getByRole('checkbox', { name: t.account.saved, exact: true }).check();
+            await page.getByRole('button', { name: t.account.continue, exact: true }).click();
+            await page.getByRole('button', { name: t.settings, exact: true }).click();
+            await page.getByRole('tab', { name: t.account.account, exact: true }).click();
+            await expect(page.getByRole('button', { name: t.account.addKey, exact: true })).toBeVisible();
+            await virtualAuthenticator(page, 'usb', authenticator!.client);
+            await authenticator!.client.send('WebAuthn.setAutomaticPresenceSimulation', { authenticatorId: authenticator!.authenticatorId, enabled: false });
+            const label = values.lang === 'uk' ? 'Ноутбук · запасний ключ для подорожей і щоденного доступу' : 'Laptop · backup passkey for travel and everyday access';
+            await page.getByRole('textbox', { name: t.account.keyLabel, exact: true }).fill(label);
+            await page.getByRole('button', { name: t.account.addKey, exact: true }).click();
+            await expect(page.getByRole('button', { name: `${t.account.removeKey}: ${label}`, exact: true })).toBeVisible();
+          }
+        }
+      }
+    } else
     if (preset === 'entry') {
       await expect(page.getByRole('textbox', { name: t.name, exact: true })).toBeVisible();
     } else {

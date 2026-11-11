@@ -1,4 +1,4 @@
-import { api, ApiError, type Attachment, type LiveEvent, type Message, type Room, type Visitor, type VisitorColour } from '../api/client';
+import { api, ApiError, type AccountSession, type Attachment, type LiveEvent, type Message, type Room, type Visitor, type VisitorColour } from '../api/client';
 import { LiveConnection } from '../api/live';
 import { followingLatest } from '../chat/place';
 import { isImage, onImageGone } from '../chat/images';
@@ -11,10 +11,12 @@ import { playSound, notificationPermission, requestNotificationPermission, notif
 import { applyAppearance } from './appearance';
 import { prefs, type Settings } from './prefs';
 import { getState, setState } from './store';
+import { captureEntryLinks, clearEntryLinks, getEntryLinks } from './entryLinks';
 
 const PAGE = 100;
 // A response from a previous access/boot must never populate the next visitor's state.
 let session = 0;
+let sessionChanging = false;
 let colourSaveSequence = 0;
 const colourRequests = new Map<string, number>();
 let colourRetryTimer: ReturnType<typeof setTimeout> | null = null;
@@ -34,11 +36,11 @@ function mergeColours(incoming: VisitorColour[]): void {
     if (!colours[colour.visitorId] || colour.revision > colours[colour.visitorId]!.revision) colours[colour.visitorId] = colour;
   }
   const visitor = s.visitor && colours[s.visitor.id] ? { ...s.visitor, colour: colours[s.visitor.id]! } : s.visitor;
-  setState({ colours, visitor });
+  setState({ colours, visitor, accountSession: visitor && s.accountSession ? { ...s.accountSession, visitor } : s.accountSession });
 }
 
 function acceptVisitor(visitor: Visitor): void {
-  setState({ visitor });
+  setState({ visitor, accountSession: getState().accountSession ? { ...getState().accountSession!, visitor } : null });
   mergeColours([visitor.colour]);
 }
 
@@ -55,6 +57,7 @@ function knownVisitorIds(): string[] {
 
 /** Explicit-ID snapshots include offline authors; failed or omitted IDs remain retryable. */
 async function refreshColours(all = false): Promise<void> {
+  if (sessionChanging) return;
   const epoch = session;
   if (!getState().visitor) return;
   let failed = false;
@@ -84,19 +87,19 @@ async function refreshColours(all = false): Promise<void> {
   }
 }
 
-/** The access link's secret, from the URL fragment, kept only while it is needed. */
-let linkSecret: string | null = null;
 let noticeSeq = 0;
 let noticeTimer: ReturnType<typeof setTimeout> | null = null;
 
-export const voice: VoiceClient = new VoiceSession({
-  onChange: (snapshot) => { setState({ voice: snapshot }); void refreshColours(); },
+const voiceSession: VoiceClient = new VoiceSession({
+  onChange: (snapshot) => { setState({ voice: snapshot }); if (!sessionChanging) void refreshColours(); },
   onProblem(problem) {
+    if (sessionChanging) return;
     if (problem === 'visitor_required') return endAccess();
     if (problem === 'name_taken') void refreshMe();
     showNotice(t.voiceProblems[problem].title, t.voiceProblems[problem].body);
   },
   onSound(sound) {
+    if (sessionChanging) return;
     const s = getState();
     if (s.settings.sounds && !s.voice.deafened) playSound(sound, s.settings.speakerId);
   },
@@ -112,22 +115,35 @@ export const voice: VoiceClient = new VoiceSession({
   volumeOf: (id) => prefs.volume(id),
 });
 
-const live = new LiveConnection({
-  onEvent: handleEvent,
+const pausedVoiceActions = new Set<PropertyKey>(['join', 'toggleMute', 'toggleDeafen', 'toggleShare', 'toggleCamera', 'restartCamera', 'setCamera', 'setMic', 'setSpeaker', 'applyMicProcessing']);
+const voiceMethods = new Map<PropertyKey, unknown>();
+export const voice: VoiceClient = new Proxy(voiceSession, {
+  get(target, key) {
+    const value = Reflect.get(target, key);
+    if (typeof value !== 'function') return value;
+    if (!voiceMethods.has(key)) voiceMethods.set(key, pausedVoiceActions.has(key)
+      ? (...args: unknown[]) => sessionChanging ? Promise.resolve() : value.apply(target, args)
+      : value.bind(target));
+    return voiceMethods.get(key);
+  },
+});
+
+function makeLive(epoch: number): LiveConnection { return new LiveConnection({
+  onEvent: (event) => { if (epoch === session) handleEvent(event); },
   onOpen() {
+    if (epoch !== session) return;
     setState({ live: 'open' });
     void catchUp();
   },
-  onDown: () => setState({ live: 'reconnecting' }),
-  onRevoked: endAccess,
+  onDown: () => { if (epoch === session) setState({ live: 'reconnecting' }); },
+  onRevoked: () => { if (epoch === session) endAccess(); },
   async shouldRetry() {
-    const epoch = session;
+    if (epoch !== session) return false;
     try {
-      const me = await api.me();
-      if (epoch !== session) return false;
-      acceptVisitor(me);
-      if (me.nameTaken) setState({ live: 'off' });
-      return !me.nameTaken;
+      if (!await refreshIdentity(epoch)) return false;
+      const me = getState().visitor;
+      if (me?.nameTaken) setState({ live: 'off' });
+      return !!me && !me.nameTaken;
     } catch (err) {
       if (epoch !== session) return false;
       if (err instanceof ApiError && err.status === 401) {
@@ -137,15 +153,20 @@ const live = new LiveConnection({
       return true;
     }
   },
-});
+}); }
+let live = makeLive(session);
+
+function clearOwner(clearPreferences = true): void {
+  dropUploads();
+  dismissNotice();
+  if (clearPreferences) prefs.clearIdentity();
+  setState({ visitor: null, accountSession: null, ownerRevision: getState().ownerRevision + 1, rooms: [], chats: {}, colours: {}, colourSave: null, viewedRoomId: null, newAfterId: null, chatOpen: false, roomsOpen: false });
+}
 
 function endAccess(): void {
-  session++;
-  resetColourRequests();
-  live.stop();
-  dropUploads();
-  setState({ phase: 'revoked', live: 'off', visitor: null, rooms: [], chats: {}, colours: {}, colourSave: null });
-  voice.end();
+  beginSessionChange();
+  clearOwner();
+  setState({ phase: 'revoked' });
 }
 
 /** Stops everything if a request found the access gone; says whether it did. */
@@ -170,66 +191,147 @@ export function dismissNotice(): void {
 
 /* ---------- Entering ---------- */
 
-export async function boot(): Promise<void> {
+/** Invalidates old requests before a cookie-changing finish. Keep Main mounted during the flow. */
+export function beginSessionChange(): number {
   const epoch = ++session;
+  sessionChanging = true;
+  setState({ sessionPaused: true });
   resetColourRequests();
-  dropUploads();
-  setState({ visitor: null, rooms: [], chats: {}, colours: {}, colourSave: null });
-  const fragment = new URLSearchParams(location.hash.slice(1));
-  const secret = fragment.get('k');
-  if (secret) {
-    linkSecret = secret;
-    // Out of the address bar and the history at once.
-    history.replaceState(null, '', location.pathname + location.search);
-  }
   live.stop();
+  live = makeLive(epoch);
   voice.end();
+  uploading.forEach((control) => control.abort());
+  uploading.clear();
+  const state = getState();
+  setState({ live: 'off', colourSave: null,
+    uploads: Object.fromEntries(Object.entries(state.uploads).map(([id, list]) => [id, list.map((u) => u.status === 'uploading' ? { ...u, status: 'failed' as const, reason: t.errors.postNetwork } : u)])),
+    chats: Object.fromEntries(Object.entries(state.chats).map(([id, chat]) => [id, { ...chat, loadingOlder: false, pending: chat.pending.map((p) => ({ ...p, failed: true, reason: t.errors.postNetwork })) }])) });
+  return epoch;
+}
+
+export function currentSessionEpoch(): number { return session; }
+export function handleAccountError(error: unknown, epoch: number): void {
+  if (epoch === session) accessEnded(error);
+}
+
+/** Only use after a known precommit failure. Unknown outcomes need reconcileSession. */
+export function resumeSession(epoch: number): void {
+  if (epoch !== session || !getState().visitor) return;
+  sessionChanging = false;
+  setState({ sessionPaused: false });
+  if (!getState().visitor?.nameTaken) live.start();
+  void catchUp();
+}
+
+export async function boot(): Promise<void> {
+  captureEntryLinks();
+  await reconcileSession().catch(() => {});
+}
+
+export async function reconcileSession(): Promise<AccountSession | null> {
+  const epoch = beginSessionChange();
   try {
-    const visitor = await api.me();
-    if (epoch === session) await startWith(visitor, epoch);
+    const resolved = await api.accountSession();
+    if (epoch !== session) return null;
+    await adoptSession(resolved, epoch);
+    return resolved;
   } catch (err) {
-    if (epoch !== session) return;
+    if (epoch !== session) return null;
     if (err instanceof ApiError && err.status === 401) {
-      setState({ phase: linkSecret ? 'entry' : getState().phase === 'revoked' ? 'revoked' : 'noaccess' });
-      return;
+      clearOwner();
+      setState({ phase: 'entry' });
+      return null;
     }
-    // Server unreachable: try again rather than pretend access is gone.
-    setTimeout(() => void boot(), 3000);
+    // A failed restore does not establish that the existing session is invalid.
+    setTimeout(() => { if (epoch === session) void reconcileSession().catch(() => {}); }, 3000);
+    throw err;
   }
 }
 
-/** Tries to enter; answers the reason for the person, or null when in. */
+/** Tries guest entry using only a captured reusable access link. */
 export async function enter(name: string): Promise<string | null> {
-  if (!linkSecret) return t.errors.invalid_link;
+  const secret = getEntryLinks().guest;
+  if (!secret) return t.errors.invalid_link;
+  const epoch = beginSessionChange();
+  let entered = false;
   try {
-    const visitor = await api.enter(linkSecret, name);
-    linkSecret = null;
-    await startWith(visitor, ++session);
+    await api.enter(secret, name);
+    entered = true;
+    if (epoch !== session) return null;
+    clearEntryLinks('guest');
+    const resolved = await api.accountSession();
+    await adoptSession(resolved, epoch);
     return null;
   } catch (err) {
+    if (epoch !== session) return null;
+    if (entered || !(err instanceof ApiError) || err.status === 0 || err.status >= 500 || err.code === 'invalid_response') {
+      void reconcileSession().catch(() => {});
+    } else resumeSession(epoch);
     const code = err instanceof ApiError ? err.code : 'other';
     if (code === 'invalid_link' || code === 'name_taken' || code === 'invalid_name' || code === 'rate_limited' || code === 'network') return t.errors[code];
     return t.errors.other;
   }
 }
 
-async function startWith(visitor: Visitor, epoch: number): Promise<void> {
-  const rooms = await api.rooms();
+export async function adoptSession(resolved: AccountSession, epoch: number): Promise<void> {
   if (epoch !== session) return;
-  const remembered = prefs.viewedRoom();
-  const viewedRoomId = rooms.some((r) => r.id === remembered) ? remembered : (rooms[0]?.id ?? null);
-  setState({ phase: 'ready', visitor, rooms, viewedRoomId, chats: Object.fromEntries(rooms.map((r) => [r.id, emptyChat()])), live: visitor.nameTaken ? 'off' : 'reconnecting' });
+  const sameOwner = getState().visitor?.id === resolved.visitor.id;
+  if (!sameOwner) clearOwner(getState().visitor !== null);
+  const visitor = resolved.visitor;
+  setState({ visitor, accountSession: resolved, phase: 'ready' });
   mergeColours([visitor.colour]);
+  let rooms: Room[];
+  try { rooms = await api.rooms(); }
+  catch (err) {
+    if (epoch === session) {
+      if (!accessEnded(err)) setTimeout(() => { if (epoch === session) void reconcileSession().catch(() => {}); }, 3000);
+    }
+    return;
+  }
+  if (epoch !== session) return;
+  sessionChanging = false;
+  setState({ sessionPaused: false });
+  const state = getState();
+  const remembered = sameOwner ? state.viewedRoomId : prefs.viewedRoom();
+  const viewedRoomId = rooms.some((r) => r.id === remembered) ? remembered : (rooms[0]?.id ?? null);
+  setState({ phase: 'ready', rooms, viewedRoomId, chats: Object.fromEntries(rooms.map((r) => [r.id, state.chats[r.id] ?? emptyChat()])), live: visitor.nameTaken ? 'off' : 'reconnecting' });
   void readAttachmentLimits(epoch);
   await Promise.all([refreshColours(), ...rooms.map(loadChat)]);
   if (epoch === session && !visitor.nameTaken) live.start();
 }
 
+export async function logout(): Promise<void> {
+  const epoch = beginSessionChange();
+  try { await api.logout(); }
+  catch (err) {
+    if (!(err instanceof ApiError && err.status === 401)) {
+      if (epoch === session) { clearOwner(); clearEntryLinks(); setState({ phase: 'entry' }); }
+      throw err;
+    }
+  }
+  if (epoch !== session) return;
+  clearOwner();
+  clearEntryLinks();
+  setState({ phase: 'entry' });
+}
+
+async function refreshIdentity(epoch: number): Promise<boolean> {
+  const resolved = await api.accountSession();
+  if (epoch !== session) return false;
+  const current = getState().accountSession;
+  if (current?.visitor.id !== resolved.visitor.id || current.kind !== resolved.kind) {
+    await reconcileSession();
+    return false;
+  }
+  acceptVisitor(resolved.visitor);
+  return true;
+}
+
 async function refreshMe(): Promise<void> {
+  if (sessionChanging) return;
   const epoch = session;
   try {
-    const visitor = await api.me();
-    if (epoch === session) acceptVisitor(visitor);
+    await refreshIdentity(epoch);
   } catch (err) {
     if (epoch === session) accessEnded(err);
   }
@@ -237,6 +339,7 @@ async function refreshMe(): Promise<void> {
 
 /** Renames; answers the reason for the person, or null when done. */
 export async function rename(name: string): Promise<string | null> {
+  if (sessionChanging) return t.errors.other;
   const epoch = session;
   try {
     const before = getState().visitor;
@@ -290,6 +393,7 @@ function handleEvent(event: LiveEvent): void {
 
 /** After any disconnection: events are not replayed, so read what was missed. */
 async function catchUp(): Promise<void> {
+  if (sessionChanging) return;
   const epoch = session;
   try {
     await Promise.all([refreshMe(), refreshColours(true)]);
@@ -350,6 +454,7 @@ function markRead(roomId: string): void {
 
 /** Reads the newest page the first time, then only what came after. */
 async function loadChat(room: Pick<Room, 'id'>): Promise<void> {
+  if (sessionChanging) return;
   const epoch = session;
   const roomId = room.id;
   try {
@@ -383,6 +488,7 @@ async function loadChat(room: Pick<Room, 'id'>): Promise<void> {
 }
 
 export async function loadOlder(roomId: string): Promise<void> {
+  if (sessionChanging) return;
   const epoch = session;
   const chat = getState().chats[roomId];
   const first = chat?.messages[0];
@@ -400,6 +506,7 @@ export async function loadOlder(roomId: string): Promise<void> {
 }
 
 export function postMessage(roomId: string, body: string): void {
+  if (sessionChanging) return;
   const ready = (getState().uploads[roomId] ?? []).filter((u) => u.status === 'ready' && u.attachment);
   const attachments = ready.map((u) => ({ ...u.attachment!, contentUrl: u.previewUrl }));
   const pending: PendingMessage = { requestKey: crypto.randomUUID(), roomId, body, attachments, failed: false, reason: '' };
@@ -412,11 +519,13 @@ export function postMessage(roomId: string, body: string): void {
 
 /** Sending again under the same key can never post it twice. */
 export function retryMessage(p: PendingMessage): void {
+  if (sessionChanging) return;
   patchChat(p.roomId, (c) => ({ pending: c.pending.map((x) => (x.requestKey === p.requestKey ? { ...x, failed: false, reason: '' } : x)) }));
   void send(p);
 }
 
 export function discardMessage(p: PendingMessage): void {
+  if (sessionChanging) return;
   patchChat(p.roomId, (c) => ({ pending: c.pending.filter((x) => x.requestKey !== p.requestKey) }));
   for (const a of p.attachments) {
     URL.revokeObjectURL(a.contentUrl);
@@ -425,6 +534,7 @@ export function discardMessage(p: PendingMessage): void {
 }
 
 async function send(p: PendingMessage): Promise<void> {
+  if (sessionChanging) return;
   const epoch = session;
   try {
     const message = await api.post(p.roomId, p.requestKey, p.body, p.attachments.map((a) => a.id));
@@ -460,6 +570,8 @@ function dropUploads(): void {
   uploading.forEach((c) => c.abort());
   uploading.clear();
   for (const list of Object.values(getState().uploads)) for (const u of list) URL.revokeObjectURL(u.previewUrl);
+  for (const chat of Object.values(getState().chats)) for (const pending of chat.pending) for (const attachment of pending.attachments) URL.revokeObjectURL(attachment.contentUrl);
+  files.clear();
   setState({ uploads: {} });
 }
 
@@ -467,7 +579,8 @@ async function readAttachmentLimits(epoch: number): Promise<void> {
   try {
     const limits = await api.attachmentLimits();
     if (epoch === session) setState({ attachmentLimits: { maxAttachments: limits.maxAttachments, maxFileBytes: limits.maxFileBytes } });
-  } catch {
+  } catch (error) {
+    if (epoch === session) accessEnded(error);
     // The defaults match the server's; it refuses anything beyond them anyway.
   }
 }
@@ -497,6 +610,7 @@ async function upload(u: ComposerUpload, file: File): Promise<void> {
   try {
     const attachment = await api.upload(u.roomId, file, (sent) => {
       // A render per percent is plenty.
+      if (epoch !== session || control.signal.aborted) return;
       if (sent - last >= 0.01 || sent === 1) {
         last = sent;
         patchUpload(u.roomId, u.localId, { progress: sent });
@@ -513,7 +627,7 @@ async function upload(u: ComposerUpload, file: File): Promise<void> {
     if (epoch !== session || (err instanceof ApiError && err.code === 'aborted') || accessEnded(err)) return;
     patchUpload(u.roomId, u.localId, { status: 'failed', reason: uploadReason(err) });
   } finally {
-    uploading.delete(u.localId);
+    if (uploading.get(u.localId) === control) uploading.delete(u.localId);
   }
 }
 
@@ -525,6 +639,7 @@ const files = new Map<string, File>();
  * a notice rather than silently.
  */
 export function addFiles(roomId: string, picked: Iterable<File>): void {
+  if (sessionChanging) return;
   const { attachmentLimits: limits, uploads } = getState();
   const list = [...picked];
   const images = list.filter((f) => f.type.startsWith('image/'));
@@ -548,6 +663,7 @@ export function addFiles(roomId: string, picked: Iterable<File>): void {
 }
 
 export function removeUpload(roomId: string, localId: string): void {
+  if (sessionChanging) return;
   const u = getState().uploads[roomId]?.find((x) => x.localId === localId);
   if (!u) return;
   uploading.get(localId)?.abort();
@@ -558,6 +674,7 @@ export function removeUpload(roomId: string, localId: string): void {
 }
 
 export function retryUpload(roomId: string, localId: string): void {
+  if (sessionChanging) return;
   const u = getState().uploads[roomId]?.find((x) => x.localId === localId);
   const file = files.get(localId);
   if (!u || !file || u.status !== 'failed' || file.size > getState().attachmentLimits.maxFileBytes) return;
@@ -596,11 +713,12 @@ onImageGone((id) => {
 
 /** Expiry events are not replayed: after a reconnect, ask after every picture still shown as there. */
 async function refreshAttachments(epoch: number): Promise<void> {
+  if (sessionChanging) return;
   const shown = Object.entries(getState().chats).flatMap(([roomId, c]) => c.messages.flatMap((m) =>
     m.attachments.filter((a) => a.availability === 'posted' && isImage(a)).map((a) => ({ roomId, id: a.id })))).slice(-120);
   for (let i = 0; i < shown.length; i += 4) {
     const batch = shown.slice(i, i + 4);
-    const fresh = await Promise.all(batch.map(({ id }) => api.attachment(id).catch(() => null)));
+    const fresh = await Promise.all(batch.map(({ id }) => api.attachment(id).catch((error) => { if (epoch === session) accessEnded(error); return null; })));
     if (epoch !== session) return;
     batch.forEach(({ roomId }, j) => {
       const next = fresh[j];
@@ -614,7 +732,9 @@ function notifyOfMessage(m: Message): void {
   if (!s.settings.notifications || m.authorId === s.visitor?.id || document.visibilityState === 'visible') return;
   if (notificationPermission() !== 'granted') return;
   const room = s.rooms.find((r) => r.id === m.roomId)?.name ?? '';
+  const epoch = session;
   notify(`${m.authorName} · ${room}`, { body: (m.body.trim() ? m.body : t.imagesSummary(m.attachments.length)).slice(0, 160), tag: m.roomId }, () => {
+    if (epoch !== session) return;
     window.focus();
     viewRoom(m.roomId);
     setChatOpen(true);
@@ -624,6 +744,7 @@ function notifyOfMessage(m: Message): void {
 /* ---------- Navigation ---------- */
 
 export function viewRoom(roomId: string): void {
+  if (sessionChanging) return;
   const s = getState();
   if (s.viewedRoomId === roomId) {
     setState({ roomsOpen: false });
@@ -635,6 +756,7 @@ export function viewRoom(roomId: string): void {
 }
 
 export function stepRoom(delta: number): void {
+  if (sessionChanging) return;
   const { rooms, viewedRoomId } = getState();
   if (!rooms.length) return;
   const i = rooms.findIndex((r) => r.id === viewedRoomId);
@@ -652,10 +774,12 @@ function openReading(roomId: string): void {
 
 /** The visitor came back to the newest messages, by scrolling or the latest button. */
 export function markLatestRead(roomId: string): void {
+  if (sessionChanging) return;
   if (reading(roomId)) markRead(roomId);
 }
 
 export function setChatOpen(open: boolean): void {
+  if (sessionChanging) return;
   const s = getState();
   setState({ chatOpen: open, newAfterId: open ? s.newAfterId : null });
   if (open && s.viewedRoomId) openReading(s.viewedRoomId);
@@ -663,13 +787,14 @@ export function setChatOpen(open: boolean): void {
 
 document.addEventListener('visibilitychange', () => {
   const s = getState();
-  if (document.visibilityState === 'visible' && s.chatOpen && s.viewedRoomId) syncRead(s.viewedRoomId);
+  if (!sessionChanging && document.visibilityState === 'visible' && s.chatOpen && s.viewedRoomId) syncRead(s.viewedRoomId);
 });
 
 /* ---------- Settings ---------- */
 
 /** A swatch requests that exact palette. The confirmed map never changes optimistically. */
 export async function setVisitorColour(palette: PaletteName): Promise<void> {
+  if (sessionChanging) return;
   const epoch = session;
   const request = ++colourSaveSequence;
   setState({ colourSave: { palette, pending: true, failed: false } });
