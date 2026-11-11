@@ -42,6 +42,10 @@ Open http://127.0.0.1:5178/?prototype=device-sign-in&variant=A
 
 Use the bottom arrows or keyboard left/right to switch layouts. Open Preview controls to choose either device, terminal states and light/dark appearance. Variant and scene URLs survive reload; transient interactions live only in memory. The QR fixture opens the local approval preview, never a real approval endpoint. Phone scanning requires a reachable development host; desktop preview controls are the reliable way to inspect both sides.
 
+The signed-in entry point is Settings → Account, previewable with `&scene=settings`. Its “Sign in another device” section places “Scan QR code” beside “Create sign-in link”. Scanning opens a camera-permission and viewfinder preview (`&scene=scanner`); Preview controls can simulate a blocked camera or a detected QR, which leads to explicit approval. Camera access and decoding are simulated; no camera is opened. “Done” returns to Account settings.
+
+The settings/scanner addition passes TypeScript, production build and a Chromium walkthrough at 320, 390 and 1440 pixels, including camera blocked/retry, explicit approval, return to settings and the link alternative. All variants retain the same Account settings entry point; 18 combinations have no horizontal overflow or page errors.
+
 ## Verdict
 
 Pending user evaluation. A is the continuity-first recommendation; B tests immediate QR discovery; C tests whether explicit steps help explain the two-device handoff. No design has been promoted to production. All controls are simulations, including passkey and recovery handoffs.

@@ -61,6 +61,34 @@
 .dsp-identity > span { flex: 1; font-size: 14px; }
 .dsp-identity > svg.i { width: 18px; color: var(--text-2); }
 
+.dsp-settings-window { display: flex; flex-direction: column; width: min(880px, 100%); height: min(680px, calc(100dvh - 240px)); margin: max(0px, calc((100dvh - 906px) / 2)) auto 0; border-radius: 48px; background: var(--surface); box-shadow: 0 24px 60px var(--shadow); overflow: hidden; }
+.dsp-settings-window .settings-head h1 { font-size: 22px; font-weight: 500; letter-spacing: -.01em; }
+.dsp-settings-window .settings-head h1:focus { outline: none; }
+.dsp-settings-tabs span { flex: none; display: grid; place-items: center; min-height: 44px; padding: 0 16px; border-radius: 22px; font-size: 15px; color: var(--text-2); white-space: nowrap; }
+.dsp-settings-tabs span[aria-current="page"] { background: var(--invert); color: var(--on-invert); font-weight: 500; }
+.dsp-settings-window h3 { font-size: 15px; font-weight: 600; margin-bottom: 12px; }
+.dsp-settings-identity { display: flex; align-items: center; gap: 16px; }
+.dsp-settings-identity .orb { width: 54px; }
+.dsp-settings-identity h2 { font-size: 21px; font-weight: 500; letter-spacing: -.02em; }
+.dsp-settings-actions .go, .dsp-settings-actions .btn2 { display: flex; align-items: center; justify-content: center; gap: 10px; }
+.dsp-settings-actions svg.i { width: 20px; height: 20px; }
+.dsp-settings-passkey { display: flex; align-items: center; gap: 14px; }
+.dsp-settings-window .account-key { margin-top: 16px; }
+.dsp-scanner-task { margin: 0 auto; text-align: center; max-width: 360px; }
+.dsp-task > .dsp-scanner-back { display: flex; align-items: center; gap: 6px; align-self: flex-start; margin: 0 0 22px; }
+.dsp-scanner-back svg.i { width: 16px; height: 16px; }
+.dsp-camera-preview { aspect-ratio: 1.25; width: 100%; margin-top: 24px; background: #161615; color: #fff; border-radius: 32px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 20px; }
+.dsp-camera-preview > p { font-size: 12px; color: rgba(255,255,255,.62); padding: 0 15px; }
+.dsp-scan-frame { position: relative; width: 152px; height: 128px; display: grid; place-items: center; }
+.dsp-scan-frame > span { position: absolute; width: 26px; height: 26px; border: solid rgba(255,255,255,.62); border-width: 0; corner-shape: round; }
+.dsp-scan-frame > span:nth-child(1) { top: 0; left: 0; border-top-width: 2px; border-left-width: 2px; border-top-left-radius: 12px; }
+.dsp-scan-frame > span:nth-child(2) { top: 0; right: 0; border-top-width: 2px; border-right-width: 2px; border-top-right-radius: 12px; }
+.dsp-scan-frame > span:nth-child(3) { bottom: 0; left: 0; border-bottom-width: 2px; border-left-width: 2px; border-bottom-left-radius: 12px; }
+.dsp-scan-frame > span:nth-child(4) { bottom: 0; right: 0; border-bottom-width: 2px; border-right-width: 2px; border-bottom-right-radius: 12px; }
+.dsp-scan-frame svg.i { width: 38px; height: 38px; stroke-width: 1.3; color: rgba(255,255,255,.62); }
+.dsp-camera-scanning .dsp-scan-frame::after { content: ''; position: absolute; left: 8px; right: 8px; top: 50%; height: 1px; background: rgba(255,255,255,.62); }
+.dsp-camera-denied .dsp-scan-frame { opacity: .35; }
+
 .dsp-quiet { min-height: calc(100dvh - 226px); display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 30px 0; text-align: center; }
 .dsp-entrance-orb { width: 116px; margin-bottom: 32px; }
 .dsp-quiet:has(.dsp-qr, .dsp-code, .dsp-context, .dsp-result-icon, .dsp-terminal-icon) .dsp-entrance-orb { display: none; }
@@ -135,6 +163,13 @@
   .dsp-guide h2 { font-size: 29px; }
 }
 @media (max-width: 650px) {
+  .dsp-settings-window { height: auto; min-height: calc(100dvh - 225px); border-radius: 32px; margin-top: 0; }
+  .dsp-settings-window .settings-head { padding: 18px 16px 0 22px; }
+  .dsp-settings-tabs { padding-inline: 12px; }
+  .dsp-settings-tabs span { padding-inline: 12px; font-size: 13px; }
+  .dsp-settings-window .settings-panel { overflow: visible; padding: 22px; }
+  .dsp-settings-actions { flex-direction: column; align-items: stretch; }
+  .dsp-settings-window .account-panel section + section { margin-top: 26px; }
   .dsp-screen { padding: 110px 24px 115px; }
   .dsp-header { inset: 22px 24px auto; }
   .dsp-back { top: 66px; left: 20px; }

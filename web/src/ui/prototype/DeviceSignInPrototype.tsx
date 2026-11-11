@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Button } from '../Button';
 import { Icon } from '../Icon';
+import { IconButton } from '../IconButton';
 import { Orb } from '../Orb';
 import { PrototypeSwitcher } from '../PrototypeSwitcher';
 import './device-sign-in-prototype.css';
@@ -13,6 +14,8 @@ const variants = [
 ] as const;
 const scenes = {
   welcome: 'Choose a sign-in method',
+  settings: 'Signed-in device: Account settings',
+  scanner: 'Signed-in device: scan a QR code',
   qr: 'New browser: waiting for a scan',
   link: 'New browser: open a sign-in link',
   code: 'New browser: show the code',
@@ -33,11 +36,12 @@ type Method = 'qr' | 'link';
 type Model = ReturnType<typeof usePrototype>;
 const code = '0428';
 
-function DeviceGlyph({ kind, className = '' }: { kind: 'phone' | 'laptop' | 'key' | 'link'; className?: string }) {
+function DeviceGlyph({ kind, className = '' }: { kind: 'phone' | 'laptop' | 'key' | 'link' | 'scan'; className?: string }) {
   return <svg className={`i ${className}`} viewBox="0 0 24 24" aria-hidden="true">
     {kind === 'phone' ? <><rect x="6" y="2.5" width="12" height="19" rx="3.5" /><path d="M10 18h4" /></>
       : kind === 'laptop' ? <><rect x="4" y="4" width="16" height="12" rx="2.5" /><path d="m4 16-2 4h20l-2-4M9 20h6" /></>
         : kind === 'key' ? <><circle cx="8" cy="9" r="4" /><path d="m11 12 9 9m-5-5 3-3m0 6 3-3" /></>
+          : kind === 'scan' ? <><path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M21 16v3a2 2 0 0 1-2 2h-3M8 21H5a2 2 0 0 1-2-2v-3M3 12h18" /><path d="M8 7h2v2H8zM14 7h2v2h-2zM8 15h2v2H8zM14 15h2v2h-2z" /></>
           : <><path d="m10 14 4-4M8 16l-1 1a4 4 0 0 1-6-6l4-4a4 4 0 0 1 6 0M16 8l1-1a4 4 0 0 1 6 6l-4 4a4 4 0 0 1-6 0" transform="translate(1 0) scale(.92)" /></>}
   </svg>;
 }
@@ -57,6 +61,7 @@ function usePrototype() {
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [controls, setControls] = useState(false);
+  const [camera, setCamera] = useState<'permission' | 'scanning' | 'denied'>('permission');
   const [theme, setTheme] = useState(document.documentElement.dataset.theme ?? 'dark');
   const originalTheme = useRef(document.documentElement.dataset.theme);
   const seconds = Math.max(0, Math.ceil((deadline - now) / 1000));
@@ -67,7 +72,7 @@ function usePrototype() {
     setScene(next); setMethod(nextMethod); setError(''); setNotice(''); setInput('');
   };
   const start = (next: Scene, nextMethod: Method = ['code', 'issue', 'link'].includes(next) ? 'link' : ['qr', 'approve'].includes(next) ? 'qr' : method) => {
-    setDeadline(Date.now() + 300_000); setNow(Date.now()); setAttempts(5); setCreated(false); setPending(false); go(next, nextMethod);
+    setDeadline(Date.now() + 300_000); setNow(Date.now()); setAttempts(5); setCreated(false); setPending(false); setCamera('permission'); go(next, nextMethod);
   };
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 1000);
@@ -78,8 +83,8 @@ function usePrototype() {
     const url = new URL(location.href);
     url.searchParams.set('variant', variant); url.searchParams.set('scene', scene); url.searchParams.set('method', method);
     history.replaceState(null, '', url);
-    console.info('[Device sign-in prototype]', { variant, scene, method, deadline: new Date(deadline).toISOString(), created, pending, attempts, code, simulated: true });
-  }, [variant, scene, method, deadline, created, pending, attempts]);
+    console.info('[Device sign-in prototype]', { variant, scene, method, camera, deadline: new Date(deadline).toISOString(), created, pending, attempts, code, simulated: true });
+  }, [variant, scene, method, camera, deadline, created, pending, attempts]);
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
     return () => { document.documentElement.dataset.theme = originalTheme.current; };
@@ -91,7 +96,7 @@ function usePrototype() {
     setNotice('Sign-in link copied');
   };
   return { variant, setVariant, scene, method, deadline, seconds, time, created, setCreated, pending, setPending, attempts, setAttempts,
-    input, setInput, error, setError, notice, setNotice, controls, setControls, theme, setTheme, go, start, waiting, heading, copy };
+    input, setInput, error, setError, notice, setNotice, controls, setControls, camera, setCamera, theme, setTheme, go, start, waiting, heading, copy };
 }
 
 function Heading({ model, title, children }: { model: Model; title: string; children?: React.ReactNode }) {
@@ -158,13 +163,47 @@ function Issuer({ model }: { model: Model }) {
   </>;
 }
 
+function AccountSettingsPreview({ model }: { model: Model }) {
+  return <main className="dsp-settings-window">
+    <header className="settings-head"><h1 ref={model.heading} tabIndex={-1}>Settings</h1><IconButton aria-label="Close settings" onClick={() => model.go('welcome')}><Icon name="x" /></IconButton></header>
+    <nav className="tabs dsp-settings-tabs" aria-label="Settings sections"><span>Audio &amp; video</span><span>Profile</span><span aria-current="page">Account</span><span>System</span></nav>
+    <div className="settings-panel">
+      {model.scene === 'scanner' ? <section className="dsp-task dsp-scanner-task"><Task model={model} /></section> : <div className="account-panel">
+        <section className="dsp-settings-identity"><Orb seed="alex" palette="sky" still /><div><h2>Alex</h2><p className="set-note">You’re signed in on this device.</p></div></section>
+        <section>
+          <h3>Sign in another device</h3>
+          <p className="set-note">Open Falky on your new device and choose “Use another device”. Then scan its QR code here, or create a sign-in link.</p>
+          <div className="account-actions dsp-settings-actions">
+            <Button variant="primary" onClick={() => model.start('scanner', 'qr')}><DeviceGlyph kind="scan" />Scan QR code</Button>
+            <Button onClick={() => model.start('issue', 'link')}><DeviceGlyph kind="link" />Create sign-in link</Button>
+          </div>
+        </section>
+        <section><h3>Passkeys</h3><p className="set-note">Use a passkey to sign in or change your account security.</p><div className="account-key"><div className="dsp-settings-passkey"><DeviceGlyph kind="key" /><div><strong>Your passkey</strong><p className="set-note">Available on this device</p></div></div></div></section>
+        <section><h3>Recovery phrase</h3><p className="set-note">Keep your twelve-word recovery phrase somewhere safe.</p></section>
+      </div>}
+    </div>
+  </main>;
+}
+
 function Task({ model, embeddedQr = false }: { model: Model; embeddedQr?: boolean }) {
   const scene = embeddedQr && model.scene === 'welcome' ? 'qr' : model.scene;
+  if (scene === 'settings') return <AccountSettingsPreview model={model} />;
+  if (scene === 'scanner') return <>
+    <button className="dsp-text dsp-scanner-back" onClick={() => model.go('settings')}><Icon name="left" />Account settings</button>
+    <Heading model={model} title={model.camera === 'denied' ? 'Camera access is off' : 'Scan a QR code'}>{model.camera === 'denied' ? 'Allow camera access in your browser settings, then try again. You can also create a sign-in link.' : 'Point this device’s camera at the QR code on the browser you want to sign in.'}</Heading>
+    <div className={`dsp-camera-preview dsp-camera-${model.camera}`} aria-label="Simulated camera preview">
+      <div className="dsp-scan-frame"><span /><span /><span /><span /><Icon name="camera" /></div>
+      <p>{model.camera === 'scanning' ? 'Looking for a Falky QR code…' : model.camera === 'denied' ? 'Camera unavailable' : 'Your camera preview will appear here'}</p>
+    </div>
+    {model.camera === 'scanning' ? <p className="dsp-note">You’ll review the browser before approving sign-in.</p> : <Button variant="primary" onClick={() => model.setCamera(model.camera === 'denied' ? 'permission' : 'scanning')}>{model.camera === 'denied' ? 'Try again' : 'Enable camera'}</Button>}
+    <button className="dsp-text" onClick={() => model.start('issue', 'link')}>Create a sign-in link instead</button>
+    <p className="dsp-note">Prototype: camera access and QR detection are simulated.</p>
+  </>;
   if (scene === 'success') return <Success model={model} />;
   if (scene === 'approved') return <>
     <div className="dsp-result-icon"><Icon name="check" /></div>
     <Heading model={model} title="Browser approved">Chrome on macOS can now finish signing in as Alex. You can return to Falky on this device.</Heading>
-    <Button variant="primary" onClick={() => { model.start('issue', 'link'); model.setNotice('End of prototype. In Falky, this returns to Account settings.'); }}>Done</Button>
+    <Button variant="primary" onClick={() => model.go('settings')}>Done</Button>
   </>;
   if (scene === 'issue') return <Issuer model={model} />;
   if (scene === 'welcome') return <>
@@ -180,7 +219,7 @@ function Task({ model, embeddedQr = false }: { model: Model; embeddedQr?: boolea
     {!embeddedQr && <Heading model={model} title="Bring this browser along">Use a device where you’re already signed in to Falky.</Heading>}
     <MethodTabs model={model} />
     <Qr model={model} />
-    <p className="dsp-qr-instructions">Scan with your phone’s camera, then approve this browser in Falky.</p>
+    <p className="dsp-qr-instructions">On your signed-in device, open Settings, then Account, and choose “Scan QR code”. You can also use your phone’s camera.</p>
     <button className="dsp-text" onClick={() => model.go('cancelled')}>Cancel sign-in</button>
   </>;
   if (scene === 'link') return <>
@@ -277,11 +316,13 @@ export function VariantC({ model }: { model: Model }) {
 
 export default function DeviceSignInPrototype() {
   const model = usePrototype();
-  const showBack = model.scene !== 'welcome' && model.scene !== 'success' && model.scene !== 'issue';
+  const accountSide = ['issue', 'approve', 'approved', 'denied'].includes(model.scene);
+  const settingsWindow = model.scene === 'settings' || model.scene === 'scanner';
+  const showBack = !settingsWindow && model.scene !== 'welcome' && model.scene !== 'success';
   return <div className={`screen dsp-screen dsp-variant-${model.variant}`}>
     <header className="dsp-header"><a className="mark" href="?prototype=device-sign-in&variant=A">falky</a><span>Sign-in prototype</span></header>
-    {showBack && <button className="dsp-back" onClick={() => model.go('welcome')}><Icon name="left" />All sign-in options</button>}
-    {model.variant === 'A' ? <VariantA model={model} /> : model.variant === 'B' ? <VariantB model={model} /> : <VariantC model={model} />}
+    {showBack && <button className="dsp-back" onClick={() => model.go(accountSide ? 'settings' : 'welcome')}><Icon name="left" />{accountSide ? 'Account settings' : 'All sign-in options'}</button>}
+    {settingsWindow ? <AccountSettingsPreview model={model} /> : model.variant === 'A' ? <VariantA model={model} /> : model.variant === 'B' ? <VariantB model={model} /> : <VariantC model={model} />}
     <div className="dsp-feedback" aria-live="polite">{model.error && <p className="auth-error" role="alert" id="dsp-error">{model.error}</p>}{model.notice && <p role="status">{model.notice}</p>}</div>
     {model.controls && <aside id="dsp-preview-panel" className="dsp-controls" aria-label="Prototype preview controls">
       <div className="dsp-control-title"><strong>Preview controls</strong><button aria-label="Close preview controls" onClick={() => model.setControls(false)}><Icon name="x" /></button></div>
@@ -290,15 +331,17 @@ export default function DeviceSignInPrototype() {
       <div className="dsp-control-actions">
         {model.waiting && <Button onClick={() => model.go('success')}>Simulate approval</Button>}
         {model.scene === 'code' && <Button onClick={() => { model.go('issue', 'link'); model.setCreated(true); model.setPending(true); }}>View issuing device</Button>}
-        {(model.scene === 'qr' || model.scene === 'welcome' && model.variant === 'B') && <Button onClick={() => model.go('approve', 'qr')}>View scanning device</Button>}
+        <Button onClick={() => { model.go('settings'); model.setControls(false); }}>View signed-in Account settings</Button>
+        {(model.scene === 'qr' || model.scene === 'welcome' && model.variant === 'B') && <Button onClick={() => { model.go('settings', 'qr'); model.setControls(false); }}>View scanning device</Button>}
+        {model.scene === 'scanner' && <><Button onClick={() => { model.go('approve', 'qr'); model.setControls(false); }}>Simulate QR found</Button><Button onClick={() => { model.setCamera('denied'); model.setControls(false); }}>Simulate camera blocked</Button></>}
         {model.scene === 'issue' && model.created && <><Button onClick={() => model.setPending(true)}>Simulate link opened</Button><Button onClick={() => model.go('code', 'link')}>View requesting browser</Button></>}
         <Button onClick={() => model.setTheme(model.theme === 'dark' ? 'light' : 'dark')}>{model.theme === 'dark' ? 'Light appearance' : 'Dark appearance'}</Button>
         <Button onClick={() => model.go('expired')}>Expire request</Button>
       </div>
-      <dl><dt>Variant / scene</dt><dd>{model.variant} / {model.scene}</dd><dt>Method / code</dt><dd>{model.method} / {model.method === 'link' ? code : 'none'}</dd><dt>Original deadline</dt><dd>{new Date(model.deadline).toLocaleTimeString()}</dd><dt>Code attempts remaining</dt><dd>{model.attempts}</dd><dt>Link / request</dt><dd>{model.created ? 'created' : 'not created'} / {model.pending ? 'pending' : 'none'}</dd></dl>
+      <dl><dt>Variant / scene</dt><dd>{model.variant} / {model.scene}</dd><dt>Method / code</dt><dd>{model.method} / {model.method === 'link' ? code : 'none'}</dd><dt>Original deadline</dt><dd>{new Date(model.deadline).toLocaleTimeString()}</dd><dt>Code attempts remaining</dt><dd>{model.attempts}</dd><dt>Link / request</dt><dd>{model.created ? 'created' : 'not created'} / {model.pending ? 'pending' : 'none'}</dd><dt>Camera preview</dt><dd>{model.camera}</dd></dl>
     </aside>}
     <PrototypeSwitcher variants={variants} current={model.variant} onChange={model.setVariant}>
-      <button className="dsp-preview-button" aria-expanded={model.controls} aria-controls="dsp-preview-panel" onClick={() => model.setControls(!model.controls)}><Icon name="sliders" /><span>Preview controls</span></button>
+      <button className="dsp-preview-button" aria-label="Preview controls" aria-expanded={model.controls} aria-controls="dsp-preview-panel" onClick={() => model.setControls(!model.controls)}><Icon name="sliders" /><span>Preview controls</span></button>
     </PrototypeSwitcher>
   </div>;
 }
