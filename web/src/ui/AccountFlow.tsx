@@ -1,17 +1,23 @@
-import { createContext, type ReactNode, useContext, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { createContext, lazy, Suspense, type ReactNode, useContext, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { authenticate, cancelAccountFlow, completeEnrollment, recover, recoveryPhrase, register, type PendingEnrollment } from '../app/accounts';
 import { enter, reconcileSession } from '../app/controller';
-import { clearEntryLinks, getEntryLinks, subscribeEntryLinks } from '../app/entryLinks';
+import { clearEntryLinks, clearDeviceEntry, getDeviceEntry, getEntryLinks, subscribeEntryLinks, takeDeviceEntry } from '../app/entryLinks';
 import { useApp } from '../app/store';
 import { t } from '../strings';
 import { Button } from './Button';
 import { Orb } from './Orb';
+const DeviceReceiver = lazy(() => import('./DeviceSignIn').then(module => ({ default: module.DeviceReceiver })));
+const DeviceScanner = lazy(() => import('./DeviceSignIn').then(module => ({ default: module.DeviceScanner })));
 import { RecoveryWords, SaveRecoveryKit } from './RecoveryKit';
 
 type Step = 'welcome' | 'guest' | 'register' | 'recover';
 type Kit = { accountId: string; phrase: string; enrollment?: PendingEnrollment };
 type AccountUI = {
   locked: boolean;
+  deviceOpen: boolean;
+  openDevice(): void;
+  openScanner(): void;
+  completeEntry(): void;
   entryOpen: boolean;
   openEntry(): void;
   run<T>(action: () => Promise<T>): Promise<T>;
@@ -38,7 +44,12 @@ export function accountError(error: unknown): string {
 /** Owns once-only server material above both the entrance and lazy Settings. */
 export function AccountFlowProvider({ children }: { children: ReactNode }) {
   const links = useSyncExternalStore(subscribeEntryLinks, getEntryLinks);
-  const ready = useApp(s => s.phase === 'ready');
+  const deviceEntry = useSyncExternalStore(subscribeEntryLinks, getDeviceEntry);
+  const session = useApp(s => s.accountSession);
+  const [device, setDevice] = useState<{ type: 'receiver' | 'scanner'; token?: string } | null>(null);
+  const deviceDialog = useRef<HTMLDialogElement>(null);
+  const phase = useApp(s => s.phase);
+  const ready = phase === 'ready';
   useApp(s => s.settings.language);
   const [opened, setOpened] = useState(false);
   const [chosen, setChosen] = useState<Step | null>(null);
@@ -53,7 +64,22 @@ export function AccountFlowProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!locked && !unknown && (links.invitation || links.recovery || links.guest)) { setChosen(null); if (ready) setOpened(true); }
   }, [links, ready, locked, unknown]);
-  useEffect(() => () => { cancelAccountFlow(); clearEntryLinks(); }, []);
+  useEffect(() => () => { cancelAccountFlow(); clearEntryLinks(); clearDeviceEntry(); }, []);
+  useEffect(() => {
+    if (!deviceEntry || phase === 'loading' || busy || kit || unknown) return;
+    if (deviceEntry.type === 'qr' && session?.kind !== 'account') {
+      if (ready) setOpened(true);
+      return;
+    }
+    const entry = takeDeviceEntry();
+    if (entry) { setOpened(false); setDevice({ type: entry.type === 'link' ? 'receiver' : 'scanner', token: entry.token }); }
+  }, [deviceEntry, session?.kind, phase, ready, busy, kit, unknown]);
+  useLayoutEffect(() => {
+    const el = deviceDialog.current;
+    if (!el) return;
+    if (device && !el.open) { el.showModal(); el.querySelector<HTMLElement>('h1')?.focus(); }
+    else if (!device && el.open) el.close();
+  }, [device]);
   const modal = locked || (opened && ready);
   useLayoutEffect(() => {
     const el = dialog.current;
@@ -67,10 +93,13 @@ export function AccountFlowProvider({ children }: { children: ReactNode }) {
     try { return await action(); }
     finally { running.current = false; setBusy(false); }
   };
-  const exit = () => {
+  const finishEntry = (preserveDevice: boolean) => {
     if (locked || unknown) return;
-    cancelAccountFlow(); clearEntryLinks(); setChosen('welcome'); setOpened(false); setError(''); setUnknown(false);
+    cancelAccountFlow(); clearEntryLinks(); if (!preserveDevice) clearDeviceEntry(); setChosen('welcome'); setOpened(false); setError(''); setUnknown(false);
   };
+  const exit = () => finishEntry(false);
+  const completeEntry = () => finishEntry(true);
+  const closeDevice = () => { setDevice(null); clearDeviceEntry(); };
   const attempt = (action: () => Promise<void>) => {
     if (locked || unknown) return;
     setError('');
@@ -80,7 +109,7 @@ export function AccountFlowProvider({ children }: { children: ReactNode }) {
     });
   };
   const ui: AccountUI = {
-    locked, entryOpen: opened, step, error, unknown, run, exit, reportError: setError,
+    locked: locked || !!device, deviceOpen: !!device, openDevice: () => { if (!locked) { clearDeviceEntry(); setDevice({ type: 'receiver' }); } }, openScanner: () => { if (!locked) setDevice({ type: 'scanner' }); }, completeEntry, entryOpen: opened, step, error, unknown, run, exit, reportError: setError,
     openEntry: () => { if (!locked && !unknown) { setChosen(null); setOpened(true); setError(''); } },
     navigate: next => { if (!locked && !unknown) { setChosen(next); setError(''); } },
     presentKit: (accountId, phrase) => { setKit({ accountId, phrase }); },
@@ -94,6 +123,9 @@ export function AccountFlowProvider({ children }: { children: ReactNode }) {
   const enroll = (value: PendingEnrollment) => setKit({ accountId: value.session.visitor.id, phrase: recoveryPhrase(value.recoveryCodes), enrollment: value });
   return <Context.Provider value={ui}>
     <EnrollmentContext.Provider value={enroll}>{children}
+      <dialog ref={deviceDialog} className={`device-dialog${device?.type === 'scanner' ? ' device-dialog-scanner' : ''}`} aria-label={device?.type === 'scanner' ? t.device.scan : t.device.another} onCancel={e => { e.preventDefault(); closeDevice(); }}>
+        <Suspense fallback={<p role="status">{t.account.working}</p>}>{device?.type === 'scanner' ? <DeviceScanner token={device.token} onClose={closeDevice} /> : device ? <DeviceReceiver token={device.token} onClose={closeDevice} /> : null}</Suspense>
+      </dialog>
       <dialog ref={dialog} className="auth-dialog" aria-label={kit ? t.account.saveTitle : t.account.account}
         onCancel={e => { e.preventDefault(); if (!locked) exit(); }}
         onPointerDown={e => { if (e.target === e.currentTarget && !locked) exit(); }}>
@@ -128,12 +160,14 @@ export function AccountEntrance({ overlay = false }: { overlay?: boolean }) {
     {!overlay && <div className="auth-topbar"><span className="mark">falky</span></div>}
     <div className="auth-voice"><Orb seed="entry" palette="sky" /></div>
     <section className="auth-content">
-      {(overlay || ui.step !== 'welcome') && <button type="button" className="auth-back" disabled={ui.locked || ui.unknown} onClick={ui.exit}>{overlay ? t.account.returnApp : t.account.chooseAccess}</button>}
+      {(overlay || ui.step !== 'welcome' || getDeviceEntry()?.type === 'qr') && <button type="button" className="auth-back" disabled={ui.locked || ui.unknown} onClick={ui.exit}>{overlay ? t.account.returnApp : getDeviceEntry()?.type === 'qr' ? t.account.cancel : t.account.chooseAccess}</button>}
       <div className="auth-heading"><h1 ref={heading} tabIndex={-1}>{title}</h1><p>{hint}</p></div>
+      {getDeviceEntry()?.type === 'qr' && <p className="device-note" role="status">{t.device.authResume}</p>}
       {(phase === 'revoked' || phase === 'noaccess') && <p className="auth-field-note">{t.account.ended}</p>}
       {ui.step === 'welcome' ? <div className="auth-actions">
-        <Button variant="primary" disabled={ui.locked || ui.unknown} onClick={() => ui.attempt(async () => { await authenticate(); ui.exit(); })}>{t.account.signIn}</Button>
+        <Button variant="primary" disabled={ui.locked || ui.unknown} onClick={() => ui.attempt(async () => { await authenticate(); ui.completeEntry(); })}>{t.account.signIn}</Button>
         <p className="auth-field-note">{t.account.passkeyHint}</p>
+        <button className="device-choice" disabled={ui.locked || ui.unknown} onClick={ui.openDevice}><span><strong>{t.device.another}</strong><small>{t.device.anotherHint}</small></span><span aria-hidden="true">→</span></button>
         <button className="auth-text" disabled={ui.locked || ui.unknown} onClick={() => ui.navigate('recover')}>{t.account.recover}</button>
         <p className="auth-invite">{t.account.invitationHint}</p>
       </div> : <form className="auth-fields" noValidate onSubmit={e => {

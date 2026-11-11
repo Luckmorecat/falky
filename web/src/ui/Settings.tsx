@@ -348,18 +348,20 @@ export function Settings({ open, onClose }: { open: boolean; onClose(): void }) 
     ['system', t.tabSystem],
   ];
   const [chosen, setChosen] = useState<Tab>('media');
+  const [scanReturn, setScanReturn] = useState<'idle' | 'away' | 'pending'>('idle');
   const tab = tabs.some(([id]) => id === chosen) ? chosen : 'media';
 
   const tabButton = (id: Tab) => tabList.current?.querySelector<HTMLButtonElement>(`#set-tab-${id}`);
 
   useEffect(() => {
     const el = dialog.current!;
-    if (open && !el.open) {
+    if (open && !accountUI.deviceOpen && !el.open) {
       el.showModal();
       tabButton(tab)?.focus();
-    } else if (!open && el.open) el.close();
+      if (scanReturn === 'away') setScanReturn('pending');
+    } else if ((!open || accountUI.deviceOpen) && el.open) el.close();
     // The tab is read only at the moment of opening.
-  }, [open]);
+  }, [open, accountUI.deviceOpen]);
 
   useEffect(() => {
     tabButton(tab)?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
@@ -386,7 +388,7 @@ export function Settings({ open, onClose }: { open: boolean; onClose(): void }) 
       ref={dialog}
       className="settings"
       aria-labelledby="set-title"
-      onClose={close}
+      onClose={() => { if (dialog.current?.open || accountUI.deviceOpen) return; close(); }}
       onCancel={e => { e.preventDefault(); close(); }}
       // Pressing on the dialog itself, not on anything in it, is pressing on what lies around it.
       onPointerDown={(e) => { if (e.target === e.currentTarget) close(); }}
@@ -405,7 +407,7 @@ export function Settings({ open, onClose }: { open: boolean; onClose(): void }) 
       {panel('media', <AudioVideoPanel active={open && tab === 'media'} />)}
       {showShare && panel('share', <SharePanel />)}
       {panel('profile', <ProfilePanel />)}
-      {panel('account', <AccountPanel active={open && tab === 'account' && !accountUI.entryOpen} />)}
+      {panel('account', <AccountPanel active={open && tab === 'account' && !accountUI.entryOpen} onScan={() => { setScanReturn('away'); accountUI.openScanner(); }} scanFocusRequested={scanReturn === 'pending' && open && !accountUI.deviceOpen && tab === 'account'} onScanFocused={() => setScanReturn('idle')} />)}
       {showKeys && panel('keys', <KeysPanel />)}
       {panel('system', <SystemPanel />)}
     </dialog>

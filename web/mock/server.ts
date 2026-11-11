@@ -1,3 +1,4 @@
+import { DeviceFixture } from './device-fixture.ts';
 import { AccountFixture, FixtureError } from './account-fixture.ts';
 import { randomBytes, randomInt } from 'node:crypto';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
@@ -114,6 +115,7 @@ export async function startMockServer(options: { port?: number; scenario?: strin
   let accessSecret = 'mock-access-link';
   const requests = new Map<string, Schema['Message']>();
   const sockets = new WebSocketServer({ noServer: true, maxPayload: 32 * 1024 });
+  const privateSockets = new Map<WebSocket, string>();
   function publish(type: Schema['EventType'], payload: Schema['Event']['payload'], roomId?: string) {
     const event: Schema['Event'] = { v: 1, type, eventId: id(), payload, timestamp: new Date().toISOString(), ...(roomId ? { roomId } : {}) };
     for (const socket of sockets.clients) {
@@ -144,10 +146,16 @@ export async function startMockServer(options: { port?: number; scenario?: strin
   }
   function requestToken(req: IncomingMessage) { return req.headers.cookie?.split(';').map((part) => part.trim()).find((part) => part.startsWith(cookieName + '='))?.slice(cookieName.length + 1) ?? ''; }
   const accounts = new AccountFixture({ id, visitor, name, token: requestToken,
-    issue: (res, next) => {
-      token = randomBytes(24).toString('hex'); state.visitor = next; state.voiceConnections = {};
+    issue: (res, next, existingToken) => {
+      token = existingToken ?? randomBytes(24).toString('hex'); state.visitor = next; state.voiceConnections = {};
       for (const socket of sockets.clients) socket.close(4000, 'Session changed');
       occupancy(); setCookie(res); state.revision++; return token;
+    },
+  });
+  const devices = new DeviceFixture({ id, accounts, cookieName: `falky_mock_signin_${instanceId}`, token: requestToken,
+    publish(issuer, request) {
+      const event: Schema['Event'] = { v: 1, eventId: id(), timestamp: new Date().toISOString(), type: 'account.signin.requested', payload: request };
+      for (const [socket, owner] of privateSockets) if (owner === issuer && socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(event));
     },
   });
   function authenticated(req: IncomingMessage) {
@@ -215,6 +223,7 @@ export async function startMockServer(options: { port?: number; scenario?: strin
     state.accessLink = `${publicOrigin}/#k=${accessSecret}`;
     token = randomBytes(24).toString('hex');
     accounts.reset();
+    devices.reset();
     if (state.visitor) accounts.guest(token, state.visitor);
   }
   function reset(scenario: Scenario) {
@@ -238,6 +247,8 @@ export async function startMockServer(options: { port?: number; scenario?: strin
     else if (state.faults.liveDisconnected) status = 503;
     if (status) { socket.end(`HTTP/1.1 ${status} Refused\r\nConnection: close\r\n\r\n`); return; }
     sockets.handleUpgrade(req, socket, head, (ws) => {
+      privateSockets.set(ws, requestToken(req));
+      for (const request of devices.initial(requestToken(req))) ws.send(JSON.stringify({ v: 1, eventId: id(), timestamp: new Date().toISOString(), type: 'account.signin.requested', payload: request } satisfies Schema['Event']));
       ws.on('error', () => {});
       let timeout: ReturnType<typeof setTimeout> | undefined;
       ws.on('pong', () => { clearTimeout(timeout); timeout = undefined; });
@@ -245,7 +256,7 @@ export async function startMockServer(options: { port?: number; scenario?: strin
         ws.ping();
         timeout = setTimeout(() => ws.terminate(), 10_000);
       }, 20_000);
-      ws.on('close', () => { clearInterval(ping); clearTimeout(timeout); });
+      ws.on('close', () => { privateSockets.delete(ws); clearInterval(ping); clearTimeout(timeout); });
     });
   });
   async function handle(req: IncomingMessage, res: ServerResponse) {
@@ -273,7 +284,7 @@ export async function startMockServer(options: { port?: number; scenario?: strin
     }
     if (url.pathname === '/__mock' && req.method === 'GET') return json(res, 200, {
       scenarios, endpoints: { bootstrap: 'POST /__mock/bootstrap {scenario?}', state: 'GET /__mock/state', reset: 'POST /__mock/reset {scenario?}', action: 'POST /__mock/action' },
-      actions: ['colour', 'message', 'participants', 'faults', 'name-conflict', 'revoke', 'voice-disconnect', 'expire-attachments', 'account-fault', 'expire-proof'],
+      actions: ['colour', 'message', 'participants', 'faults', 'name-conflict', 'revoke', 'voice-disconnect', 'expire-attachments', 'account-fault', 'expire-proof', 'device-fault', 'device-expire'],
       faults: state.faults,
       lifecycle: 'Same-scenario bootstrap preserves state. Reset advances generation; poll state independently of /api/live. Mock media disconnect releases exact connected presence in the current generation; it does not model durable authorization.',
     });
@@ -284,7 +295,11 @@ export async function startMockServer(options: { port?: number; scenario?: strin
       return json(res, 200, state);
     }
     if (url.pathname === '/__mock/action' && req.method === 'POST') {
-      if (input.type === 'account-fault') {
+      if (input.type === 'device-fault') {
+        if (!['none', 'rate-limited', 'finish-lost'].includes(String(input.fault))) throw new Refused(400, 'invalid_request', 'Invalid device fault');
+        devices.fault = input.fault as typeof devices.fault;
+      } else if (input.type === 'device-expire') devices.expire(typeof input.requestId === 'string' ? input.requestId : undefined, typeof input.linkId === 'string' ? input.linkId : undefined);
+      else if (input.type === 'account-fault') {
         if (!['none', 'finish-expired', 'finish-lost', 'regenerate-lost', 'last-passkey', 'invalid-proof'].includes(String(input.fault))) throw new Refused(400, 'invalid_request', 'Invalid account fault');
         accounts.fault = input.fault as typeof accounts.fault;
       } else if (input.type === 'expire-proof') accounts.expireProof();
@@ -296,6 +311,8 @@ export async function startMockServer(options: { port?: number; scenario?: strin
           else if (key === 'colourSave' && ['none', 'fail'].includes(String(value))) state.faults.colourSave = value as MockState['faults']['colourSave'];
           else if (key === 'send' && ['none', 'fail', 'lost-response'].includes(String(value))) state.faults.send = value as MockState['faults']['send'];
           else if (key === 'roomFull' && (value === null || state.rooms.some((room) => room.id === value))) state.faults.roomFull = value as string | null;
+          else if (key === 'scannerError' && ['', 'NotAllowedError', 'NotFoundError', 'NotReadableError', 'DecodeError'].includes(String(value))) state.faults.scannerError = value as typeof state.faults.scannerError;
+          else if (key === 'scannerDelayMs' && typeof value === 'number' && value >= 0 && value <= 30000) state.faults.scannerDelayMs = value;
           else if (['liveDisconnected', 'micDenied', 'shareFailure', 'voiceReconnecting'].includes(key) && typeof value === 'boolean') {
             state.faults[key as 'micDenied' | 'shareFailure' | 'voiceReconnecting' | 'liveDisconnected'] = value;
           } else throw new Refused(400, 'invalid_request', 'Invalid fault value');
@@ -404,7 +421,7 @@ export async function startMockServer(options: { port?: number; scenario?: strin
       state.revision++;
       return json(res, 201, state.visitor);
     }
-    const accountResult = accounts.handle(url.pathname, req, res, input, req.headers.origin ?? publicOrigin);
+    const accountResult = devices.handle(url.pathname, req, res, input, req.headers.origin ?? publicOrigin) ?? accounts.handle(url.pathname, req, res, input, req.headers.origin ?? publicOrigin);
     if (accountResult) {
       if (accountResult.lost) {
         // Keep the committed cookie, but withhold a readable once-only result.

@@ -13,10 +13,11 @@ export class AccountFlowError extends Error {
 
 export type PendingEnrollment = AccountEnrollment & { sessionEpoch: number };
 
-interface Flow {
+export interface AccountFlowContext {
   signal: AbortSignal;
   epoch: number;
   owner: string | undefined;
+  expiresAt: string | undefined;
   check(): void;
 }
 let active: AbortController | null = null;
@@ -24,14 +25,15 @@ let active: AbortController | null = null;
 /** Abort on flow exit/unmount. Once finish was sent, reconcile a possible committed result. */
 export function cancelAccountFlow(): void { active?.abort(); }
 
-async function flow<T>(signal: AbortSignal | undefined, action: (context: Flow) => Promise<T>): Promise<T> {
+async function flow<T>(signal: AbortSignal | undefined, action: (context: AccountFlowContext) => Promise<T>): Promise<T> {
   if (active) throw new AccountFlowError('busy');
   const control = new AbortController();
   active = control;
-  const context: Flow = {
+  const context: AccountFlowContext = {
     signal: signal ? AbortSignal.any([signal, control.signal]) : control.signal,
     epoch: currentSessionEpoch(),
     owner: getState().accountSession?.visitor.id,
+    expiresAt: getState().accountSession?.expiresAt,
     check() {
       if (this.epoch !== currentSessionEpoch()) throw new AccountFlowError('stale');
       if (this.signal.aborted) throw new CredentialError('cancelled');
@@ -58,7 +60,7 @@ function validateEnrollment(value: AccountEnrollment, hasPhrase: boolean): Accou
   return value;
 }
 
-async function enroll(context: Flow, begin: () => Promise<AccountCeremony>, finish: (body: { ceremonyId: string; credential: Record<string, unknown>; label?: string }) => Promise<AccountEnrollment>, create: boolean, label?: string): Promise<PendingEnrollment> {
+async function enroll(context: AccountFlowContext, begin: () => Promise<AccountCeremony>, finish: (body: { ceremonyId: string; credential: Record<string, unknown>; label?: string }) => Promise<AccountEnrollment>, create: boolean, label?: string): Promise<PendingEnrollment> {
   const ceremony = await begin();
   context.check();
   const credential = await (create ? createCredential : getCredential)(ceremony.options, context.signal);
@@ -97,7 +99,7 @@ export function recover(accountId: string, proof: string, label?: string, signal
   });
 }
 
-async function verify(context: Flow): Promise<AccountSession> {
+async function verify(context: AccountFlowContext): Promise<AccountSession> {
   if (getState().sessionPaused) throw new AccountFlowError('busy');
   const ceremony = await api.beginReauthentication(context.signal);
   context.check();
@@ -125,7 +127,7 @@ export async function completeEnrollment(result: PendingEnrollment): Promise<voi
 
 export function reauthenticate(signal?: AbortSignal): Promise<AccountSession> { return flow(signal, verify); }
 
-async function confirmAccount(context: Flow): Promise<void> {
+async function confirmAccount(context: AccountFlowContext): Promise<void> {
   context.check();
   let confirmed: AccountSession;
   try { confirmed = await api.accountSession(context.signal); }
@@ -134,14 +136,14 @@ async function confirmAccount(context: Flow): Promise<void> {
     throw error;
   }
   context.check();
-  if (confirmed.kind !== 'account' || confirmed.visitor.id !== context.owner) {
+  if (confirmed.kind !== 'account' || confirmed.visitor.id !== context.owner || confirmed.expiresAt !== context.expiresAt) {
     await reconcileSession();
     throw new AccountFlowError('stale');
   }
 }
 
 /** Server errors, never client clocks, decide whether verification is required. */
-async function withProof<T>(context: Flow, action: () => Promise<T>): Promise<T> {
+async function withProof<T>(context: AccountFlowContext, action: () => Promise<T>): Promise<T> {
   if (getState().sessionPaused) throw new AccountFlowError('busy');
   await confirmAccount(context);
   let result: T;
@@ -202,4 +204,20 @@ export function regenerateRecovery(signal?: AbortSignal): Promise<string> {
       throw error;
     }
   }));
+}
+
+
+/** Shares exclusion with passkey/recovery flows; device approval grants no sensitive proof. */
+export function runAccountSessionAction<T>(action: (signal: AbortSignal) => Promise<T>, signal?: AbortSignal): Promise<T> {
+  return flow(signal, async (context) => {
+    if (getState().sessionPaused) throw new AccountFlowError('busy');
+    await confirmAccount(context);
+    const result = await action(context.signal);
+    await confirmAccount(context);
+    return result;
+  });
+}
+
+export function runSessionAction<T>(action: (context: AccountFlowContext) => Promise<T>, signal?: AbortSignal): Promise<T> {
+  return flow(signal, action);
 }

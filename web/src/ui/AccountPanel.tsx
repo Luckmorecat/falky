@@ -5,9 +5,10 @@ import { logout } from '../app/controller';
 import { useApp } from '../app/store';
 import { t } from '../strings';
 import { accountError, useAccountUI } from './AccountFlow';
+import { DeviceIssuer } from './DeviceSignIn';
 import { Button } from './Button';
 
-export function AccountPanel({ active }: { active: boolean }) {
+export function AccountPanel({ active, onScan, scanFocusRequested, onScanFocused }: { active: boolean; onScan(): void; scanFocusRequested: boolean; onScanFocused(): void }) {
   const session = useApp(s => s.accountSession);
   const ui = useAccountUI();
   const [keys, setKeys] = useState<AccountPasskey[] | null>(null);
@@ -55,6 +56,7 @@ export function AccountPanel({ active }: { active: boolean }) {
       {upgrade && <p className="set-note">{t.account.upgradeHint}</p>}
     </section>
     {session?.kind === 'account' && <>
+      <DeviceIssuer active={active} disabled={disabled} onScan={onScan} scanFocusRequested={scanFocusRequested} onScanFocused={onScanFocused} />
       <section>
         <h3>{t.account.passkeys}</h3>
         <p className="set-note">{t.account.verifyHint}</p>

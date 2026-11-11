@@ -1,6 +1,11 @@
 import type { components } from './schema.gen';
 
 type Schemas = components['schemas'];
+export type SignInRequest = Schemas['SignInRequest'];
+export type SignInLink = Schemas['SignInLink'];
+export type SignInBegin = Schemas['SignInBegin'];
+export type SignInPreview = Schemas['SignInPreview'];
+export type SignInLinkResult = Schemas['SignInLinkResult'];
 export type AccountSession = Schemas['AccountSession'];
 export type AccountEnrollment = Schemas['AccountEnrollment'];
 export type AccountCeremony = Schemas['AccountCeremony'];
@@ -19,6 +24,7 @@ export type AttachmentsExpired = Schemas['AttachmentsExpired'];
 
 /** A live update, narrowed by its type. Unknown types are ignored by callers. */
 export type LiveEvent = { eventId: string; timestamp: string; roomId?: string } & (
+  | { type: 'account.signin.requested' | 'account.signin.state_changed'; payload: SignInRequest }
   | { type: 'message.created'; payload: Message }
   | { type: 'attachments.expired'; payload: AttachmentsExpired }
   | { type: 'room.changed'; payload: RoomChange }
@@ -33,6 +39,7 @@ export class ApiError extends Error {
     readonly status: number,
     readonly code: string,
     message: string,
+    readonly retryAfterMs?: number,
   ) {
     super(message);
     this.name = 'ApiError';
@@ -66,7 +73,9 @@ async function call<T>(method: string, path: string, body?: unknown, signal?: Ab
   } catch {
     // A proxy's error page instead of the contract's body.
   }
-  throw new ApiError(res.status, code, message);
+  const retryAfter = res.headers.get('Retry-After');
+  const seconds = retryAfter !== null && /^\d+$/.test(retryAfter) ? Number(retryAfter) : undefined;
+  throw new ApiError(res.status, code, message, seconds !== undefined && Number.isFinite(seconds) ? seconds * 1000 : undefined);
 }
 
 async function failure(status: number, statusText: string, text: string): Promise<ApiError> {
@@ -104,6 +113,21 @@ function uploadAttachment(roomId: string, file: File, onProgress: (sent: number)
 }
 
 export const api = {
+  createSignInLink: (signal?: AbortSignal) => call<SignInLinkResult>('POST', '/api/accounts/signin-links', {}, signal),
+  signInLink: (id: string, signal?: AbortSignal) => call<SignInLink>('GET', `/api/accounts/signin-links/${encodeURIComponent(id)}`, undefined, signal),
+  revokeSignInLink: (id: string, signal?: AbortSignal) => call<Schemas['AccountEmpty']>('DELETE', `/api/accounts/signin-links/${encodeURIComponent(id)}`, undefined, signal),
+  approveSignInLink: (id: string, code: string, signal?: AbortSignal) => call<SignInRequest>('POST', `/api/accounts/signin-links/${encodeURIComponent(id)}/approve`, { code }, signal),
+  denySignInRequest: (linkId: string, requestId: string, signal?: AbortSignal) => call<Schemas['AccountEmpty']>('POST', `/api/accounts/signin-links/${encodeURIComponent(linkId)}/requests/${encodeURIComponent(requestId)}/deny`, {}, signal),
+  beginSignInRequest: (token: string, signal?: AbortSignal) => call<SignInBegin>('POST', '/api/accounts/signin-requests', { token }, signal),
+  beginQRSignIn: (replace = false, signal?: AbortSignal) => call<SignInBegin>('POST', '/api/accounts/qr-signins', { replace }, signal),
+  previewQRSignIn: (token: string, signal?: AbortSignal) => call<SignInPreview>('POST', '/api/accounts/qr-signins/preview', { token }, signal),
+  approveQRSignIn: (token: string, signal?: AbortSignal) => call<SignInRequest>('POST', '/api/accounts/qr-signins/approve', { token }, signal),
+  denyQRSignIn: (token: string, signal?: AbortSignal) => call<Schemas['AccountEmpty']>('POST', '/api/accounts/qr-signins/deny', { token }, signal),
+  cancelQRSignIn: (id: string, signal?: AbortSignal) => call<Schemas['AccountEmpty']>('DELETE', `/api/accounts/qr-signins/${encodeURIComponent(id)}`, undefined, signal),
+  signInRequest: (id: string, signal?: AbortSignal) => call<SignInRequest>('GET', `/api/accounts/signin-requests/${encodeURIComponent(id)}`, undefined, signal),
+  resendSignInRequest: (id: string, token: string, signal?: AbortSignal) => call<Schemas['AccountEmpty']>('POST', `/api/accounts/signin-requests/${encodeURIComponent(id)}/resend`, { token }, signal),
+  finishSignInRequest: (id: string, token?: string) => call<AccountSession>('POST', `/api/accounts/signin-requests/${encodeURIComponent(id)}/finish`, token === undefined ? {} : { token }),
+
   accountSession: (signal?: AbortSignal) => call<AccountSession>('GET', '/api/accounts/session', undefined, signal),
   beginRegistration: (invitation: string, name: string, signal?: AbortSignal) => call<AccountCeremony>('POST', '/api/accounts/registration/begin', { invitation, name }, signal),
   finishRegistration: (body: Schemas['AccountFinish'], signal?: AbortSignal) => call<AccountEnrollment>('POST', '/api/accounts/registration/finish', body, signal),
