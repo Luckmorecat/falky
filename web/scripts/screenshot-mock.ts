@@ -91,7 +91,7 @@ Existing browser: PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/path/to/chromium`);
     const prototypeSearch = values['prototype-variant'] ? `&prototype=device-sign-in&variant=${encodeURIComponent(values['prototype-variant'])}&scene=${encodeURIComponent(values['prototype-scene'])}` : '';
     await page.goto(`${app.url}/?scenario=${scenario}${prototypeSearch}${['invitation', 'recovery-kit', 'account'].includes(preset) ? '#invite=mock-invitation' : ''}`);
     if (prototypeSearch) {
-      await expect(page.locator('.dsp-task, .dsp-settings-window').first()).toBeVisible();
+      await expect(page.locator('.dsp-task, .dsp-settings-window, .dsp-scanner-fullscreen').first()).toBeVisible();
     } else if (authPreset) {
       if (preset === 'welcome' || preset === 'recovery') {
         await expect(page.getByRole('button', { name: t.account.signIn, exact: true })).toBeVisible();

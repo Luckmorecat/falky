@@ -42,13 +42,13 @@ Open http://127.0.0.1:5178/?prototype=device-sign-in&variant=A
 
 Use the bottom arrows or keyboard left/right to switch layouts. Open Preview controls to choose either device, terminal states and light/dark appearance. Variant and scene URLs survive reload; transient interactions live only in memory. The QR fixture opens the local approval preview, never a real approval endpoint. Phone scanning requires a reachable development host; desktop preview controls are the reliable way to inspect both sides.
 
-The signed-in entry point is Settings → Account, previewable with `&scene=settings`. Its “Sign in another device” section places “Scan QR code” beside “Create sign-in link”. Scanning opens a camera-permission and viewfinder preview (`&scene=scanner`); Preview controls can simulate a blocked camera or a detected QR, which leads to explicit approval. Camera access and decoding are simulated; no camera is opened. “Done” returns to Account settings.
+The signed-in entry point is Settings → Account, previewable with `&scene=settings`. Its “Sign in another device” section places “Scan QR code” beside “Create sign-in link”. Scanning opens a separate fullscreen camera-permission and viewfinder preview (`&scene=scanner`), with no Settings window or tabs. Back returns to Account settings. Creating a link reveals the copy action, fixed expiry, code entry and revocation inline in Account settings (`&scene=issue`). Preview controls can simulate a blocked camera or a detected QR, which leads to explicit approval. Camera access and decoding are simulated; no camera is opened. “Done” returns to Account settings.
 
-The settings/scanner addition passes TypeScript, production build and a Chromium walkthrough at 320, 390 and 1440 pixels, including camera blocked/retry, explicit approval, return to settings and the link alternative. All variants retain the same Account settings entry point; 18 combinations have no horizontal overflow or page errors.
+The fullscreen scanner and inline link iteration passes TypeScript, production build and a Chromium walkthrough of variant A at 320, 390 and 1440 pixels. The walkthrough verifies viewport-filling scanner geometry, the visible camera action, blocked-camera retry, return to settings, inline link creation and code approval without deadline extension, the scanner’s link alternative and link revocation. Nine viewport/screen combinations have no horizontal overflow or page errors.
 
 ## Verdict
 
-Pending user evaluation. A is the continuity-first recommendation; B tests immediate QR discovery; C tests whether explicit steps help explain the two-device handoff. No design has been promoted to production. All controls are simulations, including passkey and recovery handoffs.
+The current iteration focuses on A. The user requested a separate fullscreen QR reader and link generation inside Settings → Account; the prototype reflects that split. B and C remain available as earlier entrance alternatives. No design has been promoted to production. All controls are simulations, including passkey and recovery handoffs.
 
 ## Capture and verification
 

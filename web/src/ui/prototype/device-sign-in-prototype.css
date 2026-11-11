@@ -74,12 +74,23 @@
 .dsp-settings-actions svg.i { width: 20px; height: 20px; }
 .dsp-settings-passkey { display: flex; align-items: center; gap: 14px; }
 .dsp-settings-window .account-key { margin-top: 16px; }
-.dsp-scanner-task { margin: 0 auto; text-align: center; max-width: 360px; }
-.dsp-task > .dsp-scanner-back { display: flex; align-items: center; gap: 6px; align-self: flex-start; margin: 0 0 22px; }
+.dsp-settings-link { display: flex; flex-direction: column; max-width: 500px; }
+.dsp-settings-link > .go { margin-top: 20px; }
+.dsp-settings-link > .dsp-note { margin-top: 18px; }
+.dsp-settings-link .go { width: 100%; min-height: 50px; height: auto; padding: 12px 20px; }
+.dsp-settings-link > .dsp-text { align-self: flex-start; margin-top: 12px; }
+.dsp-settings-link .dsp-link-preview { margin-top: 18px; }
+.dsp-screen.dsp-is-scanning { padding: 0; background: #161615; background-image: none; color: #fff; color-scheme: dark; scrollbar-gutter: auto; --text: #fff; --text-2: rgba(255,255,255,.62); --text-3: rgba(255,255,255,.48); --invert: #fff; --on-invert: #000; --raised: #2a2a29; --fill: rgba(255,255,255,.09); --level: #fff; }
+.dsp-scanner-fullscreen { min-height: 100dvh; display: flex; flex-direction: column; padding: max(24px, env(safe-area-inset-top)) 32px 110px; }
+.dsp-scanner-header { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
+.dsp-scanner-header > span { color: var(--text-2); font-size: 12px; }
+.dsp-scanner-back { display: flex; align-items: center; gap: 7px; }
 .dsp-scanner-back svg.i { width: 16px; height: 16px; }
-.dsp-camera-preview { aspect-ratio: 1.25; width: 100%; margin-top: 24px; background: #161615; color: #fff; border-radius: 32px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 20px; }
+.dsp-scanner-content { flex: 1; width: min(100%, 560px); margin: 26px auto 0; display: flex; flex-direction: column; align-items: center; text-align: center; }
+.dsp-scanner-content .dsp-heading { max-width: 390px; }
+.dsp-camera-preview { flex: 1; width: 100%; min-height: 270px; margin: 28px 0; color: #fff; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 24px; }
 .dsp-camera-preview > p { font-size: 12px; color: rgba(255,255,255,.62); padding: 0 15px; }
-.dsp-scan-frame { position: relative; width: 152px; height: 128px; display: grid; place-items: center; }
+.dsp-scan-frame { position: relative; width: min(68vw, 300px); aspect-ratio: 1; display: grid; place-items: center; }
 .dsp-scan-frame > span { position: absolute; width: 26px; height: 26px; border: solid rgba(255,255,255,.62); border-width: 0; corner-shape: round; }
 .dsp-scan-frame > span:nth-child(1) { top: 0; left: 0; border-top-width: 2px; border-left-width: 2px; border-top-left-radius: 12px; }
 .dsp-scan-frame > span:nth-child(2) { top: 0; right: 0; border-top-width: 2px; border-right-width: 2px; border-top-right-radius: 12px; }
@@ -88,6 +99,9 @@
 .dsp-scan-frame svg.i { width: 38px; height: 38px; stroke-width: 1.3; color: rgba(255,255,255,.62); }
 .dsp-camera-scanning .dsp-scan-frame::after { content: ''; position: absolute; left: 8px; right: 8px; top: 50%; height: 1px; background: rgba(255,255,255,.62); }
 .dsp-camera-denied .dsp-scan-frame { opacity: .35; }
+.dsp-scanner-actions { width: min(100%, 340px); display: flex; flex-direction: column; align-items: center; gap: 12px; }
+.dsp-scanner-actions .go { width: 100%; min-height: 54px; height: auto; padding: 14px 20px; font-size: 14px; }
+.dsp-scanner-actions .dsp-simulation-note { color: var(--text-3); font-size: 11px; }
 
 .dsp-quiet { min-height: calc(100dvh - 226px); display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 30px 0; text-align: center; }
 .dsp-entrance-orb { width: 116px; margin-bottom: 32px; }
@@ -163,6 +177,10 @@
   .dsp-guide h2 { font-size: 29px; }
 }
 @media (max-width: 650px) {
+  .dsp-scanner-fullscreen { padding-inline: 20px; padding-bottom: 102px; }
+  .dsp-scanner-header > span { font-size: 11px; }
+  .dsp-scanner-content { margin-top: 28px; }
+  .dsp-camera-preview { min-height: 230px; margin: 24px 0; }
   .dsp-settings-window { height: auto; min-height: calc(100dvh - 225px); border-radius: 32px; margin-top: 0; }
   .dsp-settings-window .settings-head { padding: 18px 16px 0 22px; }
   .dsp-settings-tabs { padding-inline: 12px; }
