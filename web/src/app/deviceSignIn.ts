@@ -78,7 +78,7 @@ export function createDeviceCandidate() {
     if (disposed || state.phase !== 'waiting') return;
     timer = setTimeout(() => { void refresh().catch(() => {}); }, Math.max(1000, (state.retryAt ?? 0) - Date.now(), 2000));
   }
-  function begin(type: 'qr' | 'link', bearer?: string, replace = false): Promise<void> {
+  function begin(type: 'qr' | 'link', bearer?: string, replace = false, recoverBinding = false): Promise<void> {
     if (pending) return pending;
     if (disposed) return Promise.reject(new AccountFlowError('stale'));
     try { cooldown(state.retryAt); } catch (error) { return Promise.reject(error); }
@@ -89,7 +89,14 @@ export function createDeviceCandidate() {
     const signal = control.signal;
     pending = allocate(async () => {
       check(version);
-      const result: SignInBegin = await (type === 'qr' ? api.beginQRSignIn(replace, signal) : api.beginSignInRequest(bearer!, signal));
+      let result: SignInBegin;
+      try { result = await (type === 'qr' ? api.beginQRSignIn(replace, signal) : api.beginSignInRequest(bearer!, signal)); }
+      catch (error) {
+        if (type !== 'qr' || !recoverBinding || !(error instanceof ApiError) || error.code !== 'invalid_proof') throw error;
+        // Binding cookies may be lost, or outlive a request from a previous visit.
+        check(version);
+        result = await api.beginQRSignIn(!replace, signal);
+      }
       check(version);
       if (result.request.type !== type || !result.request.id || !Number.isFinite(Date.parse(result.request.expiresAt)) || (type === 'link' ? !/^[0-9]{4}$/.test(result.code ?? '') : !result.url)) throw new AccountFlowError('invalid_response');
       state = { phase: 'waiting', busy: false, request: result.request, ...(type === 'qr' ? { url: result.url } : { code: result.code }) };
@@ -215,6 +222,7 @@ export function createDeviceCandidate() {
     getSnapshot: () => state,
     subscribe(listener: () => void) { listeners.add(listener); return () => { listeners.delete(listener); }; },
     beginQR: (replace = false) => begin('qr', undefined, replace),
+    retryQR: () => begin('qr', undefined, state.request?.type === 'qr', true),
     beginLink: (bearer: string) => begin('link', bearer), refresh, finish, resend, cancel,
     dispose() { disposed = true; stop(); token = undefined; state = { phase: 'idle', busy: false }; unsubscribe(); listeners.clear(); },
   };

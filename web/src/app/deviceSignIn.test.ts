@@ -22,6 +22,88 @@ it('retains server Retry-After and sends QR bearers only in JSON bodies', async 
 });
 
 const request = { id: 'request', type: 'qr', state: 'pending', version: 1, requesterUserAgent: 'Browser', createdAt: '2026-11-11T00:00:00Z', expiresAt: '2099-11-11T00:05:00Z' };
+it('retries an initial QR allocation without requiring a bound request', async () => {
+  const { createDeviceCandidate } = await import('./deviceSignIn');
+  const replacements: boolean[] = [];
+  vi.stubGlobal('fetch', async (_path: string, init: RequestInit) => {
+    replacements.push(JSON.parse(String(init.body)).replace);
+    if (replacements.length === 1) throw new TypeError('Offline before allocation');
+    return Response.json({ request, url: `${location.origin}/#qr-signin=qr` });
+  });
+  const candidate = createDeviceCandidate();
+  try {
+    await expect(candidate.beginQR()).rejects.toMatchObject({ code: 'network' });
+    await candidate.retryQR();
+    expect(replacements).toEqual([false, false]);
+    expect(candidate.getSnapshot()).toMatchObject({ phase: 'waiting', request });
+  } finally { candidate.dispose(); }
+});
+
+it('recovers a lost QR binding without looping replacement requests', async () => {
+  const { createDeviceCandidate } = await import('./deviceSignIn');
+  const replacements: boolean[] = [];
+  const replacement = { ...request, id: 'new-bound-request' };
+  vi.stubGlobal('fetch', async (path: string, init?: RequestInit) => {
+    if (path !== '/api/accounts/qr-signins') return Response.json({ code: 'invalid_proof', message: 'Binding lost' }, { status: 403 });
+    const replace = JSON.parse(String(init?.body)).replace;
+    replacements.push(replace);
+    if (replace) return Response.json({ code: 'invalid_proof', message: 'No bound request to replace' }, { status: 403 });
+    return Response.json({ request: replacements.length === 1 ? request : replacement, url: `${location.origin}/#qr-signin=qr` });
+  });
+  const candidate = createDeviceCandidate();
+  try {
+    await candidate.beginQR();
+    await expect(candidate.refresh()).rejects.toMatchObject({ code: 'invalid_proof' });
+    await candidate.retryQR();
+    expect(replacements).toEqual([false, true, false]);
+    expect(candidate.getSnapshot()).toMatchObject({ phase: 'waiting', request: replacement });
+  } finally { candidate.dispose(); }
+});
+
+it('replaces an existing terminal QR after reopening without local request metadata', async () => {
+  const { createDeviceCandidate } = await import('./deviceSignIn');
+  const replacements: boolean[] = [];
+  vi.stubGlobal('fetch', async (_path: string, init: RequestInit) => {
+    const replace = JSON.parse(String(init.body)).replace;
+    replacements.push(replace);
+    return replace ? Response.json({ request, url: `${location.origin}/#qr-signin=qr` })
+      : Response.json({ code: 'invalid_proof', message: 'Previous QR was denied' }, { status: 403 });
+  });
+  const candidate = createDeviceCandidate();
+  try {
+    await expect(candidate.beginQR()).rejects.toMatchObject({ code: 'invalid_proof' });
+    await candidate.retryQR();
+    expect(replacements).toEqual([false, false, true]);
+    expect(candidate.getSnapshot().phase).toBe('waiting');
+  } finally { candidate.dispose(); }
+});
+
+it('does not retry a rejected QR allocation after the receiver is disposed', async () => {
+  const { createDeviceCandidate } = await import('./deviceSignIn');
+  let release!: (response: Response) => void;
+  const fetcher = vi.fn(() => new Promise<Response>(resolve => { release = resolve; }));
+  vi.stubGlobal('fetch', fetcher);
+  const candidate = createDeviceCandidate();
+  const retry = candidate.retryQR();
+  await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+  candidate.dispose();
+  release(Response.json({ code: 'invalid_proof', message: 'Unavailable' }, { status: 403 }));
+  await expect(retry).rejects.toBeDefined();
+  expect(fetcher).toHaveBeenCalledOnce();
+});
+
+it('bounds explicit QR binding recovery to one fallback request', async () => {
+  const { createDeviceCandidate } = await import('./deviceSignIn');
+  const fetcher = vi.fn(async () => Response.json({ code: 'invalid_proof', message: 'Unavailable' }, { status: 403 }));
+  vi.stubGlobal('fetch', fetcher);
+  const candidate = createDeviceCandidate();
+  try {
+    await expect(candidate.retryQR()).rejects.toMatchObject({ code: 'invalid_proof' });
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(candidate.getSnapshot().phase).toBe('unavailable');
+  } finally { candidate.dispose(); }
+});
+
 it('deduplicates allocation, ignores a late result after exit, and never cancels a link on the server', async () => {
   const { createDeviceCandidate } = await import('./deviceSignIn');
   let resolve!: (value: Response) => void;

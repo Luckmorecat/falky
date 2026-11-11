@@ -67,7 +67,7 @@ export function DeviceReceiver({ token, onClose }: { token?: string; onClose(): 
     <div className="auth-heading"><h1 tabIndex={-1}>{title}</h1>{!terminal && state.phase !== 'complete' && <p>{method === 'qr' ? t.device.qrHint : t.device.codeHint}</p>}</div>
     {!consent ? <><p className="device-note">{t.device.switchWarning}</p><Button variant="primary" onClick={() => setConsent(true)}>{t.account.continue}</Button></>
       : state.phase === 'complete' ? <Button variant="primary" onClick={onClose}>{t.device.done}</Button>
-      : terminal ? <Button disabled={blocked} onClick={() => { if (token) void candidate.beginLink(token).catch(() => {}); else { setMethod('qr'); void candidate.beginQR(true).catch(() => {}); } }}>{t.device.retry}</Button>
+      : terminal ? <Button disabled={blocked} onClick={() => { if (token) void candidate.beginLink(token).catch(() => {}); else { setMethod('qr'); void candidate.retryQR().catch(() => {}); } }}>{t.device.retry}</Button>
       : <>
         {method === 'qr' && state.url && <QR value={state.url} />}
         {state.code && <p className="device-code" aria-label={`${t.device.codeLabel}: ${state.code}`}>{[...state.code].map((digit, i) => <span key={i}>{digit}</span>)}</p>}

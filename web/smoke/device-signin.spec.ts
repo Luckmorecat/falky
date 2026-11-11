@@ -14,6 +14,36 @@ async function issuer(page: Parameters<typeof authPreferences>[0]) {
   return { state, authenticator, identity: await session(page, app.url) };
 }
 
+test('QR retry recovers an initial network failure and a lost browser binding', async ({ page, browser }) => {
+  const state = await authPreferences(page, app.url);
+  const receiver = await devicePage(browser, state);
+  const replacements: boolean[] = [];
+  try {
+    await receiver.route('**/api/accounts/qr-signins', async route => {
+      replacements.push(route.request().postDataJSON().replace);
+      if (replacements.length === 1) await route.abort('failed');
+      else await route.continue();
+    });
+    await receiver.goto(app.url);
+    await receiver.getByRole('button', { name: 'Use another device', exact: false }).click();
+    await expect(receiver.getByRole('heading', { name: /unavailable/i })).toBeVisible();
+    const allocation = receiver.waitForResponse(r => r.request().method() === 'POST' && r.url().endsWith('/accounts/qr-signins') && r.status() === 200);
+    await receiver.getByRole('button', { name: 'Try again', exact: true }).click();
+    const original = await (await allocation).json();
+    await expect(receiver.getByRole('img', { name: 'QR code for this sign-in request', exact: true })).toBeVisible();
+    expect(replacements).toEqual([false, false]);
+
+    await receiver.context().clearCookies({ name: `falky_mock_signin_${state.instanceId}` });
+    await expect(receiver.getByRole('heading', { name: /unavailable/i })).toBeVisible();
+    const recovery = receiver.waitForResponse(r => r.request().method() === 'POST' && r.url().endsWith('/accounts/qr-signins') && r.status() === 200);
+    await receiver.getByRole('button', { name: 'Try again', exact: true }).click();
+    const recovered = await (await recovery).json();
+    await expect(receiver.getByRole('img', { name: 'QR code for this sign-in request', exact: true })).toBeVisible();
+    expect(recovered.request.id).not.toBe(original.request.id);
+    expect(replacements).toEqual([false, false, true, false]);
+  } finally { await receiver.context().close(); }
+});
+
 test('QR detection only previews; explicit approval delivers the candidate cookie and preserves exact issuer session', async ({ page, browser, context }) => {
   const { state, identity } = await issuer(page);
   await expect(page.getByRole('tab', { name: 'Account', exact: true })).toBeFocused();
