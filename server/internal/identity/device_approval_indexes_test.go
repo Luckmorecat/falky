@@ -6,12 +6,19 @@ import (
 	"testing"
 )
 
+// Keep this query aligned with RemovePasskeyWithEffects: its join order decides
+// whether credential indexes help beyond sessions_by_identity and initial.
+const benchmarkRevokedSessions = `SELECT t.id,t.generation,t.expires_at FROM sessions t
+ JOIN session_authentications e ON e.session_id=t.id AND e.purpose='sign_in'
+ WHERE t.identity_id=? AND (e.passkey_credential_id=? OR e.origin_passkey_credential_id=?)`
+
 func TestDeviceLookupAndCleanupUseIndexes(t *testing.T) {
 	f := newFixture(t, filepath.Join(t.TempDir(), "falky.db"))
 	for _, tc := range []struct {
 		name, query, search string
 		args                []any
 	}{
+		{"credential revocation", benchmarkRevokedSessions, "SEARCH e USING INDEX session_authentications_initial (session_id=?)", []any{"account", []byte("credential"), []byte("credential")}},
 		{"qr browser all states", "SELECT id FROM account_signin_requests WHERE type='qr' AND browser_token_hash=? ORDER BY CASE WHEN state IN ('pending','approved') THEN 0 ELSE 1 END,created_at DESC,rowid DESC LIMIT 1", "SEARCH account_signin_requests USING INDEX account_signin_requests_qr_browser (browser_token_hash=?)", []any{make([]byte, 32)}},
 		{"parent requests", "SELECT id FROM account_signin_requests WHERE link_id=?", "SEARCH account_signin_requests USING INDEX account_signin_requests_by_link (link_id=?)", []any{"link"}},
 		{"purge requests", "DELETE FROM account_signin_requests WHERE id IN (SELECT id FROM account_signin_requests WHERE expires_at<=? AND state IN ('denied','cancelled') AND browser_token_hash IS NULL AND code IS NULL AND qr_token_hash IS NULL AND delivery_ciphertext IS NULL ORDER BY expires_at LIMIT ?)", "SEARCH account_signin_requests USING INDEX account_signin_requests_purge (qr_token_hash=? AND expires_at<?)", []any{f.clock.Now().Unix(), 128}},

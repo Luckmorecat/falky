@@ -75,7 +75,7 @@ func TestIdentityAndSessionMigrationsPreserveGuestsAndResetAccountAccess(t *test
 			}); err != nil {
 				t.Fatal(err)
 			}
-			expected := 4
+			expected := 5
 			if name != "before_identity_rename" {
 				body, err := fs.ReadFile(identity.Migrations(), "0008_identity_profiles.sql")
 				if err != nil {
@@ -89,7 +89,7 @@ func TestIdentityAndSessionMigrationsPreserveGuestsAndResetAccountAccess(t *test
 				if applied, err := db.Migrate(t.Context(), intermediate); err != nil || applied != 1 {
 					t.Fatalf("identity rename = %d, %v", applied, err)
 				}
-				expected = 3
+				expected = 4
 			}
 			var beforeID string
 			var beforeHash []byte
@@ -110,7 +110,7 @@ func TestIdentityAndSessionMigrationsPreserveGuestsAndResetAccountAccess(t *test
 				if err := db.Read().QueryRowContext(t.Context(), "SELECT id,token_hash,generation,created_at,expires_at FROM sessions WHERE identity_id='guest'").Scan(&beforeID, &beforeHash, &beforeGeneration, &beforeCreated, &beforeExpiry); err != nil {
 					t.Fatal(err)
 				}
-				expected = 2
+				expected = 3
 			}
 			all, err := platform.LoadMigrations(identity.Migrations())
 			if err != nil {
@@ -292,13 +292,25 @@ func TestSessionResetPreservesPasskeysAndAllowsFreshSignedLogin(t *testing.T) {
 func sha256Bytes(token string) []byte { hash := sha256.Sum256([]byte(token)); return hash[:] }
 
 func TestSignInIndexUpgradePreservesAlreadyMigratedAccessAndHistory(t *testing.T) {
+	for _, tc := range []struct {
+		firstMigration string
+		applied        int
+	}{{"0014", 2}, {"0015", 1}} {
+		t.Run("before_"+tc.firstMigration, func(t *testing.T) {
+			testSignInIndexUpgrade(t, tc.firstMigration, tc.applied)
+		})
+	}
+}
+
+func testSignInIndexUpgrade(t *testing.T, firstMigration string, wantApplied int) {
+	t.Helper()
 	legacy := fstest.MapFS{}
 	entries, err := fs.ReadDir(identity.Migrations(), ".")
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, entry := range entries {
-		if entry.Name() >= "0014" {
+		if entry.Name() >= firstMigration {
 			continue
 		}
 		body, err := fs.ReadFile(identity.Migrations(), entry.Name())
@@ -384,8 +396,12 @@ func TestSignInIndexUpgradePreservesAlreadyMigratedAccessAndHistory(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if applied, err := db.Migrate(t.Context(), all); err != nil || applied != 1 {
+	if applied, err := db.Migrate(t.Context(), all); err != nil || applied != wantApplied {
 		t.Fatalf("index upgrade=%d %v", applied, err)
+	}
+	var redundantIndexes int
+	if err := db.Read().QueryRowContext(t.Context(), "SELECT count(*) FROM sqlite_schema WHERE type='index' AND name IN ('account_signin_requests_by_expiry','session_authentications_initial_passkey','session_authentications_initial_origin')").Scan(&redundantIndexes); err != nil || redundantIndexes != 0 {
+		t.Fatalf("redundant indexes=%d %v", redundantIndexes, err)
 	}
 	if after := snapshot(); !reflect.DeepEqual(before, after) {
 		t.Fatalf("index upgrade changed access or history:\nbefore=%v\nafter=%v", before, after)
