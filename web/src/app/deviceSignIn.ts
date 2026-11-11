@@ -252,6 +252,7 @@ export interface IssuerState {
 function createIssuer() {
   let state: IssuerState = { links: [], urls: {}, busy: false };
   const ids = new Set<string>();
+  const rejectedIds = new Set<string>();
   const listeners = new Set<() => void>();
   let timer: ReturnType<typeof setTimeout> | undefined;
   let refreshing: Promise<void> | undefined;
@@ -268,7 +269,7 @@ function createIssuer() {
     if (ids.size && getState().accountSession?.kind === 'account') timer = setTimeout(() => { void refresh().catch(() => {}); }, Math.max(3000, (state.retryAt ?? 0) - Date.now()));
   }
   function clear() {
-    generation++; control.abort(); control = new AbortController(); clearTimeout(timer); ids.clear();
+    generation++; control.abort(); control = new AbortController(); clearTimeout(timer); ids.clear(); rejectedIds.clear();
     state = { links: [], urls: {}, busy: false }; listeners.forEach(listener => listener());
   }
   subscribeSessionEpoch(clear);
@@ -276,7 +277,10 @@ function createIssuer() {
     try { const link = await api.signInLink(id, control.signal); check(version); merge(link); }
     catch (error) {
       check(version);
-      if (error instanceof ApiError && error.code === 'invalid_proof') { ids.delete(id); update({ urls: Object.fromEntries(Object.entries(state.urls).filter(([key]) => key !== id)), problem: problem(error) }); }
+      if (error instanceof ApiError && error.code === 'invalid_proof') {
+        ids.delete(id); rejectedIds.add(id);
+        update({ urls: Object.fromEntries(Object.entries(state.urls).filter(([key]) => key !== id)), problem: problem(error) });
+      }
       else throw error;
     }
   }
@@ -284,7 +288,7 @@ function createIssuer() {
     if (refreshing) return refreshing;
     try { cooldown(state.retryAt); } catch (error) { schedule(); return Promise.reject(error); }
     const version = generation;
-    getSignInHints().forEach(request => { if (request.linkId) ids.add(request.linkId); });
+    getSignInHints().forEach(request => { if (request.linkId && !rejectedIds.has(request.linkId)) ids.add(request.linkId); });
     refreshing = Promise.all([...ids].map(id => read(id, version))).then(() => {})
       .catch(error => { if (generation === version) update({ problem: problem(error), retryAt: problem(error).retryAt }); throw error; })
       .finally(() => { refreshing = undefined; schedule(); });

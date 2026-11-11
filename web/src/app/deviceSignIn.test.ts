@@ -398,3 +398,67 @@ it('replaces an in-flight QR preview without allowing its late result to authori
     expect(approved).toEqual(['second']);
   } finally { approver.dispose(); }
 });
+
+it('does not restore a rejected issuer link from retained hints when polling a new link', async () => {
+  const { deviceIssuer } = await import('./deviceSignIn');
+  const { clearSignInHints, retainSignInHint } = await import('./signInHints');
+  clearSignInHints(); deviceIssuer.clear();
+  session.value = { kind: 'account', visitor: { id: 'owner' } };
+  const oldRequest = { ...request, type: 'link' as const, state: 'pending' as const, linkId: 'old-link' };
+  const oldLink = { id: 'old-link', state: 'open', version: 1, createdAt: request.createdAt, expiresAt: request.expiresAt, approvalGrantsRecentProof: false, requests: [oldRequest] };
+  const newLink = { ...oldLink, id: 'new-link', requests: [] };
+  let expiredOnServer = false;
+  let oldReads = 0, newReads = 0;
+  vi.stubGlobal('fetch', async (path: string) => {
+    if (path.endsWith('/session')) return Response.json(session.value);
+    if (path.endsWith('/old-link')) {
+      oldReads++;
+      return expiredOnServer ? Response.json({ code: 'invalid_proof' }, { status: 403 }) : Response.json(oldLink);
+    }
+    if (path.endsWith('/new-link')) { newReads++; return Response.json(newLink); }
+    return Response.json({ link: newLink, url: `${location.origin}/#signin=new-link` });
+  });
+  try {
+    retainSignInHint(oldRequest);
+    await deviceIssuer.refresh();
+    expiredOnServer = true;
+    await deviceIssuer.refresh();
+    expect(oldReads).toBe(2);
+    expect(deviceIssuer.getSnapshot().urls['old-link']).toBeUndefined();
+    await deviceIssuer.create();
+    retainSignInHint({ ...oldRequest, version: 2 });
+    await deviceIssuer.refresh();
+    await vi.advanceTimersByTimeAsync(6000);
+    expect(newReads).toBeGreaterThanOrEqual(2);
+    expect(oldReads).toBe(2);
+    expect(deviceIssuer.getSnapshot()).toMatchObject({ problem: undefined, urls: { 'new-link': `${location.origin}/#signin=new-link` } });
+
+    clearSignInHints(); deviceIssuer.clear(); expiredOnServer = false;
+    retainSignInHint(oldRequest);
+    await deviceIssuer.refresh();
+    expect(oldReads).toBe(3);
+  } finally { clearSignInHints(); deviceIssuer.clear(); }
+});
+
+it('keeps issuer links retryable after a transient read failure', async () => {
+  const { deviceIssuer } = await import('./deviceSignIn');
+  const { clearSignInHints, retainSignInHint } = await import('./signInHints');
+  clearSignInHints(); deviceIssuer.clear();
+  session.value = { kind: 'account', visitor: { id: 'owner' } };
+  let offline = true, reads = 0;
+  const hint = { ...request, type: 'link' as const, state: 'pending' as const, linkId: 'retryable-link' };
+  const link = { id: hint.linkId, state: 'open', version: 1, createdAt: hint.createdAt, expiresAt: hint.expiresAt, requests: [hint], approvalGrantsRecentProof: false };
+  vi.stubGlobal('fetch', async () => {
+    reads++;
+    if (offline) throw new TypeError('Offline');
+    return Response.json(link);
+  });
+  try {
+    retainSignInHint(hint);
+    await expect(deviceIssuer.refresh()).rejects.toMatchObject({ code: 'network' });
+    offline = false;
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(reads).toBe(2);
+    expect(deviceIssuer.getSnapshot().links).toEqual([link]);
+  } finally { clearSignInHints(); deviceIssuer.clear(); }
+});

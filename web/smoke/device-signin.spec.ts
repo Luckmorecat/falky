@@ -364,3 +364,32 @@ test('an issuer can revoke an approved link before the receiver consumes it', as
     expect((await session(receiver, app.url)).kind).not.toBe('account');
   } finally { await receiver.context().close(); }
 });
+
+test('expired issuer hints do not pollute a replacement link with repeated unavailable errors', async ({ page, browser }) => {
+  const { state } = await issuer(page);
+  const receiver = await devicePage(browser, state);
+  const reads = new Map<string, number>();
+  page.on('request', request => {
+    if (request.method() === 'GET' && /\/accounts\/signin-links\/[^/]+$/.test(request.url())) reads.set(request.url(), (reads.get(request.url()) ?? 0) + 1);
+  });
+  try {
+    const creation = page.waitForResponse(r => r.request().method() === 'POST' && r.url().endsWith('/accounts/signin-links'));
+    await receiveLink(receiver, await createLink(page));
+    const old = await (await creation).json();
+    await expect(page.locator('.device-pending')).toHaveCount(1);
+    const oldPath = `${app.url}/api/accounts/signin-links/${old.link.id}`;
+    const rejected = page.waitForResponse(r => r.url() === oldPath && r.status() === 403);
+    await page.request.post(app.url + '/__mock/action', { data: { type: 'device-expire', linkId: old.link.id } });
+    await rejected;
+    await expect(page.getByRole('alert')).toBeVisible();
+    const oldReads = reads.get(oldPath);
+    const replacement = page.waitForResponse(r => r.request().method() === 'POST' && r.url().endsWith('/accounts/signin-links'));
+    const nextURL = await createLink(page);
+    const next = await (await replacement).json();
+    const nextPath = `${app.url}/api/accounts/signin-links/${next.link.id}`;
+    await expect.poll(() => reads.get(nextPath) ?? 0).toBeGreaterThanOrEqual(2);
+    expect(reads.get(oldPath)).toBe(oldReads);
+    await expect(page.getByRole('alert')).toHaveCount(0);
+    await expect(page.getByRole('textbox', { name: 'Sign-in link', exact: true })).toHaveValue(nextURL);
+  } finally { await receiver.context().close(); }
+});

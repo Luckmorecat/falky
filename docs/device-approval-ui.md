@@ -59,7 +59,7 @@ selection keeps its normal tab focus.
 
 ## Verification and limits
 
-- `make check-web`: frozen install, generated-schema freshness, 223 Vitest tests,
+- `make check-web`: frozen install, generated-schema freshness, 225 Vitest tests,
   runtime selection/production mock-exclusion assertions and production build.
 - `pnpm run typecheck` includes production, mock, browser helpers and tooling;
   `pnpm run test:mock` covers 19 fixture tests.
@@ -78,6 +78,9 @@ selection keeps its normal tab focus.
   changes, exit reconciliation, late poll responses/errors and overlapping previews.
   Failed session reads preserve the original request and bearer; confirmed session
   changes still invalidate them. Finish invalidates pending polls before delivery.
+- Issuer polling remembers authoritative link rejection for the current session,
+  so retained hints cannot revive expired links or contaminate a replacement link
+  with repeated unavailable errors. Network failures remain retryable.
 - Camera runtime tests independently cover late permission release, ordinary bad
   frames, fatal decoder cleanup, stopped tracks and suppressed late callbacks.
 - The unchanged Go backend was also exercised with a fresh SQLite database,
