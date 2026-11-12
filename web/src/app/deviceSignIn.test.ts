@@ -575,6 +575,50 @@ it('does not restore a rejected issuer link from retained hints when polling a n
   } finally { clearSignInHints(); deviceIssuer.clear(); }
 });
 
+it.each(['revoke', 'poll'] as const)('stops polling revoked issuer links discovered through %s, including after expiry and retained hints', async discovery => {
+  const { deviceIssuer } = await import('./deviceSignIn');
+  const { clearSignInHints, retainSignInHint } = await import('./signInHints');
+  clearSignInHints(); deviceIssuer.clear();
+  session.value = { kind: 'account', visitor: { id: 'owner' } };
+  const start = Date.now();
+  const oldRequest = { ...request, type: 'link' as const, state: 'pending' as const, linkId: 'old-link' };
+  const oldLink = { id: 'old-link', state: 'open', version: 1, createdAt: new Date(start).toISOString(), expiresAt: new Date(start + 300000).toISOString(), requests: [oldRequest], approvalGrantsRecentProof: false };
+  const newLink = { ...oldLink, id: 'new-link', expiresAt: request.expiresAt, requests: [] };
+  let revoked = false, creations = 0, oldReads = 0, newReads = 0;
+  vi.stubGlobal('fetch', async (path: string, init?: RequestInit) => {
+    if (path.endsWith('/session')) return Response.json(session.value);
+    if (init?.method === 'DELETE') { revoked = true; return Response.json({}); }
+    if (path.endsWith('/signin-links') && init?.method === 'POST') {
+      const link = creations++ === 0 ? oldLink : newLink;
+      return Response.json({ link, url: `${location.origin}/#signin=${link.id}` });
+    }
+    if (path.endsWith('/old-link')) {
+      oldReads++;
+      if (Date.now() >= start + 300000) return Response.json({ code: 'invalid_proof' }, { status: 403 });
+      return Response.json(revoked ? { ...oldLink, state: 'revoked', version: 2, requests: [{ ...oldRequest, state: 'cancelled', version: 2 }] } : oldLink);
+    }
+    if (path.endsWith('/new-link')) { newReads++; return Response.json(newLink); }
+    throw new Error(`Unexpected request: ${path}`);
+  });
+  try {
+    await deviceIssuer.create();
+    retainSignInHint(oldRequest);
+    await deviceIssuer.refresh();
+    if (discovery === 'revoke') await deviceIssuer.revoke(oldLink.id);
+    else { revoked = true; await vi.advanceTimersByTimeAsync(3000); }
+    expect(deviceIssuer.getSnapshot()).toMatchObject({ links: [{ state: 'revoked' }], problem: undefined });
+    const readsAtRevocation = oldReads;
+    await vi.advanceTimersByTimeAsync(303000);
+    retainSignInHint({ ...oldRequest, state: 'cancelled', version: 2 });
+    await deviceIssuer.refresh();
+    await deviceIssuer.create();
+    await vi.advanceTimersByTimeAsync(6000);
+    expect(oldReads).toBe(readsAtRevocation);
+    expect(newReads).toBeGreaterThanOrEqual(2);
+    expect(deviceIssuer.getSnapshot().problem).toBeUndefined();
+  } finally { clearSignInHints(); deviceIssuer.clear(); }
+});
+
 it('keeps issuer links retryable after a transient read failure', async () => {
   const { deviceIssuer } = await import('./deviceSignIn');
   const { clearSignInHints, retainSignInHint } = await import('./signInHints');
