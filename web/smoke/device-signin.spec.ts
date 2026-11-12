@@ -463,3 +463,59 @@ test('expired issuer hints do not pollute a replacement link with repeated unava
     await expect(page.getByRole('textbox', { name: 'Sign-in link', exact: true })).toHaveValue(nextURL);
   } finally { await receiver.context().close(); }
 });
+
+for (const width of [1440, 390]) test(`sign-in link cycles reuse one reserved area at ${width}px`, async ({ page }) => {
+  await page.setViewportSize({ width, height: 1000 });
+  await issuer(page);
+  await page.getByRole('dialog', { name: 'Settings', exact: true }).evaluate(async element => {
+    await Promise.all(element.getAnimations().map(animation => animation.finished));
+  });
+  await page.clock.install();
+  const area = page.locator('.device-link-area');
+  const revoked = page.getByRole('status').filter({ hasText: 'Link revoked.' });
+  const initialHeight = await area.evaluate(element => (element as HTMLElement).offsetHeight);
+  const expectStableArea = async () => {
+    expect(await area.evaluate(element => (element as HTMLElement).offsetHeight)).toBe(initialHeight);
+    await expect(page.locator('.device-inline-link')).toHaveCount(0);
+  };
+  await createLink(page);
+  expect(await area.evaluate(element => (element as HTMLElement).offsetHeight)).toBe(initialHeight);
+  await page.route('**/api/accounts/signin-links/*', async route => {
+    if (route.request().method() === 'DELETE') await route.abort('failed');
+    else await route.continue();
+  });
+  await page.getByRole('button', { name: 'Revoke link', exact: true }).click();
+  await expect(page.getByRole('alert')).toBeVisible();
+  await expect(page.getByRole('textbox', { name: 'Sign-in link', exact: true })).toBeVisible();
+  await expect(revoked).toHaveCount(0);
+  await page.unroute('**/api/accounts/signin-links/*');
+
+  for (let cycle = 0; cycle < 3; cycle++) {
+    await page.getByRole('button', { name: 'Revoke link', exact: true }).click();
+    await expect(revoked).toHaveCount(1);
+    await expectStableArea();
+    if (cycle === 0) {
+      await page.clock.runFor(2000);
+      await expect(revoked).toHaveClass(/fading/);
+      await page.clock.runFor(200);
+      await expect(revoked).toHaveCount(0);
+      await expectStableArea();
+    }
+    if (cycle < 2) {
+      await createLink(page);
+      await expect(revoked).toHaveCount(0);
+      await page.clock.runFor(2300);
+      await expect(page.getByRole('textbox', { name: 'Sign-in link', exact: true })).toBeVisible();
+      await expect(page.locator('.device-inline-link')).toHaveCount(1);
+    }
+  }
+  await page.getByRole('button', { name: 'Close', exact: true }).click();
+  await accountSettings(page);
+  await expect(revoked).toHaveCount(0);
+  await expectStableArea();
+  await createLink(page);
+  await expect(page.locator('.device-inline-link')).toHaveCount(1);
+  await createLink(page);
+  await expect(page.locator('.device-inline-link')).toHaveCount(1);
+  await expect(revoked).toHaveCount(0);
+});
