@@ -262,7 +262,7 @@ export interface IssuerState {
 function createIssuer() {
   let state: IssuerState = { links: [], urls: {}, busy: false };
   const ids = new Set<string>();
-  const rejectedIds = new Set<string>();
+  const stoppedIds = new Set<string>();
   const listeners = new Set<() => void>();
   let timer: ReturnType<typeof setTimeout> | undefined;
   let refreshing: Promise<void> | undefined;
@@ -272,14 +272,20 @@ function createIssuer() {
   function check(version: number) { if (version !== generation || control.signal.aborted) stale(); }
   function merge(link: SignInLink) {
     const previous = state.links.find(value => value.id === link.id);
-    if (!previous || previous.version <= link.version) update({ links: [...state.links.filter(value => value.id !== link.id), link] });
+    if (!previous || previous.version <= link.version) {
+      if (link.state === 'revoked') {
+        ids.delete(link.id); stoppedIds.add(link.id);
+        if (!ids.size) clearTimeout(timer);
+      }
+      update({ links: [...state.links.filter(value => value.id !== link.id), link] });
+    }
   }
   function schedule() {
     clearTimeout(timer);
     if (ids.size && getState().accountSession?.kind === 'account') timer = setTimeout(() => { void refresh().catch(() => {}); }, Math.max(3000, (state.retryAt ?? 0) - Date.now()));
   }
   function clear() {
-    generation++; control.abort(); control = new AbortController(); clearTimeout(timer); ids.clear(); rejectedIds.clear();
+    generation++; control.abort(); control = new AbortController(); clearTimeout(timer); ids.clear(); stoppedIds.clear();
     state = { links: [], urls: {}, busy: false }; listeners.forEach(listener => listener());
   }
   subscribeSessionEpoch(clear);
@@ -288,7 +294,7 @@ function createIssuer() {
     catch (error) {
       check(version);
       if (error instanceof ApiError && error.code === 'invalid_proof') {
-        ids.delete(id); rejectedIds.add(id);
+        ids.delete(id); stoppedIds.add(id);
         update({ urls: Object.fromEntries(Object.entries(state.urls).filter(([key]) => key !== id)), problem: problem(error) });
       }
       else throw error;
@@ -298,7 +304,7 @@ function createIssuer() {
     if (refreshing) return refreshing;
     try { cooldown(state.retryAt); } catch (error) { schedule(); return Promise.reject(error); }
     const version = generation;
-    getSignInHints().forEach(request => { if (request.linkId && !rejectedIds.has(request.linkId)) ids.add(request.linkId); });
+    getSignInHints().forEach(request => { if (request.linkId && !stoppedIds.has(request.linkId)) ids.add(request.linkId); });
     refreshing = Promise.all([...ids].map(id => read(id, version))).then(() => {})
       .catch(error => { if (generation === version) update({ problem: problem(error), retryAt: problem(error).retryAt }); throw error; })
       .finally(() => { refreshing = undefined; schedule(); });
