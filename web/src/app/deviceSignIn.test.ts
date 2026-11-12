@@ -560,6 +560,7 @@ it('does not restore a rejected issuer link from retained hints when polling a n
     await deviceIssuer.refresh();
     expect(oldReads).toBe(2);
     expect(deviceIssuer.getSnapshot().urls['old-link']).toBeUndefined();
+    expect(deviceIssuer.getSnapshot().links).toEqual([]);
     await deviceIssuer.create();
     retainSignInHint({ ...oldRequest, version: 2 });
     await deviceIssuer.refresh();

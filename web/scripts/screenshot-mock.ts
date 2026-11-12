@@ -120,9 +120,9 @@ Existing browser: PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/path/to/chromium`);
                 if (preset === 'device-link' || preset === 'device-revoked') {
                   if (preset === 'device-revoked') {
                     await page.getByRole('button', { name: t.device.revoke, exact: true }).click();
-                    await expect(page.getByRole('status').filter({ hasText: t.device.revoked })).toBeVisible();
+                    await expect(page.getByRole('dialog', { name: t.device.link, exact: true })).not.toBeVisible();
                   }
-                  await page.locator('.device-issuer').scrollIntoViewIfNeeded();
+                  await page.getByRole('dialog', { name: preset === 'device-revoked' ? t.settings : t.device.link, exact: true }).scrollIntoViewIfNeeded();
                 } else {
                   const candidate = await browser.newPage({ viewport: { width, height }, locale: values.lang, colorScheme: values.theme, reducedMotion: 'reduce' });
                   await candidate.addInitScript(({ state, lang, theme }) => {
@@ -138,7 +138,7 @@ Existing browser: PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/path/to/chromium`);
                     const code = (await candidate.locator('.device-code').innerText()).replace(/\s/g, '');
                     await page.getByRole('textbox', { name: t.device.codeLabel, exact: true }).fill(code);
                     await page.getByRole('button', { name: t.device.approve, exact: true }).click();
-                    await expect(page.getByText(t.device.linkApproved, { exact: true })).toBeVisible();
+                    await expect(page.getByRole('dialog', { name: t.device.link, exact: true }).getByText(t.device.linkApproved, { exact: true })).toBeVisible();
                     await page.getByRole('button', { name: t.device.revoke, exact: true }).scrollIntoViewIfNeeded();
                   } else if (preset === 'device-code') page = candidate;
                   else await page.getByRole('textbox', { name: t.device.codeLabel, exact: true }).scrollIntoViewIfNeeded();

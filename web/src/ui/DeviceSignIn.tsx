@@ -8,22 +8,8 @@ import { t } from '../strings';
 import { Button } from './Button';
 import { Icon } from './Icon';
 import { Orb } from './Orb';
+import { DeviceDeadline, DeviceError, DeviceLinkFlow, useDeviceClock, type DeviceLinkFlowProps } from './DeviceLinkFlow';
 
-export function useDeviceClock() {
-  const [now, setNow] = useState(Date.now);
-  useEffect(() => { const timer = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(timer); }, []);
-  return now;
-}
-function remaining(deadline: string | number, now: number) {
-  const seconds = Math.max(0, Math.ceil(((typeof deadline === 'number' ? deadline : Date.parse(deadline)) - now) / 1000));
-  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
-}
-export function DeviceDeadline({ at, now }: { at: string; now: number }) { return <span>{t.device.expiry} <time dateTime={at}>{remaining(at, now)}</time></span>; }
-export function DeviceError({ problem, now }: { problem?: DeviceProblem; now: number }) {
-  if (!problem) return null;
-  const message = problem.code in t.device.errors ? t.device.errors[problem.code as keyof typeof t.device.errors] : problem.code === 'rate_limited' ? t.device.rateLimited : problem.code === 'outcome_unknown' ? t.device.outcomeUnknown : problem.code === 'invalid_code' ? t.device.codeWrong : problem.code === 'invalid_proof' || problem.code === 'stale' ? t.device.unavailable : t.device.requestFailed;
-  return <p className="auth-error" role="alert">{message}{problem.retryAt && problem.retryAt > now ? ` ${remaining(problem.retryAt, now)}` : ''}</p>;
-}
 function QR({ value }: { value: string }) {
   const [qr, setQR] = useState<{ path: string; size: number }>();
   const [failed, setFailed] = useState(false);
@@ -120,48 +106,6 @@ export function DeviceScanner({ token, onClose }: { token?: string; onClose(): v
   </div>;
 }
 
-export function DeviceIssuer({ active, disabled, onScan, scanFocusRequested, onScanFocused }: { active: boolean; disabled: boolean; onScan(): void; scanFocusRequested: boolean; onScanFocused(): void }) {
-  const state = useSyncExternalStore(deviceIssuer.subscribe, deviceIssuer.getSnapshot);
-  const scanButton = useRef<HTMLButtonElement>(null);
-  const [codes, setCodes] = useState<Record<string, string>>({});
-  const [copied, setCopied] = useState('');
-  const [fallback, setFallback] = useState('');
-  const [codeIssue, setCodeIssue] = useState('');
-  const previousLinks = useRef(state.links);
-  const [revoked, setRevoked] = useState<string>();
-  const [revokedFading, setRevokedFading] = useState(false);
-  useEffect(() => {
-    const newlyRevoked = state.links.find(link => link.state === 'revoked' && previousLinks.current.some(previous => previous.id === link.id && previous.state !== 'revoked'));
-    previousLinks.current = state.links;
-    if (!active || state.links.some(link => (link.state === 'open' || link.state === 'approved') && Date.parse(link.expiresAt) > Date.now())) setRevoked(undefined);
-    else if (newlyRevoked) setRevoked(newlyRevoked.id);
-  }, [state.links, active]);
-  useEffect(() => {
-    setRevokedFading(false);
-    if (!revoked) return;
-    const fade = setTimeout(() => setRevokedFading(true), 2000);
-    const dismiss = setTimeout(() => setRevoked(undefined), 2200);
-    return () => { clearTimeout(fade); clearTimeout(dismiss); };
-  }, [revoked]);
-  const now = useDeviceClock();
-  useEffect(() => { if (active) void deviceIssuer.refresh().catch(() => {}); }, [active]);
-  const blocked = disabled || state.busy || (state.retryAt ?? 0) > now;
-  useEffect(() => {
-    const target = scanButton.current;
-    if (!scanFocusRequested || !active || blocked || !target?.closest('dialog')?.open) return;
-    target.focus();
-    if (document.activeElement === target) onScanFocused();
-  }, [scanFocusRequested, active, blocked, onScanFocused]);
-  const links = state.links.filter(link => link.state !== 'revoked' && (link.state === 'open' || link.requests.some(r => r.state === 'approved') || (link.state !== 'consumed' && Date.parse(link.expiresAt) > now))).sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt)).slice(0, 1);
-  return <section className="device-issuer"><h3>{t.device.another}</h3><p className="set-note">{t.device.createHint}</p>
-    <div className="account-actions"><Button ref={scanButton} disabled={blocked} onClick={onScan}><Icon name="camera" />{t.device.scan}</Button><Button disabled={blocked} onClick={() => { setCopied(''); setFallback(''); setCodeIssue(''); void deviceIssuer.create().catch(() => {}); }}>{links.some(l => l.state === 'open') ? t.device.replaceLink : t.device.create}</Button></div>
-    <div className="device-link-area">
-      {revoked && !links.length && <p className={`device-wait device-revoked${revokedFading ? ' fading' : ''}`} role="status">{t.device.revoked}</p>}
-      {links.some(l => l.state === 'open') && <p className="set-note">{t.device.replaceHint}</p>}
-      {links.map(link => { const expired = Date.parse(link.expiresAt) <= now; const url = state.urls[link.id]; const pending = link.requests.filter(request => request.state === 'pending' && Date.parse(request.expiresAt) > now); return <div className="device-inline-link" key={link.id}>
-        <p className="device-wait">{expired ? t.device.expired : link.state === 'approved' ? t.device.linkApproved : link.state === 'consumed' ? t.device.consumed : <DeviceDeadline at={link.expiresAt} now={now} />}</p>
-        {(link.state === 'open' || link.state === 'approved') && !expired && <><div className="account-actions">{link.state === 'open' && url && <Button disabled={blocked} onClick={() => { void (navigator.clipboard?.writeText(url) ?? Promise.reject(new Error('clipboard unavailable'))).then(() => setCopied(link.id), () => setFallback(link.id)); }}>{copied === link.id ? t.device.copied : t.device.copy}</Button>}<Button disabled={blocked} onClick={() => void deviceIssuer.revoke(link.id).catch(() => {})}>{t.device.revoke}</Button></div>{link.state === 'open' && (url ? <label className="device-copy"><span>{fallback === link.id ? t.device.copyFallback : t.device.link}</span><input readOnly value={url} onFocus={e => e.target.select()} /></label> : <p className="set-note">{t.device.lostLink}</p>)}</>}
-        {pending.length > 0 && <><h4>{t.device.pending}</h4>{pending.map(request => <div className="device-pending" key={request.id}><p>{request.requesterUserAgent || t.device.noBrowser}</p><Button disabled={blocked} onClick={() => void deviceIssuer.deny(link.id, request.id).catch(() => {})}>{t.device.deny}</Button></div>)}<p className="set-note">{t.device.selfWarning}</p><form className="device-code-form" onSubmit={e => { e.preventDefault(); const code = codes[link.id] ?? ''; if (/^[0-9]{4}$/.test(code)) { setCodeIssue(link.id); void deviceIssuer.approve(link.id, code).then(() => setCodes(current => ({ ...current, [link.id]: '' }))).catch(() => {}); } }}><label>{t.device.codeLabel}<input inputMode="numeric" autoComplete="off" pattern="[0-9]{4}" maxLength={4} value={codes[link.id] ?? ''} onChange={e => setCodes(current => ({ ...current, [link.id]: e.target.value.replace(/[^0-9]/g, '') }))} /></label><Button variant="primary" type="submit" disabled={blocked || !/^[0-9]{4}$/.test(codes[link.id] ?? '')}>{t.device.approve}</Button></form><p className="set-note">{t.device.codePolicy}</p></>}
-      </div>; })}</div><DeviceError problem={state.problem?.code === 'invalid_proof' && state.links.some(link => link.id === codeIssue && link.state === 'open' && Date.parse(link.expiresAt) > now) ? { code: 'invalid_code' } : state.problem} now={now} />
-  </section>;
+export function DeviceIssuer(props: Omit<DeviceLinkFlowProps, 'issuer' | 'defaultOpen'>) {
+  return <DeviceLinkFlow {...props} issuer={deviceIssuer} />;
 }

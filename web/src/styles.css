@@ -700,11 +700,32 @@ kbd { min-width: 34px; height: 34px; padding: 0 10px; display: inline-grid; plac
 .device-issuer .account-actions { margin-block: 16px; }
 .device-issuer .account-actions button { display: flex; align-items: center; justify-content: center; gap: 8px; }
 .device-issuer .account-actions .i { width: 18px; height: 18px; }
-.device-link-area { min-height: 240px; margin-top: 20px; padding-top: 20px; border-top: 1px solid var(--fill); }
-.device-revoked { opacity: 1; transition: opacity 200ms ease; }
-.device-revoked.fading { opacity: 0; }
+.device-issuer .account-actions .device-link-slot { width: min(180px, 100%); height: 46px; min-height: 46px; padding: 8px 16px; }
+.device-issuer .account-actions .device-link-item { justify-content: space-between; gap: 16px; text-align: left; }
+.device-link-item strong { display: block; font-size: 13px; font-weight: 500; }
+.device-link-item small { display: block; margin-top: 0; font-size: 11px; line-height: 1.3; color: var(--text-2); font-variant-numeric: tabular-nums; }
+.device-link-item > span:last-child { color: var(--text-2); }
+.btn2.danger { background: var(--danger-bg); color: var(--danger); }
+.device-link-drawer { margin: auto auto 0; width: min(560px, 100%); max-height: calc(100dvh - max(24px, env(safe-area-inset-top))); border-radius: 32px 32px 0 0; padding-bottom: max(32px, env(safe-area-inset-bottom)); overscroll-behavior: contain; transform: translateY(100%); opacity: 0; transition: transform 240ms var(--ease-out), opacity 240ms ease, display 240ms allow-discrete, overlay 240ms allow-discrete; }
+.device-link-drawer[open] { transform: translateY(0); opacity: 1; }
+.device-link-drawer::backdrop { opacity: 0; transition: opacity 240ms ease, display 240ms allow-discrete, overlay 240ms allow-discrete; }
+.device-link-drawer[open]::backdrop { opacity: 1; }
+@starting-style {
+  .device-link-drawer[open] { transform: translateY(100%); opacity: 0; }
+  .device-link-drawer[open]::backdrop { opacity: 0; }
+}
+.device-link-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 20px; }
+.device-link-header h2 { font-size: 22px; font-weight: 500; }
+.device-link-area { margin-top: 20px; }
+.device-link-skeleton span { display: block; border-radius: 24px; background: linear-gradient(90deg, var(--fill) 25%, var(--fill-2) 50%, var(--fill) 75%); background-size: 200% 100%; animation: shimmer 1.5s linear infinite; }
+.device-link-skeleton .skeleton-deadline { width: 26%; height: 20px; margin-bottom: 16px; }
+.device-link-skeleton .skeleton-label { width: 22%; height: 18px; margin-bottom: 10px; }
+.device-link-skeleton .skeleton-field { width: 100%; height: 50px; }
+.device-link-skeleton .account-actions span { width: 110px; height: 46px; }
+.device-link-area .device-wait { margin-bottom: 16px; }
 @media (prefers-reduced-motion: reduce) {
-  .device-revoked { transition: none; }
+  .device-link-drawer, .device-link-drawer::backdrop { transition: none; }
+  .device-link-skeleton span { animation: none; }
 }
 .device-copy, .device-code-form label { display: flex; flex-direction: column; gap: 10px; font-size: 12px; color: var(--text-2); }
 .device-copy input, .device-code-form input { min-width: 0; width: 100%; height: 50px; border: 0; border-radius: 25px; background: var(--fill); color: var(--text); padding: 0 18px; font-size: 13px; }
@@ -721,7 +742,8 @@ kbd { min-width: 34px; height: 34px; padding: 0 10px; display: inline-grid; plac
   .device-code-form { align-items: stretch; flex-direction: column; }
   .device-code-form label { max-width: none; }
   .device-issuer .account-actions { flex-direction: column; align-items: stretch; }
-  .device-link-area { min-height: 300px; }
+  .device-issuer .account-actions .device-link-slot { width: 100%; }
+  .device-link-skeleton .account-actions span { width: 100%; }
 }
 .device-scanner-identity { display: flex; align-items: center; gap: 10px; text-align: left; }
 .device-scanner-identity .orb { width: 36px; flex: none; }

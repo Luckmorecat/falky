@@ -24,7 +24,18 @@ export async function previewQR(page: Page, url: string) {
   await expect(page.getByRole('button', { name: 'Approve sign-in', exact: true })).toBeVisible();
 }
 export async function createLink(page: Page) {
-  await page.getByRole('button', { name: /^(Create sign-in link|Create a new link)$/, exact: true }).click();
+  const drawer = page.getByRole('dialog', { name: 'Sign-in link', exact: true });
+  if (await page.locator('.device-link-drawer[open]').count()) {
+    await drawer.getByRole('button', { name: 'Close', exact: true }).click();
+    await expect(drawer).not.toBeVisible();
+  }
+  const item = page.locator('.device-link-item');
+  if (await item.count() && !await page.getByRole('dialog', { name: 'Settings', exact: true }).getByRole('button', { name: 'Create sign-in link', exact: true }).count()) {
+    await item.click();
+    await drawer.getByRole('button', { name: 'Revoke link', exact: true }).click();
+    await expect(drawer).not.toBeVisible();
+  }
+  await page.getByRole('dialog', { name: 'Settings', exact: true }).getByRole('button', { name: /^(Create sign-in link|Create a new link)$/, exact: true }).click();
   return page.getByRole('textbox', { name: 'Sign-in link', exact: true }).inputValue();
 }
 export async function receiveLink(page: Page, url: string) {
