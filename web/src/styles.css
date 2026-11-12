@@ -387,7 +387,7 @@ button.att-tile:active img { scale: .985; }
 .viewer-frame { display: grid; place-items: center; max-width: 100%; max-height: 100%; min-width: 0; min-height: 0; }
 .viewer-img { display: block; max-width: calc(100vw - 144px); max-height: calc(100dvh - 136px); width: auto; height: auto; object-fit: contain; border-radius: calc(6px * var(--corner)); transform-origin: center; cursor: zoom-in; transition: transform 260ms var(--ease-drawer); will-change: transform; }
 .viewer.zoomed .viewer-img { cursor: grab; border-radius: 0; }
-.viewer.dragging .viewer-img { transition: none; }
+.viewer.dragging .viewer-img, .viewer.closing .viewer-img { transition: none; }
 .viewer.zoomed.dragging .viewer-img { cursor: grabbing; }
 .viewer-wait { width: min(60vw, 480px); aspect-ratio: 4 / 3; max-height: calc(100dvh - 136px); border-radius: calc(12px * var(--corner)); background: linear-gradient(100deg, rgba(255,255,255,.05) 30%, rgba(255,255,255,.11) 50%, rgba(255,255,255,.05) 70%) 0 0 / 300% 100%; animation: shimmer 1.4s linear infinite; }
 @keyframes shimmer { to { background-position: -150% 0; } }
