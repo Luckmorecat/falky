@@ -3,7 +3,6 @@ import type { InterfaceCue } from '../voice/sounds';
 import { getState } from './store';
 
 const PRESSABLE = 'button, a[href], select, summary, input[type=checkbox]';
-const HOVERABLE = 'button, a[href], select, summary, label.toggle, label.color';
 
 /** What pressing an element should say; read before the press changes anything on it. */
 export function cueFor(target: Element | null): InterfaceCue | null {
@@ -16,11 +15,6 @@ export function cueFor(target: Element | null): InterfaceCue | null {
   // A checkbox has already flipped by the time its click is seen.
   if (el instanceof HTMLInputElement) return el.checked ? 'on' : 'off';
   return 'tap';
-}
-
-function hoverable(target: EventTarget | null): Element | null {
-  const el = target instanceof Element ? target.closest(HOVERABLE) : null;
-  return el && !(el as HTMLButtonElement).disabled ? el : null;
 }
 
 function say(cue: InterfaceCue, { force = false, pitch = 0.5 } = {}): void {
@@ -37,19 +31,10 @@ export function sayTick(fraction: number): void {
 
 /** Lets the whole interface answer by itself: new controls need nothing to be heard. */
 export function installInterfaceSounds(): void {
-  // Browsers only let sound start after the first press, so hovers wait for it.
+  // Browsers only let sound start after the first press, so slider ticks wait for it.
   const unlock = () => { unlocked = true; };
   document.addEventListener('pointerdown', unlock, { capture: true, passive: true });
   document.addEventListener('keydown', unlock, { capture: true, passive: true });
-
-  let hovered: Element | null = null;
-  document.addEventListener('pointerover', (e) => {
-    if (e.pointerType !== 'mouse') return;
-    const el = hoverable(e.target);
-    if (el === hovered) return;
-    hovered = el;
-    if (el && unlocked) say('hover');
-  }, { passive: true });
 
   document.addEventListener('click', (e) => {
     const target = e.target instanceof Element ? e.target : null;
