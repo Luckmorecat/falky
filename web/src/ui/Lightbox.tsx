@@ -29,21 +29,32 @@ function calm(): boolean {
   return matchMedia('(prefers-reduced-motion: reduce)').matches || document.documentElement.classList.contains('reduced');
 }
 
-/** Where the picture came from in the chat, if it is still on screen. */
-function originOf(id: string): DOMRect | null {
+/** The picture's place in the chat, if it is still on screen. */
+function originOf(id: string): HTMLElement | null {
   const el = document.querySelector<HTMLElement>(`.feed [data-attachment="${CSS.escape(id)}"]`);
   if (!el) return null;
   const rect = el.getBoundingClientRect();
   const visible = rect.bottom > 0 && rect.top < innerHeight && rect.right > 0 && rect.left < innerWidth && rect.width > 0;
-  return visible ? rect : null;
+  return visible ? el : null;
 }
 
-/** The transform that puts `to` where `from` is, scaled to cover it the way the thumbnail did. */
-function flip(from: DOMRect, to: DOMRect): string {
+/**
+ * The transform and clip that make `to` look exactly like the thumbnail: scaled
+ * to cover it, cropped to its box and rounded like its corners, as
+ * `object-fit: cover` shows it in the chat.
+ */
+function flip(thumb: HTMLElement, to: DOMRect): { transform: string; clipPath: string } {
+  const from = thumb.getBoundingClientRect();
   const scale = Math.max(from.width / to.width, from.height / to.height);
   const dx = from.left + from.width / 2 - (to.left + to.width / 2);
   const dy = from.top + from.height / 2 - (to.top + to.height / 2);
-  return `translate(${dx}px, ${dy}px) scale(${scale})`;
+  const insetX = Math.max(0, (to.width - from.width / scale) / 2);
+  const insetY = Math.max(0, (to.height - from.height / scale) / 2);
+  const radius = (parseFloat(getComputedStyle(thumb).borderTopLeftRadius) || 0) / scale;
+  return {
+    transform: `translate(${dx}px, ${dy}px) scale(${scale})`,
+    clipPath: `inset(${insetY}px ${insetX}px round ${radius}px)`,
+  };
 }
 
 /**
@@ -95,7 +106,8 @@ export function Lightbox({ items, startId, onClose }: { items: ViewerItem[]; sta
         target.animate([{ opacity: 0, transform: 'scale(.97)' }, { opacity: 1, transform: 'none' }], { duration: calm() ? 1 : 200, easing: 'cubic-bezier(.23,1,.32,1)' });
         return;
       }
-      target.animate([{ transform: flip(from, to), opacity: 0.6 }, { transform: 'none', opacity: 1 }], { duration: 320, easing: 'cubic-bezier(.32,.72,0,1)' });
+      const start = flip(from, to);
+      target.animate([{ ...start, opacity: 0.6 }, { transform: 'none', clipPath: 'inset(0px 0px round 0px)', opacity: 1 }], { duration: 320, easing: 'cubic-bezier(.32,.72,0,1)' });
     };
     const el = img.current;
     if (image.status === 'ready' && el && !el.complete) {
@@ -113,15 +125,25 @@ export function Lightbox({ items, startId, onClose }: { items: ViewerItem[]; sta
     const back = item ? originOf(item.attachment.id) : null;
     const quick = calm();
     bg.current?.animate([{ opacity: Number(getComputedStyle(bg.current).opacity) }, { opacity: 0 }], { duration: quick ? 1 : 220, easing: 'ease', fill: 'forwards' });
-    if (!target) return finish();
-    const now = target.getBoundingClientRect();
+    const pic = img.current;
+    // The picture itself goes back, from wherever a drag or a zoom has left it.
+    const moving = image.status === 'ready' && pic ? pic : target;
+    if (!moving) return finish();
     const zoomed = viewRef.current.scale > 1.01;
     let anim: Animation;
-    if (!quick && back && !zoomed && now.width) {
-      const current = getComputedStyle(target).transform;
-      anim = target.animate([{ transform: current === 'none' ? 'none' : current }, { transform: flip(back, rectWithoutTransform(target)), opacity: 0.4 }], { duration: 280, easing: 'cubic-bezier(.32,.72,0,1)', fill: 'forwards' });
+    if (!quick && back && !zoomed && moving.offsetWidth) {
+      const current = getComputedStyle(moving).transform;
+      const radius = getComputedStyle(moving).borderTopLeftRadius;
+      moving.getAnimations().forEach((a) => a.cancel());
+      anim = moving.animate(
+        [
+          { transform: current === 'none' ? 'none' : current, clipPath: `inset(0px 0px round ${radius})` },
+          flip(back, rectWithoutTransform(moving)),
+        ],
+        { duration: 280, easing: 'cubic-bezier(.32,.72,0,1)', fill: 'forwards' },
+      );
     } else {
-      anim = target.animate([{ opacity: 1 }, { opacity: 0, transform: 'scale(.97)' }], { duration: quick ? 1 : 160, easing: 'ease', fill: 'forwards' });
+      anim = moving.animate([{ opacity: 1 }, { opacity: 0, transform: 'scale(.97)' }], { duration: quick ? 1 : 160, easing: 'ease', fill: 'forwards' });
     }
     anim.onfinish = finish;
     anim.oncancel = finish;
