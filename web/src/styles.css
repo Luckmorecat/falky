@@ -612,6 +612,7 @@ kbd { min-width: 34px; height: 34px; padding: 0 10px; display: inline-grid; plac
 .auth-voice .orb { width: 100%; }
 .auth-step-recover .auth-voice { width: 72px; margin-bottom: 24px; }
 .auth-dialog { margin: auto; width: min(560px, calc(100vw - 24px)); max-width: none; max-height: calc(100dvh - 24px); overflow: auto; overscroll-behavior: contain; border: 0; border-radius: 40px; padding: 32px; color: var(--text); background: var(--surface); box-shadow: 0 24px 80px var(--shadow); }
+.auth-dialog:focus { outline: none; }
 .auth-dialog::backdrop { background: rgba(0,0,0,.65); }
 [data-theme="light"] .auth-dialog::backdrop { background: rgba(0,0,0,.32); }
 .auth-busy { display: flex; flex-direction: column; align-items: center; gap: 18px; padding: 30px 0; text-align: center; }
