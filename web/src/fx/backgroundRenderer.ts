@@ -19,17 +19,6 @@ uniform vec3 uColorsDark[${count}], uColorsLight[${count}];
 uniform vec4 uHistory[${count * (HISTORY / 4)}];
 varying vec4 vColor;
 
-float hash(vec2 p) {
-  vec3 p3 = fract(vec3(p.xyx) * .1031);
-  p3 += dot(p3, p3.yzx + 33.33);
-  return fract((p3.x + p3.y) * p3.z);
-}
-float noise(vec2 p) {
-  vec2 cell = floor(p), f = fract(p);
-  f = f * f * (3. - 2. * f);
-  return mix(mix(hash(cell), hash(cell + vec2(1., 0.)), f.x),
-             mix(hash(cell + vec2(0., 1.)), hash(cell + vec2(1., 1.)), f.x), f.y);
-}
 float historyLevel(int voice, int index) {
   vec4 samples = uHistory[voice * ${HISTORY / 4} + index / 4];
   float channel = mod(float(index), 4.);
@@ -55,53 +44,89 @@ void main() {
   vec3 themeTint;
   themeDot(aPoint, light, themeOffset, themeTint, activity);
   vec2 offset = vec2(0.);
-  vec3 color = vec3(0.);
-  float energy = 0.;
+  vec3 voiceColor = vec3(0.);
+  vec3 restColor = vec3(0.);
+  float voiceEnergy = 0.;
+  float restEnergy = 0.;
+  // Neutral on both themes. Silence settles here instead of fading the field out.
+  vec3 gray = mix(vec3(.76, .76, .74), vec3(.40, .40, .38), light);
   for (int i = 0; i < ${count}; i++) {
-    if (uActive[i] < .5) continue;
     vec4 voice = uVoices[i];
+    // uActive is 0 while silent. step() keeps that uniform, and the gray field still draws.
+    if (step(1., voice.w) * step(0., uActive[i]) < .5) continue;
     vec2 delta = p - voice.xy;
     float distance = length(delta);
     vec2 outward = delta / max(distance, 1.);
-    // Source strength is anchored at the orb's edge, never at a wandering noise patch.
     float fromEdge = max(0., distance - voice.w);
     float seed = float(i) * 17.31 + 3.7;
-    float delay = fromEdge / 220.;
-    float level = arrivingLevel(i, delay);
-    if (level < .001) continue;
-    float t = (uTime - delay) * .38 + seed;
-    vec2 q = delta / 125. + seed;
-    // Bend the noise domain so the moving patches never form concentric fronts.
-    vec2 warp = vec2(noise(q * .57 + vec2(t * .29, -t * .21)),
-                     noise(q * .57 + vec2(-t * .24, t * .33) + 19.7));
-    q += (warp - .5) * 3.8 + vec2(t * .22, -t * .17);
-    // Analytic curl avoids four extra noise samples per point and voice.
-    float x = q.x * 1.3 + t * .3, y = q.y * .9 - t * .4;
-    float diagonal = q.x * .7 + q.y * 1.6 - t * .6;
-    float crosswise = q.x * 1.9 - q.y * .6 + t * .2;
-    float dx = 1.3 * cos(x) * cos(y) + .35 * cos(diagonal) - .665 * sin(crosswise);
-    float dy = -.9 * sin(x) * sin(y) + .8 * cos(diagonal) + .21 * sin(crosswise);
-    float falloff = exp(-fromEdge / uSpread * 3.2);
-    float patches = smoothstep(.18, .8, noise(q * .73 + 8.3));
-    float force = level * uStrength * falloff * (.32 + patches * .9);
-    // A small outward push makes the speaker readable through the stronger eddies.
-    offset += (vec2(dy, -dx) * .78 + outward * .42) * force * 70.;
-    color += mix(uColorsDark[i], uColorsLight[i], light) * force;
-    energy += force;
+    float level = arrivingLevel(i, fromEdge / 220.);
+    float reach = exp(-fromEdge / max(uSpread, 1.) * 1.05);
+    // A bright band walks outward. The gap between bands is the quiet part of the wave.
+    float band = abs(fract(fromEdge / 168. - uTime * .9 + seed) - .32);
+    float crest = 1. - smoothstep(.02, .2, band);
+    float speak = smoothstep(.03, .2, level);
+    float amp = crest * level * uStrength * reach;
+    float rest = exp(-pow(fromEdge / max(voice.w * 1.15, 72.), 2.));
+    vec2 vel = outward * amp * 100.;
+    float wall = 0.;
+    float returning = 0.;
+    for (int j = 0; j < ${count}; j++) {
+      if (j == i) continue;
+      vec4 other = uVoices[j];
+      if (step(1., other.w) * step(0., uActive[j]) < .5) continue;
+      vec2 otherDelta = p - other.xy;
+      float otherDistance = length(otherDelta);
+      vec2 otherOut = otherDelta / max(otherDistance, 1.);
+      float otherEdge = max(0., otherDistance - other.w);
+      float otherLevel = arrivingLevel(j, otherEdge / 220.);
+      vec2 apart = other.xy - voice.xy;
+      float gap = max(length(apart), 1.);
+      float along = dot(delta, apart / gap);
+      float contact = voice.w + (gap - voice.w - other.w) * .5;
+      float oppose = max(0., -dot(outward, otherOut));
+      float otherThere = smoothstep(.05, .22, otherLevel);
+      // The outgoing crest stops on the line between two voices and walks back.
+      wall = max(wall, smoothstep(-16., 42., along - contact) * oppose * otherThere);
+      float backDist = max(0., contact - along);
+      float backBand = abs(fract(backDist / 168. - uTime * .9 + seed + .2) - .32);
+      float facing = oppose * otherThere * smoothstep(8., 36., backDist);
+      returning = max(returning, (1. - smoothstep(.02, .2, backBand)) * facing);
+      float otherReach = exp(-otherEdge / max(uSpread, 1.) * 1.05);
+      float otherBand = abs(fract(otherEdge / 168. - uTime * .9 + float(j) * 17.31 + 3.7) - .32);
+      float otherCrest = 1. - smoothstep(.02, .2, otherBand);
+      float otherAmp = otherCrest * otherLevel * uStrength * otherReach;
+      float clash = oppose * smoothstep(.04, .25, amp) * smoothstep(.04, .25, otherAmp);
+      vel = mix(vel, vel - 2. * dot(vel, otherOut) * otherOut, clash);
+    }
+    crest *= 1. - wall;
+    vel *= 1. - wall;
+    vel += -outward * returning * level * uStrength * 90.;
+    offset += vel;
+    float restWeight = rest * (1. - smoothstep(0., .12, level));
+    // A dying voice goes gray before it disappears. A live crest keeps its colour.
+    float grayBody = reach * smoothstep(0., .14, level) * (1. - speak);
+    float colorBody = max(crest, returning) * speak * mix(.55, 1., reach);
+    restColor += gray * (restWeight + grayBody);
+    restEnergy += restWeight + grayBody;
+    voiceColor += mix(uColorsDark[i], uColorsLight[i], light) * colorBody;
+    voiceEnergy += colorBody;
   }
   vec2 beaconOffset;
   float beaconGlow;
   unreadBeacon(aPoint, beaconOffset, beaconGlow);
   p += offset + themeOffset + beaconOffset;
-  float glow = clamp(energy, 0., 1.);
+  float glow = clamp(voiceEnergy, 0., 1.);
+  float settled = clamp(restEnergy, 0., 1.);
+  vec3 field = (voiceColor + restColor) / max(voiceEnergy + restEnergy, .001);
   vec3 ink = mix(mix(vec3(1.), vec3(0.), light), themeTint, activity * .75);
   float opacity = .09 + .03 * light + activity * .48;
-  vColor = vec4(mix(ink, color / max(energy, .001), min(1., glow * 2.)), mix(opacity, .8, glow));
+  opacity = mix(opacity, .62, settled);
+  vColor = vec4(mix(ink, field, min(1., glow + settled)), mix(opacity, .92, glow));
   vec3 beaconInk = mix(vec3(.675, .906, .812), vec3(.094, .408, .337), light);
   vColor.rgb = mix(vColor.rgb, beaconInk, min(1., beaconGlow * 2.));
   vColor.a = max(vColor.a, beaconGlow * .85);
   gl_Position = vec4(p.x / uSize.x * 2. - 1., 1. - p.y / uSize.y * 2., 0., 1.);
-  gl_PointSize = (2.1 + glow * 2.8 + activity * 1.6 + min(1., beaconGlow) * 2.8) * uDpr;
+  gl_PointSize = (2.1 + glow * 6.2 + activity * 1.6 + min(1., beaconGlow) * 2.8) * uDpr;
 }`;
 }
 const fragment = `

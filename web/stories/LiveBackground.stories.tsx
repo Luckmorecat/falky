@@ -6,7 +6,7 @@ const meta = {
   component: LiveBackgroundPreview,
   parameters: {
     layout: 'fullscreen',
-    docs: { description: { component: 'The production live background, with simulated speech and theme controls in one scene. Voices stir coloured currents outward from their orbs. Changing theme sends two water-like fronts from opposite corners; dots surge, curl together in the centre, and settle into the new theme. Toggle or replay a transition during speech, silence the voices to compare, or switch to the original static dots. Strength and spread control voice reactions. Speed slows only the theme transition; speech keeps its normal tempo. Pause holds the field, and reduced motion makes the background still. No microphone or backend is needed.' } },
+    docs: { description: { component: 'The production live background, with simulated speech and theme controls in one scene. A quiet orb keeps a gray field. Speech sends waves outward; where two waves meet head-on, each turns back. Changing theme sends two water-like fronts from opposite corners; dots surge, curl together in the centre, and settle into the new theme. Toggle or replay a transition during speech, silence the voices to compare, or switch to the original static dots. Strength and spread control voice reactions. Speed slows only the theme transition; speech keeps its normal tempo. Pause holds the field, and reduced motion makes the background still. No microphone or backend is needed.' } },
   },
   args: { speed: 1, reducedMotion: false, speakers: 'none', strength: 1.5, spread: 480, enabled: true, unread: false },
   argTypes: {

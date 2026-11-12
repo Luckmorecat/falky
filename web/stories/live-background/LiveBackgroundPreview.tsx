@@ -73,7 +73,7 @@ export function LiveBackgroundPreview({ speed, reducedMotion, speakers, strength
       <header>
         <span>{unread ? 'One unread message' : 'Voice + theme transitions'}</span>
         <h1>{unread ? 'Unread message Beacon' : 'Live background'}</h1>
-        <p>{unread ? 'Two ripples point to the mobile chat button or desktop counter. Replay a message, leave it unread for a quieter reminder, or mark it read. Reduced motion keeps a still accent.' : people.length ? 'Simulated speech stirs the dots while two theme currents collide. Toggle the theme during speech, or silence the voices to compare.' : 'Two currents spread from opposite corners. Dots surge with the edges, curl together in the centre, and settle into the new theme.'}</p>
+        <p>{unread ? 'Two ripples point to the mobile chat button or desktop counter. Replay a message, leave it unread for a quieter reminder, or mark it read. Reduced motion keeps a still accent.' : people.length ? 'Speech sends a wave out from each orb. Head-on waves turn back. Silence leaves a gray field. Toggle the theme during speech, or silence the voices to compare.' : 'Two currents spread from opposite corners. Dots surge with the edges, curl together in the centre, and settle into the new theme.'}</p>
       </header>
       {people.length > 0 && <div ref={participants} className="live-background-people">
         {people.map((person, i) => <div key={person.name} className="live-background-person">

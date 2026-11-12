@@ -113,14 +113,13 @@ svg.i { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-widt
 .tile { position: relative; width: var(--t, 420px); height: var(--t, 420px); container-type: size; transform-origin: 0 0; flex: none;
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: clamp(10px, 4.5cqw, 20px); }
 .t-orb { position: relative; flex: none; width: min(78cqw, calc(100cqh - 44px)); }
-.t-orb .orb { width: 100%; transition: opacity 280ms ease; }
-.tile.locally-muted .orb:not(:has(video)) { opacity: .75; }
-.tile.dim .orb:not(:has(video)) { opacity: .62; }
-
-.tile.dim .orb canvas { filter: saturate(.22); }
-/* While someone talks the others step back, so the eye knows where to go. */
+.t-orb .orb { width: 100%; transition: filter 280ms ease; }
+/* A quiet avatar stays solid and turns gray. Fading it let the field show through. */
+.tile.locally-muted .orb:not(.speaking):not(:has(video)),
+.tile.dim .orb:not(:has(video)),
+.grid:has(.orb.speaking) .tile:not(:has(.orb.speaking)) .orb:not(:has(video)) { filter: grayscale(1); }
+/* While someone talks the others turn gray, so the eye knows where to go. */
 .t-label { transition: opacity 280ms ease; }
-.grid:has(.orb.speaking) .tile:not(:has(.orb.speaking)) .orb:not(:has(video)) { opacity: .5; }
 .grid:has(.orb.speaking) .tile:not(:has(.orb.speaking)) .t-label { opacity: .6; }
 .t-label { display: flex; gap: 8px; align-items: baseline; justify-content: center; max-width: 100%; min-width: 0; }
 .t-name { font-size: clamp(15px, 5.4cqw, 22px); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
