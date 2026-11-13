@@ -44,6 +44,37 @@ test('QR retry recovers an initial network failure and a lost browser binding', 
   } finally { await receiver.context().close(); }
 });
 
+for (const width of [390, 1440]) {
+  test(`scanner overlays Settings without reopening it at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 844 });
+    await issuer(page);
+    const settings = page.locator('dialog.settings');
+    const scan = page.getByRole('button', { name: 'Scan QR code', exact: true });
+    await settings.evaluate(dialog => {
+      dialog.dataset.openChanges = '0';
+      new MutationObserver(records => {
+        dialog.dataset.openChanges = String(Number(dialog.dataset.openChanges) + records.length);
+      }).observe(dialog, { attributes: true, attributeFilter: ['open'] });
+    });
+    for (const dismissal of ['back', 'escape']) {
+      await scan.click();
+      await expect(page.locator('.device-dialog-scanner')).toHaveJSProperty('open', true);
+      await expect(settings).toHaveJSProperty('open', true);
+      await expect(page.getByRole('button', { name: 'Use camera', exact: true })).toBeVisible();
+      await page.getByRole('button', { name: 'Back to Account', exact: true }).focus();
+      await page.keyboard.press('Tab');
+      await expect(page.getByRole('button', { name: 'Use camera', exact: true })).toBeFocused();
+      if (dismissal === 'back') await page.getByRole('button', { name: 'Back to Account', exact: true }).click();
+      else await page.keyboard.press('Escape');
+      await expect(page.locator('.device-dialog-scanner')).toHaveCount(0);
+      await expect(settings).toHaveJSProperty('open', true);
+      await expect(settings).toHaveAttribute('data-open-changes', '0');
+      await expect(page.getByRole('tab', { name: 'Account', exact: true })).toHaveAttribute('aria-selected', 'true');
+      await expect(scan).toBeFocused();
+    }
+  });
+}
+
 test('QR detection only previews; explicit approval delivers the candidate cookie and preserves exact issuer session', async ({ page, browser, context }) => {
   const { state, identity } = await issuer(page);
   await expect(page.getByRole('tab', { name: 'Account', exact: true })).toBeFocused();
@@ -52,8 +83,10 @@ test('QR detection only previews; explicit approval delivers the candidate cooki
   try {
     const qr = await requestQR(receiver, app.url);
     await page.getByRole('button', { name: 'Scan QR code', exact: true }).click();
-    await expect(page.getByRole('dialog', { name: 'Settings', exact: true })).not.toBeVisible();
-    await expect(page.locator('.device-scanner-identity')).toContainText('Taylor');
+    await expect(page.locator('dialog.settings')).toHaveJSProperty('open', true);
+    await expect(page.locator('.device-dialog-scanner')).toHaveJSProperty('open', true);
+    await expect(page.locator('.device-scanner')).not.toContainText('Your passkey account');
+    await expect(page.locator('.device-scanner')).not.toContainText('Taylor');
     await expect(page.getByRole('textbox', { name: 'Paste QR link', exact: true })).toHaveCount(0);
     await page.getByRole('button', { name: 'Use camera', exact: true }).click();
     await page.evaluate(url => dispatchEvent(new CustomEvent('falky:mock-qr', { detail: url })), qr.url);
@@ -79,8 +112,8 @@ test('QR detection only previews; explicit approval delivers the candidate cooki
     await page.getByRole('button', { name: 'Back to Account', exact: true }).click();
     await expect(page.getByRole('button', { name: 'Scan QR code', exact: true })).toBeFocused();
     await page.getByRole('button', { name: 'Scan QR code', exact: true }).click();
-    await page.getByRole('button', { name: 'Create a sign-in link instead', exact: true }).click();
-    await expect(page.getByRole('textbox', { name: 'Sign-in link', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Create a sign-in link instead', exact: true })).toHaveCount(0);
+    await page.getByRole('button', { name: 'Back to Account', exact: true }).click();
     await expect(page.locator('.device-scanner')).toHaveCount(0);
   } finally { await receiver.context().close(); }
 });

@@ -355,13 +355,16 @@ export function Settings({ open, onClose }: { open: boolean; onClose(): void }) 
 
   useEffect(() => {
     const el = dialog.current!;
-    if (open && !accountUI.deviceOpen && !el.open) {
+    if (open && !el.open) {
       el.showModal();
       tabButton(tab)?.focus();
-      if (scanReturn === 'away') setScanReturn('pending');
-    } else if ((!open || accountUI.deviceOpen) && el.open) el.close();
+    } else if (!open && el.open) el.close();
     // The tab is read only at the moment of opening.
-  }, [open, accountUI.deviceOpen]);
+  }, [open]);
+
+  useEffect(() => {
+    if (!accountUI.deviceOpen && scanReturn === 'away') setScanReturn('pending');
+  }, [accountUI.deviceOpen, scanReturn]);
 
   useEffect(() => {
     tabButton(tab)?.scrollIntoView({ block: 'nearest', inline: 'nearest' });

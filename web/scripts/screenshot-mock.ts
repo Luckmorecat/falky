@@ -112,7 +112,7 @@ Existing browser: PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/path/to/chromium`);
               if (preset === 'device-scanner') {
                 await page.getByRole('button', { name: t.device.scan, exact: true }).click();
                 await expect(page.getByRole('heading', { name: t.device.scanTitle, exact: true })).toBeVisible();
-                await expect(page.getByRole('dialog', { name: t.settings, exact: true })).not.toBeVisible();
+                await expect(page.locator('dialog.settings')).toHaveJSProperty('open', true);
                 await expect(page.getByRole('textbox', { name: t.device.pasteQR, exact: true })).toHaveCount(0);
               } else {
                 await page.getByRole('button', { name: t.device.create, exact: true }).click();

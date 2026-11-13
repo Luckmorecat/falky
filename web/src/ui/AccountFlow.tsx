@@ -1,4 +1,4 @@
-import { createContext, lazy, Suspense, type ReactNode, useContext, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { createContext, lazy, Suspense, type ReactNode, type RefObject, useContext, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { authenticate, cancelAccountFlow, completeEnrollment, recover, recoveryPhrase, register, type PendingEnrollment } from '../app/accounts';
 import { enter, reconcileSession } from '../app/controller';
 import { clearEntryLinks, clearDeviceEntry, getDeviceEntry, getEntryLinks, subscribeEntryLinks, takeDeviceEntry } from '../app/entryLinks';
@@ -6,9 +6,25 @@ import { useApp } from '../app/store';
 import { t } from '../strings';
 import { Button } from './Button';
 import { Orb } from './Orb';
+import { DeviceLoading } from './DeviceLoading';
 const DeviceReceiver = lazy(() => import('./DeviceSignIn').then(module => ({ default: module.DeviceReceiver })));
 const DeviceScanner = lazy(() => import('./DeviceSignIn').then(module => ({ default: module.DeviceScanner })));
 import { RecoveryWords, SaveRecoveryKit } from './RecoveryKit';
+
+function DeviceDialogSurface({ dialog, delay = 0, children }: { dialog: RefObject<HTMLDialogElement | null>; delay?: number; children: ReactNode }) {
+  useLayoutEffect(() => {
+    const show = () => {
+      const el = dialog.current;
+      if (!el) return;
+      if (!el.open) el.showModal();
+      el.querySelector<HTMLElement>('h1, [role="status"]')?.focus();
+    };
+    if (!delay) { show(); return; }
+    const timer = setTimeout(show, delay);
+    return () => clearTimeout(timer);
+  }, [dialog, delay]);
+  return children;
+}
 
 type Step = 'welcome' | 'guest' | 'register' | 'recover';
 type Kit = { accountId: string; phrase: string; enrollment?: PendingEnrollment };
@@ -77,8 +93,7 @@ export function AccountFlowProvider({ children }: { children: ReactNode }) {
   useLayoutEffect(() => {
     const el = deviceDialog.current;
     if (!el) return;
-    if (device && !el.open) { el.showModal(); el.querySelector<HTMLElement>('h1')?.focus(); }
-    else if (!device && el.open) el.close();
+    if (!device && el.open) el.close();
   }, [device]);
   const modal = locked || (opened && ready);
   useLayoutEffect(() => {
@@ -124,7 +139,9 @@ export function AccountFlowProvider({ children }: { children: ReactNode }) {
   return <Context.Provider value={ui}>
     <EnrollmentContext.Provider value={enroll}>{children}
       <dialog ref={deviceDialog} className={`device-dialog${device?.type === 'scanner' ? ' device-dialog-scanner' : ''}`} aria-label={device?.type === 'scanner' ? t.device.scan : t.device.another} onCancel={e => { e.preventDefault(); closeDevice(); }}>
-        <Suspense fallback={<p role="status">{t.account.working}</p>}>{device?.type === 'scanner' ? <DeviceScanner token={device.token} onClose={closeDevice} /> : device ? <DeviceReceiver token={device.token} onClose={closeDevice} /> : null}</Suspense>
+        {device && <Suspense key={`${device.type}:${device.token ?? ''}`} fallback={<DeviceDialogSurface dialog={deviceDialog} delay={150}><DeviceLoading scanner={device.type === 'scanner'} onClose={closeDevice} /></DeviceDialogSurface>}>
+          <DeviceDialogSurface dialog={deviceDialog}>{device.type === 'scanner' ? <DeviceScanner token={device.token} onClose={closeDevice} /> : <DeviceReceiver token={device.token} onClose={closeDevice} />}</DeviceDialogSurface>
+        </Suspense>}
       </dialog>
       <dialog ref={dialog} className="auth-dialog" aria-label={kit ? t.account.saveTitle : t.account.account}
         onCancel={e => { e.preventDefault(); if (!locked) exit(); }}
