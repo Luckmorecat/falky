@@ -550,6 +550,8 @@ for (const width of [1440, 390]) test(`sign-in drawer keeps settings stable and 
   await expect(drawer).toBeVisible();
   await drawer.evaluate(async element => { await Promise.all(element.getAnimations().map(animation => animation.finished)); });
   await drawer.click({ position: { x: 8, y: 8 } });
+  await expect(drawer).toBeVisible();
+  await drawer.getByRole('button', { name: 'Close', exact: true }).click();
   await expect(drawer).not.toBeVisible();
   await expect(settings).toBeVisible();
   await page.waitForTimeout(3200);
