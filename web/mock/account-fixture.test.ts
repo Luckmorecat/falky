@@ -2,6 +2,37 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { startMockServer } from './server.ts';
 
+test('account scenario bootstraps without WebAuthn, preserves edits and restores them on reset', async () => {
+  const server = await startMockServer({ scenario: 'account' });
+  try {
+    let cookie = '';
+    const call = async (path: string, method = 'GET', data?: unknown) => {
+      const response = await fetch(server.url + path, { method, headers: { cookie, 'Content-Type': 'application/json' }, body: data === undefined ? undefined : JSON.stringify(data) });
+      if (response.headers.get('set-cookie')) cookie = response.headers.get('set-cookie')!.split(';')[0]!;
+      return response;
+    };
+    await call('/__mock/bootstrap', 'POST', {});
+    const session = await (await call('/api/accounts/session')).json();
+    assert.equal(session.kind, 'account');
+    assert.equal(session.visitor.name, 'Alex');
+    const keys = await (await call('/api/accounts/passkeys')).json();
+    assert.deepEqual(keys.passkeys.map((key: { label: string }) => key.label), ['Laptop', 'Security key']);
+    assert.equal((await call(`/api/accounts/passkeys/${keys.passkeys[1].id}`, 'DELETE')).status, 200);
+    assert.equal((await call('/api/accounts/recovery-codes', 'POST', {})).status, 200);
+    await call('/__mock/bootstrap', 'POST', {});
+    assert.equal((await (await call('/api/accounts/passkeys')).json()).passkeys.length, 1);
+    await call('/__mock/action', 'POST', { type: 'expire-proof' });
+    assert.equal((await call('/api/accounts/recovery-codes', 'POST', {})).status, 403);
+    await call('/__mock/reset', 'POST', {});
+    cookie = '';
+    await call('/__mock/bootstrap', 'POST', {});
+    assert.equal((await (await call('/api/accounts/passkeys')).json()).passkeys.length, 2);
+    assert.equal((await call('/api/accounts/recovery-codes', 'POST', {})).status, 200);
+    await call('/__mock/bootstrap', 'POST', { scenario: 'populated' });
+    assert.equal((await (await call('/api/accounts/session')).json()).kind, 'guest');
+  } finally { await server.close(); }
+});
+
 test('account registration upgrades a guest and binds one-use ceremonies to their session', async () => {
   const server = await startMockServer();
   try {
