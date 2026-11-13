@@ -728,7 +728,7 @@ kbd { min-width: 34px; height: 34px; padding: 0 10px; display: inline-grid; plac
   .device-link-skeleton span { animation: none; }
 }
 .device-copy, .device-code-form label { display: flex; flex-direction: column; gap: 10px; font-size: 12px; color: var(--text-2); }
-.device-copy input, .device-code-form input { min-width: 0; width: 100%; height: 50px; border: 0; border-radius: 25px; background: var(--fill); color: var(--text); padding: 0 18px; font-size: 13px; }
+.device-copy input { min-width: 0; width: 100%; height: 50px; border: 0; border-radius: 25px; background: var(--fill); color: var(--text); padding: 0 18px; font-size: 13px; }
 .device-inline-link h4 { font-size: 13px; font-weight: 500; margin-top: 24px; }
 .device-pending-list { display: grid; gap: 10px; margin-block: 12px; }
 .device-pending.account-key { flex-direction: row; align-items: center; }
@@ -736,15 +736,25 @@ kbd { min-width: 34px; height: 34px; padding: 0 10px; display: inline-grid; plac
 .device-request-details strong { display: block; font-size: 14px; font-weight: 500; }
 .device-request-details small { display: block; color: var(--text-2); font-size: 13px; margin-top: 4px; }
 .device-pending > button { flex: none; }
-.device-code-form { display: flex; align-items: end; gap: 12px; margin-block: 16px; }
-.device-code-form label { flex: 1; min-width: 0; max-width: 220px; }
-.device-code-form input { font-size: 26px; letter-spacing: .25em; text-align: center; padding-left: calc(18px + .25em); font-variant-numeric: tabular-nums; }
+.device-code-form { display: flex; flex-direction: column; align-items: stretch; gap: 16px; margin-block: 24px 16px; }
+.device-code-form > button { width: 100%; }
+.device-code-form > .input-otp { align-self: center; }
+.input-otp { position: relative; width: fit-content; max-width: 100%; }
+.input-otp-group { display: flex; }
+.input-otp-slot { position: relative; display: grid; place-items: center; width: 54px; height: 58px; border: 1px solid var(--fill-2); background: var(--fill); font-size: 26px; font-variant-numeric: tabular-nums; }
+.input-otp-slot + .input-otp-slot { border-left: 0; }
+.input-otp-slot:first-child { border-radius: 16px 0 0 16px; }
+.input-otp-slot:last-child { border-radius: 0 16px 16px 0; }
+.input-otp-slot[data-active] { z-index: 1; outline: 2px solid var(--level); outline-offset: -1px; }
+.input-otp:has(input:disabled) { opacity: .5; }
+.input-otp input:focus-visible { outline: none; }
+.input-otp-caret { position: absolute; height: 26px; width: 1px; background: currentColor; animation: otp-caret 1s step-end infinite; }
+@keyframes otp-caret { 50% { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .input-otp-caret { animation: none; } }
 @media (max-width: 560px) {
   .device-scanner { padding-inline: 20px; }
   .device-scanner-content { margin-top: 28px; }
   .device-scanner .auth-heading h1 { font-size: 29px; }
-  .device-code-form { align-items: stretch; flex-direction: column; }
-  .device-code-form label { max-width: none; }
   .device-issuer .account-actions { flex-direction: column; align-items: stretch; }
   .device-issuer .account-actions .device-link-slot { width: 100%; }
   .device-link-skeleton .account-actions span { width: 100%; }
