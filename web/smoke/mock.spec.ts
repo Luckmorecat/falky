@@ -126,6 +126,55 @@ async function movingVideo(page: Page, label: string) {
   await expect.poll(frame).not.toBe(first);
 }
 
+test('manual microphone volume and local testing preserve the room mute state', async ({ page }) => {
+  await page.goto(app.url);
+  await english(page);
+  await page.getByRole('button', { name: 'Join', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Mute microphone', exact: true })).toBeVisible();
+  const settings = page.getByRole('dialog', { name: 'Settings' });
+  const open = async () => {
+    await page.getByRole('button', { name: 'Settings', exact: true }).click();
+    await settingsTab(page, 'Audio & video');
+  };
+  await open();
+  const volume = settings.getByRole('slider', { name: 'Microphone volume', exact: true });
+  await expect(volume).toBeDisabled();
+  await expect(volume).toHaveValue('100');
+  await settings.getByLabel('Automatic microphone volume', { exact: true }).uncheck();
+  await expect(volume).toBeEnabled();
+  await volume.fill('150');
+  await settings.getByRole('button', { name: 'Test microphone', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Unmute microphone', exact: true })).toBeAttached();
+  await expect(settings.getByRole('status')).toContainText('one-second delay');
+  await settings.getByLabel('Noise suppression', { exact: true }).uncheck();
+  await volume.fill('80');
+  await expect(page.getByRole('button', { name: 'Unmute microphone', exact: true })).toBeAttached();
+  await settings.getByRole('button', { name: 'Stop test', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Mute microphone', exact: true })).toBeAttached();
+  await settings.getByRole('button', { name: 'Test microphone', exact: true }).click();
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('button', { name: 'Mute microphone', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Mute microphone', exact: true }).click();
+  await open();
+  await settings.getByRole('button', { name: 'Test microphone', exact: true }).click();
+  await settings.getByRole('button', { name: 'Stop test', exact: true }).click();
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('button', { name: 'Unmute microphone', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Unmute microphone', exact: true }).click();
+  await open();
+  await action(page, { type: 'faults', faults: { micDenied: true } });
+  await settings.getByRole('button', { name: 'Test microphone', exact: true }).click();
+  await expect(settings.getByRole('alert')).toHaveText('No access to the microphone');
+  await action(page, { type: 'faults', faults: { micDenied: false } });
+  await settings.getByLabel('Automatic microphone volume', { exact: true }).check();
+  await expect(volume).toBeDisabled();
+  await expect(volume).toHaveValue('80');
+  await page.reload();
+  await open();
+  await expect(volume).toBeDisabled();
+  await expect(volume).toHaveValue('80');
+});
+
 test('settings, simulated voice errors and animated local/remote sharing avoid hardware', async ({ page }) => {
   await page.goto(`${app.url}/?scenario=remote-share`);
   await english(page);

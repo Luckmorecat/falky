@@ -12,6 +12,8 @@ import type {
 import { api, ApiError } from '../api/client';
 import { cameraOptions } from './camera';
 import { loudness } from './meter';
+import { MicrophoneGain } from './micGain';
+import { MicTestMuting, type MicTestMute } from './micTestMute';
 import { shareOptions } from './share';
 import { softClipCurve } from './softclip';
 
@@ -53,6 +55,8 @@ export class VoiceSession implements VoiceClient {
   private meters = new Map<string, Meter>();
   private readonly sinkHost: HTMLElement;
   private mutedBeforeDeaf = false;
+  private readonly micTestMuting = new MicTestMuting();
+  private readonly micStarts = new WeakMap<Room, Promise<void>>();
   private refreshQueued = false;
   /** A refused admission keeps the current room intact. */
   private moving = false;
@@ -159,6 +163,7 @@ export class VoiceSession implements VoiceClient {
   }
 
   async toggleMute(): Promise<void> {
+    if (this.micTestMuting.active) return;
     const room = this.room;
     if (!room) return;
     if (this.snap.deafened) await this.setDeafened(false);
@@ -179,6 +184,7 @@ export class VoiceSession implements VoiceClient {
     this.applyVolumes();
     void local.setAttributes({ deafened: on ? 'true' : 'false' }).catch(() => {});
     if (on) {
+      this.micTestMuting.keepMuted();
       this.mutedBeforeDeaf = !local.isMicrophoneEnabled;
       await local.setMicrophoneEnabled(false).catch(() => {});
     } else if (!this.mutedBeforeDeaf) {
@@ -265,6 +271,10 @@ export class VoiceSession implements VoiceClient {
 
   /** How loud a participant is now, from 0 to 1. */
   level(connectionId: string): number {
+    if (connectionId === this.room?.localParticipant.identity) {
+      const processor = this.micGainProcessor();
+      if (processor) return this.snap.muted ? 0 : processor.level();
+    }
     const meter = this.meters.get(connectionId);
     if (!meter) return 0;
     meter.analyser.getFloatTimeDomainData(meter.buf);
@@ -292,17 +302,66 @@ export class VoiceSession implements VoiceClient {
     this.refresh();
   }
 
+  applyMicGain(): void {
+    this.micGainProcessor()?.update();
+  }
+
+  private micGainProcessor(): MicrophoneGain | undefined {
+    const track = this.room?.localParticipant.getTrackPublication(sdk.Track.Source.Microphone)?.track as LocalAudioTrack | undefined;
+    const processor = track?.getProcessor?.();
+    return processor instanceof MicrophoneGain ? processor : undefined;
+  }
+
+  suspendMicForTest(): MicTestMute {
+    const room = this.room;
+    const restore = !!room && (room.localParticipant.isMicrophoneEnabled || this.micStarts.has(room));
+    return this.micTestMuting.acquire(async () => {
+      if (!room) return;
+      await this.micStarts.get(room);
+      if (this.room !== room) return;
+      await room.localParticipant.setMicrophoneEnabled(false);
+      this.refresh();
+    }, restore ? async () => {
+      if (!room || this.room !== room || this.snap.deafened) return;
+      await this.enableMic(room);
+      this.refresh();
+    } : undefined);
+  }
+
   private micOptions() {
     return { ...this.host.micProcessing(), deviceId: this.host.micId() || undefined };
   }
 
   private async enableMic(room: Room): Promise<void> {
-    if (this.room !== room) return;
+    if (this.room !== room || this.micTestMuting.active) return;
+    const pending = this.micStarts.get(room);
+    if (pending) return pending;
+    const starting = this.startMic(room);
+    this.micStarts.set(room, starting);
+    try { await starting; } finally { this.micStarts.delete(room); }
+  }
+
+  private async startMic(room: Room): Promise<void> {
+    let created: LocalAudioTrack | undefined;
     try {
-      await room.localParticipant.setMicrophoneEnabled(true, this.micOptions());
+      const local = room.localParticipant;
+      if (!local.getTrackPublication(sdk.Track.Source.Microphone)?.track) {
+        const tracks = await local.createTracks({ audio: this.micOptions() });
+        created = tracks[0] as LocalAudioTrack;
+        if (this.room !== room) { created.stop(); return; }
+        await created.setAudioContext(this.audio!);
+        await created.setProcessor(new MicrophoneGain(() => this.host.micGain()));
+        if (this.room !== room) { created.stop(); return; }
+        if (this.micTestMuting.active || this.snap.deafened) await created.mute();
+        await local.publishTrack(created);
+      } else if (!this.micTestMuting.active && !this.snap.deafened) {
+        await local.setMicrophoneEnabled(true, this.micOptions());
+      }
       if (this.room !== room) { this.stopTracks(room); return; }
+      if (this.micTestMuting.active || this.snap.deafened) await local.setMicrophoneEnabled(false);
       this.set({ listenOnly: false });
     } catch (err) {
+      created?.stop();
       if (this.room !== room) { this.stopTracks(room); return; }
       this.set({ listenOnly: true });
       this.host.onProblem((err as Error).name === 'NotFoundError' ? 'mic_missing' : 'mic_denied');
@@ -442,6 +501,8 @@ export class VoiceSession implements VoiceClient {
     if (!ctx) return;
     const wanted = new Map<string, MediaStreamTrack>();
     for (const p of everyone) {
+      // Feeding a processed stream back into its own context can silence the capture graph.
+      if (p === this.room?.localParticipant && this.micGainProcessor()) continue;
       const pub = p.getTrackPublication(sdk.Track.Source.Microphone) as LocalTrackPublication | undefined;
       const mst = pub?.track?.mediaStreamTrack;
       if (mst && !pub?.isMuted) wanted.set(p.identity, mst);
@@ -467,6 +528,7 @@ export class VoiceSession implements VoiceClient {
   }
 
   private teardownRoom(): void {
+    this.micTestMuting.reset();
     const room = this.room;
     this.room = null;
     for (const meter of this.meters.values()) meter.source.disconnect();
