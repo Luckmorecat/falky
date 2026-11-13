@@ -8,7 +8,7 @@ import (
 )
 
 func TestSignInClientIPUsesLastProxyEntry(t *testing.T) {
-	r := httptest.NewRequest("POST", "/", nil)
+	r := httptest.NewRequestWithContext(t.Context(), "POST", "/", nil)
 	r.RemoteAddr = "192.0.2.1:1234"
 	if signInClientIP(r) != "" {
 		t.Fatal("proxy address must not be displayed as client IP")
