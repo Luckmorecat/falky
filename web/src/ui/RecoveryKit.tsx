@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { t } from '../strings';
 import { Button } from './Button';
+import './AccountFlow.css';
+import './RecoveryKit.css';
 
 export function RecoveryWords({ words, onChange, onError }: { words: string[]; onChange(words: string[]): void; onError(error: string): void }) {
   const inputs = useRef<(HTMLInputElement | null)[]>([]);

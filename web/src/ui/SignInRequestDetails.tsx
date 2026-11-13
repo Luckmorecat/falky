@@ -1,5 +1,6 @@
 import type { SignInRequest } from '../api/client';
 import { t } from '../strings';
+import './SignInRequestDetails.css';
 
 export function requestDevice(agent: string): string {
   if (/iPad/i.test(agent) || (/Macintosh/i.test(agent) && /Mobile/i.test(agent))) return 'iPad';

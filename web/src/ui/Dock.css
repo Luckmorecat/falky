@@ -1,0 +1,38 @@
+/* Control center */
+.dock { position: absolute; left: 50%; bottom: var(--edge); translate: -50% 0; z-index: 6; display: flex; align-items: center; gap: 8px; padding: 10px; border-radius: calc(38px * var(--corner)); isolation: isolate; }
+.dock-bg { position: absolute; inset: 0; border-radius: inherit; z-index: -1; background: var(--raised); }
+.dock .ib { width: 56px; height: 56px; background: var(--fill); }
+.dock .ib[aria-pressed="true"] { background: var(--invert); }
+.dock .ib.off { background: var(--danger-bg); }
+@media (hover:hover) and (pointer:fine) { .dock .ib:not(.off):not([aria-pressed="true"]):hover { background: var(--fill-2); } }
+.mic-wrap { position: relative; width: 56px; height: 56px; flex: none; display: grid; place-items: center; }
+.dock .mic-wrap .ib:not(.off) { background: var(--invert); color: var(--on-invert); }
+.mic-ring { position: absolute; inset: 0; border-radius: var(--round); background: color-mix(in srgb, var(--invert) 30%, transparent); opacity: 0; will-change: transform, opacity; pointer-events: none; }
+.leave { display: flex; align-items: center; gap: 10px; height: 56px; padding: 0 6px 0 20px; border-radius: calc(28px * var(--corner)); background: var(--fill); transition: transform 140ms var(--ease-out), background-color 160ms ease; }
+.leave:active { transform: scale(.97); }
+.leave i { width: 44px; height: 44px; border-radius: var(--round); background: var(--fill-2); display: grid; place-items: center; }
+.leave i svg.i { width: 18px; height: 18px; }
+.dock-sep { width: 1px; height: 28px; background: var(--fill-2); margin: 0 4px; }
+.dock-room { padding: 0 8px 0 14px; max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-2); height: 56px; transition: color 120ms ease; }
+@media (hover:hover) and (pointer:fine) { .dock-room:hover { color: var(--text); } }
+.dock-move { height: 56px; padding: 0 22px; border-radius: calc(28px * var(--corner)); background: var(--invert); color: var(--on-invert); font-weight: 600; white-space: nowrap; transition: transform 140ms var(--ease-out); }
+.dock-move:active { transform: scale(.97); }
+
+.dock-move[disabled] { opacity: .6; cursor: default; }
+
+@media (max-width: 1000px) {
+  /* Leave a line below the controls for the build version on narrow screens. */
+  .dock { bottom: calc(var(--edge) + 20px); gap: 6px; padding: 8px; }
+  .dock .ib, .dock .mic-wrap { width: 48px; height: 48px; }
+  .leave { height: 48px; }
+  .leave { padding: 0 4px; }
+  .leave i { width: 40px; height: 40px; }
+  .leave span { display: none; }
+  .dock-sep, .dock-room { display: none; }
+  .dock-move { height: 48px; padding: 0 16px; font-size: 14px; }
+}
+
+/* Too narrow for the screen-share button, and its settings mean nothing without it. */
+@media (max-width: 560px) {
+  .hide-phone { display: none; }
+}

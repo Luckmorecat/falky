@@ -7,6 +7,7 @@ import { t } from '../strings';
 import { Icon } from './Icon';
 import { Orb } from './Orb';
 import { VolumeSlider } from './VolumeSlider';
+import './Tile.css';
 
 export interface TileProps {
   id: string;

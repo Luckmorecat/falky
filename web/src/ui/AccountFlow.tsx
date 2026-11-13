@@ -10,6 +10,8 @@ import { DeviceLoading } from './DeviceLoading';
 const DeviceReceiver = lazy(() => import('./DeviceSignIn').then(module => ({ default: module.DeviceReceiver })));
 const DeviceScanner = lazy(() => import('./DeviceSignIn').then(module => ({ default: module.DeviceScanner })));
 import { RecoveryWords, SaveRecoveryKit } from './RecoveryKit';
+import './AccountFlow.css';
+import './DeviceSignIn.css';
 
 function DeviceDialogSurface({ dialog, delay = 0, children }: { dialog: RefObject<HTMLDialogElement | null>; delay?: number; children: ReactNode }) {
   useLayoutEffect(() => {

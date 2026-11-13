@@ -6,6 +6,7 @@ import { useAttachmentImage } from '../chat/images';
 import { t } from '../strings';
 import { Icon } from './Icon';
 import { IconButton } from './IconButton';
+import './Lightbox.css';
 
 export interface ViewerItem {
   attachment: Attachment;

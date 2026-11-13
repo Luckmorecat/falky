@@ -19,6 +19,9 @@ import { Toggle } from './Toggle';
 import { AccountPanel } from './AccountPanel';
 import { useAccountUI } from './AccountFlow';
 import { useMediaQuery } from './useMediaQuery';
+import './Range.css';
+import './Forms.css';
+import './Settings.css';
 
 function useDevices(kind: MediaDeviceKind, active: boolean): MediaDeviceInfo[] {
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);

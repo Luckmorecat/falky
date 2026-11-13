@@ -1,0 +1,59 @@
+/* Settings: a window of its own, with its parts along the top. It keeps its size, so nothing jumps between them. */
+.settings { flex-direction: column; width: min(880px, calc(100vw - 32px)); height: min(680px, calc(100dvh - 32px)); max-width: none; max-height: none; margin: auto; padding: 0; border: 0; border-radius: calc(48px * var(--corner)); overflow: hidden; background: var(--surface); color: var(--text); box-shadow: 0 24px 60px var(--shadow);
+  opacity: 0; transform: scale(.97) translateY(8px); transition: opacity 140ms ease, transform 200ms var(--ease-out), overlay 200ms allow-discrete, display 200ms allow-discrete; }
+.settings[open] { display: flex; opacity: 1; transform: none; @starting-style { opacity: 0; transform: scale(.97) translateY(8px); } }
+.settings::backdrop { background: rgba(0,0,0,.55); opacity: 0; transition: opacity 160ms ease, overlay 160ms allow-discrete, display 160ms allow-discrete; }
+.settings[open]::backdrop { opacity: 1; @starting-style { opacity: 0; } }
+[data-theme="light"] .settings::backdrop { background: rgba(0,0,0,.32); }
+.settings-head { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 24px 24px 0 32px; }
+.settings-head h2 { font-size: 22px; font-weight: 500; letter-spacing: -.01em; }
+.settings-head .ib { width: 44px; height: 44px; }
+.tabs { flex: none; display: flex; gap: 4px; padding: 12px 32px; overflow-x: auto; scroll-padding-inline: 16px; scrollbar-width: none; box-shadow: inset 0 -1px var(--fill); }
+.tabs button { flex: none; min-height: 44px; padding: 0 16px; border-radius: calc(22px * var(--corner)); font-size: 15px; color: var(--text-2); white-space: nowrap; transition: background-color 160ms ease, color 160ms ease; }
+.tabs button:focus-visible { outline-offset: -2px; }
+@media (hover:hover) and (pointer:fine) { .tabs button:hover { color: var(--text); background: var(--fill); } }
+.tabs button[aria-selected="true"] { background: var(--invert); color: var(--on-invert); font-weight: 500; }
+.settings-panel { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: var(--fill-2) transparent; padding: 24px 32px 32px; }
+.settings-panel:focus-visible { outline-offset: -4px; border-radius: calc(32px * var(--corner)); }
+.set-columns { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 32px 48px; align-items: start; }
+.set-columns > div { display: grid; gap: 28px; min-width: 0; }
+.settings h3 { font-size: 15px; font-weight: 600; color: var(--text); margin-bottom: 12px; }
+.profile { display: grid; grid-template-columns: 200px minmax(0, 1fr); gap: 48px; align-items: start; }
+.profile-card { display: grid; justify-items: center; gap: 12px; text-align: center; min-width: 0; }
+.profile-card .orb { width: 100%; }
+.profile-card strong { max-width: 100%; font-size: 18px; font-weight: 500; overflow-wrap: anywhere; }
+.colors { border: 0; padding: 0; min-width: 0; }
+.colors legend { width: 100%; padding: 0; font-size: 15px; font-weight: 600; margin-bottom: 12px; }
+.colour-error { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 12px; }
+.colors legend b { font-size: 14px; font-weight: 450; color: var(--text-2); }
+.colors .set-note + .set-note { margin-top: 6px; }
+.color-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); gap: 4px; margin-bottom: 12px; }
+.color { position: relative; display: grid; justify-items: center; gap: 6px; padding: 10px 4px 8px; border-radius: calc(24px * var(--corner)); font-size: 14px; color: var(--text-2); cursor: pointer; transition: background-color 160ms ease, color 160ms ease; }
+.color input { position: absolute; inset: 0; z-index: 1; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; }
+.color .orb { width: 48px; }
+.color > i { position: absolute; top: 6px; left: calc(50% + 12px); width: 22px; height: 22px; border-radius: var(--round); background: var(--invert); color: var(--on-invert); display: none; place-items: center; box-shadow: 0 0 0 2px var(--surface); }
+.color > i svg.i { width: 14px; height: 14px; stroke-width: 3; }
+@media (hover:hover) and (pointer:fine) { .color:hover { background: var(--fill); color: var(--text); } }
+.color:has(input:checked) { background: var(--fill); color: var(--text); font-weight: 500; }
+.color:has(input:checked) > i { display: grid; }
+.color:has(input:disabled) { opacity: .4; }
+.color input:disabled { cursor: not-allowed; }
+.color:has(input:focus-visible) { outline: 2px solid var(--level); outline-offset: 2px; }
+.keys { display: grid; gap: 2px; }
+.keys > div { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 44px; }
+.keys dt { font-size: 15px; }
+.keys dd { display: flex; align-items: center; gap: 6px; flex: none; font-size: 14px; color: var(--text-2); }
+kbd { min-width: 34px; height: 34px; padding: 0 10px; display: inline-grid; place-items: center; border-radius: calc(12px * var(--corner)); background: var(--raised-2); color: var(--text); font: inherit; font-size: 14px; font-weight: 500; }
+.meter { height: 10px; border-radius: calc(5px * var(--corner)); overflow: hidden; background: var(--raised-2); }
+.meter div { height: 100%; border-radius: calc(5px * var(--corner)); background: var(--level); transform: scaleX(0); transform-origin: left; will-change: transform; }
+
+/* One column, then the whole screen: the same window, no smaller to read or to press. */
+@media (max-width: 760px) {
+  .settings { width: 100vw; height: 100dvh; border-radius: 0; }
+  .settings-head { padding: max(16px, env(safe-area-inset-top)) 16px 0 20px; }
+  .tabs { padding: 10px 16px; }
+  .settings-panel { padding: 20px 20px max(24px, env(safe-area-inset-bottom)); }
+  .set-columns { grid-template-columns: minmax(0, 1fr); }
+  .profile { grid-template-columns: minmax(0, 1fr); gap: 24px; }
+  .profile-card .orb { width: 120px; }
+}

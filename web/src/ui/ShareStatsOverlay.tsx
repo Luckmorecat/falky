@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { t } from '../strings';
 import { observeShareStats, type ShareStatsDirection, type ShareStatsSample, type ShareStatsTrack } from '../voice/shareStats';
+import './ShareStatsOverlay.css';
 
 const empty: ShareStatsSample = { at: 0, bitrate: null, codecs: [], history: [] };
 

@@ -1,4 +1,5 @@
 import { Orb } from './Orb';
+import './Message.css';
 
 export function Message({ title, body }: { title: string; body: string }) {
   return (
