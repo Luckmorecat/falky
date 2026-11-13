@@ -42,18 +42,6 @@ export function AccountPanel({ active, onScan, scanFocusRequested, onScanFocused
   };
   const disabled = loading || ui.locked;
   return <div className="account-panel">
-    <section>
-      <h3>{session?.kind === 'account' ? t.account.accountState : t.account.guestState}</h3>
-      {session?.kind === 'account' && <dl className="auth-account-id"><dt>{t.account.accountId}</dt><dd>{session.visitor.id}</dd></dl>}
-      {session?.expiresAt && <p className="set-note">{t.account.expires} <time dateTime={session.expiresAt}>{new Date(session.expiresAt).toLocaleString(t.locale)}</time></p>}
-      <div className="account-actions">
-        {session?.kind === 'guest' && <Button disabled={disabled} onClick={() => { setUpgrade(true); ui.openEntry(); }}>{t.account.upgrade}</Button>}
-        <Button variant="danger" disabled={disabled} onClick={() => {
-          setError(''); void ui.run(logout).catch(() => { ui.reportError(t.account.signOutUnknown); });
-        }}>{t.account.signOut}</Button>
-      </div>
-      {upgrade && <p className="set-note">{t.account.upgradeHint}</p>}
-    </section>
     {session?.kind === 'account' && <>
       <DeviceIssuer active={active} disabled={disabled} onScan={onScan} scanFocusRequested={scanFocusRequested} onScanFocused={onScanFocused} />
       <section>
@@ -81,6 +69,18 @@ export function AccountPanel({ active, onScan, scanFocusRequested, onScanFocused
         </div>}
       </section>
     </>}
+    <section>
+      {session?.kind === 'guest' && <h3>{t.account.guestState}</h3>}
+      {session?.kind === 'account' && <dl className="auth-account-id"><dt>{t.account.accountId}</dt><dd>{session.visitor.id}</dd></dl>}
+      {session?.expiresAt && <p className="set-note">{t.account.expires} <time dateTime={session.expiresAt}>{new Date(session.expiresAt).toLocaleString(t.locale)}</time></p>}
+      <div className="account-actions">
+        {session?.kind === 'guest' && <Button disabled={disabled} onClick={() => { setUpgrade(true); ui.openEntry(); }}>{t.account.upgrade}</Button>}
+        <Button variant="danger" disabled={disabled} onClick={() => {
+          setError(''); void ui.run(logout).catch(() => { ui.reportError(t.account.signOutUnknown); });
+        }}>{t.account.signOut}</Button>
+      </div>
+      {upgrade && <p className="set-note">{t.account.upgradeHint}</p>}
+    </section>
     {error && <p className="auth-error" role="alert">{error}</p>}
   </div>;
 }
