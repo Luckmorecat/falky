@@ -7,6 +7,7 @@ import { PALETTE_NAMES, paletteStyle, type PaletteName } from '../fx/palette';
 import { onTick } from '../fx/ticker';
 import { t } from '../strings';
 import type { MicTest } from '../voice/meter';
+import { microphoneGain } from '../voice/micGain';
 import { canChooseSpeaker, enumerateDevices, watchDevices, refreshDevices, startMicTest, playSound, notificationsAvailable } from '@falky/browser';
 import { canUseCamera } from '../voice/camera';
 import { canShareScreen, SHARE_BITRATE_MAX, SHARE_BITRATE_PRESETS, shareBitrate, supportedShareCodecs, type ShareCodec } from '../voice/share';
@@ -43,53 +44,77 @@ function SettingToggle({ flag, label }: { flag: Flag; label: string }) {
   return <Toggle label={label} checked={on} data-cue-always={flag === 'uiSounds' ? '' : undefined} onChange={(checked) => updateSettings({ [flag]: checked })} />;
 }
 
-/** How loud the microphone is: in voice, what goes out; otherwise a test on request. */
+/** The meter follows local playback during a test and outgoing audio otherwise. */
 function MicLevel({ open }: { open: boolean }) {
   const settings = useApp((s) => s.settings);
   const selfId = useApp((s) => s.voice.people.find((p) => p.local)?.id);
-  const inVoice = useApp((s) => s.voice.status === 'connected');
+  const status = useApp((s) => s.voice.status);
+  const roomId = useApp((s) => s.voice.roomId);
+  const inVoice = status === 'connected';
   const muted = useApp((s) => s.voice.muted);
   const [testing, setTesting] = useState(false);
   const [error, setError] = useState('');
   const test = useRef<MicTest | null>(null);
   const fill = useRef<HTMLDivElement>(null);
-  const { micId, echoCancellation, noiseSuppression, autoGain } = settings;
+  const { micId, speakerId, echoCancellation, noiseSuppression, autoGain, micVolume } = settings;
+  const running = testing && open && status !== 'joining';
+  const ready = useRef<Promise<void>>(Promise.resolve());
+  const gain = useRef(1);
+  gain.current = microphoneGain(autoGain, micVolume);
 
   useEffect(() => {
-    if (!open || inVoice) setTesting(false);
-  }, [open, inVoice]);
+    if (!open || status === 'joining') setTesting(false);
+  }, [open, status]);
+
+  useEffect(() => { setTesting(false); }, [roomId]);
 
   useEffect(() => {
-    if (!testing) return;
-    let cancelled = false;
-    setError('');
-    startMicTest({ deviceId: micId || undefined, echoCancellation, noiseSuppression, autoGainControl: autoGain }).then(
-      (started) => {
-        if (cancelled) started.stop();
-        else {
-          test.current = started;
-          // Device names appear once the browser has been allowed the microphone.
-          refreshDevices();
-        }
-      },
-      (err: Error) => {
-        if (cancelled) return;
-        setTesting(false);
-        setError(err.name === 'NotFoundError' ? t.voiceProblems.mic_missing.title : t.voiceProblems.mic_denied.title);
-      },
-    );
+    if (!running) return;
+    const mute = voice.suspendMicForTest();
+    ready.current = mute.ready;
     return () => {
-      cancelled = true;
       test.current?.stop();
       test.current = null;
+      mute.release();
     };
-  }, [testing, micId, echoCancellation, noiseSuppression, autoGain]);
+  }, [running, roomId]);
+
+  useEffect(() => {
+    if (!running) return;
+    const abort = new AbortController();
+    let started: MicTest | undefined;
+    setError('');
+    void ready.current.then(async () => {
+      abort.signal.throwIfAborted();
+      started = await startMicTest(
+        { deviceId: micId || undefined, echoCancellation, noiseSuppression, autoGainControl: autoGain },
+        { gain: gain.current, sinkId: speakerId, signal: abort.signal },
+      );
+      if (abort.signal.aborted) started.stop();
+      else {
+        started.setGain(gain.current);
+        test.current = started;
+        refreshDevices();
+      }
+    }).catch((err: Error) => {
+      if (abort.signal.aborted) return;
+      setTesting(false);
+      setError(err.name === 'NotFoundError' ? t.voiceProblems.mic_missing.title : err.name === 'NotAllowedError' ? t.voiceProblems.mic_denied.title : t.micTestFailed);
+    });
+    return () => {
+      abort.abort();
+      started?.stop();
+      if (test.current === started) test.current = null;
+    };
+  }, [running, roomId, micId, speakerId, echoCancellation, noiseSuppression, autoGain]);
+
+  useEffect(() => { test.current?.setGain(gain.current); }, [autoGain, micVolume]);
 
   useEffect(() => {
     if (!open) return;
     let shown = 0;
     return onTick((_time, dt) => {
-      const target = inVoice ? (selfId && !muted ? voice.level(selfId) : 0) : (test.current?.level() ?? 0);
+      const target = test.current ? test.current.level() : inVoice && selfId && !muted ? voice.level(selfId) : 0;
       shown += (target - shown) * (1 - Math.exp(-dt * (target > shown ? 30 : 7)));
       if (fill.current) fill.current.style.transform = `scaleX(${shown.toFixed(3)})`;
     });
@@ -99,9 +124,9 @@ function MicLevel({ open }: { open: boolean }) {
     <div className="setrow">
       <span>{t.micLevel}</span>
       <div className="meter" aria-hidden="true"><div ref={fill} /></div>
-      {inVoice ? muted && <span className="set-note">{t.micMutedHint}</span> : (
-        <Button onClick={() => setTesting(!testing)}>{testing ? t.micTestStop : t.micTest}</Button>
-      )}
+      {inVoice && muted && !running && <span className="set-note">{t.micMutedHint}</span>}
+      <Button disabled={status === 'joining'} aria-pressed={running} onClick={() => setTesting(!testing)}>{running ? t.micTestStop : t.micTest}</Button>
+      <span className="set-note" role={running ? 'status' : undefined}>{running ? `${t.micTestActive}${roomId ? ` ${t.micTestMuted}` : ''}` : t.micTestHint}</span>
       {error && <span className="field-err" role="alert">{error}</span>}
     </div>
   );
@@ -134,6 +159,10 @@ function AudioVideoPanel({ active }: { active: boolean }) {
           <SettingToggle flag="noiseSuppression" label={t.noiseSuppression} />
           <SettingToggle flag="echoCancellation" label={t.echoCancellation} />
           <SettingToggle flag="autoGain" label={t.autoGain} />
+          <label className="setrow">
+            <span className="set-head">{t.micVolume}<b>{settings.micVolume}%</b></span>
+            <input type="range" aria-label={t.micVolume} aria-valuetext={`${settings.micVolume}%`} min="0" max="200" step="1" value={settings.micVolume} disabled={settings.autoGain} style={{ '--at': `${settings.micVolume / 2}%` } as React.CSSProperties} onChange={(e) => updateSettings({ micVolume: Number(e.target.value) })} />
+          </label>
           <SettingToggle flag="joinMuted" label={t.joinMuted} />
         </section>
       </div>

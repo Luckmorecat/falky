@@ -29,6 +29,7 @@ export interface Settings extends ShareSettings, CameraSettings {
   noiseSuppression: boolean;
   echoCancellation: boolean;
   autoGain: boolean;
+  micVolume: number;
   joinMuted: boolean;
   sounds: boolean;
   uiSounds: boolean;
@@ -47,6 +48,7 @@ function oneOf<V extends string>(key: string, values: readonly V[], fallback: V)
 
 export const prefs = {
   settings(): Settings {
+    const micVolume = Number(read('micVolume') ?? 100);
     // Old browser-only favourites are intentionally not imported into shared identity.
     try { localStorage.removeItem(`${preferencePrefix}favoriteColors`); } catch { /* Private storage may be unavailable. */ }
     return {
@@ -55,6 +57,7 @@ export const prefs = {
       noiseSuppression: read('noiseSuppression') !== 'off',
       echoCancellation: read('echoCancellation') !== 'off',
       autoGain: read('autoGain') !== 'off',
+      micVolume: Math.max(0, Math.min(200, Number.isFinite(micVolume) ? micVolume : 100)),
       joinMuted: read('joinMuted') === 'on',
       shareResolution: oneOf('shareResolution', ['720', '1080', '1440'], '1080'),
       shareFps: oneOf('shareFps', ['15', '30', '60'], '30'),

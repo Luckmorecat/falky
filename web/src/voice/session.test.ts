@@ -11,7 +11,7 @@ function deferred() {
 
 let download: ReturnType<typeof deferred>;
 let host: VoiceHost;
-const rooms: { disconnect: ReturnType<typeof vi.fn> }[] = [];
+const rooms: { disconnect: ReturnType<typeof vi.fn>; localParticipant: { isMicrophoneEnabled: boolean } }[] = [];
 const resume = vi.fn(async () => {});
 const startAudio = vi.fn(async () => {});
 const connect = vi.fn(async () => {});
@@ -22,7 +22,9 @@ const speakers: { identity: string }[] = [];
 let localTracks = new Map();
 const disconnect = vi.fn();
 const constructRoom = vi.fn();
-const enableMicrophone = vi.fn(async () => {});
+const enableMicrophone = vi.fn(async (_enabled: boolean) => {});
+const createMicrophone = vi.fn<() => Promise<unknown[]>>();
+const publishMicrophone = vi.fn(async (_track: unknown) => {});
 const enableShare = vi.fn(async () => {});
 const enableCamera = vi.fn(async () => {});
 
@@ -32,6 +34,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   fetchVoice.mockImplementation(async () => Response.json({ url: 'ws://localhost/rtc', token: 'test', grantId: 'self.old' }));
   remotes.clear(); speakers.length = 0; localTracks = new Map(); rooms.length = 0;
+  createMicrophone.mockImplementation(async () => [{ stop: vi.fn(), setAudioContext: vi.fn(), setProcessor: vi.fn(), mute: vi.fn() }]);
   download = deferred();
   vi.doMock('livekit-client', async () => {
     loadSDK();
@@ -42,7 +45,7 @@ beforeEach(() => {
       RoomEvent: {},
       Room: class {
         constructor() { constructRoom(); rooms.push(this); }
-        localParticipant = { identity: 'self.nonce', setCameraEnabled: enableCamera, setScreenShareEnabled: enableShare, setMicrophoneEnabled: enableMicrophone, trackPublications: localTracks, attributes: {}, isMicrophoneEnabled: false, getTrackPublication(source: string) { return this.trackPublications.get(source); } };
+        localParticipant = { identity: 'self.nonce', setCameraEnabled: enableCamera, setScreenShareEnabled: enableShare, async setMicrophoneEnabled(enabled: boolean) { await enableMicrophone(enabled); this.isMicrophoneEnabled = enabled; }, createTracks: createMicrophone, async publishTrack(track: unknown) { await publishMicrophone(track); this.trackPublications.set('mic', { track }); this.isMicrophoneEnabled = true; }, trackPublications: localTracks, attributes: {}, isMicrophoneEnabled: false, getTrackPublication(source: string) { return this.trackPublications.get(source); } };
         remoteParticipants = remotes;
         activeSpeakers = speakers;
         connect = connect;
@@ -57,7 +60,7 @@ beforeEach(() => {
   vi.stubGlobal('fetch', fetchVoice);
   host = {
     onChange: vi.fn(), onProblem: vi.fn(), onSound: vi.fn(),
-    micId: () => '', speakerId: () => '',
+    micId: () => '', speakerId: () => '', micGain: () => 1,
     micProcessing: () => ({ echoCancellation: true, noiseSuppression: true, autoGainControl: true }),
     joinMuted: () => true, cameraSettings: () => prefs.settings(),
     shareSettings: () => prefs.settings(), volumeOf: () => 1,
@@ -220,15 +223,15 @@ it('discards an abandoned late Join after access ends', async () => {
 it('stops microphone media that becomes available after explicit Leave', async () => {
   const micReady = deferred();
   const stop = vi.fn();
-  enableMicrophone.mockImplementationOnce(async () => {
+  createMicrophone.mockImplementationOnce(async () => {
     await micReady.promise;
-    localTracks.set('mic', { track: { stop } });
+    return [{ stop }];
   });
   host.joinMuted = () => false;
   const { VoiceSession } = await import('./session');
   const session = new VoiceSession(host);
   const joining = session.join('lounge'); download.resolve();
-  await vi.waitFor(() => expect(enableMicrophone).toHaveBeenCalledOnce());
+  await vi.waitFor(() => expect(createMicrophone).toHaveBeenCalledOnce());
   await session.leave();
   micReady.resolve();
   await joining;
@@ -236,14 +239,84 @@ it('stops microphone media that becomes available after explicit Leave', async (
   expect(session.snapshot.status).toBe('idle');
 });
 
+it.each([false, true])('restores the pre-test mute state (already muted: %s)', async (muted) => {
+  const { VoiceSession } = await import('./session');
+  const session = new VoiceSession(host);
+  const joining = session.join('lounge'); download.resolve(); await joining;
+  rooms[0]!.localParticipant.isMicrophoneEnabled = !muted;
+  localTracks.set('mic', { track: { stop: vi.fn() } });
+  const test = session.suspendMicForTest();
+  await test.ready;
+  expect(session.snapshot.muted).toBe(true);
+  await session.toggleMute();
+  expect(session.snapshot.muted).toBe(true);
+  test.release();
+  await vi.waitFor(() => expect(rooms[0]!.localParticipant.isMicrophoneEnabled).toBe(!muted));
+  session.end();
+});
+
+it('never unmutes a replacement room when a test ends', async () => {
+  const { VoiceSession } = await import('./session');
+  const session = new VoiceSession(host);
+  const joining = session.join('lounge'); download.resolve(); await joining;
+  rooms[0]!.localParticipant.isMicrophoneEnabled = true;
+  const test = session.suspendMicForTest();
+  await test.ready;
+  await session.leave();
+  await session.join('games');
+  enableMicrophone.mockClear();
+  test.release();
+  await Promise.resolve();
+  expect(enableMicrophone).not.toHaveBeenCalled();
+  expect(session.snapshot.muted).toBe(true);
+  session.end();
+});
+
+it('installs microphone gain before publishing any audio', async () => {
+  const setProcessor = vi.fn(async () => {});
+  const track = { stop: vi.fn(), setAudioContext: vi.fn(), setProcessor, mute: vi.fn() };
+  createMicrophone.mockResolvedValueOnce([track]);
+  publishMicrophone.mockImplementationOnce(async () => { expect(setProcessor).toHaveBeenCalledOnce(); });
+  host.joinMuted = () => false;
+  host.micGain = () => 0;
+  const { VoiceSession } = await import('./session');
+  const session = new VoiceSession(host);
+  const joining = session.join('lounge'); download.resolve(); await joining;
+  expect(publishMicrophone).toHaveBeenCalledWith(track);
+  expect(host.onProblem).not.toHaveBeenCalled();
+  session.end();
+});
+
+it('meters processed audio directly without looping it into the capture context', async () => {
+  const { VoiceSession } = await import('./session');
+  const { MicrophoneGain } = await import('./micGain');
+  const processor = new MicrophoneGain(() => 0.5);
+  vi.spyOn(processor, 'level').mockReturnValue(0.4);
+  const update = vi.spyOn(processor, 'update');
+  const source = vi.fn();
+  vi.stubGlobal('AudioContext', class { resume = resume; createMediaStreamSource = source; });
+  const track = { mediaStreamTrack: { id: 'processed' }, stop: vi.fn(), setAudioContext: vi.fn(), setProcessor: vi.fn(), getProcessor: () => processor, mute: vi.fn() };
+  createMicrophone.mockResolvedValueOnce([track]);
+  host.joinMuted = () => false;
+  const session = new VoiceSession(host);
+  const joining = session.join('lounge'); download.resolve(); await joining;
+  expect(session.level('self.nonce')).toBe(0.4);
+  expect(source).not.toHaveBeenCalled();
+  session.applyMicGain();
+  expect(update).toHaveBeenCalledOnce();
+  await session.toggleMute();
+  expect(session.level('self.nonce')).toBe(0);
+  session.end();
+});
+
 it('ignores a canceled microphone failure after a replacement Join', async () => {
   const micReady = deferred();
-  enableMicrophone.mockImplementationOnce(() => micReady.promise);
+  createMicrophone.mockImplementationOnce(async () => { await micReady.promise; return []; });
   host.joinMuted = () => false;
   const { VoiceSession } = await import('./session');
   const session = new VoiceSession(host);
   const oldJoin = session.join('lounge'); download.resolve();
-  await vi.waitFor(() => expect(enableMicrophone).toHaveBeenCalledOnce());
+  await vi.waitFor(() => expect(createMicrophone).toHaveBeenCalledOnce());
   await session.leave();
   host.joinMuted = () => true;
   await session.join('games');
