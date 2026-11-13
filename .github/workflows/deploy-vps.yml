@@ -59,9 +59,11 @@ jobs:
         id: go-cache
         working-directory: server
         run: |
-          echo "version=$(go env GOVERSION)" >> "$GITHUB_OUTPUT"
-          echo "modules=$(go env GOMODCACHE)" >> "$GITHUB_OUTPUT"
-          echo "build=$(go env GOCACHE)" >> "$GITHUB_OUTPUT"
+          {
+            echo "version=$(go env GOVERSION)"
+            echo "modules=$(go env GOMODCACHE)"
+            echo "build=$(go env GOCACHE)"
+          } >> "$GITHUB_OUTPUT"
       - name: Cache Go modules
         if: matrix.component == 'server' && steps.validation.outputs.run != 'false'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
