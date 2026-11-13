@@ -1,0 +1,106 @@
+/* Chat: always there, behind a blur that grows towards the edge */
+.chat-btn { display: none; position: absolute; right: 16px; top: 16px; z-index: 12; }
+.chat-btn::after { left: auto; right: 0; translate: none; }
+.badge { min-width: 20px; height: 20px; padding: 0 5px; border-radius: calc(15px * var(--corner)); background: var(--signal); color: var(--on-signal); font-size: 12px; font-weight: 600; line-height: 20px; text-align: center; }
+.chat-btn .badge { position: absolute; top: -2px; right: -2px; transition: opacity 160ms ease, transform 200ms var(--ease-out); }
+.chat-open .chat-btn .badge { opacity: 0; transform: scale(.6); }
+.swap { position: relative; width: 22px; height: 22px; }
+.swap svg { position: absolute; inset: 0; transition: opacity 180ms ease, filter 180ms ease, transform 220ms var(--ease-out); }
+.swap .b { opacity: 0; filter: blur(3px); transform: scale(.7); }
+.chat-open .swap .a { opacity: 0; filter: blur(3px); transform: scale(.7); }
+.chat-open .swap .b { opacity: 1; filter: none; transform: none; }
+/* Where the mouse brings the chat in: as wide as it gets, and it never moves. */
+.chat-strip { position: absolute; right: 0; top: 0; bottom: 0; width: calc(var(--chat) + 24px); z-index: 10; }
+/* Past the page's edge at rest, with the start of its lines showing. No background: the dots stay. */
+.chat { position: absolute; right: 0; top: 0; bottom: 0; width: var(--chat); z-index: 1; display: flex; flex-direction: column; overflow: hidden; pointer-events: none; transform: translateX(calc(var(--chat) - var(--peek))); transition: transform 460ms var(--ease-drawer); }
+.chat-open .chat { transform: none; pointer-events: auto; }
+/* Sharp where lines start, then blurring and fading out towards the page's edge.
+   It stands still over the sliding chat and draws the page's dots back over its blur. */
+.chat-veil { position: absolute; right: 0; top: 0; bottom: 0; width: var(--peek); z-index: 2; pointer-events: none; }
+.chat-veil i, .chat-veil b, .chat-veil u { position: absolute; inset: 0; transition: opacity 320ms ease; }
+.chat-veil i:nth-child(1) { -webkit-backdrop-filter: blur(24px); backdrop-filter: blur(24px); -webkit-mask-image: linear-gradient(to left, #000, transparent 57px); mask-image: linear-gradient(to left, #000, transparent 57px); }
+.chat-veil i:nth-child(2) { -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px); -webkit-mask-image: linear-gradient(to left, #000 16px, transparent 105px); mask-image: linear-gradient(to left, #000 16px, transparent 105px); }
+.chat-veil i:nth-child(3) { -webkit-backdrop-filter: blur(5px); backdrop-filter: blur(5px); -webkit-mask-image: linear-gradient(to left, #000 44px, transparent 159px); mask-image: linear-gradient(to left, #000 44px, transparent 159px); }
+.chat-veil i:nth-child(4) { -webkit-backdrop-filter: blur(2px); backdrop-filter: blur(2px); -webkit-mask-image: linear-gradient(to left, #000 150px, transparent); mask-image: linear-gradient(to left, #000 150px, transparent); }
+.chat-veil b { background: linear-gradient(to left, var(--bg), transparent 98px); }
+/* As wide as the window from its right edge, so that its dots fall on the page's. */
+.chat-veil u { left: auto; width: 100vw; background-image: var(--dots); background-size: 20px 20px; -webkit-mask-image: linear-gradient(to left, #000 150px, transparent var(--peek)); mask-image: linear-gradient(to left, #000 150px, transparent var(--peek)); }
+.room-screen:has(> .live-background[data-ready][data-beacon]) .chat-veil u { background-image: none; }
+.chat-open .chat-veil i, .chat-open .chat-veil b, .chat-open .chat-veil u { opacity: 0; }
+.chat-hint { position: absolute; right: 24px; bottom: calc(var(--edge) + 13px); z-index: 3; display: flex; gap: 8px; align-items: center; color: var(--text-2); pointer-events: none; transition: opacity 180ms ease; }
+.chat-open .chat-hint { opacity: 0; }
+/* Newest at the bottom, with few messages too: the free space stays above them.
+   The insets are also in chat/place via the feed component, so a virtual row lands where padding used to. */
+.feed { --feed-top: 28px; --feed-bottom: 12px; flex: 1; min-height: 0; position: relative; display: flex; flex-direction: column; overflow-y: auto; overflow-anchor: none; padding: 0 20px; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: var(--fill-2) transparent;
+  -webkit-mask-image: linear-gradient(to bottom, transparent, #000 28px); mask-image: linear-gradient(to bottom, transparent, #000 28px); }
+.feed > * { flex: none; }
+.feed:not(:has([data-row]))::before { content: ""; margin-top: auto; }
+.feed-gap { pointer-events: none; transition-property: none; }
+.chat .feed, .chat .composer { opacity: .3; transition: opacity 320ms ease; }
+.chat-open .chat .feed, .chat-open .chat .composer { opacity: 1; }
+/* A new message: the start of the lines clears up for a moment; the far edge stays blurred. */
+.chat-strip.nudge .feed { opacity: .9; }
+.chat-strip.nudge .chat-veil i:nth-child(n+3) { opacity: 0; }
+.day { text-align: center; font-size: 12px; color: var(--text-3); padding: 8px 0 14px; }
+.new-line { display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--signal-text); padding: 8px 0 12px; }
+.new-line::after { content: ""; flex: 1; height: 1px; background: color-mix(in srgb, var(--level) 28%, transparent); }
+.msg { padding-top: 14px; }
+.msg.own { text-align: right; }
+.msg.own .msg-meta, .msg.own .msg-state { justify-content: flex-end; }
+.msg.own .msg-text { width: fit-content; max-width: 100%; margin-left: auto; padding: 6px 10px; border-radius: calc(24px * var(--corner)); background: color-mix(in srgb, var(--base) 9%, transparent); }
+.msg.cont { padding-top: 3px; }
+/* `lead` stands in for the next sibling when the day or the divider above is unmounted. */
+.msg.lead, .day + .msg, .new-line + .msg { padding-top: 0; }
+.live-msg { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
+.msg-meta { display: flex; gap: 6px; align-items: baseline; margin-bottom: 1px; }
+.msg-author { font-size: 14px; color: color-mix(in srgb, var(--base) 72%, var(--text)); max-width: 75%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+[data-theme="light"] .msg-author { color: color-mix(in srgb, var(--base) 50%, var(--text)); }
+.msg-time { font-size: 12px; color: var(--text-3); }
+.msg-text { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.42; }
+.msg-text a { color: inherit; text-decoration: underline; text-decoration-color: var(--text-3); text-underline-offset: 3px; }
+.msg.pending .msg-text { color: var(--text-2); }
+.msg-state { font-size: 12px; color: var(--text-3); margin-top: 2px; display: flex; gap: 10px; flex-wrap: wrap; }
+.msg-state.err { color: var(--danger); }
+.msg-state button { font-size: 12px; text-decoration: underline; text-underline-offset: 3px; padding: 0; }
+.to-latest { position: absolute; left: 50%; bottom: 68px; translate: -50% 0; display: flex; gap: 6px; align-items: center; background: var(--raised-2); padding: 8px 14px 8px 10px; border-radius: 99px; font-size: 13px; z-index: 2;
+  opacity: 0; transform: translateY(6px); pointer-events: none; transition: opacity 140ms ease, transform 200ms var(--ease-out); }
+.to-latest.show { opacity: 1; transform: none; pointer-events: auto; }
+.to-latest svg.i { width: 16px; height: 16px; }
+.composer { flex: none; padding: 4px 20px var(--edge); position: relative; }
+.count { position: absolute; right: 34px; top: -14px; font-size: 12px; color: var(--text-2); }
+.count.over { color: var(--danger); }
+.field { position: relative; display: flex; align-items: flex-end; gap: 4px; background: var(--raised); border-radius: calc(24px * var(--corner)); padding: 4px; transition: background-color 160ms ease; }
+.field:focus-within { background: var(--raised-2); }
+.field textarea { flex: 1; min-width: 0; background: none; border: 0; outline: 0; resize: none; padding: 9px 6px 9px 12px; max-height: 140px; line-height: 22px; field-sizing: content; }
+.field textarea::placeholder { color: var(--text-3); }
+.field .ib { background: transparent; }
+.send { background: var(--invert) !important; color: var(--on-invert); transition: opacity 140ms ease, transform 180ms var(--ease-out); }
+.send[disabled] { opacity: 0; transform: scale(.8); pointer-events: none; }
+.field .attach { color: var(--text-2); }
+@media (hover:hover) and (pointer:fine) { .field .attach:hover { color: var(--text); background: var(--fill) !important; } }
+.field .attach + input + textarea { padding-left: 4px; }
+
+/* Files held over the chat. */
+.drop-zone { position: absolute; inset: 12px 12px calc(var(--edge) + 4px); z-index: 4; display: grid; place-items: center; border-radius: calc(32px * var(--corner)); border: 2px dashed color-mix(in srgb, var(--level) 45%, transparent); background: color-mix(in srgb, var(--bg) 82%, transparent); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); pointer-events: none; animation: drop-in 160ms ease; }
+.drop-zone div { display: grid; justify-items: center; gap: 10px; color: var(--text); font-size: 15px; }
+.drop-zone svg.i { width: 32px; height: 32px; }
+@keyframes drop-in { from { opacity: 0; } }
+.empty-chat { text-align: center; color: var(--text-2); padding: 72px 20px; }
+.empty-chat strong { display: block; color: var(--text); font-weight: 500; font-size: 17px; margin-bottom: 4px; }
+
+@media (max-width: 1180px), (hover: none) {
+  .chat-btn { display: grid; z-index: 13; }
+  .chat-veil, .chat-hint { display: none; }
+  .chat-strip { width: 100%; z-index: 12; pointer-events: none; }
+  .chat { pointer-events: auto; width: 100%; background: var(--surface); transform: translateX(100%); visibility: hidden; transition: transform 460ms var(--ease-drawer), visibility 0s linear 460ms; }
+  .chat-open .chat { transform: none; visibility: visible; transition: transform 460ms var(--ease-drawer), visibility 0s; }
+  .feed { --feed-top: 72px; -webkit-mask-image: none; mask-image: none; }
+  .composer { padding-inline: 12px; }
+  .chat .feed, .chat .composer { opacity: 1; }
+}
+
+.reduced .chat-veil i { display: none; }
+
+@supports not (corner-shape: superellipse(2)) {
+  .to-latest { border-radius: calc((.5lh + 8px) * var(--corner)); }
+}

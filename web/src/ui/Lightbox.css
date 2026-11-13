@@ -1,0 +1,39 @@
+/* The viewer: a picture over everything, always on dark, whatever the theme. */
+.viewer { position: fixed; inset: 0; width: 100vw; height: 100dvh; max-width: none; max-height: none; margin: 0; padding: 0; border: 0; background: transparent; color: #fff; overflow: hidden; pointer-events: auto; outline: none; }
+.viewer::backdrop { background: transparent; }
+.viewer-bg { position: absolute; inset: 0; background: rgba(10,10,10,.94); -webkit-backdrop-filter: blur(24px); backdrop-filter: blur(24px); }
+.viewer-stage { position: absolute; inset: 0; display: grid; place-items: center; padding: 72px 72px 64px; touch-action: none; user-select: none; -webkit-user-select: none; }
+.viewer-frame { display: grid; place-items: center; max-width: 100%; max-height: 100%; min-width: 0; min-height: 0; }
+.viewer-img { display: block; max-width: calc(100vw - 144px); max-height: calc(100dvh - 136px); width: auto; height: auto; object-fit: contain; border-radius: calc(6px * var(--corner)); transform-origin: center; cursor: zoom-in; transition: transform 260ms var(--ease-drawer); will-change: transform; }
+.viewer.zoomed .viewer-img { cursor: grab; border-radius: 0; }
+.viewer.dragging .viewer-img, .viewer.closing .viewer-img { transition: none; }
+.viewer.zoomed.dragging .viewer-img { cursor: grabbing; }
+.viewer-wait { width: min(60vw, 480px); aspect-ratio: 4 / 3; max-height: calc(100dvh - 136px); border-radius: calc(12px * var(--corner)); background: linear-gradient(100deg, rgba(255,255,255,.05) 30%, rgba(255,255,255,.11) 50%, rgba(255,255,255,.05) 70%) 0 0 / 300% 100%; animation: shimmer 1.4s linear infinite; }
+.viewer-gone { display: grid; justify-items: center; gap: 10px; color: rgba(255,255,255,.6); font-size: 15px; }
+.viewer-gone svg.i { width: 36px; height: 36px; }
+.viewer-top { position: absolute; left: 0; right: 0; top: 0; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: max(14px, env(safe-area-inset-top)) 16px 14px 24px; background: linear-gradient(rgba(0,0,0,.35), transparent); transition: opacity 200ms ease; }
+.viewer-who { display: grid; min-width: 0; }
+.viewer-author { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.viewer-meta { font-size: 12px; color: rgba(255,255,255,.6); font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.viewer-actions { display: flex; gap: 8px; flex: none; }
+.viewer .ib { width: 44px; height: 44px; background: rgba(255,255,255,.1); color: #fff; }
+@media (hover:hover) and (pointer:fine) { .viewer .ib:hover { background: rgba(255,255,255,.2); } }
+.viewer .ib:focus-visible, .viewer-nav:focus-visible { outline-color: #fff; }
+.viewer-nav { position: absolute; top: 50%; translate: 0 -50%; width: 48px; height: 48px; border-radius: var(--round); display: grid; place-items: center; padding: 0; background: rgba(255,255,255,.1); color: #fff; transition: opacity 160ms ease, background-color 160ms ease, transform 140ms var(--ease-out); }
+.viewer-nav.prev { left: 16px; }
+.viewer-nav.next { right: 16px; }
+.viewer-nav:active { transform: scale(.94); }
+.viewer-nav[disabled] { opacity: 0; pointer-events: none; }
+@media (hover:hover) and (pointer:fine) { .viewer-nav:hover { background: rgba(255,255,255,.2); } }
+.viewer-count { position: absolute; left: 50%; bottom: max(18px, env(safe-area-inset-bottom)); translate: -50% 0; padding: 6px 12px; border-radius: 99px; background: rgba(255,255,255,.1); font-size: 13px; font-variant-numeric: tabular-nums; pointer-events: none; transition: opacity 200ms ease; }
+.viewer.zoomed .viewer-nav, .viewer.zoomed .viewer-count, .viewer.dragging .viewer-top, .viewer.dragging .viewer-nav, .viewer.dragging .viewer-count, .viewer.closing .viewer-top, .viewer.closing .viewer-nav, .viewer.closing .viewer-count { opacity: 0; pointer-events: none; }
+@media (hover: none), (max-width: 760px) {
+  .viewer-nav { display: none; }
+  .viewer-stage { padding: 64px 0 56px; }
+  .viewer-img { max-width: 100vw; max-height: calc(100dvh - 120px); border-radius: 0; }
+  .viewer-top { padding-left: 16px; padding-right: 12px; }
+}
+
+@supports not (corner-shape: superellipse(2)) {
+  .viewer-count { border-radius: calc((.5lh + 6px) * var(--corner)); }
+}

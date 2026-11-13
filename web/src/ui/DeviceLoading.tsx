@@ -1,5 +1,8 @@
 import { t } from '../strings';
 import { Icon } from './Icon';
+import './AccountFlow.css';
+import './DeviceSignIn.css';
+import './DeviceLoading.css';
 
 export function DeviceLoading({ scanner, onClose }: { scanner: boolean; onClose(): void }) {
   const heading = <div className="auth-heading" aria-hidden="true"><h1 className="device-skeleton-line">{scanner ? t.device.scanTitle : t.device.qrTitle}</h1><p className="device-skeleton-line">{scanner ? t.device.scanHint : t.device.qrHint}</p></div>;

@@ -5,6 +5,7 @@ import { createThemeWave } from '../fx/themeWave';
 import { createUnreadBeacon } from '../fx/unreadBeacon';
 import { effectsReduced, onTick } from '../fx/ticker';
 import type { VoiceSource } from '../fx/voiceField';
+import './LiveBackground.css';
 
 // Match CSS/FLIP time even when GPU work delays animation frames.
 const layoutTime = () => Number(document.timeline.currentTime ?? performance.now());

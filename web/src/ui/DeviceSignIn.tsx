@@ -9,6 +9,8 @@ import { Button } from './Button';
 import { SignInRequestDetails } from './SignInRequestDetails';
 import { Icon } from './Icon';
 import { DeviceDeadline, DeviceError, DeviceLinkFlow, useDeviceClock, type DeviceLinkFlowProps } from './DeviceLinkFlow';
+import './AccountFlow.css';
+import './DeviceSignIn.css';
 
 function QR({ value }: { value: string }) {
   const [qr, setQR] = useState<{ path: string; size: number }>();

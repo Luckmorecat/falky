@@ -13,6 +13,7 @@ import { Icon } from './Icon';
 import { ShareStats } from './ShareStatsOverlay';
 import { Tile } from './Tile';
 import { useDrawerLayout } from './useDrawerLayout';
+import './Stage.css';
 
 interface Person {
   id: string;

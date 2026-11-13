@@ -1,4 +1,5 @@
 import type { ComponentProps, ReactNode } from 'react';
+import './Toggle.css';
 
 type ToggleProps = Omit<ComponentProps<'input'>, 'type' | 'checked' | 'defaultChecked' | 'onChange'> & {
   label: ReactNode;

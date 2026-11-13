@@ -1,0 +1,15 @@
+.btn2 { height: 46px; padding: 0 16px; border-radius: calc(24px * var(--corner)); background: var(--raised-2); flex: none; font-size: 14px; color: var(--text); transition: transform 140ms var(--ease-out), background-color 160ms ease; }
+.btn2:active { transform: scale(.97); }
+.btn2[disabled] { opacity: .45; cursor: default; }
+.go { height: 54px; width: min(280px, 100%); border-radius: calc(27px * var(--corner)); background: var(--invert); color: var(--on-invert); font-weight: 600; transition: transform 140ms var(--ease-out), opacity 160ms ease; }
+.go:active { transform: scale(.97); }
+.go[disabled] { opacity: .35; pointer-events: none; }
+
+.join { display: flex; align-items: center; gap: 10px; height: 56px; padding: 0 26px 0 22px; border-radius: calc(28px * var(--corner)); background: var(--invert); color: var(--on-invert); font-weight: 600; transition: transform 140ms var(--ease-out); }
+.join:active { transform: scale(.97); }
+.join[disabled] { opacity: .6; cursor: default; }
+.btn2.danger { background: var(--danger-bg); color: var(--danger); }
+
+@media (max-width: 1000px) {
+  .join { height: 48px; }
+}

@@ -1,0 +1,12 @@
+.input-otp { position: relative; width: fit-content; max-width: 100%; }
+.input-otp-group { display: flex; }
+.input-otp-slot { position: relative; display: grid; place-items: center; width: 54px; height: 58px; border: 1px solid var(--fill-2); background: var(--fill); font-size: 26px; font-variant-numeric: tabular-nums; }
+.input-otp-slot + .input-otp-slot { border-left: 0; }
+.input-otp-slot:first-child { border-radius: 16px 0 0 16px; }
+.input-otp-slot:last-child { border-radius: 0 16px 16px 0; }
+.input-otp-slot[data-active] { z-index: 1; outline: 2px solid var(--level); outline-offset: -1px; }
+.input-otp:has(input:disabled) { opacity: .5; }
+.input-otp input:focus-visible { outline: none; }
+.input-otp-caret { position: absolute; height: 26px; width: 1px; background: currentColor; animation: otp-caret 1s step-end infinite; }
+@keyframes otp-caret { 50% { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .input-otp-caret { animation: none; } }

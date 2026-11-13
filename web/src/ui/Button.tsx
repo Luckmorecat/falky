@@ -1,4 +1,5 @@
 import type { ComponentProps } from 'react';
+import './Button.css';
 
 type ButtonProps = ComponentProps<'button'> & { variant?: 'primary' | 'secondary' | 'join' | 'danger' };
 const classes = { primary: 'go', secondary: 'btn2', join: 'join', danger: 'btn2 danger' };
