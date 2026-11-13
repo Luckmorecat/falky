@@ -1,7 +1,7 @@
 import type { VoiceSound } from './types';
 
 /** What the interface itself says, next to what happens in a room. */
-export type InterfaceCue = 'hover' | 'tap' | 'on' | 'off' | 'open' | 'close' | 'tick';
+export type InterfaceCue = 'tap' | 'on' | 'off' | 'open' | 'close' | 'tick';
 export type Sound = VoiceSound | InterfaceCue | 'test';
 
 const MASTER_VOLUME = 0.3;
@@ -12,7 +12,7 @@ let noise: AudioBuffer | null = null;
 const lastPlayed = new Map<Sound, number>();
 
 /** Milliseconds a sound stays quiet after playing, so a sweep over buttons does not rattle. */
-const MIN_GAP: Partial<Record<Sound, number>> = { hover: 45, tap: 30, tick: 35 };
+const MIN_GAP: Partial<Record<Sound, number>> = { tap: 30, tick: 35 };
 
 function output(): { audio: AudioContext; out: GainNode } {
   if (!ctx || !master) {
@@ -78,7 +78,6 @@ function stream(start: number, count: number, low: number, high: number, gap: nu
 }
 
 const SOUNDS: Record<Sound, (t: number, vary: number, pitch: number) => void> = {
-  hover: (t, v) => bubble(t, 880 * v, 1420 * v, 0.04, 0.1),
   tap(t, v) {
     bubble(t, 340 * v, 720 * v, 0.085, 0.5);
     bubble(t + 0.045, 760 * v, 1280 * v, 0.055, 0.18);
