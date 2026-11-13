@@ -54,6 +54,31 @@ jobs:
       - name: Install pinned tools
         if: matrix.component != 'web' && steps.validation.outputs.run != 'false'
         uses: jdx/mise-action@f5be966e4a917d54244728e6a5fdcd1d93a35e6c # v5.2.6
+      - name: Locate Go caches
+        if: matrix.component == 'server' && steps.validation.outputs.run != 'false'
+        id: go-cache
+        working-directory: server
+        run: |
+          echo "version=$(go env GOVERSION)" >> "$GITHUB_OUTPUT"
+          echo "modules=$(go env GOMODCACHE)" >> "$GITHUB_OUTPUT"
+          echo "build=$(go env GOCACHE)" >> "$GITHUB_OUTPUT"
+      - name: Cache Go modules
+        if: matrix.component == 'server' && steps.validation.outputs.run != 'false'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.go-cache.outputs.modules }}
+          key: go-mod-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.go-cache.outputs.version }}-${{ hashFiles('server/go.mod', 'server/go.sum') }}
+          restore-keys: |
+            go-mod-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.go-cache.outputs.version }}-
+      - name: Cache Go build outputs
+        if: matrix.component == 'server' && steps.validation.outputs.run != 'false'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.go-cache.outputs.build }}
+          key: go-build-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.go-cache.outputs.version }}-${{ hashFiles('server/go.mod', 'server/go.sum') }}-${{ github.sha }}
+          restore-keys: |
+            go-build-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.go-cache.outputs.version }}-${{ hashFiles('server/go.mod', 'server/go.sum') }}-
+            go-build-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.go-cache.outputs.version }}-
       - name: Install Node.js runtime
         if: matrix.component == 'web' || (matrix.component == 'deploy' && (steps.validation.outputs.run != 'false' || github.event_name == 'pull_request'))
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
