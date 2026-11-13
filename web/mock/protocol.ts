@@ -1,7 +1,7 @@
 /** Dev-only simulator protocol. Public API responses retain the generated contract. */
 import type { components } from '../src/api/schema.gen';
 export type Schema = components['schemas'];
-export const scenarios = ['populated', 'entry', 'quiet', 'remote-share', 'same-person', 'signed-out'] as const;
+export const scenarios = ['populated', 'account', 'entry', 'quiet', 'remote-share', 'same-person', 'signed-out'] as const;
 export type Scenario = (typeof scenarios)[number];
 export interface MockPeer {
   connectionId: string;

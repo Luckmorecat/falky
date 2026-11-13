@@ -224,7 +224,10 @@ export async function startMockServer(options: { port?: number; scenario?: strin
     token = randomBytes(24).toString('hex');
     accounts.reset();
     devices.reset();
-    if (state.visitor) accounts.guest(token, state.visitor);
+    if (state.visitor) {
+      if (scenario === 'account') accounts.seedAccount(token, state.visitor);
+      else accounts.guest(token, state.visitor);
+    }
   }
   function reset(scenario: Scenario) {
     state.generation++;
@@ -277,7 +280,10 @@ export async function startMockServer(options: { port?: number; scenario?: strin
       else if (switched || !requestToken(req)) {
         token = randomBytes(24).toString('hex');
         state.visitor = bootstrapVisitor;
-        if (state.visitor) accounts.guest(token, state.visitor);
+        if (state.visitor) {
+          if (state.scenario === 'account') accounts.seedAccount(token, state.visitor);
+          else accounts.guest(token, state.visitor);
+        }
         setCookie(res);
       }
       return json(res, 200, state);

@@ -21,6 +21,14 @@ export class AccountFixture {
   constructor(private hooks: { id(): string; visitor(name: string): Schema['Visitor']; name(value: unknown): string; token(req: IncomingMessage): string; issue(res: ServerResponse, visitor: Schema['Visitor'] | null, token?: string): string }) {}
   reset() { this.sessions.clear(); this.accounts.clear(); this.ceremonies.clear(); this.rotation = 0; this.usedInvitations.clear(); this.fault = 'none'; }
   guest(token: string, visitor: Schema['Visitor']) { this.sessions.set(token, { visitor, kind: 'guest', expiresAt: new Date(Date.now() + 86400_000).toISOString(), proofAt: 0 }); }
+  seedAccount(token: string, visitor: Schema['Visitor']) {
+    let account = this.accounts.get(visitor.id);
+    if (!account) {
+      account = { visitor, phrase: this.phrase(), keys: ['Laptop', 'Security key'].map(label => ({ id: randomBytes(32).toString('base64url'), label, createdAt: new Date().toISOString() })) };
+      this.accounts.set(visitor.id, account);
+    }
+    this.sessions.set(token, { visitor: account.visitor, kind: 'account', expiresAt: new Date(Date.now() + 90 * 86400_000).toISOString(), proofAt: Date.now(), proofKey: account.keys[0]!.id });
+  }
   resolve(req: IncomingMessage) { return this.sessions.get(this.hooks.token(req)); }
   private require(req: IncomingMessage, account = false) {
     const session = this.resolve(req);
