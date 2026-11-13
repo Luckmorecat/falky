@@ -69,7 +69,7 @@ const uk = {
     "copyFallback": "Скопіюй це посилання вручну",
     "lostLink": "Це посилання вже не можна скопіювати. Створи нове, щоб надіслати його.",
     "revoke": "Відкликати посилання",
-    "pending": "Браузери в очікуванні",
+    "pending": "Запити на вхід",
     "codeLabel": "Код із чотирьох цифр",
     "codePolicy": "П’ять неправильних кодів відкличуть посилання.",
     "codeWrong": "Код не прийнято. Перевір його в іншому браузері.",
@@ -80,6 +80,12 @@ const uk = {
     "authResume": "Увійди, щоб переглянути запит. Підтвердження буде окремим кроком.",
     "expiry": "Залишилося",
     "noBrowser": "Опис браузера недоступний",
+    "unknownDevice": "Пристрій",
+    "androidPhone": "Телефон Android",
+    "androidDevice": "Пристрій Android",
+    "windowsPC": "Комп’ютер Windows",
+    "linuxPC": "Комп’ютер Linux",
+    "ipUnavailable": "IP-адреса недоступна",
     "resend": "Отримати код знову"
 },
   account: {
@@ -421,7 +427,7 @@ const en: Strings = {
     "copyFallback": "Copy this link manually",
     "lostLink": "This link can no longer be copied. Create a new one to send another link.",
     "revoke": "Revoke link",
-    "pending": "Waiting browsers",
+    "pending": "Sign-in requests",
     "codeLabel": "Four-digit code",
     "codePolicy": "Five incorrect codes revoke the link.",
     "codeWrong": "That code was not accepted. Check the code on the other browser.",
@@ -432,6 +438,12 @@ const en: Strings = {
     "authResume": "Sign in to review this request. You will approve it separately.",
     "expiry": "Expires in",
     "noBrowser": "Browser details unavailable",
+    "unknownDevice": "Device",
+    "androidPhone": "Android phone",
+    "androidDevice": "Android device",
+    "windowsPC": "Windows PC",
+    "linuxPC": "Linux PC",
+    "ipUnavailable": "IP address unavailable",
     "resend": "Get code again"
 },
   account: {

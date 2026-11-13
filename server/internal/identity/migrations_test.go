@@ -75,7 +75,7 @@ func TestIdentityAndSessionMigrationsPreserveGuestsAndResetAccountAccess(t *test
 			}); err != nil {
 				t.Fatal(err)
 			}
-			expected := 5
+			expected := 6
 			if name != "before_identity_rename" {
 				body, err := fs.ReadFile(identity.Migrations(), "0008_identity_profiles.sql")
 				if err != nil {
@@ -89,7 +89,7 @@ func TestIdentityAndSessionMigrationsPreserveGuestsAndResetAccountAccess(t *test
 				if applied, err := db.Migrate(t.Context(), intermediate); err != nil || applied != 1 {
 					t.Fatalf("identity rename = %d, %v", applied, err)
 				}
-				expected = 4
+				expected = 5
 			}
 			var beforeID string
 			var beforeHash []byte
@@ -110,7 +110,7 @@ func TestIdentityAndSessionMigrationsPreserveGuestsAndResetAccountAccess(t *test
 				if err := db.Read().QueryRowContext(t.Context(), "SELECT id,token_hash,generation,created_at,expires_at FROM sessions WHERE identity_id='guest'").Scan(&beforeID, &beforeHash, &beforeGeneration, &beforeCreated, &beforeExpiry); err != nil {
 					t.Fatal(err)
 				}
-				expected = 3
+				expected = 4
 			}
 			all, err := platform.LoadMigrations(identity.Migrations())
 			if err != nil {
@@ -310,7 +310,8 @@ func testSignInIndexUpgrade(t *testing.T, firstMigration string, wantApplied int
 		t.Fatal(err)
 	}
 	for _, entry := range entries {
-		if entry.Name() >= firstMigration {
+		// The current service seeds this index fixture and requires the IP column.
+		if entry.Name() >= firstMigration && entry.Name() != "0016_signin_request_ip.sql" {
 			continue
 		}
 		body, err := fs.ReadFile(identity.Migrations(), entry.Name())

@@ -80,7 +80,7 @@ export class DeviceFixture {
   }
   private create(type: 'qr' | 'link', binding: string, req: IncomingMessage, link?: Link): Request {
     const createdAt = new Date().toISOString();
-    const request: Request = { binding, view: { id: this.hooks.id(), type, state: 'pending', version: 1, requesterUserAgent: [...(req.headers['user-agent'] ?? 'Browser')].slice(0, 256).join(''), createdAt, expiresAt: link?.view.expiresAt ?? new Date(Date.now() + 300_000).toISOString(), ...(link ? { linkId: link.view.id } : {}) } };
+    const request: Request = { binding, view: { id: this.hooks.id(), type, state: 'pending', version: 1, requesterIp: req.socket.remoteAddress?.replace(/^::ffff:/, '') ?? '', requesterUserAgent: [...(req.headers['user-agent'] ?? 'Browser')].slice(0, 256).join(''), createdAt, expiresAt: link?.view.expiresAt ?? new Date(Date.now() + 300_000).toISOString(), ...(link ? { linkId: link.view.id } : {}) } };
     if (link) {
       for (let number = 0; number < 10000; number++) {
         const code = String(number).padStart(4, '0');

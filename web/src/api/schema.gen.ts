@@ -953,6 +953,11 @@ export interface components {
              */
             version: number;
             /**
+             * @description Full client IP reported by the trusted reverse proxy. Empty for older requests or when unavailable.
+             * @example 203.0.113.42
+             */
+            requesterIp?: string;
+            /**
              * @description Untrusted display text, at most 256 Unicode code points.
              * @example Browser
              */

@@ -52,6 +52,15 @@ func signInBinding(r *http.Request) string {
 	return ""
 }
 
+func signInClientIP(r *http.Request) string {
+	values := r.Header.Values("X-Forwarded-For")
+	if len(values) == 0 {
+		return ""
+	}
+	last := values[len(values)-1]
+	return strings.TrimSpace(last[strings.LastIndexByte(last, ',')+1:])
+}
+
 func signInBindingCookie(value string) string {
 	return (&http.Cookie{Name: signInCookie, Value: value, Path: "/", Secure: true, HttpOnly: true, SameSite: http.SameSiteStrictMode, MaxAge: 600}).String()
 }
@@ -89,7 +98,7 @@ func (s *server) signInApplied(ctx context.Context, effects identity.Effects, er
 }
 
 func signInRequestBody(v identity.SignInRequestView) api.SignInRequest {
-	return api.SignInRequest{Id: v.ID, Type: api.SignInRequestType(v.Type), State: api.SignInRequestState(v.State), LinkId: v.LinkID, Version: v.Version, RequesterUserAgent: v.RequesterUserAgent, CreatedAt: v.CreatedAt, ExpiresAt: v.ExpiresAt, ApprovedAt: v.ApprovedAt, ConsumedAt: v.ConsumedAt}
+	return api.SignInRequest{Id: v.ID, Type: api.SignInRequestType(v.Type), State: api.SignInRequestState(v.State), LinkId: v.LinkID, Version: v.Version, RequesterUserAgent: v.RequesterUserAgent, RequesterIp: v.RequesterIP, CreatedAt: v.CreatedAt, ExpiresAt: v.ExpiresAt, ApprovedAt: v.ApprovedAt, ConsumedAt: v.ConsumedAt}
 }
 
 func signInLinkBody(v identity.SignInLinkView) api.SignInLink {
@@ -156,7 +165,7 @@ func (s *server) BeginSignInRequest(ctx context.Context, req api.BeginSignInRequ
 	s.lifecycle.Lock()
 	defer s.lifecycle.Unlock()
 	r, _ := accountHTTP(ctx)
-	result, effects, err := s.identity.BeginSignInRequest(ctx, req.Body.Token, signInBinding(r), accountToken(ctx), r.UserAgent())
+	result, effects, err := s.identity.BeginSignInRequest(ctx, req.Body.Token, signInBinding(r), accountToken(ctx), r.UserAgent(), signInClientIP(r))
 	if s.signInApplied(ctx, effects, err) {
 		return nil, nil
 	}
@@ -177,7 +186,7 @@ func (s *server) BeginQRSignIn(ctx context.Context, req api.BeginQRSignInRequest
 		return nil
 	}
 
-	result, effects, err := s.identity.BeginQRSignIn(ctx, signInBinding(r), accountToken(ctx), r.UserAgent(), req.Body.Replace, allocate)
+	result, effects, err := s.identity.BeginQRSignIn(ctx, signInBinding(r), accountToken(ctx), r.UserAgent(), req.Body.Replace, allocate, signInClientIP(r))
 	if s.signInApplied(ctx, effects, err) {
 		return nil, nil
 	}

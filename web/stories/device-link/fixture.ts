@@ -10,7 +10,7 @@ export function createFixture(scenario: Scenario, responseDelay = 500) {
   const listeners = new Set<() => void>();
   let sequence = 0;
   const makeLink = (): SignInLink => ({ id: `link-${++sequence}`, state: 'open', version: 1, createdAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 300_000).toISOString(), approvalGrantsRecentProof: false, requests: [] });
-  const request = (link: SignInLink, browser = 'Safari on iPhone'): SignInRequest => ({ id: `request-${++sequence}`, linkId: link.id, type: 'link', state: 'pending', version: 1, createdAt: new Date().toISOString(), expiresAt: link.expiresAt, requesterUserAgent: browser });
+  const request = (link: SignInLink, browser = 'Safari on iPhone'): SignInRequest => ({ id: `request-${++sequence}`, linkId: link.id, type: 'link', state: 'pending', version: 1, createdAt: new Date().toISOString(), expiresAt: link.expiresAt, requesterUserAgent: browser, requesterIp: browser.includes('Windows') ? '2001:db8:85a3::8a2e:370:7334' : '203.0.113.42' });
   const link = makeLink();
   if (['enter-code', 'multiple-requests', 'wrong-code', 'approved', 'complete'].includes(scenario)) link.requests = [request(link)];
   if (scenario === 'multiple-requests') link.requests.push(request(link, 'Chrome on Windows'));

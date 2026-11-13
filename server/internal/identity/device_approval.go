@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"net/netip"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -43,6 +44,7 @@ type SignInRequestView struct {
 	LinkID             string
 	Version            int64
 	RequesterUserAgent string
+	RequesterIP        string
 	CreatedAt          time.Time
 	ExpiresAt          time.Time
 	ApprovedAt         *time.Time
@@ -106,7 +108,7 @@ type signInRequest struct {
 
 const (
 	signInLinkColumns    = `id,state,version,created_at,expires_at,identity_id,COALESCE(issuer_session_id,''),token_hash,failed_code_attempts,last_notified_at`
-	signInRequestColumns = `id,type,state,COALESCE(link_id,''),version,requester_user_agent,created_at,expires_at,approved_at,consumed_at,browser_token_hash,qr_token_hash,origin_passkey_credential_id,delivery_ciphertext,COALESCE(code,''),COALESCE(approved_by_session_id,''),COALESCE(created_session_id,''),approver_recent_proof`
+	signInRequestColumns = `id,type,state,COALESCE(link_id,''),version,requester_user_agent,requester_ip,created_at,expires_at,approved_at,consumed_at,browser_token_hash,qr_token_hash,origin_passkey_credential_id,delivery_ciphertext,COALESCE(code,''),COALESCE(approved_by_session_id,''),COALESCE(created_session_id,''),approver_recent_proof`
 )
 
 func readSignInLink(ctx context.Context, q queryer, where string, args ...any) (signInLink, error) {
@@ -145,7 +147,7 @@ func scanSignInRequest(row interface{ Scan(...any) error }) (signInRequest, erro
 	var r signInRequest
 	var created, expires int64
 	var approved, consumed sql.NullInt64
-	err := row.Scan(&r.ID, &r.Type, &r.State, &r.LinkID, &r.Version, &r.RequesterUserAgent, &created, &expires, &approved, &consumed, &r.browser, &r.qrHash, &r.origin, &r.ciphertext, &r.code, &r.approver, &r.resultID, &r.recent)
+	err := row.Scan(&r.ID, &r.Type, &r.State, &r.LinkID, &r.Version, &r.RequesterUserAgent, &r.RequesterIP, &created, &expires, &approved, &consumed, &r.browser, &r.qrHash, &r.origin, &r.ciphertext, &r.code, &r.approver, &r.resultID, &r.recent)
 	r.CreatedAt, r.ExpiresAt = unixTime(created), unixTime(expires)
 	if approved.Valid {
 		r.ApprovedAt = ptr(unixTime(approved.Int64))
@@ -447,6 +449,17 @@ func signInBrowser(browser string) (string, error) {
 	return browser, nil
 }
 
+func signInIP(values []string) string {
+	if len(values) == 0 {
+		return ""
+	}
+	addr, err := netip.ParseAddr(values[0])
+	if err != nil {
+		return ""
+	}
+	return addr.Unmap().WithZone("").String()
+}
+
 func signInUA(ua string) string {
 	ua = strings.ToValidUTF8(ua, "")
 	if utf8.RuneCountInString(ua) > signInUserAgentLimit {
@@ -474,7 +487,7 @@ func (s *Service) newSignInCode(ctx context.Context, tx *sql.Tx, linkID string) 
 	}
 }
 
-func (s *Service) BeginSignInRequest(ctx context.Context, linkToken, browser, currentToken, ua string) (SignInBeginResult, Effects, error) {
+func (s *Service) BeginSignInRequest(ctx context.Context, linkToken, browser, currentToken, ua string, requesterIP ...string) (SignInBeginResult, Effects, error) {
 	var result SignInBeginResult
 	var e Effects
 	browser, err := signInBrowser(browser)
@@ -518,7 +531,7 @@ func (s *Service) BeginSignInRequest(ctx context.Context, linkToken, browser, cu
 			return err
 		}
 		id := opaque()
-		if _, err = tx.ExecContext(ctx, "INSERT INTO account_signin_requests(id,type,state,browser_token_hash,link_id,code,requester_user_agent,created_at,expires_at) VALUES(?,'link','pending',?,?,?,?,?,?)", id, hashToken(browser), l.ID, code, signInUA(ua), s.now().Unix(), l.ExpiresAt.Unix()); err != nil {
+		if _, err = tx.ExecContext(ctx, "INSERT INTO account_signin_requests(id,type,state,browser_token_hash,link_id,code,requester_user_agent,requester_ip,created_at,expires_at) VALUES(?,'link','pending',?,?,?,?,?,?,?)", id, hashToken(browser), l.ID, code, signInUA(ua), signInIP(requesterIP), s.now().Unix(), l.ExpiresAt.Unix()); err != nil {
 			return err
 		}
 		if _, err = tx.ExecContext(ctx, "UPDATE account_signin_links SET last_notified_at=? WHERE id=?", s.now().Unix(), l.ID); err != nil {
@@ -817,7 +830,7 @@ func (s *Service) FinishSignInRequest(ctx context.Context, id, browser, linkToke
 	return result, nil
 }
 
-func (s *Service) BeginQRSignIn(ctx context.Context, browser, currentToken, ua string, replace bool, allocate SignInAllocation) (SignInBeginResult, Effects, error) {
+func (s *Service) BeginQRSignIn(ctx context.Context, browser, currentToken, ua string, replace bool, allocate SignInAllocation, requesterIP ...string) (SignInBeginResult, Effects, error) {
 	var result SignInBeginResult
 	var e Effects
 	if replace && browser == "" {
@@ -873,7 +886,7 @@ func (s *Service) BeginQRSignIn(ctx context.Context, browser, currentToken, ua s
 		if err != nil {
 			return err
 		}
-		if _, err = tx.ExecContext(ctx, "INSERT INTO account_signin_requests(id,type,state,browser_token_hash,qr_token_hash,requester_user_agent,created_at,expires_at) VALUES(?,'qr','pending',?,?,?,?,?)", id, hashToken(browser), hashToken(token), signInUA(ua), now, now+int64(SignInTTL/time.Second)); err != nil {
+		if _, err = tx.ExecContext(ctx, "INSERT INTO account_signin_requests(id,type,state,browser_token_hash,qr_token_hash,requester_user_agent,requester_ip,created_at,expires_at) VALUES(?,'qr','pending',?,?,?,?,?,?)", id, hashToken(browser), hashToken(token), signInUA(ua), signInIP(requesterIP), now, now+int64(SignInTTL/time.Second)); err != nil {
 			return err
 		}
 		r, err := readSignInRequest(ctx, tx, "id=?", id)

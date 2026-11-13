@@ -730,8 +730,12 @@ kbd { min-width: 34px; height: 34px; padding: 0 10px; display: inline-grid; plac
 .device-copy, .device-code-form label { display: flex; flex-direction: column; gap: 10px; font-size: 12px; color: var(--text-2); }
 .device-copy input, .device-code-form input { min-width: 0; width: 100%; height: 50px; border: 0; border-radius: 25px; background: var(--fill); color: var(--text); padding: 0 18px; font-size: 13px; }
 .device-inline-link h4 { font-size: 13px; font-weight: 500; margin-top: 24px; }
-.device-pending { display: flex; align-items: center; gap: 12px; margin-block: 12px; }
-.device-pending p { min-width: 0; flex: 1; font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+.device-pending-list { display: grid; gap: 10px; margin-block: 12px; }
+.device-pending.account-key { flex-direction: row; align-items: center; }
+.device-request-details { min-width: 0; flex: 1; overflow-wrap: anywhere; }
+.device-request-details strong { display: block; font-size: 14px; font-weight: 500; }
+.device-request-details small { display: block; color: var(--text-2); font-size: 13px; margin-top: 4px; }
+.device-pending > button { flex: none; }
 .device-code-form { display: flex; align-items: end; gap: 12px; margin-block: 16px; }
 .device-code-form label { flex: 1; min-width: 0; max-width: 220px; }
 .device-code-form input { font-size: 26px; letter-spacing: .25em; text-align: center; padding-left: calc(18px + .25em); font-variant-numeric: tabular-nums; }
