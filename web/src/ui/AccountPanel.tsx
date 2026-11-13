@@ -48,8 +48,7 @@ export function AccountPanel({ active, onScan, scanFocusRequested, onScanFocused
       {session?.expiresAt && <p className="set-note">{t.account.expires} <time dateTime={session.expiresAt}>{new Date(session.expiresAt).toLocaleString(t.locale)}</time></p>}
       <div className="account-actions">
         {session?.kind === 'guest' && <Button disabled={disabled} onClick={() => { setUpgrade(true); ui.openEntry(); }}>{t.account.upgrade}</Button>}
-        <Button disabled={disabled} onClick={ui.openEntry}>{t.account.switch}</Button>
-        <Button disabled={disabled} onClick={() => {
+        <Button variant="danger" disabled={disabled} onClick={() => {
           setError(''); void ui.run(logout).catch(() => { ui.reportError(t.account.signOutUnknown); });
         }}>{t.account.signOut}</Button>
       </div>

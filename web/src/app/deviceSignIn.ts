@@ -295,7 +295,7 @@ function createIssuer() {
       check(version);
       if (error instanceof ApiError && error.code === 'invalid_proof') {
         ids.delete(id); stoppedIds.add(id);
-        update({ urls: Object.fromEntries(Object.entries(state.urls).filter(([key]) => key !== id)), problem: problem(error) });
+        update({ links: state.links.filter(link => link.id !== id), urls: Object.fromEntries(Object.entries(state.urls).filter(([key]) => key !== id)), problem: problem(error) });
       }
       else throw error;
     }

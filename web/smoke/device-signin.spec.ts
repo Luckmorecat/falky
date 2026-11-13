@@ -44,6 +44,37 @@ test('QR retry recovers an initial network failure and a lost browser binding', 
   } finally { await receiver.context().close(); }
 });
 
+for (const width of [390, 1440]) {
+  test(`scanner overlays Settings without reopening it at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 844 });
+    await issuer(page);
+    const settings = page.locator('dialog.settings');
+    const scan = page.getByRole('button', { name: 'Scan QR code', exact: true });
+    await settings.evaluate(dialog => {
+      dialog.dataset.openChanges = '0';
+      new MutationObserver(records => {
+        dialog.dataset.openChanges = String(Number(dialog.dataset.openChanges) + records.length);
+      }).observe(dialog, { attributes: true, attributeFilter: ['open'] });
+    });
+    for (const dismissal of ['back', 'escape']) {
+      await scan.click();
+      await expect(page.locator('.device-dialog-scanner')).toHaveJSProperty('open', true);
+      await expect(settings).toHaveJSProperty('open', true);
+      await expect(page.getByRole('button', { name: 'Use camera', exact: true })).toBeVisible();
+      await page.getByRole('button', { name: 'Back to Account', exact: true }).focus();
+      await page.keyboard.press('Tab');
+      await expect(page.getByRole('button', { name: 'Use camera', exact: true })).toBeFocused();
+      if (dismissal === 'back') await page.getByRole('button', { name: 'Back to Account', exact: true }).click();
+      else await page.keyboard.press('Escape');
+      await expect(page.locator('.device-dialog-scanner')).toHaveCount(0);
+      await expect(settings).toHaveJSProperty('open', true);
+      await expect(settings).toHaveAttribute('data-open-changes', '0');
+      await expect(page.getByRole('tab', { name: 'Account', exact: true })).toHaveAttribute('aria-selected', 'true');
+      await expect(scan).toBeFocused();
+    }
+  });
+}
+
 test('QR detection only previews; explicit approval delivers the candidate cookie and preserves exact issuer session', async ({ page, browser, context }) => {
   const { state, identity } = await issuer(page);
   await expect(page.getByRole('tab', { name: 'Account', exact: true })).toBeFocused();
@@ -52,8 +83,10 @@ test('QR detection only previews; explicit approval delivers the candidate cooki
   try {
     const qr = await requestQR(receiver, app.url);
     await page.getByRole('button', { name: 'Scan QR code', exact: true }).click();
-    await expect(page.getByRole('dialog', { name: 'Settings', exact: true })).not.toBeVisible();
-    await expect(page.locator('.device-scanner-identity')).toContainText('Taylor');
+    await expect(page.locator('dialog.settings')).toHaveJSProperty('open', true);
+    await expect(page.locator('.device-dialog-scanner')).toHaveJSProperty('open', true);
+    await expect(page.locator('.device-scanner')).not.toContainText('Your passkey account');
+    await expect(page.locator('.device-scanner')).not.toContainText('Taylor');
     await expect(page.getByRole('textbox', { name: 'Paste QR link', exact: true })).toHaveCount(0);
     await page.getByRole('button', { name: 'Use camera', exact: true }).click();
     await page.evaluate(url => dispatchEvent(new CustomEvent('falky:mock-qr', { detail: url })), qr.url);
@@ -79,8 +112,8 @@ test('QR detection only previews; explicit approval delivers the candidate cooki
     await page.getByRole('button', { name: 'Back to Account', exact: true }).click();
     await expect(page.getByRole('button', { name: 'Scan QR code', exact: true })).toBeFocused();
     await page.getByRole('button', { name: 'Scan QR code', exact: true }).click();
-    await page.getByRole('button', { name: 'Create a sign-in link instead', exact: true }).click();
-    await expect(page.getByRole('textbox', { name: 'Sign-in link', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Create a sign-in link instead', exact: true })).toHaveCount(0);
+    await page.getByRole('button', { name: 'Back to Account', exact: true }).click();
     await expect(page.locator('.device-scanner')).toHaveCount(0);
   } finally { await receiver.context().close(); }
 });
@@ -170,7 +203,7 @@ test('server cooldown prevents allocation loops and fifth wrong code revokes the
         expect((await rejected).status()).toBe(403);
         if (attempt < 4) await expect(page.getByRole('button', { name: 'Approve sign-in', exact: true })).toBeEnabled();
       }
-      await expect(page.getByText('Link revoked.', { exact: true })).toBeVisible();
+      await expect(page.getByRole('dialog', { name: 'Sign-in link', exact: true })).not.toBeVisible();
       await expect(page.getByRole('textbox', { name: 'Four-digit code', exact: true })).toHaveCount(0);
       await expect(waiting.getByRole('heading', { name: /cancelled|unavailable/i })).toBeVisible();
     } finally { await waiting.context().close(); }
@@ -427,9 +460,9 @@ test('an issuer can revoke an approved link before the receiver consumes it', as
     const code = await receiveLink(receiver, await createLink(page));
     await page.getByRole('textbox', { name: 'Four-digit code', exact: true }).fill(code);
     await page.getByRole('button', { name: 'Approve sign-in', exact: true }).click();
-    await expect(page.getByText('Sign-in approved. Waiting for the other browser.', { exact: true })).toBeVisible();
+    await expect(page.getByRole('dialog', { name: 'Sign-in link', exact: true }).getByText('Sign-in approved. Waiting for the other browser.', { exact: true })).toBeVisible();
     await page.getByRole('button', { name: 'Revoke link', exact: true }).click();
-    await expect(page.getByText('Link revoked.', { exact: true })).toBeVisible();
+    await expect(page.getByRole('dialog', { name: 'Sign-in link', exact: true })).not.toBeVisible();
     await expect(receiver.getByRole('heading', { name: /cancelled|unavailable/i })).toBeVisible();
     expect((await session(receiver, app.url)).kind).not.toBe('account');
   } finally { await receiver.context().close(); }
@@ -451,7 +484,8 @@ test('expired issuer hints do not pollute a replacement link with repeated unava
     const rejected = page.waitForResponse(r => r.url() === oldPath && r.status() === 403);
     await page.request.post(app.url + '/__mock/action', { data: { type: 'device-expire', linkId: old.link.id } });
     await rejected;
-    await expect(page.getByRole('alert')).toBeVisible();
+    await expect(page.getByRole('dialog', { name: 'Sign-in link', exact: true })).not.toBeVisible();
+    await expect(page.getByRole('button', { name: 'Create sign-in link', exact: true })).toBeEnabled();
     const oldReads = reads.get(oldPath);
     const replacement = page.waitForResponse(r => r.request().method() === 'POST' && r.url().endsWith('/accounts/signin-links'));
     const nextURL = await createLink(page);
@@ -464,58 +498,107 @@ test('expired issuer hints do not pollute a replacement link with repeated unava
   } finally { await receiver.context().close(); }
 });
 
-for (const width of [1440, 390]) test(`sign-in link cycles reuse one reserved area at ${width}px`, async ({ page }) => {
-  await page.setViewportSize({ width, height: 1000 });
-  await issuer(page);
-  await page.getByRole('dialog', { name: 'Settings', exact: true }).evaluate(async element => {
-    await Promise.all(element.getAnimations().map(animation => animation.finished));
-  });
-  await page.clock.install();
-  const area = page.locator('.device-link-area');
-  const revoked = page.getByRole('status').filter({ hasText: 'Link revoked.' });
-  const initialHeight = await area.evaluate(element => (element as HTMLElement).offsetHeight);
-  const expectStableArea = async () => {
-    expect(await area.evaluate(element => (element as HTMLElement).offsetHeight)).toBe(initialHeight);
-    await expect(page.locator('.device-inline-link')).toHaveCount(0);
-  };
-  await createLink(page);
-  expect(await area.evaluate(element => (element as HTMLElement).offsetHeight)).toBe(initialHeight);
-  await page.route('**/api/accounts/signin-links/*', async route => {
-    if (route.request().method() === 'DELETE') await route.abort('failed');
-    else await route.continue();
-  });
-  await page.getByRole('button', { name: 'Revoke link', exact: true }).click();
-  await expect(page.getByRole('alert')).toBeVisible();
-  await expect(page.getByRole('textbox', { name: 'Sign-in link', exact: true })).toBeVisible();
-  await expect(revoked).toHaveCount(0);
-  await page.unroute('**/api/accounts/signin-links/*');
-
-  for (let cycle = 0; cycle < 3; cycle++) {
-    await page.getByRole('button', { name: 'Revoke link', exact: true }).click();
-    await expect(revoked).toHaveCount(1);
-    await expectStableArea();
-    if (cycle === 0) {
-      await page.clock.runFor(2000);
-      await expect(revoked).toHaveClass(/fading/);
-      await page.clock.runFor(200);
-      await expect(revoked).toHaveCount(0);
-      await expectStableArea();
-    }
-    if (cycle < 2) {
-      await createLink(page);
-      await expect(revoked).toHaveCount(0);
-      await page.clock.runFor(2300);
-      await expect(page.getByRole('textbox', { name: 'Sign-in link', exact: true })).toBeVisible();
-      await expect(page.locator('.device-inline-link')).toHaveCount(1);
-    }
-  }
-  await page.getByRole('button', { name: 'Close', exact: true }).click();
-  await accountSettings(page);
-  await expect(revoked).toHaveCount(0);
-  await expectStableArea();
-  await createLink(page);
-  await expect(page.locator('.device-inline-link')).toHaveCount(1);
-  await createLink(page);
-  await expect(page.locator('.device-inline-link')).toHaveCount(1);
-  await expect(revoked).toHaveCount(0);
+for (const width of [1440, 390]) test(`sign-in drawer keeps settings stable and reopens for a new request at ${width}px`, async ({ page, browser }) => {
+  await page.setViewportSize({ width, height: 844 });
+  const { state, identity } = await issuer(page);
+  const settings = page.getByRole('dialog', { name: 'Settings', exact: true });
+  const drawer = page.getByRole('dialog', { name: 'Sign-in link', exact: true });
+  const initialHeight = await settings.evaluate(element => (element as HTMLElement).scrollHeight);
+  const slot = settings.locator('.device-link-slot');
+  const initialSlotHeight = await slot.evaluate(element => (element as HTMLElement).offsetHeight);
+  const link = await createLink(page);
+  await expect(drawer).toBeVisible();
+  const linkField = drawer.getByRole('textbox', { name: 'Sign-in link', exact: true });
+  const copy = drawer.getByRole('button', { name: 'Copy link', exact: true });
+  const revoke = drawer.getByRole('button', { name: 'Revoke link', exact: true });
+  await expect(revoke).toHaveClass(/danger/);
+  await expect(drawer.getByRole('button', { name: /Create/ })).toHaveCount(0);
+  await drawer.evaluate(async element => { await Promise.all(element.getAnimations().map(animation => animation.finished)); });
+  const linkBox = await linkField.boundingBox();
+  const copyBox = await copy.boundingBox();
+  expect(linkBox!.y + linkBox!.height).toBeLessThanOrEqual(copyBox!.y);
+  expect(await drawer.evaluate(element => element.contains(document.activeElement))).toBe(true);
+  await drawer.getByRole('button', { name: 'Close', exact: true }).click();
+  await expect(drawer).not.toBeVisible();
+  const settingsHeight = await settings.evaluate(element => (element as HTMLElement).scrollHeight);
+  expect(settingsHeight).toBe(initialHeight);
+  expect(await slot.evaluate(element => (element as HTMLElement).offsetHeight)).toBe(initialSlotHeight);
+  await expect(settings.getByRole('button', { name: /Create.*link/ })).toHaveCount(0);
+  const item = settings.locator('.device-link-item');
+  await expect(item).toContainText('Expires in');
+  await expect(item.locator('time')).toHaveText(/^[0-9]+:[0-9]{2}$/);
+  await settings.screenshot({ path: `screenshots/sign-in-link-item-${width}.png` });
+  await expect(item).toBeFocused();
+  await item.click();
+  await expect(drawer).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(drawer).not.toBeVisible();
+  await expect(settings).toBeVisible();
+  await item.click();
+  await expect(drawer).toBeVisible();
+  await drawer.evaluate(async element => { await Promise.all(element.getAnimations().map(animation => animation.finished)); });
+  const underlyingTab = settings.getByRole('tab', { name: 'Profile', exact: true });
+  const underlyingBox = await underlyingTab.boundingBox();
+  let creations = 0;
+  page.on('request', request => { if (request.method() === 'POST' && request.url().endsWith('/accounts/signin-links')) creations++; });
+  await page.mouse.click(underlyingBox!.x + underlyingBox!.width / 2, underlyingBox!.y + underlyingBox!.height / 2);
+  await expect(drawer).not.toBeVisible();
+  await expect(settings).toBeVisible();
+  expect(creations).toBe(0);
+  await expect(settings.getByRole('tab', { name: 'Account', exact: true })).toHaveAttribute('aria-selected', 'true');
+  await item.click();
+  await expect(drawer).toBeVisible();
+  await drawer.evaluate(async element => { await Promise.all(element.getAnimations().map(animation => animation.finished)); });
+  await drawer.click({ position: { x: 8, y: 8 } });
+  await expect(drawer).toBeVisible();
+  await drawer.getByRole('button', { name: 'Close', exact: true }).click();
+  await expect(drawer).not.toBeVisible();
+  await expect(settings).toBeVisible();
+  await page.waitForTimeout(3200);
+  await expect(drawer).not.toBeVisible();
+  await settings.getByRole('button', { name: 'Close', exact: true }).click();
+  const receiver = await devicePage(browser, state);
+  const second = await devicePage(browser, state);
+  try {
+    const code = await receiveLink(receiver, link);
+    await expect(drawer).toBeVisible();
+    await expect(settings).not.toBeVisible();
+    await expect(drawer.getByRole('textbox', { name: 'Four-digit code', exact: true })).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(drawer).not.toBeVisible();
+    await receiveLink(second, link);
+    await expect(drawer).toBeVisible();
+    await expect(drawer.locator('.device-pending')).toHaveCount(2);
+    await drawer.getByRole('textbox', { name: 'Four-digit code', exact: true }).fill(code);
+    await drawer.getByRole('button', { name: 'Approve sign-in', exact: true }).click();
+    await expect(receiver.getByRole('heading', { name: 'You’re in.', exact: true })).toBeVisible();
+    expect((await session(receiver, app.url)).visitor.id).toBe(identity.visitor.id);
+    await drawer.getByRole('button', { name: 'Close', exact: true }).click();
+    await expect(drawer).not.toBeVisible();
+    await accountSettings(page);
+    expect(await settings.evaluate(element => (element as HTMLElement).scrollHeight)).toBe(settingsHeight);
+    await createLink(page);
+    await page.route('**/api/accounts/signin-links/*', async route => {
+      if (route.request().method() === 'DELETE') await route.abort('failed');
+      else await route.continue();
+    });
+    await drawer.getByRole('button', { name: 'Revoke link', exact: true }).click();
+    await expect(drawer.getByRole('alert')).toBeVisible();
+    await expect(drawer.getByRole('textbox', { name: 'Sign-in link', exact: true })).toBeVisible();
+    await page.unroute('**/api/accounts/signin-links/*');
+    await drawer.getByRole('button', { name: 'Revoke link', exact: true }).click();
+    await expect(drawer).not.toBeVisible();
+    await expect(settings.getByRole('button', { name: 'Create sign-in link', exact: true })).toBeVisible();
+    expect(await settings.evaluate(element => (element as HTMLElement).scrollHeight)).toBe(initialHeight);
+    const expiring = await createLink(page);
+    expect(expiring).toBeTruthy();
+    await drawer.getByRole('button', { name: 'Close', exact: true }).click();
+    await expect(drawer).not.toBeVisible();
+    await page.clock.install();
+    await page.clock.fastForward(300_001);
+    await expect(item).toHaveCount(0);
+    await expect(settings.getByRole('button', { name: 'Create sign-in link', exact: true })).toBeEnabled();
+    expect(await slot.evaluate(element => (element as HTMLElement).offsetHeight)).toBe(initialSlotHeight);
+    expect(await settings.evaluate(element => (element as HTMLElement).scrollHeight)).toBe(initialHeight);
+  } finally { await receiver.context().close(); await second.context().close(); }
 });
