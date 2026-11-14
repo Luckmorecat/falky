@@ -140,6 +140,8 @@ export function Chat({ room }: { room: Room | null }) {
   /** Older pages wait until the saved place has been applied, so the first paint at the top does not fetch them. */
   const placed = useRef(false);
   const placedRoom = useRef<string | null>(null);
+  /** The layout the feed was last placed for: scrolling alone never moves it, only a change of what is laid out. */
+  const placedLayout = useRef('');
   const adjusting = useRef(false);
   const [scrollPos, setScrollPos] = useState(0);
   const [measured, setMeasured] = useState(0);
@@ -218,6 +220,17 @@ export function Chat({ room }: { room: Room | null }) {
         return;
       }
       const place = rememberedPlace(room.id) ?? { following: true, anchor: null };
+      const layout = `${room.id}|${laid.scrollHeight}|${height}|${width}`;
+      // A scroll in flight is ahead of the place noted at its last event; setting it back would pull the feed against the hand.
+      if (placed.current && placedLayout.current === layout) {
+        const now = el.scrollTop;
+        if (Math.abs(scrollRef.current - now) > 0.5) {
+          scrollRef.current = now;
+          setScrollPos(now);
+        }
+        return;
+      }
+      placedLayout.current = layout;
       const max = Math.max(0, laid.scrollHeight - height);
       const next = place.following ? max : place.anchor ? scrollToAnchor(keys, laid.tops, place.anchor, max) : null;
       setAtBottomNow((prev) => (prev === place.following ? prev : place.following));
