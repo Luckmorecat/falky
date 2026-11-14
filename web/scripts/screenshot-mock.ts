@@ -174,7 +174,7 @@ Existing browser: PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/path/to/chromium`);
       if (preset === 'chat') {
         // The chat button is hidden on wide screens; the app's shortcut works in both layouts.
         await page.keyboard.press('Slash');
-        await expect(page.locator('.chat-btn')).toHaveAttribute('aria-expanded', 'true');
+        await expect(page.locator('.dock-chat')).toHaveAttribute('aria-expanded', 'true');
       }
       if (preset === 'voice' || preset === 'screen-share') {
         await page.getByRole('button', { name: t.join, exact: true }).click();

@@ -51,9 +51,6 @@ function useWindowSize(): { w: number; h: number } {
   return size;
 }
 
-/** The width of --chat in styles.css. */
-const CHAT_WIDTH = 340;
-
 export function Stage({ room, background }: { room: Room; background?: RefObject<LiveBackgroundHandle | null> }) {
   const people = usePeople(room);
   const { w, h } = useWindowSize();
@@ -62,18 +59,14 @@ export function Stage({ room, background }: { room: Room; background?: RefObject
   const [picked, setPicked] = useState<string | null>(null);
   const shown = shares.find((p) => p.id === picked) ?? shares[0] ?? null;
 
-  // The chat comes in over a page that does not move, so nothing may stand where
-  // it lands: blocks stay centred with its width kept free on both sides, and a
-  // shared screen, which wants all the room it can get, stands left of it.
-  const width = narrow ? w - 24 : w - 2 * (CHAT_WIDTH + 24);
-  const shareRoom = narrow ? w - 24 : w - CHAT_WIDTH - 48;
+  const width = narrow ? w - 24 : w - 48;
   const height = h - (narrow ? 96 : 112) - (narrow ? 104 : 128) - 16;
   const gap = people.length > 4 ? 12 : 16;
   const miniSize = narrow ? 76 : 104;
   const fit = fitBlocks(people.length, width, height, gap, 460);
   const size = shown ? miniSize : fit.size;
   const gridWidth = shown ? undefined : fit.columns * size + (fit.columns - 1) * gap;
-  const shareWidth = Math.min(shareRoom, (height - miniSize - 18) * (16 / 9));
+  const shareWidth = Math.min(width, (height - miniSize - 18) * (16 / 9));
   const colours = useApp((s) => s.colours);
 
   const grid = useRef<HTMLDivElement>(null);

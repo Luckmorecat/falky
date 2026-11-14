@@ -1,7 +1,6 @@
 .stage { flex: 1; min-height: 0; width: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px; padding: 0 24px;
   transition: transform 340ms var(--ease-drawer), opacity 220ms ease; }
 .rooms-open .stage { transform: translateY(52px) scale(.9); opacity: .5; }
-.stage.with-share { padding-right: calc(var(--chat) + 24px); }
 .grid { display: flex; flex-wrap: wrap; gap: var(--gap, 16px); justify-content: center; align-content: center; }
 .stage-empty { text-align: center; max-width: 340px; }
 .stage-empty h2 { font-size: 24px; font-weight: 500; letter-spacing: -.015em; margin-bottom: 4px; }

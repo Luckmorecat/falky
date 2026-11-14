@@ -50,10 +50,10 @@ for (const width of [1440, 390]) {
     await expect(page.getByRole('dialog')).toBeHidden();
     await selectableVersion(label);
     if (width === 390) {
-      await page.locator('.chat-btn').click();
+      await page.locator('.dock-chat').click();
       await expect(page.locator('.chat')).toBeVisible();
       await expect(label).toHaveCount(0);
-      await page.locator('.chat-btn').click();
+      await page.locator('.dock-chat').click();
       await selectableVersion(label);
     }
     await page.request.post(`${app.url}/__mock/action`, { data: { type: 'revoke' } });

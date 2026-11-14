@@ -212,19 +212,19 @@ Or set PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/path/to/chromium.`);
         };
         if (values.flow === 'chat-settings') {
           await page.mouse.move(0, 0);
-          await page.locator('.chat-btn[aria-expanded="false"]').waitFor({ state: 'attached' });
+          await page.locator('.dock-chat[aria-expanded="false"]').waitFor({ state: 'attached' });
           await action('open-chat', () => page.keyboard.press('Slash'));
-          await expect(page.locator('.chat-btn')).toHaveAttribute('aria-expanded', 'true');
+          await expect(page.locator('.dock-chat')).toHaveAttribute('aria-expanded', 'true');
           await action('type-draft', () => page.locator('.composer textarea').pressSequentially('Performance check', { delay: 30 }));
           await action('clear-draft', async () => {
             await page.locator('.composer textarea').press('ControlOrMeta+A');
             await page.locator('.composer textarea').press('Backspace');
           });
           await action('close-chat', async () => {
-            if (await page.locator('.chat-btn').isVisible()) await page.locator('.chat-btn').click();
+            if (await page.locator('.dock-chat').isVisible()) await page.locator('.dock-chat').click();
             else await page.locator('.topbar .mark').click();
           });
-          await expect(page.locator('.chat-btn')).toHaveAttribute('aria-expanded', 'false');
+          await expect(page.locator('.dock-chat')).toHaveAttribute('aria-expanded', 'false');
           await action('open-settings', () => page.locator('.dock button[aria-haspopup="dialog"]').click());
           await expect(page.locator('dialog.settings')).toBeVisible();
           await action('close-settings', () => page.keyboard.press('Escape'));

@@ -159,7 +159,7 @@ test.describe('live background', () => {
     await page.mouse.move(1400, 950);
     await expect(page.locator('body')).not.toHaveClass(/rooms-open/);
     await page.setViewportSize({ width: 390, height: 844 });
-    const chatButton = page.locator('.chat-btn');
+    const chatButton = page.locator('.dock-chat');
     if (await chatButton.getAttribute('aria-expanded') === 'true') await chatButton.click();
     await expect(page.locator('.chat')).toBeHidden();
     await expect.poll(sourceError).toBeLessThan(1);

@@ -1,6 +1,6 @@
-import { type Ref, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { Attachment, Message, Room } from '../api/client';
-import { addFiles, discardMessage, loadOlder, markLatestRead, postMessage, retryMessage, setChatOpen } from '../app/controller';
+import { addFiles, discardMessage, loadOlder, markLatestRead, postMessage, retryMessage, setChatOpen, voice } from '../app/controller';
 import { shortcuts } from '../app/shortcuts';
 import { getState, useApp } from '../app/store';
 import { atBottom, followingLatest, rememberedPlace, rememberPlace, scrollToAnchor, sliceRange, stack, type Anchor } from '../chat/place';
@@ -13,6 +13,7 @@ import { ComposerTray, Gallery, type OpenImage } from './Attachments';
 import { IconButton } from './IconButton';
 import { Icon } from './Icon';
 import { Lightbox, type ViewerItem } from './Lightbox';
+import { Orb } from './Orb';
 import { useDrawerLayout } from './useDrawerLayout';
 import './Chat.css';
 
@@ -60,6 +61,20 @@ function textAnchor(el: HTMLElement): Anchor | null {
   return { key, offset: rowTop - edge, pad: text.getBoundingClientRect().top - rowTop };
 }
 
+const talkFns = new Map<string, () => number>();
+/** How loud someone is in voice right now, so their mark in the chat moves as they talk. One per person, so orbs are not rebuilt. */
+function talkOf(visitorId: string): () => number {
+  let fn = talkFns.get(visitorId);
+  if (!fn) {
+    fn = () => {
+      const person = getState().voice.people.find((p) => p.visitorId === visitorId);
+      return person && !person.muted && !person.deafened ? voice.level(person.id) : 0;
+    };
+    talkFns.set(visitorId, fn);
+  }
+  return fn;
+}
+
 function Body({ text }: { text: string }) {
   return (
     <div className="msg-text">
@@ -73,6 +88,7 @@ const MessageRow = memo(function MessageRow({ message, own, continued, lead, pal
     <article className={`msg${own ? ' own' : ''}${continued ? ' cont' : ''}${lead ? ' lead' : ''}`} style={paletteStyle(palette)}>
       {!continued && (
         <div className="msg-meta">
+          <span className="msg-avatar"><Orb seed={message.authorId} palette={palette} level={talkOf(message.authorId)} /></span>
           <span className="msg-author">{message.authorName}</span>
           <time className="msg-time" dateTime={message.createdAt}>{timeOf(message.createdAt)}</time>
         </div>
@@ -83,10 +99,10 @@ const MessageRow = memo(function MessageRow({ message, own, continued, lead, pal
   );
 });
 
-function PendingRow({ pending, continued, lead, name, palette }: { pending: PendingMessage; continued: boolean; lead: boolean; name: string; palette: PaletteName | undefined }) {
+function PendingRow({ pending, continued, lead, name, seed, palette }: { pending: PendingMessage; continued: boolean; lead: boolean; name: string; seed: string; palette: PaletteName | undefined }) {
   return (
     <article className={`msg own pending${continued ? ' cont' : ''}${lead ? ' lead' : ''}`} style={paletteStyle(palette)}>
-      {!continued && <div className="msg-meta"><span className="msg-author">{name}</span></div>}
+      {!continued && <div className="msg-meta"><span className="msg-avatar"><Orb seed={seed} palette={palette} level={talkOf(seed)} /></span><span className="msg-author">{name}</span></div>}
       {pending.attachments.length > 0 && <Gallery attachments={pending.attachments} local />}
       {pending.body.trim() && <Body text={pending.body} />}
       <div className={`msg-state${pending.failed ? ' err' : ''}`}>
@@ -103,25 +119,15 @@ function PendingRow({ pending, continued, lead, name, palette }: { pending: Pend
 }
 
 /**
- * Always on the page, mostly past its right edge, with the start of its lines
- * showing and blurring away. A mouse anywhere over the strip it comes into, or
- * focus in it, brings it in; only then does it count as read. It has no
- * background and nothing else moves, so the page's dots stay and the interface
- * keeps out of its way for good. The strip itself stands still, so the chat
- * sliding under the mouse cannot make it flicker. On a phone there is no hover,
- * so it opens over the page by a button.
+ * Opened by its button in the dock, like the other controls, and only then
+ * counted as read. With a mouse it is a card standing over the dock that Escape
+ * or a click elsewhere puts away; on a phone it covers the page.
  */
-export function Chat({ room, unreadCounterRef }: { room: Room | null; unreadCounterRef?: Ref<HTMLSpanElement> }) {
+export function Chat({ room }: { room: Room | null }) {
   const open = useApp((s) => s.chatOpen);
   const lang = useApp((s) => s.settings.language);
-  const unread = useApp((s) => (s.viewedRoomId ? (s.chats[s.viewedRoomId]?.unread ?? 0) : 0));
   const drawer = useDrawerLayout();
-  const aside = useRef<HTMLElement>(null);
-  const hovering = useRef(false);
-  const settling = useRef<ReturnType<typeof setTimeout> | null>(null);
-  /** Someone wrote while the chat is back: it shows itself for a moment. */
-  const [nudged, setNudged] = useState(false);
-  const lastSeen = useRef<{ roomId?: string; messageId?: string }>({});
+  const strip = useRef<HTMLDivElement>(null);
   const chat = useApp((s) => (room ? s.chats[room.id] : undefined));
   const newAfterId = useApp((s) => s.newAfterId);
   const visitor = useApp((s) => s.visitor);
@@ -182,7 +188,7 @@ export function Chat({ room, unreadCounterRef }: { room: Room | null; unreadCoun
 
   useLayoutEffect(() => {
     const el = feed.current;
-    if (!el || !room || (drawer && !open)) return;
+    if (!el || !room || !open) return;
     const measure = () => {
       if (placedRoom.current !== room.id) {
         placedRoom.current = room.id;
@@ -250,7 +256,7 @@ export function Chat({ room, unreadCounterRef }: { room: Room | null; unreadCoun
 
   useEffect(() => {
     const el = feed.current;
-    if (!el || (drawer && !open)) return;
+    if (!el || !open) return;
     let cancel: (() => void) | undefined;
     const measure = () => {
       const style = getComputedStyle(el);
@@ -270,45 +276,29 @@ export function Chat({ room, unreadCounterRef }: { room: Room | null; unreadCoun
   }, [room?.id, open, drawer]);
 
   useEffect(() => {
-    if (open && drawer && matchMedia('(pointer: fine)').matches) input.current?.focus({ preventScroll: true });
-  }, [open, room?.id, drawer]);
+    if (!open || !matchMedia('(pointer: fine)').matches) return;
+    // The page shows the chat a frame later, from Main's effect.
+    const id = requestAnimationFrame(() => input.current?.focus({ preventScroll: true }));
+    return () => cancelAnimationFrame(id);
+  }, [open, room?.id]);
 
   const newest = chat?.messages.at(-1);
+
+  // The card goes away when the person turns to the page, not while they look at a picture from it or use the dock.
   useEffect(() => {
-    const before = lastSeen.current;
-    lastSeen.current = { roomId: room?.id, messageId: newest?.id };
-    if (open || before.roomId !== room?.id) {
-      setNudged(false);
-      return;
-    }
-    // The first page of history is not news.
-    if (!newest || !before.messageId || before.messageId === newest.id || newest.authorId === visitor?.id) return;
-    setNudged(true);
-    const id = setTimeout(() => setNudged(false), 4000);
-    return () => clearTimeout(id);
-  }, [room?.id, newest?.id, newest?.authorId, open, visitor?.id]);
-
-  useEffect(() => () => {
-    if (settling.current) clearTimeout(settling.current);
-  }, []);
-
-  /** Forward at once when wanted; back only after a moment, so a passing mouse does no harm. */
-  const settle = () => {
-    if (drawer) return;
-    if (settling.current) clearTimeout(settling.current);
-    const wanted = () => hovering.current || viewingRef.current || !!aside.current?.contains(document.activeElement);
-    if (wanted()) {
-      if (!getState().chatOpen) setChatOpen(true);
-      return;
-    }
-    settling.current = setTimeout(() => {
-      if (!wanted() && getState().chatOpen) setChatOpen(false);
-    }, 280);
-  };
+    if (!open) return;
+    const away = (e: PointerEvent) => {
+      const target = e.target as Element | null;
+      if (viewingRef.current || strip.current?.contains(target) || target?.closest('.dock, dialog')) return;
+      setChatOpen(false);
+    };
+    addEventListener('pointerdown', away);
+    return () => removeEventListener('pointerdown', away);
+  }, [open]);
 
   const onScroll = () => {
     const el = feed.current;
-    if (!el || !room || (drawer && !open)) return;
+    if (!el || !room || !open) return;
     const top = el.scrollTop;
     if (Math.abs(scrollRef.current - top) <= 0.5) return;
     scrollRef.current = top;
@@ -361,63 +351,63 @@ export function Chat({ room, unreadCounterRef }: { room: Room | null; unreadCoun
     .map((attachment: Attachment) => ({ attachment, authorName: m.authorName, createdAt: m.createdAt }))), [chat?.messages]);
 
   const openImage = useCallback<OpenImage>((id) => setViewing(id), []);
-  const closeViewer = () => {
-    setViewing(null);
-    // The chat stays while the person is still with it.
-    requestAnimationFrame(settle);
-  };
+  const closeViewer = () => setViewing(null);
 
   useEffect(() => { setViewing(null); }, [room?.id]);
 
-  const hasFiles = (e: React.DragEvent) => e.dataTransfer.types.includes('Files');
+  // Files dragged anywhere over the page open the chat and land in it.
+  const roomId = room?.id;
+  useEffect(() => {
+    if (!roomId) return;
+    const files = (e: DragEvent) => !!e.dataTransfer?.types.includes('Files');
+    let depth = 0;
+    const enter = (e: DragEvent) => {
+      if (!files(e)) return;
+      e.preventDefault();
+      depth += 1;
+      setDropping(true);
+      if (!getState().chatOpen) setChatOpen(true);
+    };
+    const over = (e: DragEvent) => {
+      if (!files(e)) return;
+      e.preventDefault();
+      e.dataTransfer!.dropEffect = 'copy';
+    };
+    const leave = (e: DragEvent) => {
+      if (!files(e)) return;
+      depth = Math.max(0, depth - 1);
+      if (!depth) setDropping(false);
+    };
+    const drop = (e: DragEvent) => {
+      if (!files(e)) return;
+      e.preventDefault();
+      depth = 0;
+      setDropping(false);
+      if (e.dataTransfer?.files.length) addFiles(roomId, e.dataTransfer.files);
+      input.current?.focus({ preventScroll: true });
+    };
+    addEventListener('dragenter', enter);
+    addEventListener('dragover', over);
+    addEventListener('dragleave', leave);
+    addEventListener('drop', drop);
+    return () => {
+      removeEventListener('dragenter', enter);
+      removeEventListener('dragover', over);
+      removeEventListener('dragleave', leave);
+      removeEventListener('drop', drop);
+    };
+  }, [roomId]);
+
   const takeFiles = (list: FileList | File[] | null | undefined) => {
     if (room && list && list.length) addFiles(room.id, list);
   };
 
   return (
-    <div
-      className={`chat-strip${nudged ? ' nudge' : ''}`}
-      onPointerEnter={(e) => {
-        if (e.pointerType !== 'mouse') return;
-        hovering.current = true;
-        settle();
-      }}
-      onPointerLeave={(e) => {
-        if (e.pointerType !== 'mouse') return;
-        hovering.current = false;
-        settle();
-      }}
-      onDragEnter={(e) => {
-        if (!room || !hasFiles(e)) return;
-        e.preventDefault();
-        setDropping(true);
-        if (!getState().chatOpen) setChatOpen(true);
-      }}
-      onDragOver={(e) => {
-        if (!room || !hasFiles(e)) return;
-        e.preventDefault();
-        e.dataTransfer.dropEffect = 'copy';
-      }}
-      onDragLeave={(e) => {
-        if (e.currentTarget.contains(e.relatedTarget as Node | null)) return;
-        setDropping(false);
-        settle();
-      }}
-      onDrop={(e) => {
-        if (!hasFiles(e)) return;
-        e.preventDefault();
-        setDropping(false);
-        takeFiles(e.dataTransfer.files);
-        input.current?.focus({ preventScroll: true });
-      }}
-    >
+    <div ref={strip} className="chat-strip">
     <aside
-      ref={aside}
       className="chat"
       aria-label={t.chat}
-      {...(drawer && !open ? { inert: true } : {})}
-      onFocus={settle}
-      onBlur={settle}
+      {...(!open ? { inert: true } : {})}
     >
       <div className="live-msg" aria-live="polite">{live}</div>
       <div className="feed" ref={feed} onScroll={onScroll}>
@@ -436,7 +426,7 @@ export function Chat({ room, unreadCounterRef }: { room: Room | null; unreadCoun
                     : row.kind === 'day' ? <div className="day">{row.label}</div>
                       : row.kind === 'new' ? <div className="new-line">{t.newMessages}</div>
                         : row.kind === 'message' ? <MessageRow message={row.message} own={row.message.authorId === selfId} continued={row.continued} lead={lead} palette={paletteFor(row.message.authorId)} onOpen={openImage} />
-                          : <PendingRow pending={row.pending} continued={row.continued} lead={lead} name={visitor?.name ?? ''} palette={paletteFor(selfId)} />}
+                          : <PendingRow pending={row.pending} continued={row.continued} lead={lead} name={visitor?.name ?? ''} seed={selfId} palette={paletteFor(selfId)} />}
                 </div>
               );
             })}
@@ -444,24 +434,24 @@ export function Chat({ room, unreadCounterRef }: { room: Room | null; unreadCoun
           </>
         )}
       </div>
-      <button
-        className={`to-latest${atBottomNow ? '' : ' show'}`}
-        tabIndex={atBottomNow ? -1 : 0}
-        aria-hidden={atBottomNow}
-        onClick={followBottom}
-      >
-        <Icon name="down" />{t.toLatest}
-      </button>
       {dropping && (
         <div className="drop-zone" aria-hidden="true">
           <div><Icon name="image" />{t.dropImages}</div>
         </div>
       )}
       <div className="composer">
+        <button
+          className={`to-latest${atBottomNow ? '' : ' show'}`}
+          tabIndex={atBottomNow ? -1 : 0}
+          aria-hidden={atBottomNow}
+          onClick={followBottom}
+        >
+          <Icon name="down" />{t.toLatest}
+        </button>
         {room && <ComposerTray roomId={room.id} />}
         {count > MESSAGE_MAX - 400 && <span className={`count${count > MESSAGE_MAX ? ' over' : ''}`}>{count} / {MESSAGE_MAX}</span>}
         <div className="field" data-tip={`${t.focusChat} (${shortcuts.chat.label} · ${shortcuts.chatEnter.label})`}>
-          <IconButton size="small" className="attach" aria-label={t.attachImage} disabled={!room} onClick={() => picker.current?.click()}><Icon name="image" /></IconButton>
+          <IconButton size="small" className="attach" aria-label={t.attachImage} disabled={!room} onClick={() => picker.current?.click()}><Icon name="plus" /></IconButton>
           <input
             ref={picker}
             type="file"
@@ -493,7 +483,7 @@ export function Chat({ room, unreadCounterRef }: { room: Room | null; unreadCoun
             onKeyDown={(e) => {
               if (e.key === 'Escape') {
                 e.currentTarget.blur();
-                if (drawer) setChatOpen(false);
+                setChatOpen(false);
               }
               if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
                 e.preventDefault();
@@ -506,8 +496,6 @@ export function Chat({ room, unreadCounterRef }: { room: Room | null; unreadCoun
       </div>
     </aside>
     {viewing && <Lightbox items={viewerItems} startId={viewing} onClose={closeViewer} />}
-    <div className="chat-veil" aria-hidden="true"><i /><i /><i /><i /><b /><u /></div>
-    {unread > 0 && <div className="chat-hint" aria-hidden="true"><span ref={unreadCounterRef} className="badge">{unread > 99 ? '99+' : unread}</span></div>}
     </div>
   );
 }

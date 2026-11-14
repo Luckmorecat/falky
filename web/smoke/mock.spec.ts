@@ -105,7 +105,7 @@ test('reduced motion opens chat history with tinted own messages without a rende
   await page.goto(app.url);
   await page.locator('.feed .msg').first().waitFor({ state: 'attached' });
   await page.keyboard.press('Slash');
-  await expect(page.locator('.chat-btn')).toHaveAttribute('aria-expanded', 'true');
+  await expect(page.locator('.dock-chat')).toHaveAttribute('aria-expanded', 'true');
   await expect(page.locator('.msg.own').last()).toHaveText('See you shortly!');
   await expect(page.locator('.msg.own').last()).toBeVisible();
   await expect.poll(() => page.locator('.feed').evaluate((el) => Math.abs(el.scrollHeight - el.clientHeight - el.scrollTop))).toBeLessThanOrEqual(1);

@@ -2,9 +2,9 @@
 .dock { position: absolute; left: 50%; bottom: var(--edge); translate: -50% 0; z-index: 6; display: flex; align-items: center; gap: 8px; padding: 10px; border-radius: calc(38px * var(--corner)); isolation: isolate; }
 .dock-bg { position: absolute; inset: 0; border-radius: inherit; z-index: -1; background: var(--raised); }
 .dock .ib { width: 56px; height: 56px; background: var(--fill); }
-.dock .ib[aria-pressed="true"] { background: var(--invert); }
+.dock .ib[aria-pressed="true"], .dock .ib[aria-expanded="true"] { background: var(--invert); color: var(--on-invert); }
 .dock .ib.off { background: var(--danger-bg); }
-@media (hover:hover) and (pointer:fine) { .dock .ib:not(.off):not([aria-pressed="true"]):hover { background: var(--fill-2); } }
+@media (hover:hover) and (pointer:fine) { .dock .ib:not(.off):not([aria-pressed="true"]):not([aria-expanded="true"]):hover { background: var(--fill-2); } }
 .mic-wrap { position: relative; width: 56px; height: 56px; flex: none; display: grid; place-items: center; }
 .dock .mic-wrap .ib:not(.off) { background: var(--invert); color: var(--on-invert); }
 .mic-ring { position: absolute; inset: 0; border-radius: var(--round); background: color-mix(in srgb, var(--invert) 30%, transparent); opacity: 0; will-change: transform, opacity; pointer-events: none; }
