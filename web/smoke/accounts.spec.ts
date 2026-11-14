@@ -1,5 +1,5 @@
 import { readFile } from 'node:fs/promises';
-import { test, expect } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
 import { launchMock } from './launcher';
 import { virtualAuthenticator, authPreferences, registerFixture, acknowledgeKit, accountSettings } from './account-browser';
 
@@ -72,6 +72,7 @@ test('manual recovery supports full and partial paste, keyboard navigation and n
 test('settings add restarts on proof expiry at finish; remove, last-key race, regenerate and close guards preserve chat and voice', async ({ page }) => {
   await authPreferences(page, app.url); const original = await virtualAuthenticator(page);
   await registerFixture(page, app.url); await acknowledgeKit(page);
+  await openChat(page);
   await page.getByRole('textbox', { name: 'Message', exact: true }).fill('keep this draft');
   await page.getByRole('button', { name: 'Join', exact: true }).click();
   await expect(page.getByRole('toolbar')).toBeVisible();
@@ -113,6 +114,7 @@ test('settings add restarts on proof expiry at finish; remove, last-key race, re
 test('guest upgrades retain owner, ready attachment, colour, history and unsent text; another account clears draft and media', async ({ page }) => {
   const initial = await authPreferences(page, app.url, 'populated'); await virtualAuthenticator(page);
   await page.goto(app.url + '/?scenario=populated');
+  await openChat(page);
   await page.getByRole('textbox', { name: 'Message', exact: true }).fill('guest draft stays');
   const roomId = initial.rooms[0]!.id;
   await page.request.post(`${app.url}/api/rooms/${roomId}/messages`, { data: { requestKey: 'guest-history', body: 'Guest historical message' } });
@@ -133,7 +135,7 @@ test('guest upgrades retain owner, ready attachment, colour, history and unsent 
   await page.getByRole('textbox', { name: 'Name', exact: true }).fill('Other account');
   await page.getByRole('button', { name: 'Create your passkey', exact: true }).click(); await expect(kit).toBeVisible();
   expect(await kit.locator('dd').innerText()).not.toBe(initial.visitor!.id); await acknowledgeKit(page);
-  await expect(page.getByRole('textbox', { name: 'Message', exact: true })).toHaveValue('');
+  await expect(page.locator('.composer textarea')).toHaveValue('');
   await expect(page.locator('.tray-item')).toHaveCount(0); await expect(page.getByRole('toolbar')).toHaveCount(0);
   expect((await (await page.request.get(app.url + '/__mock/state')).json()).voiceConnections).toEqual({});
 });
@@ -223,3 +225,8 @@ test('sensitive settings reconcile a shared-cookie account switch before regener
   await expect(page.locator('.account-panel')).toContainText(secondId);
   await expect(kit).not.toBeVisible(); expect(mutations).toBe(0);
 });
+
+async function openChat(page: Page) {
+  await page.locator('.dock-chat').click();
+  await expect(page.locator('body')).toHaveClass(/chat-open/);
+}

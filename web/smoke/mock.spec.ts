@@ -49,6 +49,7 @@ async function english(page: Page) {
   await page.keyboard.press('Escape');
 }
 async function send(page: Page, body: string) {
+  await openChat(page);
   await page.getByRole('textbox', { name: 'Message', exact: true }).fill(body);
   await page.getByRole('button', { name: 'Send', exact: true }).click();
 }
@@ -76,6 +77,7 @@ test('send, retry exactly once, catch up, reload and reset the populated fixture
   await action(page, { type: 'faults', faults: { liveDisconnected: false } });
   await expect(page.getByText('Missed while disconnected', { exact: true })).toBeVisible();
   await page.reload();
+  await openChat(page);
   await expect(page.getByText('Retry this message once', { exact: true })).toHaveCount(1);
   await expect(page.getByText('Browser message survives reload', { exact: true })).toBeVisible();
   await page.request.post(`${app.url}/__mock/reset`, { data: {} });
@@ -296,6 +298,7 @@ test('chat and avatars render the same authoritative colour for each visitor', a
   await english(page);
   await page.request.post(`${app.url}/__mock/reset`, { data: { scenario: 'populated' } });
   await page.reload();
+  await openChat(page);
   await page.locator('.msg').first().waitFor();
   const colours = () => page.evaluate(() => {
     const byName: Record<string, string[]> = {};
@@ -319,6 +322,7 @@ test('entry, history/unread, conflict and reset after revoked or disconnected ac
   await page.getByRole('textbox', { name: "Ім'я", exact: true }).fill('Taylor');
   await page.getByRole('button', { name: 'Увійти як гість', exact: true }).click();
   await english(page);
+  await openChat(page);
   await expect(page.getByText('Welcome back! Try sending a message or joining voice.', { exact: true })).toBeVisible();
   // The first trip to the top loads the older page and keeps the message that was already there.
   // A second trip reaches the newly loaded start, which is the only place that row is mounted.
@@ -332,6 +336,7 @@ test('entry, history/unread, conflict and reset after revoked or disconnected ac
   await action(page, { type: 'message', roomId: lounge, body: 'Unread in Lounge', authorName: 'Sam' });
   await expect(page.getByRole('button', { name: 'Rooms: Games', exact: true }).getByTitle('New messages')).toBeVisible();
   await room(page, 'Lounge');
+  await openChat(page);
   // The room reopens where it was left, at the older history, so the new line is below.
   await page.getByRole('button', { name: 'Latest', exact: true }).click();
   await expect(page.getByText('Unread in Lounge', { exact: true })).toBeVisible();
@@ -352,6 +357,7 @@ test('entry, history/unread, conflict and reset after revoked or disconnected ac
   await page.request.post(`${app.url}/__mock/reset`, { data: { scenario: 'quiet' } });
   await expect(page.getByRole('button', { name: 'Налаштування', exact: true })).toBeVisible();
   await expect(page).toHaveURL(/scenario=quiet/);
+  await openChat(page);
   await expect(page.getByText('Тут ще порожньо', { exact: true })).toBeVisible();
   // Let the old delayed response finish; a fresh page must remain empty.
   await page.waitForTimeout(1600);
@@ -376,6 +382,7 @@ test('two instances in one browser context isolate visitors and survive a fresh 
     await other.keyboard.press('Escape');
     await send(other, 'Only the second instance');
     await page.reload();
+    await openChat(page);
     await expect(page.getByText('Only the first instance', { exact: true })).toBeVisible();
     await expect(page.getByText('Only the second instance', { exact: true })).toHaveCount(0);
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
@@ -385,6 +392,7 @@ test('two instances in one browser context isolate visitors and survive a fresh 
     await page.request.post(`${app.url}/__mock/reset`, { data: {} });
     await expect(page.getByRole('button', { name: 'Налаштування', exact: true })).toBeVisible();
     await other.reload();
+    await openChat(other);
     await expect(other.getByText('Only the second instance', { exact: true })).toBeVisible();
     await other.getByRole('button', { name: 'Settings', exact: true }).click();
     await settingsTab(other, 'Profile');
@@ -411,12 +419,13 @@ test('two instances in one browser context isolate visitors and survive a fresh 
 });
 
 async function openChat(page: Page) {
-  await page.mouse.move(1400, 420);
+  const chat = page.locator('.dock-chat');
+  if (await chat.getAttribute('aria-expanded') !== 'true') await chat.click();
   await expect(page.locator('body')).toHaveClass(/chat-open/);
 }
 
 async function closeChat(page: Page) {
-  await page.mouse.move(280, 420);
+  await page.locator('.dock-chat').click();
   await expect(page.locator('body')).not.toHaveClass(/chat-open/);
 }
 

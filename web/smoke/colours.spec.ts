@@ -66,7 +66,7 @@ test('tabs with different loaded history agree on duplicate colours, live recolo
   try {
     await other.goto(app.url);
     await page.bringToFront();
-    await page.keyboard.press('Slash');
+    await page.locator('.dock-chat').click();
     await expect(page.getByText('Welcome back! Try sending a message or joining voice.', { exact: true })).toBeVisible();
     const older = page.waitForResponse((response) => response.url().includes('/messages?before='), { timeout: 10_000 });
     await page.locator('.feed').evaluate((el) => { el.scrollTop = 0; }); await older;
