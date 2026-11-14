@@ -20,7 +20,7 @@ async function openChat(page: Page) {
   await page.goto(app.url);
   await page.locator('.feed .msg').first().waitFor({ state: 'attached' });
   await page.keyboard.press('Slash');
-  await expect(page.locator('.chat-btn')).toHaveAttribute('aria-expanded', 'true');
+  await expect(page.locator('.dock-chat')).toHaveAttribute('aria-expanded', 'true');
 }
 
 async function loaded(image: Locator) {
@@ -46,7 +46,7 @@ test('direct images revalidate on reload and work in the gallery and lightbox', 
   await page.reload();
   await page.locator('.feed .msg').first().waitFor({ state: 'attached' });
   await page.keyboard.press('Slash');
-  await expect(page.locator('.chat-btn')).toHaveAttribute('aria-expanded', 'true');
+  await expect(page.locator('.dock-chat')).toHaveAttribute('aria-expanded', 'true');
   await loaded(page.locator('.feed button.att-tile').last().locator('img'));
   await expect.poll(() => [...validated].filter((id) => contentRequests.has(id)).length).toBeGreaterThan(0);
   await page.locator('.feed button.att-tile').last().click();
@@ -84,7 +84,7 @@ test('a busy direct image retries, and metadata recovers missed expiry events', 
   await page.reload();
   await page.locator('.feed .msg').first().waitFor({ state: 'attached' });
   await page.keyboard.press('Slash');
-  await expect(page.locator('.chat-btn')).toHaveAttribute('aria-expanded', 'true');
+  await expect(page.locator('.dock-chat')).toHaveAttribute('aria-expanded', 'true');
   await expect(page.locator('.feed .att-gone').last()).toBeVisible();
 });
 

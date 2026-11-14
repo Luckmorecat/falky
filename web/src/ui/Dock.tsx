@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from 'react';
+import { type Ref, useEffect, useRef, useState } from 'react';
 import type { Room } from '../api/client';
-import { showNotice, viewRoom, voice } from '../app/controller';
+import { setChatOpen, showNotice, viewRoom, voice } from '../app/controller';
 import { shortcuts } from '../app/shortcuts';
 import { useApp } from '../app/store';
 import { onTick } from '../fx/ticker';
@@ -14,7 +14,7 @@ import type { Settings as SettingsDialog } from './Settings';
 import './Dock.css';
 
 /** The control center and the settings it opens, which outlast any change between its states. */
-export function Dock({ room }: { room: Room | null }) {
+export function Dock({ room, unreadRef }: { room: Room | null; unreadRef?: Ref<HTMLSpanElement> }) {
   const [Settings, setSettings] = useState<typeof SettingsDialog | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
 
@@ -33,14 +33,14 @@ export function Dock({ room }: { room: Room | null }) {
 
   return (
     <>
-      <Controls room={room} onSettings={() => void openSettings()} />
+      <Controls room={room} unreadRef={unreadRef} onSettings={() => void openSettings()} />
       {Settings && <Settings open={settingsOpen} onClose={() => setSettingsOpen(false)} />}
     </>
   );
 }
 
 /** Voice for this visitor, wherever they are looking. */
-function Controls({ room, onSettings }: { room: Room | null; onSettings(): void }) {
+function Controls({ room, unreadRef, onSettings }: { room: Room | null; unreadRef?: Ref<HTMLSpanElement>; onSettings(): void }) {
   const v = useApp((s) => s.voice);
   const rooms = useApp((s) => s.rooms);
   const selfId = useApp((s) => s.voice.people.find((p) => p.local)?.id);
@@ -73,6 +73,7 @@ function Controls({ room, onSettings }: { room: Room | null; onSettings(): void 
           </Button>
         )}
         <SettingsButton onOpen={onSettings} />
+        {room && <ChatButton unreadRef={unreadRef} />}
       </div>
     );
   }
@@ -113,6 +114,7 @@ function Controls({ room, onSettings }: { room: Room | null; onSettings(): void 
       )}
       <span className="dock-sep" />
       <SettingsButton onOpen={onSettings} />
+      <ChatButton unreadRef={unreadRef} />
       <button className="leave" data-cue="none" aria-label={t.leaveVoice} onClick={() => void voice.leave()}>
         <span>{t.leave}</span>
         <i><Icon name="x" /></i>
@@ -125,6 +127,26 @@ function SettingsButton({ onOpen }: { onOpen(): void }) {
   return (
     <IconButton aria-label={t.settings} aria-haspopup="dialog" data-cue="open" data-tip={t.settings} onClick={onOpen}>
       <Icon name="sliders" />
+    </IconButton>
+  );
+}
+
+/** The chat opens from here like everything else in the dock, and says how much waits in it. */
+function ChatButton({ unreadRef }: { unreadRef?: Ref<HTMLSpanElement> }) {
+  const open = useApp((s) => s.chatOpen);
+  const unread = useApp((s) => (s.viewedRoomId ? (s.chats[s.viewedRoomId]?.unread ?? 0) : 0));
+  const label = open ? t.closeChat : unread ? `${t.chat}: ${unread}` : t.chat;
+  return (
+    <IconButton
+      className="dock-chat"
+      aria-expanded={open}
+      aria-label={label}
+      data-cue={open ? 'off' : 'open'}
+      data-tip={open ? t.closeChat : `${t.chat} (${shortcuts.chat.label})`}
+      onClick={() => setChatOpen(!open)}
+    >
+      <Icon name="chat" />
+      {unread > 0 && !open && <span ref={unreadRef} className="badge">{unread > 99 ? '99+' : unread}</span>}
     </IconButton>
   );
 }

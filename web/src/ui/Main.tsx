@@ -1,17 +1,16 @@
 import { useEffect, useRef, useState } from 'react';
-import { dismissNotice, setChatOpen } from '../app/controller';
-import { shortcuts } from '../app/shortcuts';
+import { dismissNotice } from '../app/controller';
 import { useApp } from '../app/store';
 import { t } from '../strings';
 import { IconButton } from './IconButton';
 import { Chat } from './Chat';
+import { ChatTicker } from './ChatTicker';
 import { Dock } from './Dock';
 import { Icon } from './Icon';
 import { NameConflict } from './Screens';
 import { Rooms } from './Rooms';
 import { Stage } from './Stage';
 import { useShortcuts } from './useShortcuts';
-import { useDrawerLayout } from './useDrawerLayout';
 import { LiveBackground, type LiveBackgroundHandle } from './LiveBackground';
 import './Notices.css';
 import './Main.css';
@@ -33,15 +32,12 @@ function Clock({ joinedAt }: { joinedAt: number }) {
 export function Main() {
   useShortcuts();
   const background = useRef<LiveBackgroundHandle>(null);
-  const chatButton = useRef<HTMLButtonElement>(null);
   const unreadCounter = useRef<HTMLSpanElement>(null);
-  const drawer = useDrawerLayout();
   const room = useApp((s) => s.rooms.find((r) => r.id === s.viewedRoomId) ?? null);
   const voiceState = useApp((s) => s.voice);
   const voiceRoomName = useApp((s) => s.rooms.find((r) => r.id === s.voice.roomId)?.name);
   const chatOpen = useApp((s) => s.chatOpen);
   const roomsOpen = useApp((s) => s.roomsOpen);
-  const unread = useApp((s) => (s.viewedRoomId ? (s.chats[s.viewedRoomId]?.unread ?? 0) : 0));
   const live = useApp((s) => s.live);
   const notice = useApp((s) => s.notice);
   const nameTaken = useApp((s) => s.visitor?.nameTaken);
@@ -58,7 +54,7 @@ export function Main() {
   return (
     <div className="screen room-screen">
       <span className="build-version">{import.meta.env.VITE_BUILD_VERSION}</span>
-      <LiveBackground ref={background} unreadTarget={drawer ? chatButton : unreadCounter} />
+      <LiveBackground ref={background} unreadTarget={unreadCounter} />
       <div className="topbar"><span className="mark">falky</span></div>
 
       <div className="main">
@@ -71,22 +67,11 @@ export function Main() {
         />
         {room ? <Stage room={room} background={background} /> : <div className="stage" />}
         <div className="dock-space" />
-        <Dock room={room} />
+        <Dock room={room} unreadRef={unreadCounter} />
       </div>
 
-      <IconButton
-        ref={chatButton}
-        className="chat-btn"
-        aria-label={chatOpen ? t.closeChat : unread ? `${t.chat}: ${unread}` : t.chat}
-        aria-expanded={chatOpen}
-        data-tip={chatOpen ? t.closeChat : `${t.focusChat} (${shortcuts.chat.label} · ${shortcuts.chatEnter.label})`}
-        data-tip-side="bottom"
-        onClick={() => setChatOpen(!chatOpen)}
-      >
-        <span className="swap"><Icon name="chat" className="a" /><Icon name="x" className="b" /></span>
-        {unread > 0 && <span className="badge">{unread > 99 ? '99+' : unread}</span>}
-      </IconButton>
-      <Chat room={room} unreadCounterRef={unreadCounter} />
+      <Chat room={room} />
+      {room && <ChatTicker room={room} />}
 
       <div className="float-top" aria-live="polite">
         {banner && <div className="banner"><span className="pulse" />{banner}</div>}
