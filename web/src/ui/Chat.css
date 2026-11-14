@@ -14,7 +14,8 @@
 }
 .chat { --chat-bg: var(--raised); position: absolute; inset: 0; display: flex; flex-direction: column; overflow: hidden; border-radius: calc(32px * var(--corner)); background: var(--chat-bg);
   box-shadow: 0 24px 64px -12px var(--shadow), 0 0 0 1px var(--fill);
-  opacity: 0; transform: translateY(10px) scale(.96); transform-origin: 10% 100%; visibility: hidden;
+  /* Only a slide: the feed measures its rows on screen, and a scale would shrink them. */
+  opacity: 0; transform: translateY(12px); visibility: hidden;
   transition: opacity 160ms ease, transform 220ms var(--ease-out), visibility 0s linear 220ms; }
 .chat-open .chat { opacity: 1; transform: none; visibility: visible; pointer-events: auto; transition: opacity 180ms ease, transform 320ms var(--ease-drawer), visibility 0s; }
 /* Newest at the bottom, with few messages too: the free space stays above them.
@@ -81,7 +82,6 @@
   /* The same card, as wide as the screen and standing on the dock, so the button that opened it closes it. */
   .chat-strip { top: max(12px, env(safe-area-inset-top)); left: 12px; right: 12px; bottom: calc(var(--edge) + 96px); width: auto; height: auto; }
   @supports (anchor-name: --dock) { .chat-strip { position-anchor: --dock; left: 12px; right: 12px; bottom: calc(anchor(top) + 10px); } }
-  .chat { transform-origin: 80% 100%; }
 }
 
 @supports not (corner-shape: superellipse(2)) {
