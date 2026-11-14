@@ -1,0 +1,11 @@
+.share-stats { position: absolute; bottom: 14px; left: 14px; width: min(248px, calc(100% - 28px)); padding: 12px 14px 10px; border: 1px solid rgba(255,255,255,.16); border-radius: calc(14px * var(--corner)); background: rgba(10,12,17,.88); color: #f5f7fb; pointer-events: none; font-size: 11px; font-variant-numeric: tabular-nums; }
+.share-stats-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.share-stats-heading > span { color: #c4ccd8; }
+.share-stats-heading strong { white-space: nowrap; font-size: 18px; font-weight: 600; }
+.share-stats-heading small { font-size: 10px; font-weight: 400; }
+.share-stats-codecs { color: #a9e3c8; margin: 3px 0 6px; min-height: 14px; }
+.share-stats svg { display: block; width: 100%; height: 52px; overflow: visible; }
+.share-stats-axis { stroke: rgba(255,255,255,.14); stroke-width: 1; fill: none; }
+.share-stats-line { stroke: #8be0b8; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; fill: none; }
+.share-stats circle { fill: #8be0b8; }
+.share-stats-scale { display: flex; justify-content: space-between; color: #a6afbd; font-size: 9px; line-height: 1.4; }

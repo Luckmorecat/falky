@@ -1,0 +1,4 @@
+.message-screen { display: grid; justify-items: center; text-align: center; gap: 10px; max-width: 420px; }
+.message-screen .orb { width: 132px; }
+.message-screen h1 { font-size: 30px; font-weight: 500; letter-spacing: -.02em; line-height: 1.15; margin-top: 18px; }
+.message-screen p { color: var(--text-2); }

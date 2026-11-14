@@ -315,7 +315,7 @@ func TestAllProcessorsShareAdmissionUntilChildIsReaped(t *testing.T) {
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		data, err := os.ReadFile(first + ".started")
-		if err == nil {
+		if err == nil && len(data) > 0 {
 			pidData = data
 			break
 		}

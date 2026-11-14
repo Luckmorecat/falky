@@ -1,0 +1,7 @@
+/* A voice */
+.orb { position: relative; flex: none; aspect-ratio: 1; }
+.orb.colour-loading { background: var(--fill); -webkit-mask: var(--squircle) center / 100% 100% no-repeat; mask: var(--squircle) center / 100% 100% no-repeat; }
+.orb canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; will-change: transform; pointer-events: none; }
+/* Room for the glow it draws around itself; VOLUME_PAD in orbRenderer.ts. */
+.orb.volume canvas { inset: -18%; width: 136%; height: 136%; }
+.orb.flat { -webkit-mask: var(--squircle) center / 100% 100% no-repeat; mask: var(--squircle) center / 100% 100% no-repeat; background: radial-gradient(70% 70% at 36% 30%, var(--core), transparent), radial-gradient(80% 80% at 66% 70%, var(--deep), transparent), linear-gradient(160deg, var(--bright), var(--base)); }

@@ -66,9 +66,11 @@ def valid_release(value):
     require(isinstance(value, dict) and set(value) == {'version', 'revision', 'ref', 'environment', 'inputs', 'package', 'images'}, 'Invalid manifest fields')
     require(value['version'] == VERSION and type(value['version']) is int, 'Unsupported manifest version')
     require(isinstance(value['revision'], str) and re.fullmatch('[a-f0-9]{40}', value['revision']), 'Invalid revision')
-    require(value['environment'] in ('development', 'production'), 'Invalid environment')
+    require(value['environment'] in ('development', 'staging', 'production'), 'Invalid environment')
     require(isinstance(value['ref'], str) and len(value['ref']) <= 200 and
-            (value['ref'] == 'refs/heads/master' if value['environment'] == 'development' else re.fullmatch(r'refs/tags/v[0-9][A-Za-z0-9.+-]*', value['ref'])), 'Invalid release ref')
+            (value['ref'] == 'refs/heads/master' if value['environment'] == 'development' else
+             value['ref'] == 'refs/heads/staging' if value['environment'] == 'staging' else
+             re.fullmatch(r'refs/tags/v[0-9][A-Za-z0-9.+-]*', value['ref'])), 'Invalid release ref')
     require(isinstance(value['inputs'], dict) and set(value['inputs']) == set(SERVICES), 'Invalid inputs')
     for item in value['inputs'].values():
         require(isinstance(item, str) and re.fullmatch('[a-f0-9]{64}', item), 'Invalid input hash')

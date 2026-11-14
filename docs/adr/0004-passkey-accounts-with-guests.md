@@ -1,5 +1,8 @@
 # Passkey accounts share lasting identities with guests
 
+[ADR-0005](0005-device-approval-authentication.md) extends the original passkey-only
+sign-in policy with device approval; passkeys still establish and recover accounts.
+
 We now support invitation-only, passkey-only accounts alongside guests admitted
 by the reusable access link, superseding [ADR-0003](0003-access-link-instead-of-accounts.md).
 Upgrading a guest preserves its identity and ownership; signing into another

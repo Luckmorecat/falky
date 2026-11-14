@@ -7,6 +7,7 @@ import { roomPalette } from '../fx/palette';
 import { t } from '../strings';
 import { Icon } from './Icon';
 import { Orb } from './Orb';
+import './Rooms.css';
 
 /**
  * The room's name at the top, which unfolds into all the rooms in place: on

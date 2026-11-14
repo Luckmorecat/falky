@@ -28,3 +28,13 @@ it('offers usable simulated devices, mic levels and alerts without browser captu
   expect(browser.notificationPermission()).toBe('granted');
   browser.notify('Message', { body: 'Hello' }, () => {});
 });
+
+it('delivers a simulated camera detection once and removes its listener on detection or exit', () => {
+  const video = document.createElement('video'), result = vi.fn();
+  const scanner = browser.startQRScanner(video, result, vi.fn());
+  dispatchEvent(new CustomEvent('falky:mock-qr', { detail: 'local-scan' }));
+  dispatchEvent(new CustomEvent('falky:mock-qr', { detail: 'late-scan' }));
+  expect(result).toHaveBeenCalledExactlyOnceWith('local-scan'); expect(video.srcObject).toBeNull(); scanner.stop();
+  const exitedResult = vi.fn(); const exited = browser.startQRScanner(video, exitedResult, vi.fn()); exited.stop();
+  dispatchEvent(new CustomEvent('falky:mock-qr', { detail: 'after-exit' })); expect(exitedResult).not.toHaveBeenCalled();
+});

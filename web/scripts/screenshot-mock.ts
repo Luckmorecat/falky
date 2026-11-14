@@ -3,11 +3,12 @@ import { dirname, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { chromium, expect, type Browser } from '@playwright/test';
 import { scenarios, type MockState } from '../mock/protocol';
+import { virtualAuthenticator } from '../smoke/account-browser';
 import { chromiumOptions } from '../smoke/browser';
 import { launchMock } from '../smoke/launcher';
 import { setLanguage, t } from '../src/strings';
 
-const presets = ['room', 'chat', 'unread', 'voice', 'screen-share', 'settings', 'profile', 'entry'] as const;
+const presets = ['room', 'chat', 'unread', 'voice', 'screen-share', 'settings', 'profile', 'entry', 'welcome', 'invitation', 'recovery', 'recovery-kit', 'account', 'device-qr', 'device-code', 'device-issuer', 'device-link', 'device-revoked', 'device-approved', 'device-scanner'] as const;
 const { values } = parseArgs({ options: {
   preset: { type: 'string' }, scenario: { type: 'string' }, output: { type: 'string' },
   viewport: { type: 'string', default: '1440x1000' }, theme: { type: 'string', default: 'dark' },
@@ -36,7 +37,9 @@ Existing browser: PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/path/to/chromium`);
     return;
   }
   const preset = values.preset ?? (values.scenario === 'entry' ? 'entry' : 'room');
-  const scenario = values.scenario ?? (preset === 'entry' ? 'entry' : preset === 'screen-share' ? 'remote-share' : 'populated');
+  const devicePreset = preset.startsWith('device-');
+  const authPreset = devicePreset || ['welcome', 'invitation', 'recovery', 'recovery-kit', 'account'].includes(preset);
+  const scenario = values.scenario ?? (authPreset ? 'signed-out' : undefined) ?? (preset === 'entry' ? 'entry' : preset === 'screen-share' ? 'remote-share' : 'populated');
   if (!presets.includes(preset as typeof presets[number])) throw new Error(`Unknown preset: ${preset}`);
   if (!scenarios.includes(scenario as typeof scenarios[number])) throw new Error(`Unknown scenario: ${scenario}`);
   if ((preset === 'entry') !== (scenario === 'entry')) throw new Error('The entry scenario requires the entry preset, and vice versa.');
@@ -63,11 +66,12 @@ Existing browser: PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/path/to/chromium`);
   cancellation.signal.addEventListener('abort', closeBrowser);
   try {
     app = await launchMock(0, { signal: cancellation.signal, stats: false });
+    if (authPreset) app.url = app.url.replace('127.0.0.1', 'localhost');
     console.error(`Mock: ${app.url} | preset: ${preset} | scenario: ${scenario}${values.gpu ? ' | GPU requested' : ''}`);
     browser = await chromium.launch({ ...chromiumOptions(values.gpu), headless: true,
       handleSIGINT: false, handleSIGTERM: false, handleSIGHUP: false });
     cancellation.signal.throwIfAborted();
-    const page = await browser.newPage({ viewport: { width, height }, locale: values.lang,
+    let page = await browser.newPage({ viewport: { width, height }, locale: values.lang,
       timezoneId: 'UTC', colorScheme: values.theme, reducedMotion: preset === 'unread' ? 'no-preference' : 'reduce', deviceScaleFactor: 1 });
     page.setDefaultTimeout(15_000);
     page.setDefaultNavigationTimeout(15_000);
@@ -81,7 +85,77 @@ Existing browser: PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/path/to/chromium`);
       localStorage.setItem(prefix + 'theme', theme);
       if (unread) localStorage.setItem(prefix + 'liveBackground', 'on');
     }, { state, lang: values.lang, theme: values.theme, unread: preset === 'unread' });
-    await page.goto(`${app.url}/?scenario=${scenario}`);
+    const authenticator = authPreset ? await virtualAuthenticator(page) : undefined;
+    await page.goto(`${app.url}/?scenario=${scenario}${(['invitation', 'recovery-kit', 'account'].includes(preset) || (devicePreset && preset !== 'device-qr')) ? '#invite=mock-invitation' : ''}`);
+    if (authPreset) {
+      if (preset === 'device-qr') {
+        await page.getByRole('button', { name: t.device.another, exact: false }).click();
+        await expect(page.getByRole('img', { name: t.device.qrAlt, exact: true })).toBeVisible();
+      } else if (preset === 'welcome' || preset === 'recovery') {
+        await expect(page.getByRole('button', { name: t.account.signIn, exact: true })).toBeVisible();
+        if (preset === 'recovery') {
+          await page.getByRole('button', { name: t.account.recover, exact: true }).click();
+          await expect(page.getByRole('textbox', { name: `${t.account.word} 12`, exact: true })).toBeVisible();
+        }
+      } else {
+        await page.getByRole('textbox', { name: t.name, exact: true }).fill('Taylor');
+        if (preset !== 'invitation') {
+          await page.getByRole('button', { name: t.account.register, exact: true }).click();
+          await expect(page.getByRole('dialog', { name: t.account.saveTitle, exact: true })).toBeVisible();
+          if (preset === 'account' || devicePreset) {
+            await page.getByRole('checkbox', { name: t.account.saved, exact: true }).check();
+            await page.getByRole('button', { name: t.account.continue, exact: true }).click();
+            await page.getByRole('button', { name: t.settings, exact: true }).click();
+            await page.getByRole('tab', { name: t.account.account, exact: true }).click();
+            await expect(page.getByRole('button', { name: t.account.addKey, exact: true })).toBeVisible();
+            if (devicePreset) {
+              if (preset === 'device-scanner') {
+                await page.getByRole('button', { name: t.device.scan, exact: true }).click();
+                await expect(page.getByRole('heading', { name: t.device.scanTitle, exact: true })).toBeVisible();
+                await expect(page.locator('dialog.settings')).toHaveJSProperty('open', true);
+                await expect(page.getByRole('textbox', { name: t.device.pasteQR, exact: true })).toHaveCount(0);
+              } else {
+                await page.getByRole('button', { name: t.device.create, exact: true }).click();
+                const link = await page.getByRole('textbox', { name: t.device.link, exact: true }).inputValue();
+                if (preset === 'device-link' || preset === 'device-revoked') {
+                  if (preset === 'device-revoked') {
+                    await page.getByRole('button', { name: t.device.revoke, exact: true }).click();
+                    await expect(page.getByRole('dialog', { name: t.device.link, exact: true })).not.toBeVisible();
+                  }
+                  await page.getByRole('dialog', { name: preset === 'device-revoked' ? t.settings : t.device.link, exact: true }).scrollIntoViewIfNeeded();
+                } else {
+                  const candidate = await browser.newPage({ viewport: { width, height }, locale: values.lang, colorScheme: values.theme, reducedMotion: 'reduce' });
+                  await candidate.addInitScript(({ state, lang, theme }) => {
+                    localStorage.setItem(`falky.mock-generation.${state.instanceId}`, String(state.generation));
+                    localStorage.setItem(`falky.mock.${state.instanceId}.language`, lang);
+                    localStorage.setItem(`falky.mock.${state.instanceId}.theme`, theme);
+                  }, { state, lang: values.lang, theme: values.theme });
+                  await candidate.goto(link);
+                  await expect(candidate.locator('.device-code')).toBeVisible();
+                  await expect(page.getByRole('textbox', { name: t.device.codeLabel, exact: true })).toBeVisible();
+                  if (preset === 'device-approved') {
+                    await candidate.route('**/api/accounts/signin-requests/*/finish', route => route.abort('failed'));
+                    const code = (await candidate.locator('.device-code').innerText()).replace(/\s/g, '');
+                    await page.getByRole('textbox', { name: t.device.codeLabel, exact: true }).fill(code);
+                    await page.getByRole('button', { name: t.device.approve, exact: true }).click();
+                    await expect(page.getByRole('dialog', { name: t.device.link, exact: true }).getByText(t.device.linkApproved, { exact: true })).toBeVisible();
+                    await page.getByRole('button', { name: t.device.revoke, exact: true }).scrollIntoViewIfNeeded();
+                  } else if (preset === 'device-code') page = candidate;
+                  else await page.getByRole('textbox', { name: t.device.codeLabel, exact: true }).scrollIntoViewIfNeeded();
+                }
+              }
+            } else {
+            await virtualAuthenticator(page, 'usb', authenticator!.client);
+            await authenticator!.client.send('WebAuthn.setAutomaticPresenceSimulation', { authenticatorId: authenticator!.authenticatorId, enabled: false });
+            const label = values.lang === 'uk' ? 'Ноутбук · запасний ключ для подорожей і щоденного доступу' : 'Laptop · backup passkey for travel and everyday access';
+            await page.getByRole('textbox', { name: t.account.keyLabel, exact: true }).fill(label);
+            await page.getByRole('button', { name: t.account.addKey, exact: true }).click();
+            await expect(page.getByRole('button', { name: `${t.account.removeKey}: ${label}`, exact: true })).toBeVisible();
+            }
+          }
+        }
+      }
+    } else
     if (preset === 'entry') {
       await expect(page.getByRole('textbox', { name: t.name, exact: true })).toBeVisible();
     } else {
@@ -140,6 +214,7 @@ Existing browser: PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/path/to/chromium`);
       });
       console.error(`WebGL renderer: ${renderer}`);
     }
+    if (devicePreset && !await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)) throw new Error('Device flow overflows the viewport horizontally.');
     await page.screenshot({ path: output, type: 'png', fullPage: values['full-page'], animations: 'disabled', caret: 'hide' });
     cancellation.signal.throwIfAborted();
   } finally {

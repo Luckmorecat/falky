@@ -1,6 +1,7 @@
 import { type ReactNode, useEffect, useRef } from 'react';
 import { addOrb } from '../fx/orbRenderer';
 import { hashString, PALETTES, type PaletteName, paletteStyle } from '../fx/palette';
+import './Orb.css';
 
 /**
  * A voice as a rounded square of poured colour. Talking swells it, sets the

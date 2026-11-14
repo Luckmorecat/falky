@@ -1,0 +1,20 @@
+/* Room layout */
+/* The interface stands in the middle of the page and stays there when the chat comes in. */
+.main { position: absolute; left: 0; top: 0; bottom: 0; width: 100%; z-index: 11; display: flex; flex-direction: column; align-items: center; pointer-events: none; }
+.tile, .dock, .settings, .share, .stage-empty, .room-now, .rooms-open .room-list { pointer-events: auto; }
+.topbar { position: absolute; left: 28px; top: 24px; z-index: 5; }
+.dock-space { height: 116px; flex: none; }
+
+.build-version { position: absolute; left: max(12px, env(safe-area-inset-left)); bottom: max(8px, env(safe-area-inset-bottom)); z-index: 1;
+  color: var(--text); opacity: .5; font-size: 11px; line-height: 16px; user-select: text; }
+.room-screen:has(.settings[open], .share:fullscreen) .build-version { visibility: hidden; }
+.room-screen { overflow: hidden; }
+
+@media (max-width: 1180px), (hover: none) {
+  .chat-open .build-version { visibility: hidden; }
+}
+
+@media (max-width: 1000px) {
+  .topbar { display: none; }
+  .dock-space { height: 124px; }
+}

@@ -3,15 +3,18 @@ import { preloadVoice } from '@falky/voice';
 import { createRoot } from 'react-dom/client';
 import { applyAppearance } from './appearance';
 import { boot } from './controller';
+import { captureEntryLinks } from './entryLinks';
 import { installInterfaceSounds } from './interfaceSounds';
 import { useApp } from './store';
-import { t } from '../strings';
 import { Main } from '../ui/Main';
 import { Entry } from '../ui/Screens';
-import { Message } from '../ui/Message';
+import { AccountFlowProvider, useAccountUI } from '../ui/AccountFlow';
 
 function Screen() {
   const phase = useApp((s) => s.phase);
+  const ownerRevision = useApp(s => s.ownerRevision);
+  const paused = useApp(s => s.sessionPaused);
+  const accountUI = useAccountUI();
   // Words are read when rendering, so a new language needs only this render.
   useApp((s) => s.settings.language);
   const unread = useApp((s) => Object.values(s.chats).reduce((sum, c) => sum + c.unread, 0));
@@ -57,22 +60,22 @@ function Screen() {
     case 'entry':
       return <Entry />;
     case 'noaccess':
-      return <Message title={t.noAccessTitle} body={t.noAccessBody} />;
+      return <Entry />;
     case 'revoked':
-      return <Message title={t.revokedTitle} body={t.revokedBody} />;
+      return <Entry />;
     case 'ready':
-      return <Main />;
+      return <div inert={paused || accountUI.locked}><Main key={ownerRevision} /></div>;
   }
 }
 
 function App() {
   useApp((s) => s.settings.language);
-  return <Screen />;
+  return <AccountFlowProvider><Screen /></AccountFlowProvider>;
 }
 
 // A new access link pasted into this tab changes only the fragment.
 addEventListener('hashchange', () => {
-  if (location.hash.includes('k=')) void boot();
+  captureEntryLinks();
 });
 
 applyAppearance();

@@ -1,6 +1,8 @@
 import { type RefObject, useEffect, useRef, useState } from 'react';
 import { sayTick } from '../app/interfaceSounds';
 import { pointsPath, sideFraction, sideUpTo, squircleSide } from '../fx/squircle';
+import './Range.css';
+import './VolumeSlider.css';
 
 /** Far enough off the outline to clear an orb swollen by a loud voice. */
 const SIDE = squircleSide(6.5);

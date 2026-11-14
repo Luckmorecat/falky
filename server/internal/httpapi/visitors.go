@@ -22,6 +22,7 @@ const cookieMaxAge = int(identity.GuestSessionTTL / time.Second)
 // openOperations are the operations that need no visitor: those the contract
 // marks with an empty security requirement. Every other operation does.
 var openOperations = map[string]bool{
+	"BeginSignInRequest": true, "BeginQRSignIn": true, "CancelQRSignIn": true, "GetSignInRequest": true, "ResendSignInRequest": true, "FinishSignInRequest": true,
 	"Enter":                true,
 	"GetLiveness":          true,
 	"GetReadiness":         true,

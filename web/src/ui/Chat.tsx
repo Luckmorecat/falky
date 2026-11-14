@@ -14,6 +14,7 @@ import { IconButton } from './IconButton';
 import { Icon } from './Icon';
 import { Lightbox, type ViewerItem } from './Lightbox';
 import { useDrawerLayout } from './useDrawerLayout';
+import './Chat.css';
 
 function afterPaint(fn: () => void): () => void {
   let frame = requestAnimationFrame(() => { frame = requestAnimationFrame(fn); });

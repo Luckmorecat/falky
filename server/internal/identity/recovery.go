@@ -151,7 +151,15 @@ func (s *Service) accountEffects(ctx context.Context, tx *sql.Tx, id string, gen
 		session.ExpiresAt = unixTime(expires)
 		e.RevokedSessions = append(e.RevokedSessions, session)
 	}
-	return e, rows.Err()
+	if err = errors.Join(rows.Err(), rows.Close()); err != nil {
+		return Effects{}, err
+	}
+	for _, session := range e.RevokedSessions {
+		if err = s.cancelSessionApprovals(ctx, tx, session.ID, &e); err != nil {
+			return Effects{}, err
+		}
+	}
+	return e, nil
 }
 
 func (s *Service) DisableAccount(ctx context.Context, accountID string) (Effects, error) {

@@ -29,7 +29,7 @@ async function capture(args: string[], environment: NodeJS.ProcessEnv = {}, inte
       child.once('error', reject);
       child.once('close', resolve);
     });
-    const url = /Mock: (http:\/\/127\.0\.0\.1:\d+)/.exec(stderr)?.[1];
+    const url = /Mock: (http:\/\/(?:127\.0\.0\.1|localhost):\d+)/.exec(stderr)?.[1];
     if (url) await assert.rejects(fetch(`${url}/__mock/state`), 'Capture must close its mock server');
     return { code, stdout, stderr, url };
   } finally { clearTimeout(timeout); }
@@ -38,7 +38,7 @@ async function capture(args: string[], environment: NodeJS.ProcessEnv = {}, inte
 test('all presets produce PNGs and terminate their isolated servers', { timeout: 180_000 }, async () => {
   const directory = await mkdtemp(join(tmpdir(), 'falky-screenshots-'));
   try {
-    for (const preset of ['room', 'chat', 'unread', 'voice', 'screen-share', 'settings', 'profile', 'entry']) {
+    for (const preset of ['room', 'chat', 'unread', 'voice', 'screen-share', 'settings', 'profile', 'entry', 'welcome', 'invitation', 'recovery', 'recovery-kit', 'account']) {
       const output = join(directory, 'nested', `${preset}.png`);
       const result = await capture(['--preset', preset, '--output', output]);
       assert.equal(result.code, 0, result.stderr);
@@ -86,4 +86,18 @@ test('GPU opt-in requests hardware-capable headless Chromium while retaining exe
   assert.equal(defaults.args, undefined);
   assert.equal(gpu.channel, 'chromium');
   assert.deepEqual(gpu.args, ['--enable-gpu']);
+});
+
+test('device presets use production flows at narrow Ukrainian light and dark sizes', { timeout: 90_000 }, async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'falky-device-captures-'));
+  try {
+    for (const [preset, width, theme] of [['device-qr', 320, 'light'], ['device-code', 390, 'dark'], ['device-issuer', 390, 'light'], ['device-approved', 320, 'light'], ['device-scanner', 320, 'dark']] as const) {
+      const output = join(directory, `${preset}.png`);
+      const result = await capture(['--preset', preset, '--viewport', `${width}x844`, '--theme', theme, '--lang', 'uk', '--output', output]);
+      assert.equal(result.code, 0, result.stderr);
+      const png = await readFile(output);
+      assert.equal(png.readUInt32BE(16), width);
+      assert.equal(png.readUInt32BE(20), 844);
+    }
+  } finally { await rm(directory, { recursive: true, force: true }); }
 });

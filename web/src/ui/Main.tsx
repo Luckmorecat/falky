@@ -13,6 +13,8 @@ import { Stage } from './Stage';
 import { useShortcuts } from './useShortcuts';
 import { useDrawerLayout } from './useDrawerLayout';
 import { LiveBackground, type LiveBackgroundHandle } from './LiveBackground';
+import './Notices.css';
+import './Main.css';
 
 function Clock({ joinedAt }: { joinedAt: number }) {
   const [now, setNow] = useState(() => performance.now());

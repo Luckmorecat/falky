@@ -1,0 +1,5 @@
+.seg.fit button { font-size: 13px; }
+.seg { display: flex; gap: 2px; padding: 3px; border-radius: calc(24px * var(--corner)); background: var(--raised); }
+.seg button { flex: 1; min-width: 0; height: 40px; border-radius: calc(20px * var(--corner)); font-size: 14px; color: var(--text-2); white-space: nowrap; transition: background-color 160ms ease, color 160ms ease; }
+@media (hover:hover) and (pointer:fine) { .seg button:hover { color: var(--text); } }
+.seg button[aria-pressed="true"] { background: var(--invert); color: var(--on-invert); }

@@ -1,0 +1,11 @@
+.device-loading-status { display: flex; flex: 1; flex-direction: column; outline: none; }
+.device-loading .device-task-content { display: flex; flex-direction: column; align-items: stretch; gap: 20px; }
+.device-loading .device-skeleton-line, .device-skeleton-fill { background: linear-gradient(90deg, var(--fill) 25%, var(--fill-2, rgba(255,255,255,.14)) 50%, var(--fill) 75%); background-size: 200% 100%; animation: shimmer 1.5s linear infinite; }
+.device-loading .device-skeleton-line { color: transparent; border-radius: 8px; }
+.device-loading .device-scan-frame { opacity: .25; }
+.device-loading .device-qr { padding: 0; }
+.device-skeleton-button { width: 100%; min-height: 54px; border-radius: 27px; }
+.device-skeleton-link { width: 110px; height: 18px; border-radius: 9px; align-self: center; margin-block: 10px; }
+@media (prefers-reduced-motion: reduce) {
+  .device-loading .device-skeleton-line, .device-skeleton-fill { animation: none; }
+}

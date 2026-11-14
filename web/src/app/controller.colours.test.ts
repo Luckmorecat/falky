@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { LiveHandlers } from '../api/live';
 import type { VoiceSnapshot } from '../voice/types';
 
-const seam = vi.hoisted(() => ({ api: { me: vi.fn(), rooms: vi.fn(), messages: vi.fn(), colours: vi.fn(), setColour: vi.fn(), rename: vi.fn() }, live: {} as LiveHandlers, voiceChange: undefined as undefined | ((snapshot: VoiceSnapshot) => void) }));
+const seam = vi.hoisted(() => ({ api: { accountSession: vi.fn(), logout: vi.fn(), me: vi.fn(), rooms: vi.fn(), messages: vi.fn(), colours: vi.fn(), setColour: vi.fn(), rename: vi.fn() }, live: {} as LiveHandlers, voiceChange: undefined as undefined | ((snapshot: VoiceSnapshot) => void) }));
 vi.mock('../api/client', async (original) => ({ ...await original<typeof import('../api/client')>(), api: seam.api }));
 vi.mock('../api/live', () => ({ LiveConnection: class {
   constructor(options: typeof seam.live) { seam.live = options; }
@@ -26,6 +26,7 @@ afterEach(() => vi.useRealTimers());
 
 beforeEach(() => {
   vi.resetModules(); vi.clearAllMocks(); localStorage.clear();
+  seam.api.accountSession.mockImplementation(async () => ({ visitor: await seam.api.me(), kind: 'guest', expiresAt: '2027-01-01T00:00:00Z' }));
   seam.api.me.mockResolvedValue(me()); seam.api.rooms.mockResolvedValue([]); seam.api.messages.mockResolvedValue([]); seam.api.colours.mockResolvedValue([]);
 });
 
@@ -155,4 +156,84 @@ it('retries a failed recovery snapshot while the live socket remains open and no
   await vi.advanceTimersByTimeAsync(30_000);
   expect(seam.api.colours).toHaveBeenCalledTimes(beforeEnd);
   expect(getState().phase).toBe('revoked');
+});
+
+
+it('keeps same-owner drafts during guest upgrade, but clears old identity data and previews on account switch', async () => {
+  const app = await import('./controller'); const { getState, setState } = await import('./store');
+  await app.boot();
+  const revoke = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {});
+  setState({ uploads: { room: [{ localId: 'draft', roomId: 'room', name: 'picture', size: 1, previewUrl: 'blob:ready', status: 'ready', progress: 1, reason: '' }] }, chatOpen: true });
+  const before = getState().ownerRevision;
+  seam.api.rooms.mockResolvedValue([{ id: 'room', name: 'Lounge', occupancy: [] }]);
+  setState({ chats: { room: { messages: [], pending: [{ requestKey: 'pending', roomId: 'room', body: 'Draft', attachments: [{ id: 'pending-image', contentUrl: 'blob:pending' } as never], failed: false, reason: '' }], hasOlder: false, loadingOlder: false, loaded: true, unread: 0 } } });
+  const epoch = app.beginSessionChange();
+  await app.adoptSession({ visitor: me(), kind: 'account', expiresAt: '2027-02-01T00:00:00Z' }, epoch);
+  expect(getState().uploads.room?.[0]?.previewUrl).toBe('blob:ready');
+  expect(getState().ownerRevision).toBe(before);
+  expect(getState().chats.room?.pending[0]).toMatchObject({ body: 'Draft', failed: true });
+  expect(revoke).not.toHaveBeenCalled();
+  expect(getState().accountSession?.kind).toBe('account');
+  const next = app.beginSessionChange();
+  await app.adoptSession({ visitor: { ...me(), id: 'other', colour: colour('moss', 1, 'other') }, kind: 'account' }, next);
+  expect(getState().uploads).toEqual({});
+  expect(getState().chatOpen).toBe(false);
+  expect(getState().ownerRevision).toBe(before + 1);
+  expect(revoke).toHaveBeenCalledWith('blob:ready');
+  expect(revoke).toHaveBeenCalledWith('blob:pending');
+  revoke.mockRestore();
+});
+
+it('pauses old Main effects/actions before finish and ignores stale live callbacks after adoption', async () => {
+  const app = await import('./controller'); const { getState } = await import('./store');
+  await app.boot();
+  const previousLive = seam.live;
+  const epoch = app.beginSessionChange();
+  expect(getState().sessionPaused).toBe(true);
+  const reads = seam.api.messages.mock.calls.length;
+  await app.loadOlder('room'); app.postMessage('room', 'Old owner action');
+  expect(await app.rename('Old owner name')).toBeTruthy();
+  expect(seam.api.rename).not.toHaveBeenCalled();
+  expect(seam.api.messages).toHaveBeenCalledTimes(reads);
+  await app.adoptSession({ visitor: { ...me(), id: 'new', colour: colour('rose', 1, 'new') }, kind: 'account' }, epoch);
+  previousLive.onRevoked(); previousLive.onEvent(event('moss', 99));
+  expect(getState().phase).toBe('ready'); expect(getState().visitor?.id).toBe('new');
+  expect(getState().colours.self).toBeUndefined(); expect(getState().sessionPaused).toBe(false);
+});
+
+it('signs out an already invalid session, clears identity state and links, and preserves browser choices', async () => {
+  const app = await import('./controller'); const { getState } = await import('./store'); const { ApiError } = await import('../api/client');
+  const links = await import('./entryLinks');
+  await app.boot();
+  app.updateSettings({ theme: 'light', sounds: false });
+  history.replaceState(null, '', '/#invite=TransientInvitation'); links.captureEntryLinks();
+  seam.api.logout.mockRejectedValueOnce(new ApiError(401, 'visitor_required', 'expired'));
+  await app.logout();
+  expect(seam.api.logout).toHaveBeenCalledTimes(1);
+  expect(getState()).toMatchObject({ phase: 'entry', visitor: null, accountSession: null, chats: {}, uploads: {}, viewedRoomId: null, settings: { theme: 'light', sounds: false } });
+  expect(links.getEntryLinks()).toEqual({});
+});
+
+it('reclassifies live retry snapshots and clears old owner state when the shared cookie changed identities', async () => {
+  const app = await import('./controller'); const { getState, setState } = await import('./store');
+  await app.boot();
+  const oldRevision = getState().ownerRevision;
+  setState({ uploads: { private: [{ localId: 'old', roomId: 'private', name: 'old image', size: 1, previewUrl: 'blob:old', status: 'ready', progress: 1, reason: '' }] } });
+  seam.api.accountSession.mockResolvedValue({ visitor: { ...me(), id: 'other', colour: colour('rose', 1, 'other') }, kind: 'account' });
+  expect(await seam.live.shouldRetry()).toBe(false);
+  expect(getState().accountSession?.kind).toBe('account');
+  expect(getState().visitor?.id).toBe('other');
+  expect(getState().uploads).toEqual({});
+  expect(getState().ownerRevision).toBe(oldRevision + 1);
+});
+
+it('resolves the current cookie owner before retrying room adoption after a network failure', async () => {
+  vi.useFakeTimers();
+  const app = await import('./controller'); const { getState } = await import('./store');
+  seam.api.rooms.mockRejectedValueOnce(new Error('rooms offline'));
+  await app.boot();
+  seam.api.accountSession.mockResolvedValue({ visitor: { ...me(), id: 'next', colour: colour('rose', 1, 'next') }, kind: 'account' });
+  await vi.advanceTimersByTimeAsync(3000);
+  expect(getState().visitor?.id).toBe('next');
+  expect(getState().accountSession?.kind).toBe('account');
 });

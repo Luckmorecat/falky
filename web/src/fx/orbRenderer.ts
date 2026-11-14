@@ -20,7 +20,7 @@ const MAX_SIZE: Record<OrbLook, number> = { flat: 512, volume: 768 };
 const CANVAS_SIZE = Math.max(MAX_SIZE.flat, MAX_SIZE.volume);
 const IDLE_INTERVAL = 1 / 15;
 
-/** How much bigger than the shape a `volume` canvas is; styles.css makes it so. */
+/** How much bigger than the shape a `volume` canvas is; ui/Orb.css makes it so. */
 const VOLUME_PAD = 1.36;
 
 const VERTEX = `

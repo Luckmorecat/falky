@@ -1,0 +1,41 @@
+import { afterEach, expect, it, vi } from 'vitest';
+import { startQRScanner } from './qrScanner';
+const scan = vi.hoisted(() => vi.fn());
+vi.mock('@zxing/browser', () => ({ BrowserQRCodeReader: class { scan = scan; } }));
+afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); scan.mockReset(); });
+it('releases a camera that resolves after the reader has been exited', async () => {
+  let accept!: (stream: MediaStream) => void;
+  const stop = vi.fn();
+  vi.stubGlobal('navigator', { mediaDevices: { getUserMedia: () => new Promise<MediaStream>(resolve => { accept = resolve; }) } });
+  const video = document.createElement('video');
+  const reader = startQRScanner(video, vi.fn(), vi.fn());
+  reader.stop(); accept({ getTracks: () => [{ stop }] } as unknown as MediaStream);
+  await Promise.resolve(); await Promise.resolve();
+  expect(stop).toHaveBeenCalledOnce(); expect(video.srcObject).toBeNull(); expect(scan).not.toHaveBeenCalled();
+});
+it('stops capture and decoding before delivering a detected code, and ignores later frames', async () => {
+  const trackStop = vi.fn(), decoderStop = vi.fn(), detected = vi.fn(), failed = vi.fn();
+  vi.stubGlobal('navigator', { mediaDevices: { getUserMedia: async () => ({ getTracks: () => [{ stop: trackStop }] }) } });
+  const video = document.createElement('video'); vi.spyOn(video, 'play').mockResolvedValue();
+  scan.mockReturnValue({ stop: decoderStop });
+  const reader = startQRScanner(video, detected, failed);
+  await vi.waitFor(() => expect(scan).toHaveBeenCalledOnce());
+  const callback = scan.mock.calls[0]![1];
+  callback({ getText: () => 'https://local/#qr-signin=secret' });
+  callback({ getText: () => 'second' });
+  expect(trackStop).toHaveBeenCalledOnce(); expect(decoderStop).toHaveBeenCalledOnce();
+  expect(detected).toHaveBeenCalledExactlyOnceWith('https://local/#qr-signin=secret'); expect(video.srcObject).toBeNull(); expect(failed).not.toHaveBeenCalled(); reader.stop();
+});
+it('keeps scanning ordinary empty and damaged frames, and releases resources on a decoder failure', async () => {
+  const { NotFoundException, ChecksumException, FormatException } = await import('@zxing/library');
+  const stop = vi.fn(), decoderStop = vi.fn(), result = vi.fn(), error = vi.fn();
+  vi.stubGlobal('navigator', { mediaDevices: { getUserMedia: async () => ({ getTracks: () => [{ stop }] }) } });
+  const video = document.createElement('video'); vi.spyOn(video, 'play').mockResolvedValue();
+  scan.mockReturnValue({ stop: decoderStop }); startQRScanner(video, result, error);
+  await vi.waitFor(() => expect(scan).toHaveBeenCalledOnce());
+  const callback = scan.mock.calls[0]![1];
+  for (const frameError of [new NotFoundException(), new ChecksumException(), new FormatException()]) callback(undefined, frameError);
+  expect(stop).not.toHaveBeenCalled(); expect(error).not.toHaveBeenCalled();
+  const failure = new Error('decoder failed'); callback(undefined, failure);
+  expect(error).toHaveBeenCalledExactlyOnceWith(failure); expect(stop).toHaveBeenCalledOnce(); expect(decoderStop).toHaveBeenCalledOnce(); expect(video.srcObject).toBeNull();
+});

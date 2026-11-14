@@ -36,3 +36,5 @@ export function notify(title: string, options: NotificationOptions, onClick: () 
   const notification = new Notification(title, options);
   notification.onclick = () => { onClick(); notification.close(); };
 }
+
+export { startQRScanner } from './qrScanner';

@@ -11,6 +11,7 @@ import { Button } from './Button';
 import { IconButton } from './IconButton';
 import { Icon } from './Icon';
 import type { Settings as SettingsDialog } from './Settings';
+import './Dock.css';
 
 /** The control center and the settings it opens, which outlast any change between its states. */
 export function Dock({ room }: { room: Room | null }) {

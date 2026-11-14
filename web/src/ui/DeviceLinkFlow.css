@@ -1,0 +1,51 @@
+.device-issuer .account-actions { margin-block: 16px; }
+.device-issuer .account-actions button { display: flex; align-items: center; justify-content: center; gap: 8px; }
+.device-issuer .account-actions .i { width: 18px; height: 18px; }
+.device-issuer .account-actions .device-link-slot { width: min(180px, 100%); height: 46px; min-height: 46px; padding: 8px 16px; }
+.device-issuer .account-actions .device-link-item { justify-content: space-between; gap: 16px; text-align: left; }
+.device-link-item strong { display: block; font-size: 13px; font-weight: 500; }
+.device-link-item small { display: block; margin-top: 0; font-size: 11px; line-height: 1.3; color: var(--text-2); font-variant-numeric: tabular-nums; }
+.device-link-item > span:last-child { color: var(--text-2); }
+
+.device-link-drawer { margin: auto auto 0; width: min(560px, 100%); max-height: calc(100dvh - max(24px, env(safe-area-inset-top))); border-radius: 32px 32px 0 0; padding-bottom: max(32px, env(safe-area-inset-bottom)); overscroll-behavior: contain; transform: translateY(100%); opacity: 0; transition: transform 240ms var(--ease-out), opacity 240ms ease, display 240ms allow-discrete, overlay 240ms allow-discrete; }
+.device-link-drawer[open] { transform: translateY(0); opacity: 1; }
+.device-link-drawer::backdrop { opacity: 0; transition: opacity 240ms ease, display 240ms allow-discrete, overlay 240ms allow-discrete; }
+.device-link-drawer[open]::backdrop { opacity: 1; }
+@starting-style {
+  .device-link-drawer[open] { transform: translateY(100%); opacity: 0; }
+  .device-link-drawer[open]::backdrop { opacity: 0; }
+}
+.device-link-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 20px; }
+.device-link-header h2 { font-size: 22px; font-weight: 500; }
+.device-link-area { margin-top: 20px; }
+.device-link-skeleton span { display: block; border-radius: 24px; background: linear-gradient(90deg, var(--fill) 25%, var(--fill-2) 50%, var(--fill) 75%); background-size: 200% 100%; animation: shimmer 1.5s linear infinite; }
+.device-link-skeleton .skeleton-deadline { width: 26%; height: 20px; margin-bottom: 16px; }
+.device-link-skeleton .skeleton-label { width: 22%; height: 18px; margin-bottom: 10px; }
+.device-link-skeleton .skeleton-field { width: 100%; height: 50px; }
+.device-link-skeleton .account-actions span { width: 110px; height: 46px; }
+.device-link-area .device-wait { margin-bottom: 16px; }
+@media (prefers-reduced-motion: reduce) {
+  .device-link-drawer, .device-link-drawer::backdrop { transition: none; }
+  .device-link-skeleton span { animation: none; }
+}
+.device-copy, .device-code-form label { display: flex; flex-direction: column; gap: 10px; font-size: 12px; color: var(--text-2); }
+.device-copy input { min-width: 0; width: 100%; height: 50px; border: 0; border-radius: 25px; background: var(--fill); color: var(--text); padding: 0 18px; font-size: 13px; }
+.device-inline-link h4 { font-size: 13px; font-weight: 500; margin-top: 24px; }
+.device-pending-list { display: grid; gap: 10px; margin-block: 12px; }
+.device-pending.account-key { flex-direction: row; align-items: center; }
+
+.device-pending > button { flex: none; }
+.device-code-form { display: flex; flex-direction: column; align-items: stretch; gap: 16px; margin-block: 24px 16px; }
+.device-code-form > button { width: 100%; }
+.device-code-form > .input-otp { align-self: center; }
+.device-code-form .device-code-label { flex-direction: row; align-items: center; gap: 8px; }
+.device-code-beacon { position: relative; width: 6px; height: 6px; flex: none; border-radius: 50%; background: var(--level); }
+.device-code-beacon[data-active]::after { content: ''; position: absolute; inset: -4px; border: 1px solid var(--level); border-radius: 50%; animation: code-beacon 1.8s ease-out infinite; }
+@keyframes code-beacon { from { transform: scale(.45); opacity: .7; } to { transform: scale(1.3); opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .device-code-beacon[data-active]::after { animation: none; opacity: 0; } }
+
+@media (max-width: 560px) {
+  .device-issuer .account-actions { flex-direction: column; align-items: stretch; }
+  .device-issuer .account-actions .device-link-slot { width: 100%; }
+  .device-link-skeleton .account-actions span { width: 100%; }
+}

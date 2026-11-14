@@ -1,0 +1,15 @@
+/* Round buttons */
+.ib { position: relative; width: 52px; height: 52px; border-radius: var(--round); background: var(--raised);
+  display: grid; place-items: center; flex: none; transition: transform 140ms var(--ease-out), background-color 160ms ease, color 160ms ease, opacity 160ms ease; }
+.ib:active { transform: scale(.94); }
+@media (hover:hover) and (pointer:fine) { .ib:hover { background: var(--raised-2); } }
+.ib[aria-pressed="true"] { background: var(--invert); color: var(--on-invert); }
+.ib.off { background: var(--danger-bg); color: var(--danger); }
+.ib.sm { width: 40px; height: 40px; }
+.ib.sm svg.i { width: 18px; height: 18px; }
+
+[data-tip]::after { content: attr(data-tip); position: absolute; bottom: calc(100% + 10px); left: 50%; translate: -50% 0;
+  background: var(--invert); color: var(--on-invert); font-size: 13px; line-height: 1; padding: 7px 10px; border-radius: calc(15px * var(--corner)); white-space: nowrap;
+  opacity: 0; scale: .96; transform-origin: bottom center; pointer-events: none; transition: opacity 120ms ease, scale 120ms var(--ease-out); z-index: 20; }
+[data-tip-side="bottom"]::after { top: calc(100% + 10px); bottom: auto; transform-origin: top center; }
+@media (hover:hover) and (pointer:fine) { [data-tip]:hover::after { opacity: 1; scale: 1; transition-delay: 450ms; } }

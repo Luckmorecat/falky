@@ -1,4 +1,5 @@
 import type { ComponentProps } from 'react';
+import './IconButton.css';
 
 type IconButtonProps = ComponentProps<'button'> & { size?: 'regular' | 'small'; 'aria-label': string };
 

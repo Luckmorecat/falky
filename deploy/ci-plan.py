@@ -18,9 +18,9 @@ def source_inputs():
     revision = release.run('git', 'rev-parse', 'HEAD').strip()
     release.require(os.environ.get('GITHUB_SHA', revision) == revision, 'Checkout differs from workflow source')
     ref = os.environ['GITHUB_REF']
-    environment = 'development' if ref == 'refs/heads/master' else 'production'
-    release.require(ref == 'refs/heads/master' or re.fullmatch(r'refs/tags/v[0-9][A-Za-z0-9.+-]*', ref),
-                    'Releases require master (development) or a v* version tag (production)')
+    environment = {'refs/heads/master': 'development', 'refs/heads/staging': 'staging'}.get(ref, 'production')
+    release.require(ref in ('refs/heads/master', 'refs/heads/staging') or re.fullmatch(r'refs/tags/v[0-9][A-Za-z0-9.+-]*', ref),
+                    'Releases require master (development), staging (staging), or a v* version tag (production)')
     entries = []
     for entry in release.run('git', 'ls-tree', '-r', '-z', 'HEAD').split('\0'):
         if not entry:
@@ -108,7 +108,7 @@ def main():
         source = source_inputs()
         release.require(os.environ['GITHUB_EVENT_NAME'] == 'workflow_dispatch' and
                         os.environ['PREPARE_ENVIRONMENT'] == source['environment'],
-                        'Prepare environment must match master (development) or the version tag (production)')
+                        'Prepare environment must match master (development), staging (staging), or the version tag (production)')
         emit({'mode': 'prepare', 'source': source})
     elif len(args) == 2 and args[0] == 'resolve':
         print(resolve(release.decode(os.environ['RELEASE_PLAN']), Path(args[1])))

@@ -2,12 +2,14 @@
 import importlib.util
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
+from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parent
 spec = importlib.util.spec_from_file_location('release', ROOT / 'release.py')
@@ -166,30 +168,57 @@ class PipelineTests(unittest.TestCase):
         self.command('resolve', str(directory), succeeds=False, environment=environment)
 
 
-    def test_prepare_needs_no_host_snapshot_and_emits_only_exact_artifacts(self):
-        self.environment.update(GITHUB_EVENT_NAME='workflow_dispatch', PREPARE_ENVIRONMENT='development')
-        self.command('prepare')
-        output = dict(line.split('=', 1) for line in (self.root / 'output').read_text().splitlines())
-        planned = release.decode(output['plan'])
-        self.assertEqual((output['server'], output['web'], planned['mode']), ('true', 'true', 'prepare'))
-        directory = self.root / 'prepared'
-        result = self.command('resolve', str(directory), environment=self.resolve_environment(planned))
-        self.assertEqual(result.stdout.strip(), '')
-        self.assertEqual(sorted(item.name for item in directory.iterdir()), ['manifest.json', 'runtime.tar'])
-        manifest = json.loads((directory / 'manifest.json').read_text())
-        self.assertEqual(manifest['environment'], 'development')
-        release.unpack((directory / 'runtime.tar').read_bytes(), manifest['package'])
-        self.environment['PREPARE_ENVIRONMENT'] = 'production'
-        self.command('prepare', succeeds=False)
-        self.environment.update(GITHUB_REF='refs/heads/codex/feature', PREPARE_ENVIRONMENT='development')
-        self.command('prepare', succeeds=False)
-        self.environment.update(GITHUB_REF='refs/tags/v2.0.0', GITHUB_REF_TYPE='tag', PREPARE_ENVIRONMENT='production')
-        self.git('tag', 'v2.0.0')
-        self.command('prepare')
-        output = dict(line.split('=', 1) for line in (self.root / 'output').read_text().splitlines())
-        production = release.decode(output['plan'])
-        self.assertEqual(production['source']['environment'], 'production')
-        self.assertNotEqual(production['source']['inputs'], planned['source']['inputs'])
+    def test_prepare_needs_no_host_snapshot_and_emits_only_matching_environment_artifacts(self):
+        inputs = []
+        for environment, ref, ref_type in (('development', 'refs/heads/master', 'branch'),
+                                            ('staging', 'refs/heads/staging', 'branch'),
+                                            ('production', 'refs/tags/v2.0.0', 'tag')):
+            with self.subTest(environment=environment):
+                self.environment.update(GITHUB_EVENT_NAME='workflow_dispatch',
+                                        GITHUB_REF=ref, GITHUB_REF_TYPE=ref_type,
+                                        PREPARE_ENVIRONMENT=environment)
+                self.command('prepare')
+                output = dict(line.split('=', 1) for line in (self.root / 'output').read_text().splitlines())
+                planned = release.decode(output['plan'])
+                self.assertEqual((output['server'], output['web'], planned['mode']), ('true', 'true', 'prepare'))
+                directory = self.root / ('prepared-' + environment)
+                result = self.command('resolve', str(directory), environment=self.resolve_environment(planned))
+                self.assertEqual(result.stdout.strip(), '')
+                self.assertEqual(sorted(item.name for item in directory.iterdir()), ['manifest.json', 'runtime.tar'])
+                manifest = json.loads((directory / 'manifest.json').read_text())
+                self.assertEqual((manifest['environment'], manifest['ref']), (environment, ref))
+                release.unpack((directory / 'runtime.tar').read_bytes(), manifest['package'])
+                inputs.append(manifest['inputs']['server'])
+                self.environment['PREPARE_ENVIRONMENT'] = 'production' if environment != 'production' else 'staging'
+                self.command('prepare', succeeds=False)
+        self.assertEqual(len(set(inputs)), 3, 'Each environment needs an independent input baseline')
+        for ref in ('refs/heads/codex/feature', 'refs/tags/vlatest'):
+            self.environment.update(GITHUB_REF=ref, PREPARE_ENVIRONMENT='staging')
+            self.command('prepare', succeeds=False)
+
+    def test_staging_baseline_and_exact_pending_retry_preserve_the_release(self):
+        self.environment['GITHUB_REF'] = 'refs/heads/staging'
+        _, planned = self.plan()
+        self.assertEqual(planned['source']['environment'], 'staging')
+        self.snapshot['release'] = self.manifest(planned['source'])
+        self.snapshot['ancestry'] = planned['source']['revision']
+        self.change('docs/runbook.md', 'staging docs')
+        output, _ = self.plan()
+        self.assertEqual(output['mode'], 'skip')
+        self.change('server/main.go', 'staging runtime')
+        _, planned = self.plan()
+        request = {'version': 1, 'baseline': self.snapshot['token'], 'release': self.manifest(planned['source'])}
+        self.snapshot['pending'] = {'request': request, 'stage': 'activated', 'backup': 'backups/original', 'recovery': False}
+        output, retry = self.plan()
+        self.assertEqual((output['server'], output['web'], retry['mode']), ('false', 'false', 'retry'))
+        directory = self.root / 'staging-retry'
+        environment = self.resolve_environment(retry)
+        environment.update(SERVER_RESULT='skipped', WEB_RESULT='skipped')
+        result = self.command('resolve', str(directory), environment=environment)
+        self.assertEqual(result.stdout.strip(), 'retry-release ' + release.encode(request))
+        self.assertFalse(directory.exists())
+        self.change('server/main.go', 'different staging target')
+        self.assertIn('operator', self.plan(succeeds=False).stderr.lower())
 
     def test_tags_always_build_both_and_pending_tag_rerun_preserves_artifacts(self):
         self.git('tag', 'v2.0.0')
@@ -228,6 +257,48 @@ class PipelineTests(unittest.TestCase):
         self.environment['GITHUB_SHA'] = self.git('rev-parse', 'HEAD')
         self.plan()
 
+
+
+class WorkflowTests(unittest.TestCase):
+    def test_routing_gate_and_dispatch_keep_all_three_environments_separate(self):
+        workflow = (ROOT.parent / '.github/workflows/deploy-vps.yml').read_text()
+        triggers = workflow.split('permissions:', 1)[0]
+        self.assertEqual(triggers.count('branches: [master, staging]'), 2)
+        self.assertIn('options: [development, staging, production]', triggers)
+        routes = [expression for expression in re.findall(r'\$\{\{(.*?)\}\}', workflow)
+                  if "'development'" in expression and "'production'" in expression]
+        self.assertEqual(len(routes), 5, 'Concurrency, both environments, deploy label and artifact must route')
+        plan_condition = re.search(r'  plan:\n.*?    if: ([^\n]+)', workflow, re.S)[1]
+        ssh_conditions = re.findall(
+            r'- name: (?:Read the durable host release baseline|Install complete release or resume exact pending attempt)\n +if: ([^\n]+)', workflow)
+        self.assertEqual(len(ssh_conditions), 2)
+        checks_condition = re.search(r'  checks:\n.*?    if: ([^\n]+)', workflow, re.S)[1]
+        for event, ref, ref_type, enabled, environment, plans in (
+                ('push', 'refs/heads/master', 'branch', '', 'development', True),
+                ('push', 'refs/heads/staging', 'branch', '', 'staging', False),
+                ('push', 'refs/heads/staging', 'branch', 'false', 'staging', False),
+                ('push', 'refs/heads/staging', 'branch', 'true', 'staging', True),
+                ('push', 'refs/heads/staging', 'branch', 'True', 'staging', True),
+                ('push', 'refs/heads/staging', 'branch', 'TRUE', 'staging', True),
+                ('push', 'refs/tags/v1.2.3', 'tag', '', 'production', True),
+                ('workflow_dispatch', 'refs/heads/staging', 'branch', '', 'staging', True),
+                ('pull_request', 'refs/pull/42/merge', 'branch', '', 'development', False)):
+            with self.subTest(event=event, ref=ref, enabled=enabled):
+                context = {'github': SimpleNamespace(event_name=event, ref=ref, ref_type=ref_type,
+                                                     repository='Luckmorecat/falky'),
+                           # GitHub string equality ignores case, including repository opt-in values.
+                           'vars': SimpleNamespace(STAGING_DEPLOY_ENABLED=enabled.casefold())}
+                def evaluate(expression):
+                    return eval(expression.strip().replace('&&', ' and ').replace('||', ' or '),
+                                {'__builtins__': {}}, context)
+                for expression in routes:
+                    expected = ref if event == 'pull_request' and 'pull_request' in expression else environment
+                    self.assertEqual(evaluate(expression), expected, expression)
+                self.assertEqual(evaluate(plan_condition), plans)
+                self.assertTrue(evaluate(checks_condition))
+                for condition in ssh_conditions:
+                    self.assertEqual(evaluate(condition), event == 'push')
+        self.assertIn("dev_stats: ${{ github.ref == 'refs/heads/master' }}", workflow)
 
 class TransportTests(unittest.TestCase):
     def test_ssh_streams_archive_unchanged_pins_host_and_cleans_private_credentials(self):

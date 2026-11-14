@@ -35,10 +35,13 @@ const maxRequestBody = 64 << 10
 
 // Deps are what the handlers serve from.
 type Deps struct {
-	Logger      *slog.Logger
-	Health      *platform.Health
-	Metrics     http.Handler
-	Identity    *identity.Service
+	SignInLimits *SignInLimits
+	SignInNow    func() time.Time
+	Logger       *slog.Logger
+	Health       *platform.Health
+	Metrics      http.Handler
+	Identity     *identity.Service
+	// Lifecycle must be dedicated to Identity and Live; New configures its maintenance dependencies.
 	Lifecycle   *Lifecycle
 	AuthLimit   *platform.Limiter
 	Rooms       *rooms.Service
@@ -61,8 +64,10 @@ type Deps struct {
 
 // New returns the handlers of both listeners. Every operation of the contract
 // is routed on one mux; each listener forwards only its own path prefixes to
-// it, so an operation is reachable on exactly one listener.
+// it, so an operation is reachable on exactly one listener. The supplied Lifecycle
+// is configured for Identity and Live and must keep those same dependencies.
 func New(deps Deps) Handlers {
+	signInBodyContract()
 	if deps.Lifecycle == nil {
 		deps.Lifecycle = &Lifecycle{}
 	}
@@ -75,7 +80,17 @@ func New(deps Deps) Handlers {
 	if deps.AuthLimit == nil {
 		deps.AuthLimit = platform.NewLimiter(20, 3*time.Second, time.Now)
 	}
+	if deps.SignInNow == nil {
+		deps.SignInNow = time.Now
+	}
+	if deps.SignInLimits == nil {
+		deps.SignInLimits = &SignInLimits{}
+	}
+	deps.SignInLimits.defaults(deps.SignInNow)
+	deps.Lifecycle.identity = deps.Identity
+	deps.Lifecycle.events = Events{Hub: deps.Live, Logger: deps.Logger}
 	s := &server{
+		signInLimits: deps.SignInLimits, signInNow: deps.SignInNow,
 		lifecycle:    deps.Lifecycle,
 		logger:       deps.Logger,
 		health:       deps.Health,
@@ -107,6 +122,7 @@ func New(deps Deps) Handlers {
 	public.HandleFunc("GET /api/attachments/{id}", attachmentRoute(a.status))
 	public.HandleFunc("DELETE /api/attachments/{id}", attachmentRoute(a.cancel))
 	public.HandleFunc("GET /api/attachments/{id}/content", attachmentRoute(a.content))
+	public.Handle("GET /api/accounts/signin-requests/{requestId}/events", signInLive{origin: deps.PublicOrigin, identity: deps.Identity, hub: deps.Live, lifecycle: deps.Lifecycle, logger: deps.Logger, limits: deps.SignInLimits, now: deps.SignInNow})
 	public.Handle("GET /api/live", live{
 		origin: deps.PublicOrigin, resolve: resolve, identity: deps.Identity, rooms: deps.Rooms, hub: deps.Live,
 		logger: deps.Logger, lifecycle: deps.Lifecycle,
@@ -127,10 +143,12 @@ func New(deps Deps) Handlers {
 		http.MaxBytesHandler(liveKitWebhook{voice: deps.Voice, logger: deps.Logger}, maxWebhookBody))
 	internal.HandleFunc("/", notFound)
 
-	return Handlers{Public: accountProtection(public, deps.PublicOrigin, deps.AuthLimit), Internal: internal, Signalling: signalling}
+	return Handlers{Public: accountProtection(public, deps.PublicOrigin, deps.AuthLimit, deps.SignInLimits), Internal: internal, Signalling: signalling}
 }
 
 type server struct {
+	signInLimits *SignInLimits
+	signInNow    func() time.Time
 	lifecycle    *Lifecycle
 	events       Events
 	logger       *slog.Logger

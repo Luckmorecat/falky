@@ -7,6 +7,7 @@ import { isAvailable, isImage, useAttachmentImage, type ImageState } from '../ch
 import type { ComposerUpload } from '../chat/timeline';
 import { t } from '../strings';
 import { Icon } from './Icon';
+import './Attachments.css';
 
 /** Opens the viewer at a picture; the element is where it grows from and goes back to. */
 export type OpenImage = (id: string, from: HTMLElement) => void;
