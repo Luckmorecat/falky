@@ -7,6 +7,7 @@ import { type PaletteName } from '../fx/palette';
 import { resolveLanguage, setLanguage, t } from '../strings';
 import { VoiceSession } from '@falky/voice';
 import type { VoiceClient } from '../voice/types';
+import { microphoneGain } from '../voice/micGain';
 import { playSound, notificationPermission, requestNotificationPermission, notificationsAvailable, notify } from '@falky/browser';
 import { applyAppearance } from './appearance';
 import { prefs, type Settings } from './prefs';
@@ -115,6 +116,7 @@ const voiceSession: VoiceClient = new VoiceSession({
     const s = getState().settings;
     return { echoCancellation: s.echoCancellation, noiseSuppression: s.noiseSuppression, autoGainControl: s.autoGain };
   },
+  micGain: () => microphoneGain(getState().settings.autoGain, getState().settings.micVolume),
   joinMuted: () => getState().settings.joinMuted,
   shareSettings: () => getState().settings,
   cameraSettings: () => getState().settings,
@@ -827,6 +829,7 @@ export function updateSettings(patch: Partial<Settings>): void {
   setState({ settings });
   if (patch.language !== undefined || patch.theme !== undefined || patch.fewerEffects !== undefined || patch.orbLight !== undefined) applyAppearance();
   if (patch.noiseSuppression !== undefined || patch.echoCancellation !== undefined || patch.autoGain !== undefined) void voice.applyMicProcessing();
+  if (patch.micVolume !== undefined || patch.autoGain !== undefined) voice.applyMicGain();
   if (patch.micId !== undefined) void voice.setMic(patch.micId);
   if (patch.speakerId !== undefined) void voice.setSpeaker(patch.speakerId);
   if (patch.cameraId !== undefined) void voice.setCamera(patch.cameraId);

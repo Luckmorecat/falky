@@ -44,7 +44,7 @@ beforeEach(async () => {
   joinMuted = false;
   const host: VoiceHost = {
     onChange() {}, onProblem: (problem) => problems.push(problem), onSound() {},
-    micId: () => '', speakerId: () => '', micProcessing: () => ({ echoCancellation: true, noiseSuppression: true, autoGainControl: true }),
+    micId: () => '', speakerId: () => '', micGain: () => 1, micProcessing: () => ({ echoCancellation: true, noiseSuppression: true, autoGainControl: true }),
     joinMuted: () => joinMuted, cameraSettings: () => ({ cameraId: '', cameraResolution: '720', cameraMirror: true }),
       shareSettings: () => prefs.settings(), volumeOf: () => 1,
   };

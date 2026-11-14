@@ -1,5 +1,5 @@
 import { mockState, subscribeMockState } from './state';
-import type { MicTest } from '../voice/meter';
+import type { MicTest, MicTestOptions } from '../voice/meter';
 import type { ShareCodec } from '../voice/share';
 import type { Sound } from '../voice/sounds';
 
@@ -21,10 +21,11 @@ export function watchDevices(onChange: () => void): () => void {
   return () => devices.removeEventListener('devicechange', onChange);
 }
 export function refreshDevices(): void { devices.dispatchEvent(new Event('devicechange')); }
-export async function startMicTest(_constraints: MediaTrackConstraints): Promise<MicTest> {
+export async function startMicTest(_constraints: MediaTrackConstraints, options: MicTestOptions = {}): Promise<MicTest> {
   if (mockState()?.faults.micDenied) throw new DOMException('Simulated microphone denial', 'NotAllowedError');
   let stopped = false;
-  return { level: () => stopped ? 0 : 0.35 + 0.25 * Math.sin(performance.now() / 170), stop: () => { stopped = true; } };
+  let gain = options.gain ?? 1;
+  return { level: () => stopped ? 0 : Math.min(1, gain * (0.35 + 0.25 * Math.sin(performance.now() / 170))), setGain: (value) => { gain = value; }, stop: () => { stopped = true; } };
 }
 /** Settings exercise state only; no audio output or OS notification escapes mock mode. */
 export function playSound(_sound: Sound, _sinkId = '', _pitch = 0.5): void {}

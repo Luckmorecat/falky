@@ -8,25 +8,66 @@ export function loudness(samples: Float32Array): number {
 
 export interface MicTest {
   level(): number;
+  setGain(value: number): void;
   stop(): void;
 }
 
-/** Listens to a microphone outside voice, to see that it works. Nothing leaves the page. */
-export async function startMicTest(constraints: MediaTrackConstraints): Promise<MicTest> {
-  const stream = await navigator.mediaDevices.getUserMedia({ audio: constraints });
+export interface MicTestOptions {
+  gain?: number;
+  sinkId?: string;
+  signal?: AbortSignal;
+}
+
+/** Delayed playback stays local and is disconnected before room audio resumes. */
+export async function startMicTest(constraints: MediaTrackConstraints, options: MicTestOptions = {}): Promise<MicTest> {
   const ctx = new AudioContext();
-  const analyser = ctx.createAnalyser();
-  analyser.fftSize = 1024;
-  ctx.createMediaStreamSource(stream).connect(analyser);
-  const buf = new Float32Array(analyser.fftSize);
-  return {
-    level() {
-      analyser.getFloatTimeDomainData(buf);
-      return loudness(buf);
-    },
-    stop() {
-      stream.getTracks().forEach((track) => track.stop());
-      void ctx.close();
-    },
+  let stream: MediaStream | undefined;
+  let source: MediaStreamAudioSourceNode | undefined;
+  let delay: DelayNode | undefined;
+  let stopped = false;
+  const stop = () => {
+    if (stopped) return;
+    stopped = true;
+    options.signal?.removeEventListener('abort', stop);
+    source?.disconnect();
+    delay?.disconnect();
+    stream?.getTracks().forEach((track) => track.stop());
+    void ctx.close().catch(() => {});
   };
+  options.signal?.addEventListener('abort', stop, { once: true });
+  try {
+    options.signal?.throwIfAborted();
+    const resumed = ctx.resume();
+    // Capture rejection even if the permission prompt stays open.
+    void resumed.catch(() => {});
+    stream = await navigator.mediaDevices.getUserMedia({ audio: constraints });
+    if (stopped) {
+      stream.getTracks().forEach((track) => track.stop());
+      throw new DOMException('Microphone test stopped', 'AbortError');
+    }
+    const withSink = ctx as AudioContext & { setSinkId?: (id: string) => Promise<void> };
+    if (options.sinkId && withSink.setSinkId) await withSink.setSinkId(options.sinkId);
+    await resumed;
+    options.signal?.throwIfAborted();
+    const analyser = ctx.createAnalyser();
+    analyser.fftSize = 1024;
+    const gain = ctx.createGain();
+    gain.gain.value = options.gain ?? 1;
+    delay = ctx.createDelay(1);
+    delay.delayTime.value = 1;
+    source = ctx.createMediaStreamSource(stream);
+    source.connect(gain).connect(analyser).connect(delay).connect(ctx.destination);
+    const buf = new Float32Array(analyser.fftSize);
+    return {
+      level() {
+        analyser.getFloatTimeDomainData(buf);
+        return stopped ? 0 : loudness(buf);
+      },
+      setGain(value) { gain.gain.value = value; },
+      stop,
+    };
+  } catch (error) {
+    stop();
+    throw error;
+  }
 }

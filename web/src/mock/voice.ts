@@ -1,6 +1,7 @@
 import { api, ApiError } from '../api/client';
 import { idleVoice, type VoiceHost, type VoiceSnapshot, type VoiceClient, type ShareTrack } from '../voice/types';
 import { SyntheticShare } from './share';
+import { MicTestMuting, type MicTestMute } from '../voice/micTestMute';
 import { mockAction, mockState, refreshMockState, subscribeMockState } from './state';
 
 /** Mock media needs no SDK download. */
@@ -13,6 +14,7 @@ export class VoiceSession implements VoiceClient {
   private cameras = new Map<string, SyntheticShare>();
   private snap: VoiceSnapshot = idleVoice;
   private mutedBeforeDeaf = false;
+  private readonly micTestMuting = new MicTestMuting();
   private operation = 0;
   private generation: number | null = null;
   private readonly unsubscribe: () => void;
@@ -83,6 +85,7 @@ export class VoiceSession implements VoiceClient {
   dispose(): void { this.end(); this.unsubscribe(); window.removeEventListener('pagehide', this.pagehide); }
 
   async toggleMute(): Promise<void> {
+    if (this.micTestMuting.active) return;
     if (!this.snap.roomId) return;
     if (this.snap.deafened) await this.toggleDeafen();
     if (!this.snap.muted) this.set({ muted: true });
@@ -92,6 +95,7 @@ export class VoiceSession implements VoiceClient {
   async toggleDeafen(): Promise<void> {
     if (!this.snap.roomId) return;
     if (!this.snap.deafened) {
+      this.micTestMuting.keepMuted();
       this.mutedBeforeDeaf = this.snap.muted;
       this.set({ deafened: true, muted: true });
     } else {
@@ -119,6 +123,18 @@ export class VoiceSession implements VoiceClient {
   async setMic(_deviceId: string): Promise<void> {}
   async setSpeaker(_deviceId: string): Promise<void> {}
   async applyMicProcessing(): Promise<void> {}
+  applyMicGain(): void {}
+  suspendMicForTest(): MicTestMute {
+    const grant = this.grantId;
+    const restore = !!grant && !this.snap.muted;
+    return this.micTestMuting.acquire(async () => {
+      if (grant) { this.set({ muted: true }); this.refresh(); }
+    }, restore ? async () => {
+      if (this.grantId !== grant || this.snap.deafened) return;
+      this.enableMic();
+      this.refresh();
+    } : undefined);
+  }
 
   level(visitorId: string): number {
     const person = this.snap.people.find((person) => person.id === visitorId);
@@ -128,6 +144,7 @@ export class VoiceSession implements VoiceClient {
   }
 
   private enableMic(): void {
+    if (this.micTestMuting.active) return;
     const denied = mockState()?.faults.micDenied ?? false;
     this.set({ muted: denied, listenOnly: denied });
     if (denied) this.host.onProblem('mic_denied');
@@ -169,6 +186,7 @@ export class VoiceSession implements VoiceClient {
     await mockAction({ type: 'voice-disconnect', generation, connectionId: grantId }).catch(() => {});
   }
   private close(): Promise<void> {
+    this.micTestMuting.reset();
     const pending = this.generation !== null && this.grantId ? this.release(this.generation, this.grantId) : Promise.resolve();
     this.operation++;
     this.generation = null;

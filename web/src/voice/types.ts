@@ -1,6 +1,7 @@
 import type { CameraSettings } from './camera';
 import type { ShareSettings } from './share';
 import type { ShareStatsTrack } from './shareStats';
+import type { MicTestMute } from './micTestMute';
 
 export interface VoicePerson {
   /** Immutable connection identity. */
@@ -57,6 +58,7 @@ export interface VoiceHost {
   micId(): string;
   speakerId(): string;
   micProcessing(): { echoCancellation: boolean; noiseSuppression: boolean; autoGainControl: boolean };
+  micGain(): number;
   joinMuted(): boolean;
   shareSettings(): ShareSettings;
   cameraSettings(): CameraSettings;
@@ -87,4 +89,6 @@ export interface VoiceClient {
   setMic(deviceId: string): Promise<void>;
   setSpeaker(deviceId: string): Promise<void>;
   applyMicProcessing(): Promise<void>;
+  applyMicGain(): void;
+  suspendMicForTest(): MicTestMute;
 }
