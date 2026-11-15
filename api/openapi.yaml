@@ -1948,6 +1948,61 @@ paths:
                 $ref: "#/components/schemas/Error"
         default:
           $ref: "#/components/responses/Error"
+  /api/rooms/{id}/knock:
+    parameters:
+      - $ref: "#/components/parameters/RoomId"
+    post:
+      operationId: knock
+      tags: [rooms]
+      summary: Call someone into this room's voice.
+      description: >-
+        Asks another identity to join the room's voice that the caller is in.
+        Every open live connection of that identity receives a private `knock`
+        event; no one else does. The answer is the same whether or not they are
+        connected, already in this voice, or known at all, so a knock reveals
+        neither connection status nor a roster. Nothing is stored.
+        A caller may knock the same identity once per 30 seconds and anyone
+        at most five times in a minute.
+      requestBody:
+        description: The identity to call.
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/KnockRequest"
+      responses:
+        "204":
+          description: Accepted; delivered to every open connection of that identity, if any.
+        "400":
+          description: A missing visitor ID, or the caller's own (invalid_request).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          $ref: "#/components/responses/VisitorRequired"
+        "404":
+          $ref: "#/components/responses/RoomNotFound"
+        "409":
+          description: The caller has no connection in this room's voice (not_in_voice).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "429":
+          description: Knocked this identity or anyone too often (knock_too_soon); try again after Retry-After seconds.
+          headers:
+            Retry-After:
+              description: Whole seconds until a knock is accepted again.
+              schema:
+                type: integer
+                minimum: 1
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        default:
+          $ref: "#/components/responses/Error"
   /api/live:
     get:
       operationId: openLive
@@ -3210,7 +3265,8 @@ components:
         `AttachmentsExpired`. Private `account.signin.requested` reaches only the exact issuing
         session; `account.signin.state_changed` reaches only its bound candidate. Both carry
         a sanitized `SignInRequest` with durable version. Issuer reconnect snapshots repeat
-        its links requests in stable creation/identifier order. Clients ignore
+        its links requests in stable creation/identifier order. Private `knock` reaches only the
+        connections of the knocked identity and carries a `Knock`. Clients ignore
         event types they do not know.
       required: [v, type, eventId, payload, timestamp]
       properties:
@@ -3242,6 +3298,7 @@ components:
             - $ref: "#/components/schemas/VisitorColour"
             - $ref: "#/components/schemas/AttachmentsExpired"
             - $ref: "#/components/schemas/SignInRequest"
+            - $ref: "#/components/schemas/Knock"
         timestamp:
           type: string
           format: date-time
@@ -3274,9 +3331,42 @@ components:
         saved colour change (its payload is the `VisitorColour`) to all visitors;
         `attachments.expired`, posted files expired in this room (its payload is
         `AttachmentsExpired`); private `account.signin.requested` and
-        `account.signin.state_changed` carry `SignInRequest`. Private drafts are never broadcast.
-      enum: [message.created, room.changed, occupancy.changed, access.revoked, visitor.colour.changed, attachments.expired, account.signin.requested, account.signin.state_changed]
+        `account.signin.state_changed` carry `SignInRequest`. Private `knock` reaches only the
+        knocked identity's connections and carries a `Knock`. Private drafts are never broadcast.
+      enum: [message.created, room.changed, occupancy.changed, access.revoked, visitor.colour.changed, attachments.expired, account.signin.requested, account.signin.state_changed, knock]
       example: message.created
+    KnockRequest:
+      type: object
+      additionalProperties: false
+      description: Whom to call into the room's voice.
+      required: [visitorId]
+      properties:
+        visitorId:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: The permanent identity ID to call, as messages and occupancy show it.
+          example: 01JBX6Z8Q3M5W2K7R9T4V1C0DE
+    Knock:
+      type: object
+      description: Someone in a room's voice calls this identity to join it.
+      required: [roomId, from]
+      properties:
+        roomId:
+          type: string
+          description: The room whose voice to join.
+          example: 01JBX7A2K9D4F6H8M0P3R5T7VW
+        from:
+          type: object
+          description: Who knocked, under their current name.
+          required: [visitorId, name]
+          properties:
+            visitorId:
+              type: string
+              example: 01JBX6Z8Q3M5W2K7R9T4V1C0DE
+            name:
+              type: string
+              example: Alex
     RoomChange:
       type: object
       description: A room as it is after being created or renamed.

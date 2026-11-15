@@ -101,6 +101,7 @@ func New(deps Deps) Handlers {
 		enterLimit:   deps.EnterLimit,
 		publicOrigin: deps.PublicOrigin,
 		events:       Events{Hub: deps.Live, Logger: deps.Logger},
+		knocks:       newKnockLimits(time.Now),
 	}
 	errs := errorWriter{logger: deps.Logger}
 	resolve := visitorResolver{identity: deps.Identity, errs: errs}
@@ -158,6 +159,7 @@ type server struct {
 	chat         *chat.Service
 	voice        *voice.Service
 	enterLimit   *platform.Limiter
+	knocks       knockLimits
 	publicOrigin string
 }
 
