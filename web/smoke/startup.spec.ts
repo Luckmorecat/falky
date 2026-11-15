@@ -41,6 +41,7 @@ test('keeps background programs through empty and same-size source updates', asy
   // Membership growth rebuilds only the voice program, retaining the theme surface.
   await expect(field).toHaveAttribute('data-program-builds', '3');
   await page.getByRole('button', { name: 'Leave voice', exact: true }).click();
+  await page.getByRole('dialog').getByRole('button', { name: 'Leave', exact: true }).click();
   await expect(page.locator('.grid .orb')).toHaveCount(1);
   await expect(field).toHaveAttribute('data-program-builds', '4');
   await page.getByRole('button', { name: 'Join', exact: true }).click();

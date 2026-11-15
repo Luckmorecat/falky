@@ -6,6 +6,7 @@ import { useApp } from '../app/store';
 import { onTick } from '../fx/ticker';
 import { t } from '../strings';
 import { canUseCamera } from '../voice/camera';
+import { EMOJI_REACTIONS, SOUND_REACTIONS } from '../voice/reactions';
 import { canShareScreen } from '../voice/share';
 import { Button } from './Button';
 import { IconButton } from './IconButton';
@@ -43,6 +44,7 @@ export function Dock({ room, unreadRef }: { room: Room | null; unreadRef?: Ref<H
 function Controls({ room, unreadRef, onSettings }: { room: Room | null; unreadRef?: Ref<HTMLSpanElement>; onSettings(): void }) {
   const v = useApp((s) => s.voice);
   const rooms = useApp((s) => s.rooms);
+  const pushToTalk = useApp((s) => s.settings.pushToTalk);
   const selfId = useApp((s) => s.voice.people.find((p) => p.local)?.id);
   const ring = useRef<HTMLSpanElement>(null);
   const inVoice = v.status === 'connected' || v.status === 'reconnecting' || (v.status === 'joining' && v.roomId !== null);
@@ -98,7 +100,7 @@ function Controls({ room, unreadRef, onSettings }: { room: Room | null; unreadRe
       </IconButton>
       <div className="mic-wrap">
         <span ref={ring} className="mic-ring" />
-        <IconButton className={v.muted ? 'off' : ''} aria-pressed={v.muted} data-cue={v.muted ? 'on' : 'off'} aria-label={muteLabel} data-tip={`${muteLabel} (${shortcuts.mute.label})`} onClick={() => void voice.toggleMute()}>
+        <IconButton className={v.muted ? 'off' : ''} aria-pressed={v.muted} data-cue={v.muted ? 'on' : 'off'} aria-label={muteLabel} data-tip={pushToTalk && v.muted ? t.holdToTalk : `${muteLabel} (${shortcuts.mute.label})`} onClick={() => void voice.toggleMute()}>
           <Icon name={v.muted ? 'micOff' : 'mic'} />
         </IconButton>
       </div>
@@ -112,14 +114,91 @@ function Controls({ room, unreadRef, onSettings }: { room: Room | null; unreadRe
           <Icon name="screen" />
         </IconButton>
       )}
+      <ReactButton />
       <span className="dock-sep" />
       <SettingsButton onOpen={onSettings} />
       <ChatButton unreadRef={unreadRef} />
-      <button className="leave" data-cue="none" aria-label={t.leaveVoice} onClick={() => void voice.leave()}>
+      <LeaveButton />
+    </div>
+  );
+}
+
+/** A tray of reactions above the dock, open until the pointer goes elsewhere. */
+function ReactButton() {
+  const [open, setOpen] = useState(false);
+  const wrap = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const away = (e: PointerEvent) => { if (!wrap.current?.contains(e.target as Node)) setOpen(false); };
+    const escape = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
+    addEventListener('pointerdown', away);
+    addEventListener('keydown', escape);
+    return () => {
+      removeEventListener('pointerdown', away);
+      removeEventListener('keydown', escape);
+    };
+  }, [open]);
+
+  return (
+    <div ref={wrap} className={`react-wrap${open ? ' open' : ''}`}>
+      <IconButton
+        aria-expanded={open}
+        aria-controls="react-tray"
+        aria-label={t.reactions}
+        data-cue={open ? 'off' : 'open'}
+        data-tip={open ? undefined : `${t.reactions} (${shortcuts.react.label})`}
+        onClick={() => setOpen(!open)}
+      >
+        <Icon name="smile" />
+      </IconButton>
+      <div id="react-tray" className="react-tray" role="group" aria-label={t.reactions} inert={!open}>
+        <div className="react-row">
+          {EMOJI_REACTIONS.map((r, i) => (
+            <button key={r.id} type="button" className="react-pick" aria-label={t.reactionNames[r.id]} data-tip={`${t.reactionNames[r.id]} (${i + 1})`} onClick={() => voice.react(r.id)}>
+              {r.emoji}
+            </button>
+          ))}
+        </div>
+        <div className="react-row react-sounds" role="group" aria-label={t.roomSounds}>
+          {SOUND_REACTIONS.map((r) => (
+            <button key={r.id} type="button" className="react-pick" aria-label={t.reactionNames[r.id]} title={t.reactionNames[r.id]} onClick={() => voice.react(r.id)}>
+              {r.emoji}
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function LeaveButton() {
+  const dialog = useRef<HTMLDialogElement>(null);
+
+  function leave() {
+    dialog.current?.close();
+    void voice.leave();
+  }
+
+  return (
+    <>
+      <button className="leave" data-cue="none" aria-label={t.leaveVoice} aria-haspopup="dialog" data-tip={`${t.leaveVoice} (${shortcuts.leave.label})`} onClick={() => dialog.current?.showModal()}>
         <span>{t.leave}</span>
         <i><Icon name="x" /></i>
       </button>
-    </div>
+      <dialog
+        ref={dialog}
+        className="leave-confirm"
+        aria-labelledby="leave-confirm-title"
+        onClick={(e) => { if (e.target === e.currentTarget) e.currentTarget.close(); }}
+      >
+        <h2 id="leave-confirm-title">{t.leaveAsk}</h2>
+        <div className="leave-confirm-actions">
+          <Button autoFocus onClick={() => dialog.current?.close()}>{t.leaveCancel}</Button>
+          <Button variant="danger" data-cue="none" onClick={leave}>{t.leave}</Button>
+        </div>
+      </dialog>
+    </>
   );
 }
 

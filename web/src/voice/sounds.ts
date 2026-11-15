@@ -2,7 +2,9 @@ import type { VoiceSound } from './types';
 
 /** What the interface itself says, next to what happens in a room. */
 export type InterfaceCue = 'tap' | 'on' | 'off' | 'open' | 'close' | 'tick';
-export type Sound = VoiceSound | InterfaceCue | 'test';
+/** Played to the whole room from the reactions tray. */
+export type BoardSound = 'rimshot' | 'horn' | 'tada' | 'crickets';
+export type Sound = VoiceSound | InterfaceCue | BoardSound | 'test';
 
 const MASTER_VOLUME = 0.3;
 
@@ -77,6 +79,24 @@ function stream(start: number, count: number, low: number, high: number, gap: nu
   }
 }
 
+/** A pitched tone with its own envelope, for the board's sounds. */
+function tone(start: number, type: OscillatorType, from: number, to: number, attack: number, decay: number, peak: number, lowpass = 0): void {
+  const { audio, out } = output();
+  const osc = audio.createOscillator();
+  osc.type = type;
+  osc.frequency.setValueAtTime(from, start);
+  if (to !== from) osc.frequency.exponentialRampToValueAtTime(to, start + attack + decay);
+  const env = envelope(audio, out, start, attack, decay, peak);
+  if (lowpass) {
+    const filter = audio.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.frequency.value = lowpass;
+    osc.connect(filter).connect(env);
+  } else osc.connect(env);
+  osc.start(start);
+  osc.stop(start + attack + decay + 0.05);
+}
+
 const SOUNDS: Record<Sound, (t: number, vary: number, pitch: number) => void> = {
   tap(t, v) {
     bubble(t, 340 * v, 720 * v, 0.085, 0.5);
@@ -100,6 +120,27 @@ const SOUNDS: Record<Sound, (t: number, vary: number, pitch: number) => void> = 
   leave: (t, v) => stream(t, 5, 1050, 340, 0.06, 0.09, 0.5, v),
   share: (t, v) => stream(t, 4, 640, 820, 0.08, 0.09, 0.5, v),
   test: (t, v) => stream(t, 7, 420, 1100, 0.07, 0.1, 0.55, v),
+  rimshot(t, v) {
+    tone(t, 'sine', 200 * v, 90, 0.004, 0.16, 0.7);
+    tone(t + 0.17, 'sine', 150 * v, 70, 0.004, 0.2, 0.7);
+    wash(t + 0.42, 7000, 9000, 0.45, 0.35);
+    tone(t + 0.42, 'triangle', 330 * v, 300, 0.002, 0.08, 0.25);
+  },
+  horn(t, v) {
+    for (const [at, length] of [[0, 0.16], [0.22, 0.16], [0.44, 0.55]] as const) {
+      tone(t + at, 'sawtooth', 415 * v, 415 * v, 0.02, length, 0.22, 2200);
+      tone(t + at, 'sawtooth', 523 * v, 523 * v, 0.02, length, 0.16, 2200);
+    }
+  },
+  tada(t, v) {
+    [523, 659, 784].forEach((f, i) => tone(t + i * 0.07, 'triangle', f * v, f * v, 0.01, 0.16, 0.3));
+    for (const f of [523, 659, 784, 1047]) tone(t + 0.24, 'triangle', f * v, f * v, 0.02, 0.9, 0.18);
+  },
+  crickets(t, v) {
+    for (let chirp = 0; chirp < 3; chirp++) {
+      for (let pulse = 0; pulse < 4; pulse++) tone(t + chirp * 0.42 + pulse * 0.045, 'sine', 4300 * v, 4300 * v, 0.006, 0.03, 0.12);
+    }
+  },
 };
 
 /**

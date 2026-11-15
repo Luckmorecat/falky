@@ -30,6 +30,9 @@ export interface Settings extends ShareSettings, CameraSettings {
   echoCancellation: boolean;
   autoGain: boolean;
   joinMuted: boolean;
+  pushToTalk: boolean;
+  /** Turns a long-silent live microphone off. */
+  awayMute: boolean;
   sounds: boolean;
   uiSounds: boolean;
   notifications: boolean;
@@ -56,6 +59,8 @@ export const prefs = {
       echoCancellation: read('echoCancellation') !== 'off',
       autoGain: read('autoGain') !== 'off',
       joinMuted: read('joinMuted') === 'on',
+      pushToTalk: read('pushToTalk') === 'on',
+      awayMute: read('awayMute') !== 'off',
       shareResolution: oneOf('shareResolution', ['720', '1080', '1440'], '1080'),
       shareFps: oneOf('shareFps', ['15', '30', '60'], '30'),
       shareCodec: oneOf('shareCodec', ['vp8', 'h264', 'h265'], 'vp8'),

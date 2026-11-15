@@ -7,6 +7,7 @@ import { type PaletteName } from '../fx/palette';
 import { resolveLanguage, setLanguage, t } from '../strings';
 import { VoiceSession } from '@falky/voice';
 import type { VoiceClient } from '../voice/types';
+import { allowSound, onReaction, soundOf } from '../voice/reactions';
 import { playSound, notificationPermission, requestNotificationPermission, notificationsAvailable, notify } from '@falky/browser';
 import { applyAppearance } from './appearance';
 import { prefs, type Settings } from './prefs';
@@ -115,13 +116,21 @@ const voiceSession: VoiceClient = new VoiceSession({
     const s = getState().settings;
     return { echoCancellation: s.echoCancellation, noiseSuppression: s.noiseSuppression, autoGainControl: s.autoGain };
   },
-  joinMuted: () => getState().settings.joinMuted,
+  joinMuted: () => getState().settings.joinMuted || getState().settings.pushToTalk,
   shareSettings: () => getState().settings,
   cameraSettings: () => getState().settings,
   volumeOf: (id) => prefs.volume(id),
 });
 
-const pausedVoiceActions = new Set<PropertyKey>(['join', 'toggleMute', 'toggleDeafen', 'toggleShare', 'toggleCamera', 'restartCamera', 'setCamera', 'setMic', 'setSpeaker', 'applyMicProcessing']);
+// Board sounds play for everyone who hears the sender: not while deafened, nor if their volume is down to nothing.
+onReaction((from, id) => {
+  const sound = soundOf(id);
+  const s = getState();
+  if (!sound || sessionChanging || !s.settings.sounds || s.voice.deafened || prefs.volume(from) === 0 || !allowSound(from, performance.now())) return;
+  playSound(sound, s.settings.speakerId);
+});
+
+const pausedVoiceActions = new Set<PropertyKey>(['join', 'toggleMute', 'toggleDeafen', 'toggleShare', 'toggleCamera', 'restartCamera', 'setCamera', 'setMic', 'setSpeaker', 'applyMicProcessing', 'react']);
 const voiceMethods = new Map<PropertyKey, unknown>();
 export const voice: VoiceClient = new Proxy(voiceSession, {
   get(target, key) {
@@ -831,6 +840,7 @@ export function updateSettings(patch: Partial<Settings>): void {
   if (patch.speakerId !== undefined) void voice.setSpeaker(patch.speakerId);
   if (patch.cameraId !== undefined) void voice.setCamera(patch.cameraId);
   if (patch.cameraResolution !== undefined) void voice.restartCamera();
+  if (patch.pushToTalk && !getState().voice.muted) void voice.toggleMute();
 }
 
 /** Turns message notifications on, asking the browser first; answers whether they are on. */

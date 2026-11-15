@@ -1,4 +1,5 @@
 import type { CameraSettings } from './camera';
+import type { ReactionId } from './reactions';
 import type { ShareSettings } from './share';
 import type { ShareStatsTrack } from './shareStats';
 
@@ -87,4 +88,6 @@ export interface VoiceClient {
   setMic(deviceId: string): Promise<void>;
   setSpeaker(deviceId: string): Promise<void>;
   applyMicProcessing(): Promise<void>;
+  /** Sends a reaction to everyone in voice and shows it on this client's own orb. */
+  react(id: ReactionId): void;
 }
