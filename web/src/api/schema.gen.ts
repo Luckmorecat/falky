@@ -836,6 +836,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/rooms/{id}/knock": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The room's ID. */
+                id: components["parameters"]["RoomId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Call someone into this room's voice.
+         * @description Asks another identity to join the room's voice that the caller is in. Every open live connection of that identity receives a private `knock` event; no one else does. The answer is the same whether or not they are connected, already in this voice, or known at all, so a knock reveals neither connection status nor a roster. Nothing is stored. A caller may knock the same identity once per 30 seconds and anyone at most five times in a minute.
+         */
+        post: operations["knock"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/live": {
         parameters: {
             query?: never;
@@ -1797,7 +1820,7 @@ export interface components {
             attachmentIds?: string[];
         };
         /**
-         * @description A live update, as sent over `GET /api/live`. `type` says what happened and which schema `payload` has: `message.created` carries a `Message`, `room.changed` a `RoomChange`, `occupancy.changed` an `OccupancyChange`, `visitor.colour.changed` a `VisitorColour`, `access.revoked` an `AccessRevoked`, `attachments.expired` an `AttachmentsExpired`. Private `account.signin.requested` reaches only the exact issuing session; `account.signin.state_changed` reaches only its bound candidate. Both carry a sanitized `SignInRequest` with durable version. Issuer reconnect snapshots repeat its links requests in stable creation/identifier order. Clients ignore event types they do not know.
+         * @description A live update, as sent over `GET /api/live`. `type` says what happened and which schema `payload` has: `message.created` carries a `Message`, `room.changed` a `RoomChange`, `occupancy.changed` an `OccupancyChange`, `visitor.colour.changed` a `VisitorColour`, `access.revoked` an `AccessRevoked`, `attachments.expired` an `AttachmentsExpired`. Private `account.signin.requested` reaches only the exact issuing session; `account.signin.state_changed` reaches only its bound candidate. Both carry a sanitized `SignInRequest` with durable version. Issuer reconnect snapshots repeat its links requests in stable creation/identifier order. Private `knock` reaches only the connections of the knocked identity and carries a `Knock`. Clients ignore event types they do not know.
          * @example {
          *       "v": 1,
          *       "type": "message.created",
@@ -1834,7 +1857,7 @@ export interface components {
              */
             roomId?: string;
             /** @description What happened, in the schema `type` names. */
-            payload: components["schemas"]["Message"] | components["schemas"]["RoomChange"] | components["schemas"]["OccupancyChange"] | components["schemas"]["AccessRevoked"] | components["schemas"]["VisitorColour"] | components["schemas"]["AttachmentsExpired"] | components["schemas"]["SignInRequest"];
+            payload: components["schemas"]["Message"] | components["schemas"]["RoomChange"] | components["schemas"]["OccupancyChange"] | components["schemas"]["AccessRevoked"] | components["schemas"]["VisitorColour"] | components["schemas"]["AttachmentsExpired"] | components["schemas"]["SignInRequest"] | components["schemas"]["Knock"];
             /**
              * Format: date-time
              * @description When the server published the event, in UTC.
@@ -1843,11 +1866,34 @@ export interface components {
             timestamp: string;
         };
         /**
-         * @description What an event reports: `message.created`, a message was posted (its payload is the `Message`); `room.changed`, a room was created or renamed (its payload is the `RoomChange`); `occupancy.changed`, someone joined or left a room's voice, or a participant's new name reached it (its payload is the `OccupancyChange`); `access.revoked`, the guest link was replaced (its payload is the `AccessRevoked`), and the server closes the connection next; `visitor.colour.changed`, an explicit saved colour change (its payload is the `VisitorColour`) to all visitors; `attachments.expired`, posted files expired in this room (its payload is `AttachmentsExpired`); private `account.signin.requested` and `account.signin.state_changed` carry `SignInRequest`. Private drafts are never broadcast.
+         * @description What an event reports: `message.created`, a message was posted (its payload is the `Message`); `room.changed`, a room was created or renamed (its payload is the `RoomChange`); `occupancy.changed`, someone joined or left a room's voice, or a participant's new name reached it (its payload is the `OccupancyChange`); `access.revoked`, the guest link was replaced (its payload is the `AccessRevoked`), and the server closes the connection next; `visitor.colour.changed`, an explicit saved colour change (its payload is the `VisitorColour`) to all visitors; `attachments.expired`, posted files expired in this room (its payload is `AttachmentsExpired`); private `account.signin.requested` and `account.signin.state_changed` carry `SignInRequest`. Private `knock` reaches only the knocked identity's connections and carries a `Knock`. Private drafts are never broadcast.
          * @example message.created
          * @enum {string}
          */
-        EventType: "message.created" | "room.changed" | "occupancy.changed" | "access.revoked" | "visitor.colour.changed" | "attachments.expired" | "account.signin.requested" | "account.signin.state_changed";
+        EventType: "message.created" | "room.changed" | "occupancy.changed" | "access.revoked" | "visitor.colour.changed" | "attachments.expired" | "account.signin.requested" | "account.signin.state_changed" | "knock";
+        /** @description Whom to call into the room's voice. */
+        KnockRequest: {
+            /**
+             * @description The permanent identity ID to call, as messages and occupancy show it.
+             * @example 01JBX6Z8Q3M5W2K7R9T4V1C0DE
+             */
+            visitorId: string;
+        };
+        /** @description Someone in a room's voice calls this identity to join it. */
+        Knock: {
+            /**
+             * @description The room whose voice to join.
+             * @example 01JBX7A2K9D4F6H8M0P3R5T7VW
+             */
+            roomId: string;
+            /** @description Who knocked, under their current name. */
+            from: {
+                /** @example 01JBX6Z8Q3M5W2K7R9T4V1C0DE */
+                visitorId: string;
+                /** @example Alex */
+                name: string;
+            };
+        };
         /** @description A room as it is after being created or renamed. */
         RoomChange: {
             /**
@@ -3800,6 +3846,64 @@ export interface operations {
             /** @description The server cannot reach LiveKit (`voice_unavailable`); try again later. Existing connections are unchanged. */
             503: {
                 headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    knock: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The room's ID. */
+                id: components["parameters"]["RoomId"];
+            };
+            cookie?: never;
+        };
+        /** @description The identity to call. */
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["KnockRequest"];
+            };
+        };
+        responses: {
+            /** @description Accepted; delivered to every open connection of that identity, if any. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description A missing visitor ID, or the caller's own (invalid_request). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            401: components["responses"]["VisitorRequired"];
+            404: components["responses"]["RoomNotFound"];
+            /** @description The caller has no connection in this room's voice (not_in_voice). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Knocked this identity or anyone too often (knock_too_soon); try again after Retry-After seconds. */
+            429: {
+                headers: {
+                    /** @description Whole seconds until a knock is accepted again. */
+                    "Retry-After"?: number;
                     [name: string]: unknown;
                 };
                 content: {

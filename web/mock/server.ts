@@ -114,6 +114,7 @@ export async function startMockServer(options: { port?: number; scenario?: strin
   let conflictName: string | null = null;
   let accessSecret = 'mock-access-link';
   const requests = new Map<string, Schema['Message']>();
+  const knocks = new Map<string, number>();
   const sockets = new WebSocketServer({ noServer: true, maxPayload: 32 * 1024 });
   const privateSockets = new Map<WebSocket, string>();
   function publish(type: Schema['EventType'], payload: Schema['Event']['payload'], roomId?: string) {
@@ -290,7 +291,7 @@ export async function startMockServer(options: { port?: number; scenario?: strin
     }
     if (url.pathname === '/__mock' && req.method === 'GET') return json(res, 200, {
       scenarios, endpoints: { bootstrap: 'POST /__mock/bootstrap {scenario?}', state: 'GET /__mock/state', reset: 'POST /__mock/reset {scenario?}', action: 'POST /__mock/action' },
-      actions: ['colour', 'message', 'participants', 'faults', 'name-conflict', 'revoke', 'voice-disconnect', 'expire-attachments', 'account-fault', 'expire-proof', 'device-fault', 'device-expire'],
+      actions: ['colour', 'message', 'participants', 'faults', 'name-conflict', 'revoke', 'voice-disconnect', 'expire-attachments', 'account-fault', 'expire-proof', 'device-fault', 'device-expire', 'knock'],
       faults: state.faults,
       lifecycle: 'Same-scenario bootstrap preserves state. Reset advances generation; poll state independently of /api/live. Mock media disconnect releases exact connected presence in the current generation; it does not model durable authorization.',
     });
@@ -309,6 +310,12 @@ export async function startMockServer(options: { port?: number; scenario?: strin
         if (!['none', 'finish-expired', 'finish-lost', 'regenerate-lost', 'last-passkey', 'invalid-proof'].includes(String(input.fault))) throw new Refused(400, 'invalid_request', 'Invalid account fault');
         accounts.fault = input.fault as typeof accounts.fault;
       } else if (input.type === 'expire-proof') accounts.expireProof();
+      else if (input.type === 'knock') {
+        const room = state.rooms.find((r) => r.id === input.roomId);
+        if (!room) throw new Refused(404, 'room_not_found', 'No such room');
+        if (typeof input.name !== 'string' || !input.name.trim()) throw new Refused(400, 'invalid_request', 'Expected a name');
+        publish('knock', { roomId: room.id, from: { visitorId: id(), name: input.name.trim() } }, room.id);
+      }
       else if (input.type === 'faults') {
         const faults = input.faults;
         if (!faults || typeof faults !== 'object' || Array.isArray(faults)) throw new Refused(400, 'invalid_request', 'Expected faults object');
@@ -482,6 +489,22 @@ export async function startMockServer(options: { port?: number; scenario?: strin
       // Syntactically JWT-shaped; consumed only by the dev-only voice adapter.
       const jwt = (value: unknown) => Buffer.from(JSON.stringify(value)).toString('base64url');
       return json(res, 200, { grantId: grantId, url: publicOrigin.replace('http', 'ws') + '/rtc', token: `${jwt({ alg: 'none', typ: 'JWT' })}.${jwt({ sub: grantId, room: roomId, mock: true })}.mock` } satisfies Schema['VoiceCredentials']);
+    }
+    const knock = /^\/api\/rooms\/([^/]+)\/knock$/.exec(url.pathname);
+    if (knock && req.method === 'POST') {
+      const roomId = knock[1]!;
+      if (!state.rooms.some((room) => room.id === roomId)) throw new Refused(404, 'room_not_found', 'No such room');
+      if (typeof input.visitorId !== 'string' || !input.visitorId || input.visitorId === state.visitor.id) throw new Refused(400, 'invalid_request', 'Name someone else to knock');
+      if (!Object.values(state.voiceConnections).includes(roomId)) throw new Refused(409, 'not_in_voice', 'Join this room\'s voice before knocking');
+      const pair = `${state.visitor.id} ${input.visitorId}`;
+      const last = knocks.get(pair) ?? 0;
+      if (Date.now() - last < 30_000) {
+        res.setHeader('Retry-After', String(Math.ceil((30_000 - (Date.now() - last)) / 1000)));
+        throw new Refused(429, 'knock_too_soon', 'Knocked too often; try again later');
+      }
+      knocks.set(pair, Date.now());
+      res.writeHead(204).end();
+      return;
     }
     if (url.pathname === '/api/attachments/limits' && req.method === 'GET') return json(res, 200, attachmentLimits);
     const upload = /^\/api\/rooms\/([^/]+)\/attachments$/.exec(url.pathname);

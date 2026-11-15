@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { Attachment, Message, Room } from '../api/client';
-import { addFiles, discardMessage, loadOlder, markLatestRead, postMessage, retryMessage, setChatOpen, voice } from '../app/controller';
+import { addFiles, discardMessage, knock, loadOlder, markLatestRead, postMessage, retryMessage, setChatOpen, voice } from '../app/controller';
 import { shortcuts } from '../app/shortcuts';
 import { getState, useApp } from '../app/store';
 import { atBottom, followingLatest, rememberedPlace, rememberPlace, scrollToAnchor, sliceRange, stack, type Anchor } from '../chat/place';
@@ -83,7 +83,7 @@ function Body({ text }: { text: string }) {
   );
 }
 
-const MessageRow = memo(function MessageRow({ message, own, continued, lead, palette, onOpen }: { message: Message; own: boolean; continued: boolean; lead: boolean; palette: PaletteName | undefined; onOpen: OpenImage }) {
+const MessageRow = memo(function MessageRow({ message, own, continued, lead, palette, onOpen, knockable }: { message: Message; own: boolean; continued: boolean; lead: boolean; palette: PaletteName | undefined; onOpen: OpenImage; knockable: boolean }) {
   return (
     <article className={`msg${own ? ' own' : ''}${continued ? ' cont' : ''}${lead ? ' lead' : ''}`} style={paletteStyle(palette)}>
       {!continued && (
@@ -91,6 +91,11 @@ const MessageRow = memo(function MessageRow({ message, own, continued, lead, pal
           <span className="msg-avatar"><Orb seed={message.authorId} palette={palette} level={talkOf(message.authorId)} /></span>
           <span className="msg-author">{message.authorName}</span>
           <time className="msg-time" dateTime={message.createdAt}>{timeOf(message.createdAt)}</time>
+          {knockable && (
+            <button type="button" className="msg-knock" aria-label={t.knockAction(message.authorName)} title={t.knockAction(message.authorName)} onClick={() => void knock(message.roomId, message.authorId, message.authorName)}>
+              <Icon name="knock" />
+            </button>
+          )}
         </div>
       )}
       {message.attachments.length > 0 && <Gallery attachments={message.attachments} onOpen={onOpen} />}
@@ -133,6 +138,9 @@ export function Chat({ room }: { room: Room | null }) {
   const visitor = useApp((s) => s.visitor);
   const colours = useApp((s) => s.colours);
   const selfId = visitor?.id ?? '';
+  // Only from inside this room's voice, and never to whoever is already in it.
+  const voiceHere = useApp((s) => s.voice.status === 'connected' && !!room && s.voice.roomId === room.id);
+  const canKnock = (authorId: string) => voiceHere && authorId !== selfId && !room?.occupancy.some((p) => p.visitorId === authorId);
   const paletteFor = (id: string) => colours[id]?.palette;
   const feed = useRef<HTMLDivElement>(null);
   const heights = useRef(new Map<string, number>());
@@ -438,7 +446,7 @@ export function Chat({ room }: { room: Room | null }) {
                   {row.kind === 'loading' ? <div className="day">{t.loadingOlder}</div>
                     : row.kind === 'day' ? <div className="day">{row.label}</div>
                       : row.kind === 'new' ? <div className="new-line">{t.newMessages}</div>
-                        : row.kind === 'message' ? <MessageRow message={row.message} own={row.message.authorId === selfId} continued={row.continued} lead={lead} palette={paletteFor(row.message.authorId)} onOpen={openImage} />
+                        : row.kind === 'message' ? <MessageRow message={row.message} own={row.message.authorId === selfId} continued={row.continued} lead={lead} palette={paletteFor(row.message.authorId)} onOpen={openImage} knockable={canKnock(row.message.authorId)} />
                           : <PendingRow pending={row.pending} continued={row.continued} lead={lead} name={visitor?.name ?? ''} seed={selfId} palette={paletteFor(selfId)} />}
                 </div>
               );

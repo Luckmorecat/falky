@@ -190,6 +190,20 @@ test('voice moves retain the old room on failure and scripted peers, rename, lea
   assert.equal((await call('/api/me')).status, 200);
 });
 
+test('knocking needs this room\'s voice, refuses yourself and a quick repeat with Retry-After', async () => {
+  const { call, bootstrap } = await client();
+  const [lounge] = bootstrap.rooms;
+  const robin = '01JBX6Z8Q3M5W2K7R9T4V1C0DE';
+  assert.equal((await call(`/api/rooms/${lounge.id}/knock`, { visitorId: robin })).status, 409);
+  await call(`/api/rooms/${lounge.id}/voice`, {});
+  assert.equal((await call(`/api/rooms/${lounge.id}/knock`, { visitorId: bootstrap.visitor.id })).status, 400);
+  assert.equal((await call(`/api/rooms/${lounge.id}/knock`, { visitorId: robin })).status, 204);
+  const again = await call(`/api/rooms/${lounge.id}/knock`, { visitorId: robin });
+  assert.equal(again.status, 429);
+  assert.equal((await again.json()).code, 'knock_too_soon');
+  assert.ok(Number(again.headers.get('retry-after')) >= 1);
+});
+
 test('live upgrades require the instance session and enforce the public frame-size contract', async () => {
   const { server, cookie } = await client();
   const { WebSocket } = await import('ws');

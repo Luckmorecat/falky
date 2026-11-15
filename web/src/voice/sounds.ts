@@ -4,7 +4,7 @@ import type { VoiceSound } from './types';
 export type InterfaceCue = 'tap' | 'on' | 'off' | 'open' | 'close' | 'tick';
 /** Played to the whole room from the reactions tray. */
 export type BoardSound = 'rimshot' | 'horn' | 'tada' | 'crickets';
-export type Sound = VoiceSound | InterfaceCue | BoardSound | 'test';
+export type Sound = VoiceSound | InterfaceCue | BoardSound | 'knock' | 'test';
 
 const MASTER_VOLUME = 0.3;
 
@@ -139,6 +139,13 @@ const SOUNDS: Record<Sound, (t: number, vary: number, pitch: number) => void> = 
   crickets(t, v) {
     for (let chirp = 0; chirp < 3; chirp++) {
       for (let pulse = 0; pulse < 4; pulse++) tone(t + chirp * 0.42 + pulse * 0.045, 'sine', 4300 * v, 4300 * v, 0.006, 0.03, 0.12);
+    }
+  },
+  // Two raps on a door, then two more.
+  knock(t, v) {
+    for (const at of [0, 0.14, 0.5, 0.64]) {
+      bubble(t + at, 190 * v, 150 * v, 0.07, 0.75);
+      wash(t + at, 900, 500, 0.05, 0.12);
     }
   },
 };

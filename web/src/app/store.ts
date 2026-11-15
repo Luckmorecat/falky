@@ -34,6 +34,8 @@ export interface AppState {
   roomsOpen: boolean;
   voice: VoiceSnapshot;
   notice: Notice | null;
+  /** Someone in a room's voice calling this person to join it, until answered or dismissed. */
+  knock: { id: number; roomId: string; fromName: string } | null;
   settings: Settings;
   /** Only server-confirmed assignments; missing IDs render without a visitor colour. */
   colours: Record<string, VisitorColour>;
@@ -57,6 +59,7 @@ let state: AppState = {
   roomsOpen: false,
   voice: idleVoice,
   notice: null,
+  knock: null,
   settings: prefs.settings(),
   colours: {},
   colourSave: null,
