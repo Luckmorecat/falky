@@ -8,3 +8,11 @@ options.
 Use the [pr skill](.agents/skills/pr/SKILL.md) when creating or updating PR bodies.
 
 Avoid adding comments that merely restate what the code does.
+
+## Corners
+
+Nested corners are concentric: an outer radius is the inner radius plus the
+padding between them (`outer = inner + gap`). Derive the outer radius from
+the inner one in CSS (`calc(inner + gap)`) instead of picking a round number,
+so it stays right under `--corner` scaling in Safari. Scale the inner radius by
+`--corner`, never the gap.
