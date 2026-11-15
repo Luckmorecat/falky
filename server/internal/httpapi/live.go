@@ -141,6 +141,14 @@ func (e Events) Knocked(visitorID, roomID string, from identity.Visitor) {
 	e.Hub.Publish(realtime.Event{VisitorID: visitorID, RoomID: roomID, Data: data})
 }
 
+// MessageUpdated publishes message.updated for m, as it now reads, to the
+// visitors allowed into m's room.
+func (e Events) MessageUpdated(m chat.Message) {
+	e.publish(api.EventTypeMessageUpdated, m.RoomID, func(p *api.Event_Payload) error {
+		return p.FromMessage(messageBody(m))
+	})
+}
+
 // RoomChanged publishes room.changed for r, to every visitor.
 func (e Events) RoomChanged(r rooms.Room) {
 	e.publish(api.EventTypeRoomChanged, "", func(p *api.Event_Payload) error {
