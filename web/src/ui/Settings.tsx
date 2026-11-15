@@ -135,6 +135,8 @@ function AudioVideoPanel({ active }: { active: boolean }) {
           <SettingToggle flag="echoCancellation" label={t.echoCancellation} />
           <SettingToggle flag="autoGain" label={t.autoGain} />
           <SettingToggle flag="joinMuted" label={t.joinMuted} />
+          <SettingToggle flag="pushToTalk" label={t.pushToTalk} />
+          <SettingToggle flag="awayMute" label={t.awayMute} />
         </section>
       </div>
       <div>
@@ -263,6 +265,7 @@ function Shortcut({ keys, label }: { keys: ReactNode; label: string }) {
 }
 
 function KeysPanel() {
+  const pushToTalk = useApp((s) => s.settings.pushToTalk);
   return (
     <div className="set-columns">
       <div>
@@ -273,6 +276,8 @@ function KeysPanel() {
             <Shortcut label={t.keyDeafen} keys={<kbd>{shortcuts.deafen.label}</kbd>} />
             {canUseCamera && <Shortcut label={t.keyCamera} keys={<kbd>{shortcuts.camera.label}</kbd>} />}
             <Shortcut label={t.keyReact} keys={<kbd>{shortcuts.react.label}</kbd>} />
+            {pushToTalk && <Shortcut label={t.keyPushToTalk} keys={<kbd>{shortcuts.pushToTalk.label}</kbd>} />}
+            <Shortcut label={t.keyLeave} keys={<kbd>{shortcuts.leave.label}</kbd>} />
           </dl>
         </section>
       </div>

@@ -44,6 +44,7 @@ export function Dock({ room, unreadRef }: { room: Room | null; unreadRef?: Ref<H
 function Controls({ room, unreadRef, onSettings }: { room: Room | null; unreadRef?: Ref<HTMLSpanElement>; onSettings(): void }) {
   const v = useApp((s) => s.voice);
   const rooms = useApp((s) => s.rooms);
+  const pushToTalk = useApp((s) => s.settings.pushToTalk);
   const selfId = useApp((s) => s.voice.people.find((p) => p.local)?.id);
   const ring = useRef<HTMLSpanElement>(null);
   const inVoice = v.status === 'connected' || v.status === 'reconnecting' || (v.status === 'joining' && v.roomId !== null);
@@ -99,7 +100,7 @@ function Controls({ room, unreadRef, onSettings }: { room: Room | null; unreadRe
       </IconButton>
       <div className="mic-wrap">
         <span ref={ring} className="mic-ring" />
-        <IconButton className={v.muted ? 'off' : ''} aria-pressed={v.muted} data-cue={v.muted ? 'on' : 'off'} aria-label={muteLabel} data-tip={`${muteLabel} (${shortcuts.mute.label})`} onClick={() => void voice.toggleMute()}>
+        <IconButton className={v.muted ? 'off' : ''} aria-pressed={v.muted} data-cue={v.muted ? 'on' : 'off'} aria-label={muteLabel} data-tip={pushToTalk && v.muted ? t.holdToTalk : `${muteLabel} (${shortcuts.mute.label})`} onClick={() => void voice.toggleMute()}>
           <Icon name={v.muted ? 'micOff' : 'mic'} />
         </IconButton>
       </div>
@@ -172,7 +173,7 @@ function LeaveButton() {
 
   return (
     <>
-      <button className="leave" data-cue="none" aria-label={t.leaveVoice} aria-haspopup="dialog" onClick={() => dialog.current?.showModal()}>
+      <button className="leave" data-cue="none" aria-label={t.leaveVoice} aria-haspopup="dialog" data-tip={`${t.leaveVoice} (${shortcuts.leave.label})`} onClick={() => dialog.current?.showModal()}>
         <span>{t.leave}</span>
         <i><Icon name="x" /></i>
       </button>

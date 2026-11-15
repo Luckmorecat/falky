@@ -115,7 +115,7 @@ const voiceSession: VoiceClient = new VoiceSession({
     const s = getState().settings;
     return { echoCancellation: s.echoCancellation, noiseSuppression: s.noiseSuppression, autoGainControl: s.autoGain };
   },
-  joinMuted: () => getState().settings.joinMuted,
+  joinMuted: () => getState().settings.joinMuted || getState().settings.pushToTalk,
   shareSettings: () => getState().settings,
   cameraSettings: () => getState().settings,
   volumeOf: (id) => prefs.volume(id),
@@ -831,6 +831,7 @@ export function updateSettings(patch: Partial<Settings>): void {
   if (patch.speakerId !== undefined) void voice.setSpeaker(patch.speakerId);
   if (patch.cameraId !== undefined) void voice.setCamera(patch.cameraId);
   if (patch.cameraResolution !== undefined) void voice.restartCamera();
+  if (patch.pushToTalk && !getState().voice.muted) void voice.toggleMute();
 }
 
 /** Turns message notifications on, asking the browser first; answers whether they are on. */

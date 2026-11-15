@@ -11,6 +11,7 @@ import { NameConflict } from './Screens';
 import { Rooms } from './Rooms';
 import { Stage } from './Stage';
 import { useShortcuts } from './useShortcuts';
+import { useTalk } from './useTalk';
 import { LiveBackground, type LiveBackgroundHandle } from './LiveBackground';
 import './Notices.css';
 import './Main.css';
@@ -31,6 +32,7 @@ function Clock({ joinedAt }: { joinedAt: number }) {
 
 export function Main() {
   useShortcuts();
+  useTalk();
   const background = useRef<LiveBackgroundHandle>(null);
   const unreadCounter = useRef<HTMLSpanElement>(null);
   const room = useApp((s) => s.rooms.find((r) => r.id === s.viewedRoomId) ?? null);
