@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
-import { dismissNotice } from '../app/controller';
+import { answerKnock, dismissKnock, dismissNotice } from '../app/controller';
 import { useApp } from '../app/store';
 import { t } from '../strings';
+import { Button } from './Button';
 import { IconButton } from './IconButton';
 import { Chat } from './Chat';
 import { ChatTicker } from './ChatTicker';
@@ -42,6 +43,8 @@ export function Main() {
   const roomsOpen = useApp((s) => s.roomsOpen);
   const live = useApp((s) => s.live);
   const notice = useApp((s) => s.notice);
+  const knockCall = useApp((s) => s.knock);
+  const rooms = useApp((s) => s.rooms);
   const nameTaken = useApp((s) => s.visitor?.nameTaken);
 
   useEffect(() => {
@@ -83,6 +86,17 @@ export function Main() {
               {notice.body && <p>{notice.body}</p>}
             </div>
             <IconButton size="small" aria-label={t.close} onClick={dismissNotice}><Icon name="x" /></IconButton>
+          </div>
+        )}
+        {knockCall && (
+          <div className="toast knock-toast" key={`knock-${knockCall.id}`} role="alert">
+            <div>
+              <strong>{t.knockFrom(knockCall.fromName, rooms.find((r) => r.id === knockCall.roomId)?.name ?? '')}</strong>
+            </div>
+            <div className="knock-actions">
+              <Button variant="join" data-cue="none" onClick={answerKnock}><Icon name="mic" />{t.join}</Button>
+              <IconButton size="small" aria-label={t.close} onClick={dismissKnock}><Icon name="x" /></IconButton>
+            </div>
           </div>
         )}
         {nameTaken && <NameConflict />}

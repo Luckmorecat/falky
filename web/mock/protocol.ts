@@ -53,4 +53,5 @@ export type MockAction =
   | { type: 'faults'; faults: Partial<MockFaults> }
   | { type: 'name-conflict'; active: boolean }
   | { type: 'revoke' }
-  | { type: 'voice-disconnect'; generation: number; connectionId: string };
+  | { type: 'voice-disconnect'; generation: number; connectionId: string }
+  | { type: 'knock'; roomId: string; name: string };

@@ -23,6 +23,9 @@ type Event struct {
 	// request instead; private events are never ordinary broadcasts.
 	SessionID string
 	RequestID string
+	// VisitorID targets every ordinary connection of one identity instead,
+	// across its sessions; no one else gets it.
+	VisitorID string
 	// RoomID, when set, is the room the event is about: only connections
 	// whose subscriber may receive events about that room get it. When
 	// empty, every ordinary connection gets it. Private scopes take precedence.
@@ -196,6 +199,9 @@ func eventMatches(e Event, sub Subscriber) bool {
 	}
 	if e.RequestID != "" {
 		return false
+	}
+	if e.VisitorID != "" {
+		return e.VisitorID == sub.VisitorID
 	}
 	return e.SessionID == "" || e.SessionID == sub.Session.ID
 }

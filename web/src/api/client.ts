@@ -21,6 +21,7 @@ export type OccupancyChange = Schemas['OccupancyChange'];
 export type AccessRevoked = Schemas['AccessRevoked'];
 export type Attachment = Schemas['Attachment'];
 export type AttachmentsExpired = Schemas['AttachmentsExpired'];
+export type Knock = Schemas['Knock'];
 
 /** A live update, narrowed by its type. Unknown types are ignored by callers. */
 export type LiveEvent = { eventId: string; timestamp: string; roomId?: string } & (
@@ -31,6 +32,7 @@ export type LiveEvent = { eventId: string; timestamp: string; roomId?: string } 
   | { type: 'occupancy.changed'; payload: OccupancyChange }
   | { type: 'access.revoked'; payload: AccessRevoked }
   | { type: 'visitor.colour.changed'; payload: VisitorColour }
+  | { type: 'knock'; payload: Knock }
 );
 
 /** A refused or failed request. `code` is the contract's error code, or `network`. */
@@ -165,4 +167,5 @@ export const api = {
   cancelAttachment: (id: string) => call<void>('DELETE', `/api/attachments/${encodeURIComponent(id)}`),
   upload: uploadAttachment,
   joinVoice: (roomId: string) => call<VoiceCredentials>('POST', `/api/rooms/${encodeURIComponent(roomId)}/voice`),
+  knock: (roomId: string, visitorId: string) => call<void>('POST', `/api/rooms/${encodeURIComponent(roomId)}/knock`, { visitorId }),
 };

@@ -408,6 +408,57 @@ function handleEvent(event: LiveEvent): void {
     case 'access.revoked':
       endAccess();
       break;
+    case 'knock':
+      receiveKnock(event.payload.roomId, event.payload.from.name);
+      break;
+  }
+}
+
+/* ---------- Knocking ---------- */
+
+let knockSeq = 0;
+let knockTimer: ReturnType<typeof setTimeout> | null = null;
+
+function receiveKnock(roomId: string, fromName: string): void {
+  const s = getState();
+  const room = s.rooms.find((r) => r.id === roomId);
+  if (!room || (s.voice.roomId === roomId && s.voice.status !== 'idle')) return;
+  if (knockTimer) clearTimeout(knockTimer);
+  setState({ knock: { id: ++knockSeq, roomId, fromName } });
+  knockTimer = setTimeout(() => setState({ knock: null }), 30_000);
+  if (s.settings.sounds && !s.voice.deafened) playSound('knock', s.settings.speakerId);
+  if (s.settings.notifications && document.visibilityState !== 'visible') {
+    const epoch = session;
+    notify(t.knockFrom(fromName, room.name), { tag: `knock-${roomId}` }, () => {
+      if (epoch !== session) return;
+      window.focus();
+      answerKnock();
+    });
+  }
+}
+
+/** Goes to the room that knocked and joins its voice. */
+export function answerKnock(): void {
+  const k = getState().knock;
+  dismissKnock();
+  if (!k || sessionChanging) return;
+  viewRoom(k.roomId);
+  void voice.join(k.roomId);
+}
+
+export function dismissKnock(): void {
+  if (knockTimer) clearTimeout(knockTimer);
+  setState({ knock: null });
+}
+
+/** Calls someone into the voice of the room this person is in. */
+export async function knock(roomId: string, visitorId: string, name: string): Promise<void> {
+  try {
+    await api.knock(roomId, visitorId);
+    showNotice(t.knockSent(name), t.knockSentBody);
+  } catch (err) {
+    if (err instanceof ApiError && err.code === 'knock_too_soon') showNotice(t.knockTooSoon, t.knockTooSoonBody);
+    else showNotice(t.knockFailed, err instanceof ApiError ? err.message : undefined);
   }
 }
 
