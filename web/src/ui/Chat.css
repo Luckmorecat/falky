@@ -12,7 +12,7 @@
   .chat-strip { position-anchor: --dock; bottom: calc(anchor(top) + 12px); right: auto;
     left: clamp(16px, calc(anchor(--chat-button left) - 12px), calc(100% - min(380px, 100vw - 32px) - 16px)); }
 }
-.chat { --chat-bg: var(--raised); position: absolute; inset: 0; display: flex; flex-direction: column; overflow: hidden; border-radius: calc(32px * var(--corner)); background: var(--chat-bg);
+.chat { --chat-bg: var(--raised); --field-r: calc(20px * var(--corner) + 4px); position: absolute; inset: 0; display: flex; flex-direction: column; overflow: hidden; border-radius: calc(var(--field-r) + 12px); background: var(--chat-bg);
   box-shadow: 0 24px 64px -12px var(--shadow), 0 0 0 1px var(--fill);
   /* Only a slide: the feed measures its rows on screen, and a scale would shrink them. */
   opacity: 0; transform: translateY(12px); visibility: hidden;
@@ -62,19 +62,44 @@
   opacity: 0; transform: translateY(6px); pointer-events: none; transition: opacity 140ms ease, transform 200ms var(--ease-out); }
 .to-latest.show { opacity: 1; transform: none; pointer-events: auto; }
 .to-latest svg.i { width: 16px; height: 16px; }
-/* What can be done to a message: a small bar at its top corner, on hover or once tapped. */
+/* What can be done to a message: with a mouse, a flat pill beside the bubble, a step lighter than the chat and without a shadow.
+   It is opaque, so it also covers text a long message may run under. */
 .msg { position: relative; outline: none; }
-.msg-tools { position: absolute; top: 4px; right: 0; z-index: 2; display: flex; gap: 2px; padding: 3px; border-radius: calc(18px * var(--corner)); background: var(--raised-2); box-shadow: 0 6px 18px var(--shadow);
-  opacity: 0; translate: 0 2px; pointer-events: none; transition: opacity 100ms ease, translate 140ms var(--ease-out); }
-.msg.own .msg-tools { right: auto; left: 0; }
-.msg.cont .msg-tools { top: -10px; }
-.msg:focus-within .msg-tools { opacity: 1; translate: 0 0; pointer-events: auto; }
-@media (hover:hover) and (pointer:fine) { .msg:hover .msg-tools { opacity: 1; translate: 0 0; pointer-events: auto; } }
-.msg-tool { height: 30px; min-width: 30px; padding: 0 6px; border-radius: calc(15px * var(--corner)); display: grid; place-items: center; color: var(--text-2); font-size: 13px; white-space: nowrap; transition: background-color 100ms ease, color 100ms ease; }
-.msg-tool svg.i { width: 16px; height: 16px; }
-.msg-tool.emoji { font-size: 17px; padding: 0 4px; }
-.msg-tool.danger { color: var(--danger); background: var(--danger-bg); }
-@media (hover:hover) and (pointer:fine) { .msg-tool:not(.danger):hover { background: var(--fill); color: var(--text); } }
+.msg:not(.own) .msg-text { width: fit-content; max-width: 100%; }
+.msg-tools { position: absolute; top: 0; left: 0; z-index: 2; display: none; gap: 2px; padding: 2px; border-radius: calc(14px * var(--corner) + 2px); background: color-mix(in srgb, var(--text) 8%, var(--chat-bg));
+  opacity: 0; pointer-events: none; transition: opacity 100ms ease; }
+@media (hover:hover) and (pointer:fine) {
+  .msg-tools { display: flex; }
+  .msg:hover .msg-tools, .msg:focus-within .msg-tools { opacity: 1; pointer-events: auto; }
+}
+.msg-tool { height: 28px; min-width: 28px; padding: 0 4px; border-radius: calc(14px * var(--corner)); display: grid; place-items: center; color: var(--text-3); font-size: 13px; white-space: nowrap; transition: background-color 100ms ease, color 100ms ease; }
+.msg-tool svg.i { width: 17px; height: 17px; }
+.msg-tool.emoji { font-size: 17px; padding-top: 3px; }
+@media (hover:hover) and (pointer:fine) { .msg-tool:hover { background: var(--fill-2); color: var(--text); } }
+@media (hover:none) { .msg { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; } }
+
+/* Right-click or a long press: the message again over the dimmed page, reactions above, actions below. */
+/* It lives in the strip, which lets clicks through to the stage. */
+.msg-menu { pointer-events: auto; position: fixed; inset: auto; margin: 0; padding: 0; border: 0; background: none; color: var(--text); overflow: visible; max-width: min(300px, calc(100vw - 24px));
+  display: flex; flex-direction: column; align-items: flex-start; gap: 8px; opacity: 1; transform: none; transition: opacity 140ms ease, transform 220ms var(--ease-out); }
+.msg-menu.own { align-items: flex-end; }
+.msg-menu:not([open]) { display: none; }
+@starting-style { .msg-menu[open] { opacity: 0; transform: scale(.96); } }
+.msg-menu::backdrop { background: rgba(0,0,0,.45); -webkit-backdrop-filter: blur(3px); backdrop-filter: blur(3px); }
+[data-theme="light"] .msg-menu::backdrop { background: rgba(0,0,0,.22); }
+.msg-menu-react { display: flex; gap: 2px; padding: 4px; border-radius: calc(20px * var(--corner) + 4px); background: var(--raised-2); }
+.msg-menu-react button { width: 40px; height: 40px; border-radius: var(--round); font-size: 22px; line-height: 1; padding-top: 3px; display: grid; place-items: center; transition: background-color 100ms ease, scale 140ms var(--ease-out); }
+.msg-menu-react button.mine { background: color-mix(in srgb, var(--level) 22%, transparent); }
+.msg-menu-react button:active { scale: .9; }
+@media (hover:hover) and (pointer:fine) { .msg-menu-react button:not(.mine):hover { background: var(--fill-2); } }
+.msg-menu-preview { max-width: 100%; padding: 6px 10px; border-radius: calc(24px * var(--corner)); background: var(--raised); white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.42;
+  display: -webkit-box; -webkit-line-clamp: 6; -webkit-box-orient: vertical; overflow: hidden; }
+.msg-menu-list { width: 220px; display: grid; padding: 4px; border-radius: calc(16px * var(--corner) + 4px); background: var(--raised-2); }
+.msg-menu-list button { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 40px; padding: 0 12px; border-radius: calc(16px * var(--corner)); font-size: 15px; text-align: left; transition: background-color 100ms ease; }
+.msg-menu-list button svg.i { width: 18px; height: 18px; color: var(--text-2); }
+.msg-menu-list button.danger, .msg-menu-list button.danger svg.i { color: var(--danger); }
+.msg-menu-list button:focus-visible { outline-offset: -2px; }
+@media (hover:hover) and (pointer:fine) { .msg-menu-list button:hover { background: var(--fill); } }
 
 .msg-quote { display: grid; gap: 1px; width: fit-content; max-width: 100%; margin: 2px 0 4px; padding: 4px 10px; border-left: 2px solid color-mix(in srgb, var(--base) 60%, var(--text-3)); font-size: 13px; line-height: 1.35; text-align: left; }
 .msg.own .msg-quote { margin-left: auto; }
@@ -86,7 +111,7 @@
 .msg-reactions { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
 .msg.own .msg-reactions { justify-content: flex-end; }
 .msg-reaction { display: inline-flex; align-items: center; gap: 4px; height: 26px; padding: 0 9px 0 7px; border-radius: calc(13px * var(--corner)); background: var(--fill); font-size: 12px; color: var(--text-2); font-variant-numeric: tabular-nums; transition: background-color 100ms ease, transform 120ms var(--ease-out); }
-.msg-reaction span { font-size: 14px; }
+.msg-reaction span { font-size: 14px; line-height: 1; translate: 0 1px; }
 .msg-reaction.mine { background: color-mix(in srgb, var(--level) 22%, transparent); color: var(--text); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--level) 45%, transparent); }
 .msg-reaction:active { transform: scale(.94); }
 @media (hover:hover) and (pointer:fine) { .msg-reaction:not(.mine):hover { background: var(--fill-2); } }
@@ -99,12 +124,13 @@
 .composing-text span { color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .composing .ib { background: transparent; flex: none; }
 
-/* Inset by 12px at the sides and bottom, so its corners follow the card's; lines end right at its top. */
+/* Inset by 12px at the sides and bottom, so its corners follow the card's; lines end right at its top.
+   Corners nest: the field is the 40px button's radius plus its 4px padding, the card that plus the 12px inset. */
 .composer { flex: none; padding: 0 12px 12px; position: relative; }
 .count { position: absolute; right: 34px; top: -14px; font-size: 12px; color: var(--text-2); }
 .count.over { color: var(--danger); }
-.field { position: relative; display: flex; align-items: flex-end; gap: 4px; background: var(--fill); border-radius: calc(22px * var(--corner)); padding: 4px; transition: background-color 160ms ease, box-shadow 160ms ease; }
-.field:focus-within { background: color-mix(in srgb, var(--text) 12%, transparent); box-shadow: inset 0 0 0 1px var(--fill); }
+.field { position: relative; display: flex; align-items: flex-end; gap: 4px; background: var(--fill); border-radius: var(--field-r); padding: 4px; transition: background-color 160ms ease; }
+.field:focus-within { background: color-mix(in srgb, var(--text) 12%, transparent); }
 .field textarea { flex: 1; min-width: 0; background: none; border: 0; outline: 0; resize: none; padding: 9px 6px 9px 12px; max-height: 140px; line-height: 22px; field-sizing: content; }
 .field textarea::placeholder { color: var(--text-3); }
 .field .ib { background: transparent; }

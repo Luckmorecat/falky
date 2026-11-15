@@ -6,8 +6,10 @@
 @media (hover:hover) and (pointer:fine) { .room-now:not([disabled]):hover { background: var(--fill); } }
 .room-now-name { font-size: 28px; font-weight: 500; line-height: 1.15; letter-spacing: -.02em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* A filled circle, so a finger sees it can be pressed; a mouse opens the list by hovering. */
-.room-chevron { flex: none; width: 26px; height: 26px; padding: 4px; border-radius: var(--round); background: var(--fill); color: var(--text-2); transition: transform 240ms var(--ease-out); }
-.room-now[aria-expanded="true"] .room-chevron { transform: rotate(180deg); }
+/* Only the arrow turns; the plate under it stays put. */
+.room-chevron { flex: none; display: grid; place-items: center; width: 26px; height: 26px; border-radius: var(--round); background: var(--fill); color: var(--text-2); }
+.room-chevron svg.i { width: 18px; height: 18px; transition: transform 240ms var(--ease-out); }
+.room-now[aria-expanded="true"] .room-chevron svg.i { transform: rotate(180deg); }
 .clock { display: flex; gap: 8px; align-items: center; justify-content: center; margin-top: 4px; color: var(--text-2); font-size: 15px; height: 20px; font-variant-numeric: tabular-nums; transition: opacity 160ms ease; }
 .room-list { position: absolute; left: 0; right: 0; top: 64px; display: flex; gap: 4px; padding: 6px 24px 24px; overflow-x: auto; justify-content: safe center; scrollbar-width: none; text-align: left;
   opacity: 0; transform: translateY(-10px); pointer-events: none; transition: opacity 160ms ease, transform 280ms var(--ease-drawer); }
