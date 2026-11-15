@@ -162,7 +162,7 @@ function ReactButton() {
         </div>
         <div className="react-row react-sounds" role="group" aria-label={t.roomSounds}>
           {SOUND_REACTIONS.map((r) => (
-            <button key={r.id} type="button" className="react-pick" aria-label={t.reactionNames[r.id]} data-tip={t.reactionNames[r.id]} onClick={() => voice.react(r.id)}>
+            <button key={r.id} type="button" className="react-pick" aria-label={t.reactionNames[r.id]} title={t.reactionNames[r.id]} onClick={() => voice.react(r.id)}>
               {r.emoji}
             </button>
           ))}
