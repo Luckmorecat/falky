@@ -1,8 +1,8 @@
-import { api, ApiError, type AccountSession, type Attachment, type LiveEvent, type Message, type Room, type Visitor, type VisitorColour } from '../api/client';
+import { api, ApiError, type AccountSession, type Attachment, type LiveEvent, type Message, type MessageReaction, type Room, type Visitor, type VisitorColour } from '../api/client';
 import { LiveConnection } from '../api/live';
 import { followingLatest } from '../chat/place';
 import { isImage, onImageGone } from '../chat/images';
-import { countUnread, emptyChat, mergeMessages, type ComposerUpload, type PendingMessage, type RoomChat } from '../chat/timeline';
+import { countUnread, emptyChat, mergeMessages, replaceMessage, type ComposerUpload, type PendingMessage, type RoomChat } from '../chat/timeline';
 import { type PaletteName } from '../fx/palette';
 import { resolveLanguage, setLanguage, t } from '../strings';
 import { VoiceSession } from '@falky/voice';
@@ -389,6 +389,9 @@ function handleEvent(event: LiveEvent): void {
       addMessages(event.payload.roomId, [event.payload]);
       notifyOfMessage(event.payload);
       break;
+    case 'message.updated':
+      applyMessage(event.payload);
+      break;
     case 'room.changed': {
       const { id, name } = event.payload;
       const exists = s.rooms.some((r) => r.id === id);
@@ -578,9 +581,16 @@ export async function loadOlder(roomId: string): Promise<void> {
 
 export function postMessage(roomId: string, body: string): void {
   if (sessionChanging) return;
+  const composing = getState().composing;
+  if (composing?.roomId === roomId && composing.kind === 'edit') {
+    void editMessage(composing.message, body);
+    return;
+  }
+  const replyTo = composing?.roomId === roomId && composing.kind === 'reply' ? replyOf(composing.message) : undefined;
+  if (replyTo) setState({ composing: null });
   const ready = (getState().uploads[roomId] ?? []).filter((u) => u.status === 'ready' && u.attachment);
   const attachments = ready.map((u) => ({ ...u.attachment!, contentUrl: u.previewUrl }));
-  const pending: PendingMessage = { requestKey: crypto.randomUUID(), roomId, body, attachments, failed: false, reason: '' };
+  const pending: PendingMessage = { requestKey: crypto.randomUUID(), roomId, body, attachments, replyTo, failed: false, reason: '' };
   // The previews now belong to the pending message; failed pictures stay for the person to see why.
   setUploads(roomId, (list) => list.filter((u) => !ready.includes(u)));
   ready.forEach((u) => files.delete(u.localId));
@@ -608,7 +618,7 @@ async function send(p: PendingMessage): Promise<void> {
   if (sessionChanging) return;
   const epoch = session;
   try {
-    const message = await api.post(p.roomId, p.requestKey, p.body, p.attachments.map((a) => a.id));
+    const message = await api.post(p.roomId, p.requestKey, p.body, p.attachments.map((a) => a.id), p.replyTo?.id);
     if (epoch !== session) return;
     patchChat(p.roomId, (c) => ({ pending: c.pending.filter((x) => x.requestKey !== p.requestKey), messages: mergeMessages(c.messages, [message]) }));
     p.attachments.forEach((a) => URL.revokeObjectURL(a.contentUrl));
@@ -619,9 +629,66 @@ async function send(p: PendingMessage): Promise<void> {
     const reason = code === 'rate_limited' ? t.errors.postRateLimited
       : code === 'network' ? t.errors.postNetwork
         : code === 'invalid_attachments' ? t.errors.postAttachmentsGone
-          : t.errors.postOther;
+          : code === 'invalid_reply' ? t.errors.postReplyGone
+            : t.errors.postOther;
     patchChat(p.roomId, (c) => ({ pending: c.pending.map((x) => (x.requestKey === p.requestKey ? { ...x, failed: true, reason } : x)) }));
   }
+}
+
+/* ---------- Changing messages ---------- */
+
+function replyOf(m: Message): NonNullable<PendingMessage['replyTo']> {
+  const line = m.body.split(/\s+/).filter(Boolean).join(' ');
+  return { id: m.id, authorName: m.authorName, deleted: m.deleted, excerpt: [...line].length > 120 ? [...line].slice(0, 119).join('') + '…' : line };
+}
+
+/** Takes in a message as it now reads, wherever it is held. */
+function applyMessage(m: Message): void {
+  patchChat(m.roomId, (c) => ({ messages: replaceMessage(c.messages, m) }));
+  const composing = getState().composing;
+  if (composing?.message.id === m.id && m.deleted) setState({ composing: null });
+}
+
+/** Points the composer of the message's room at answering it, or at changing its text. */
+export function compose(kind: 'reply' | 'edit', message: Message): void {
+  setState({ composing: { roomId: message.roomId, kind, message } });
+}
+
+export function stopComposing(): void {
+  setState({ composing: null });
+}
+
+async function changeMessage(change: () => Promise<Message>, failed: string): Promise<boolean> {
+  const epoch = session;
+  try {
+    const m = await change();
+    if (epoch === session) applyMessage(m);
+    return true;
+  } catch (err) {
+    if (epoch !== session || accessEnded(err)) return false;
+    showNotice(failed, err instanceof ApiError && err.code !== 'network' ? err.message : t.errors.postNetwork);
+    return false;
+  }
+}
+
+export async function editMessage(m: Message, body: string): Promise<void> {
+  if (sessionChanging) return;
+  setState({ composing: null });
+  if (body === m.body) return;
+  await changeMessage(() => api.editMessage(m.roomId, m.id, body), t.editFailed);
+}
+
+export async function deleteMessage(m: Message): Promise<void> {
+  if (sessionChanging) return;
+  await changeMessage(() => api.deleteMessage(m.roomId, m.id), t.deleteFailed);
+}
+
+/** Gives the reaction, or takes it back when this person already gave it. */
+export async function toggleReaction(m: Message, reaction: MessageReaction): Promise<void> {
+  const self = getState().visitor?.id;
+  if (sessionChanging || !self) return;
+  const on = !m.reactions.some((g) => g.reaction === reaction && g.visitorIds.includes(self));
+  await changeMessage(() => api.react(m.roomId, m.id, reaction, on), t.reactFailed);
 }
 
 /* ---------- Attachments ---------- */

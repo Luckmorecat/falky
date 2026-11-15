@@ -45,7 +45,7 @@ func (s *server) PostMessage(ctx context.Context, req api.PostMessageRequestObje
 	if err != nil {
 		return nil, err
 	}
-	m, created, err := s.chat.Post(ctx, visitor, req.Id, req.Body.RequestKey, req.Body.Body, req.Body.AttachmentIds...)
+	m, created, err := s.chat.Reply(ctx, visitor, req.Id, req.Body.RequestKey, req.Body.ReplyTo, req.Body.Body, req.Body.AttachmentIds...)
 	switch {
 	case errors.Is(err, attachments.ErrInvalidAttachments):
 		_, body, _ := attachmentError(err)
@@ -57,6 +57,8 @@ func (s *server) PostMessage(ctx context.Context, req api.PostMessageRequestObje
 		return api.PostMessage400JSONResponse{Code: "invalid_message", Message: err.Error()}, nil
 	case errors.Is(err, chat.ErrInvalidRequestKey):
 		return api.PostMessage400JSONResponse{Code: "invalid_request", Message: err.Error()}, nil
+	case errors.Is(err, chat.ErrInvalidReply):
+		return api.PostMessage400JSONResponse{Code: "invalid_reply", Message: err.Error()}, nil
 	case errors.Is(err, chat.ErrRequestKeyReused):
 		return api.PostMessage409JSONResponse{Code: "request_key_reused", Message: err.Error()}, nil
 	case errors.Is(err, chat.ErrRateLimited):
@@ -77,7 +79,11 @@ func messageBody(m chat.Message) api.Message {
 	for _, metadata := range m.Attachments {
 		attached = append(attached, attachmentBody(metadata))
 	}
-	return api.Message{
+	reactions := make([]api.ReactionGroup, 0, len(m.Reactions))
+	for _, r := range m.Reactions {
+		reactions = append(reactions, api.ReactionGroup{Reaction: api.MessageReaction(r.Reaction), VisitorIds: r.VisitorIDs})
+	}
+	body := api.Message{
 		Attachments: attached,
 		Id:          m.ID,
 		RoomId:      m.RoomID,
@@ -85,5 +91,15 @@ func messageBody(m chat.Message) api.Message {
 		AuthorName:  m.AuthorName,
 		Body:        m.Body,
 		CreatedAt:   m.CreatedAt,
+		Deleted:     m.Deleted,
+		Reactions:   reactions,
 	}
+	if m.ReplyTo != nil {
+		body.ReplyTo = &api.MessageReply{Id: m.ReplyTo.ID, AuthorName: m.ReplyTo.AuthorName, Excerpt: m.ReplyTo.Excerpt, Deleted: m.ReplyTo.Deleted}
+	}
+	if !m.EditedAt.IsZero() {
+		edited := m.EditedAt
+		body.EditedAt = &edited
+	}
+	return body
 }

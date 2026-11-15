@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Message } from '../api/client';
-import { buildFeed, canPost, countUnread, dayLabel, mergeMessages, splitLinks } from './timeline';
+import { buildFeed, canPost, countUnread, dayLabel, mergeMessages, replaceMessage, splitLinks } from './timeline';
 
 const msg = (id: string, over: Partial<Message> = {}): Message => ({
   id,
@@ -9,6 +9,8 @@ const msg = (id: string, over: Partial<Message> = {}): Message => ({
   authorName: 'Bob',
   body: 'hi',
   attachments: [],
+  deleted: false,
+  reactions: [],
   createdAt: '2026-11-05T12:00:00.000Z',
   ...over,
 });
@@ -97,5 +99,14 @@ describe('canPost', () => {
     expect(canPost('x'.repeat(4001))).toBe(false);
     expect(canPost('', 1)).toBe(true);
     expect(canPost('x'.repeat(4001), 1)).toBe(false);
+  });
+});
+
+describe('replaceMessage', () => {
+  it('swaps a held message in place and leaves out one not held', () => {
+    const list = [msg('01'), msg('02')];
+    const edited = msg('02', { body: 'changed', editedAt: '2026-11-05T12:01:00.000Z' });
+    expect(replaceMessage(list, edited)).toEqual([list[0], edited]);
+    expect(replaceMessage(list, msg('00', { body: 'older page' }))).toBe(list);
   });
 });

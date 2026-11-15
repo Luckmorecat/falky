@@ -204,6 +204,31 @@ test('knocking needs this room\'s voice, refuses yourself and a quick repeat wit
   assert.ok(Number(again.headers.get('retry-after')) >= 1);
 });
 
+test('replies, edits, deletes and reactions follow the server rules', async () => {
+  const { call, bootstrap } = await client();
+  const [lounge, games] = bootstrap.rooms;
+  const post = async (room: string, key: string, body: string, replyTo?: string) => call(`/api/rooms/${room}/messages`, { requestKey: key, body, ...(replyTo ? { replyTo } : {}) });
+  const question = await (await post(lounge.id, 'q', 'Anyone\nup?')).json();
+  const answer = await (await post(lounge.id, 'a', 'me', question.id)).json();
+  assert.deepEqual(answer.replyTo, { id: question.id, authorName: question.authorName, deleted: false, excerpt: 'Anyone up?' });
+  assert.equal((await post(games.id, 'g', 'x', question.id)).status, 400);
+  const edited = await (await call(`/api/rooms/${lounge.id}/messages/${question.id}`, { body: 'Anyone up tonight?' }, 'PATCH')).json();
+  assert.equal(edited.body, 'Anyone up tonight?');
+  assert.ok(edited.editedAt);
+  const reacted = await (await call(`/api/rooms/${lounge.id}/messages/${question.id}/reactions/fire`, undefined, 'PUT')).json();
+  assert.deepEqual(reacted.reactions, [{ reaction: 'fire', visitorIds: [bootstrap.visitor.id] }]);
+  assert.equal((await call(`/api/rooms/${lounge.id}/messages/${question.id}/reactions/skull`, undefined, 'PUT')).status, 400);
+  const deleted = await (await call(`/api/rooms/${lounge.id}/messages/${question.id}`, undefined, 'DELETE')).json();
+  assert.equal(deleted.deleted, true);
+  assert.equal(deleted.body, '');
+  assert.deepEqual(deleted.reactions, []);
+  assert.equal((await call(`/api/rooms/${lounge.id}/messages/${question.id}`, { body: 'back' }, 'PATCH')).status, 409);
+  const page = (await (await call(`/api/rooms/${lounge.id}/messages?limit=5`)).json()).messages;
+  assert.equal(page.find((m: { id: string }) => m.id === answer.id).replyTo.deleted, true);
+  const someoneElse = page.find((m: { authorId: string }) => m.authorId !== bootstrap.visitor.id);
+  assert.equal((await call(`/api/rooms/${lounge.id}/messages/${someoneElse.id}`, undefined, 'DELETE')).status, 403);
+});
+
 test('live upgrades require the instance session and enforce the public frame-size contract', async () => {
   const { server, cookie } = await client();
   const { WebSocket } = await import('ws');

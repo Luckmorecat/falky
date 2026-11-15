@@ -809,6 +809,66 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/rooms/{id}/messages/{messageId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The room's ID. */
+                id: components["parameters"]["RoomId"];
+                /** @description The message's ID. */
+                messageId: components["parameters"]["MessageId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Delete your message.
+         * @description Clears its text and reactions and hides its attachments; the ID stays so history and replies keep their place. Only the author can delete; deleting again changes nothing.
+         */
+        delete: operations["deleteMessage"];
+        options?: never;
+        head?: never;
+        /**
+         * Change the text of your message.
+         * @description Replaces the text under the message rules of posting and sets editedAt. Only the author can edit; the same text changes nothing.
+         */
+        patch: operations["editMessage"];
+        trace?: never;
+    };
+    "/api/rooms/{id}/messages/{messageId}/reactions/{reaction}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The room's ID. */
+                id: components["parameters"]["RoomId"];
+                /** @description The message's ID. */
+                messageId: components["parameters"]["MessageId"];
+                /** @description The reaction to give or take back. */
+                reaction: components["parameters"]["Reaction"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Give a reaction to a message.
+         * @description Idempotent; giving one you already gave changes nothing. Changes are limited per identity.
+         */
+        put: operations["addReaction"];
+        post?: never;
+        /**
+         * Take back your reaction.
+         * @description Idempotent; taking back one you did not give changes nothing.
+         */
+        delete: operations["removeReaction"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/rooms/{id}/voice": {
         parameters: {
             query?: never;
@@ -1780,6 +1840,69 @@ export interface components {
              * @example []
              */
             attachments: components["schemas"]["Attachment"][];
+            /**
+             * @example {
+             *       "id": "01JBX8C4N2F6H8K0P3R5T7W9YZ",
+             *       "authorName": "Bob",
+             *       "excerpt": "Anyone up for a game?",
+             *       "deleted": false
+             *     }
+             */
+            replyTo?: components["schemas"]["MessageReply"];
+            /**
+             * Format: date-time
+             * @description When the author last changed the text, in UTC; absent when never.
+             * @example 2026-11-04T18:31:10.004Z
+             */
+            editedAt?: string;
+            /**
+             * @description The author deleted the message. Its ID stays, but body is empty and attachments, reactions and replyTo are not shown.
+             * @example false
+             */
+            deleted: boolean;
+            /**
+             * @description Each reaction someone gave, in the order of `MessageReaction`, with who gave it; empty when none.
+             * @example []
+             */
+            reactions: components["schemas"]["ReactionGroup"][];
+        };
+        /** @description The earlier message of the room a message answers, as it reads now. */
+        MessageReply: {
+            /** @example 01JBX8C4N2F6H8K0P3R5T7W9YZ */
+            id: string;
+            /** @example Bob */
+            authorName: string;
+            /**
+             * @description The start of its text on one line, at most 120 characters; empty when deleted or attachments only.
+             * @example Anyone up for a game?
+             */
+            excerpt: string;
+            /** @example false */
+            deleted: boolean;
+        };
+        /**
+         * @description A reaction from the fixed list, the same as in a room's voice.
+         * @example fire
+         * @enum {string}
+         */
+        MessageReaction: "up" | "heart" | "laugh" | "wow" | "fire" | "clap";
+        /** @description One reaction on a message and the identities who gave it, earliest first. */
+        ReactionGroup: {
+            reaction: components["schemas"]["MessageReaction"];
+            /**
+             * @example [
+             *       "01JBX6Z8Q3M5W2K7R9T4V1C0DE"
+             *     ]
+             */
+            visitorIds: string[];
+        };
+        /** @description The new text of a message. */
+        EditMessageRequest: {
+            /**
+             * @description At most 4000 characters, kept untrimmed; may be empty only when the message has attachments.
+             * @example Anyone up for a game tonight?
+             */
+            body: string;
         };
         /** @description A page of a room's chat. */
         MessageList: {
@@ -1793,7 +1916,9 @@ export interface components {
              *         "authorName": "Bob",
              *         "body": "Anyone up for a game?",
              *         "createdAt": "2026-11-04T18:30:05.123Z",
-             *         "attachments": []
+             *         "attachments": [],
+             *         "deleted": false,
+             *         "reactions": []
              *       }
              *     ]
              */
@@ -1818,9 +1943,14 @@ export interface components {
              *     ]
              */
             attachmentIds?: string[];
+            /**
+             * @description The ID of an earlier message of this room that this one answers. A retry must name the same one.
+             * @example 01JBX8C4N2F6H8K0P3R5T7W9YZ
+             */
+            replyTo?: string;
         };
         /**
-         * @description A live update, as sent over `GET /api/live`. `type` says what happened and which schema `payload` has: `message.created` carries a `Message`, `room.changed` a `RoomChange`, `occupancy.changed` an `OccupancyChange`, `visitor.colour.changed` a `VisitorColour`, `access.revoked` an `AccessRevoked`, `attachments.expired` an `AttachmentsExpired`. Private `account.signin.requested` reaches only the exact issuing session; `account.signin.state_changed` reaches only its bound candidate. Both carry a sanitized `SignInRequest` with durable version. Issuer reconnect snapshots repeat its links requests in stable creation/identifier order. Private `knock` reaches only the connections of the knocked identity and carries a `Knock`. Clients ignore event types they do not know.
+         * @description A live update, as sent over `GET /api/live`. `type` says what happened and which schema `payload` has: `message.created` and `message.updated` carry a `Message`, `room.changed` a `RoomChange`, `occupancy.changed` an `OccupancyChange`, `visitor.colour.changed` a `VisitorColour`, `access.revoked` an `AccessRevoked`, `attachments.expired` an `AttachmentsExpired`. Private `account.signin.requested` reaches only the exact issuing session; `account.signin.state_changed` reaches only its bound candidate. Both carry a sanitized `SignInRequest` with durable version. Issuer reconnect snapshots repeat its links requests in stable creation/identifier order. Private `knock` reaches only the connections of the knocked identity and carries a `Knock`. Clients ignore event types they do not know.
          * @example {
          *       "v": 1,
          *       "type": "message.created",
@@ -1833,7 +1963,9 @@ export interface components {
          *         "authorName": "Bob",
          *         "body": "Anyone up for a game?",
          *         "createdAt": "2026-11-04T18:30:05.123Z",
-         *         "attachments": []
+         *         "attachments": [],
+         *         "deleted": false,
+         *         "reactions": []
          *       },
          *       "timestamp": "2026-11-04T18:30:05.140Z"
          *     }
@@ -1866,11 +1998,11 @@ export interface components {
             timestamp: string;
         };
         /**
-         * @description What an event reports: `message.created`, a message was posted (its payload is the `Message`); `room.changed`, a room was created or renamed (its payload is the `RoomChange`); `occupancy.changed`, someone joined or left a room's voice, or a participant's new name reached it (its payload is the `OccupancyChange`); `access.revoked`, the guest link was replaced (its payload is the `AccessRevoked`), and the server closes the connection next; `visitor.colour.changed`, an explicit saved colour change (its payload is the `VisitorColour`) to all visitors; `attachments.expired`, posted files expired in this room (its payload is `AttachmentsExpired`); private `account.signin.requested` and `account.signin.state_changed` carry `SignInRequest`. Private `knock` reaches only the knocked identity's connections and carries a `Knock`. Private drafts are never broadcast.
+         * @description What an event reports: `message.created`, a message was posted (its payload is the `Message`); `message.updated`, a message was edited, deleted or its reactions changed (its payload is the whole `Message` as it now reads); `room.changed`, a room was created or renamed (its payload is the `RoomChange`); `occupancy.changed`, someone joined or left a room's voice, or a participant's new name reached it (its payload is the `OccupancyChange`); `access.revoked`, the guest link was replaced (its payload is the `AccessRevoked`), and the server closes the connection next; `visitor.colour.changed`, an explicit saved colour change (its payload is the `VisitorColour`) to all visitors; `attachments.expired`, posted files expired in this room (its payload is `AttachmentsExpired`); private `account.signin.requested` and `account.signin.state_changed` carry `SignInRequest`. Private `knock` reaches only the knocked identity's connections and carries a `Knock`. Private drafts are never broadcast.
          * @example message.created
          * @enum {string}
          */
-        EventType: "message.created" | "room.changed" | "occupancy.changed" | "access.revoked" | "visitor.colour.changed" | "attachments.expired" | "account.signin.requested" | "account.signin.state_changed" | "knock";
+        EventType: "message.created" | "room.changed" | "occupancy.changed" | "access.revoked" | "visitor.colour.changed" | "attachments.expired" | "account.signin.requested" | "account.signin.state_changed" | "knock" | "message.updated";
         /** @description Whom to call into the room's voice. */
         KnockRequest: {
             /**
@@ -2017,6 +2149,10 @@ export interface components {
         AttachmentId: string;
         /** @description The room's ID. */
         RoomId: string;
+        /** @description The message's ID. */
+        MessageId: string;
+        /** @description The reaction to give or take back. */
+        Reaction: components["schemas"]["MessageReaction"];
     };
     requestBodies: never;
     headers: never;
@@ -3749,7 +3885,7 @@ export interface operations {
                     "application/json": components["schemas"]["Message"];
                 };
             };
-            /** @description The message body breaks the message rules (`invalid_message`): longer than 4000 characters, or empty/white space without attachments. Duplicate, foreign, expired, cancelled or consumed drafts are invalid_attachments. A missing body counts as empty. A request key that breaks its rules, or a body that is not JSON of the request's shape, is `invalid_request`. */
+            /** @description The message body breaks the message rules (`invalid_message`): longer than 4000 characters, or empty/white space without attachments. Duplicate, foreign, expired, cancelled or consumed drafts are invalid_attachments. A missing body counts as empty. A request key that breaks its rules, or a body that is not JSON of the request's shape, is `invalid_request`. A replyTo that is not a message of this room, or was deleted, is `invalid_reply`. */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -3780,6 +3916,240 @@ export interface operations {
             };
             /** @description Attachment quota or cleanup capacity is unavailable (attachment_capacity). */
             503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    deleteMessage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The room's ID. */
+                id: components["parameters"]["RoomId"];
+                /** @description The message's ID. */
+                messageId: components["parameters"]["MessageId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The message as it now reads; it was also sent as `message.updated` if anything changed. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Message"];
+                };
+            };
+            401: components["responses"]["VisitorRequired"];
+            /** @description Only the author can delete it (`not_author`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description No such room, or no such message in it (`room_not_found`, `message_not_found`). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    editMessage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The room's ID. */
+                id: components["parameters"]["RoomId"];
+                /** @description The message's ID. */
+                messageId: components["parameters"]["MessageId"];
+            };
+            cookie?: never;
+        };
+        /** @description The new text. */
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EditMessageRequest"];
+            };
+        };
+        responses: {
+            /** @description The message as it now reads; it was also sent as `message.updated` if anything changed. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Message"];
+                };
+            };
+            /** @description The text breaks the message rules (`invalid_message`), or the body is not of the request's shape (`invalid_request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            401: components["responses"]["VisitorRequired"];
+            /** @description Only the author can edit it (`not_author`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description No such room, or no such message in it (`room_not_found`, `message_not_found`). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description The message was deleted (`message_deleted`). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    addReaction: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The room's ID. */
+                id: components["parameters"]["RoomId"];
+                /** @description The message's ID. */
+                messageId: components["parameters"]["MessageId"];
+                /** @description The reaction to give or take back. */
+                reaction: components["parameters"]["Reaction"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The message as it now reads; it was also sent as `message.updated` if anything changed. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Message"];
+                };
+            };
+            /** @description Not a reaction from the list (`invalid_request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            401: components["responses"]["VisitorRequired"];
+            /** @description No such room, or no such message in it (`room_not_found`, `message_not_found`). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description The message was deleted (`message_deleted`). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Too many reaction changes lately (`rate_limited`). */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    removeReaction: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The room's ID. */
+                id: components["parameters"]["RoomId"];
+                /** @description The message's ID. */
+                messageId: components["parameters"]["MessageId"];
+                /** @description The reaction to give or take back. */
+                reaction: components["parameters"]["Reaction"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The message as it now reads; it was also sent as `message.updated` if anything changed. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Message"];
+                };
+            };
+            /** @description Not a reaction from the list (`invalid_request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            401: components["responses"]["VisitorRequired"];
+            /** @description No such room, or no such message in it (`room_not_found`, `message_not_found`). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Too many reaction changes lately (`rate_limited`). */
+            429: {
                 headers: {
                     [name: string]: unknown;
                 };

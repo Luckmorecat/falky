@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from 'react';
-import type { AccountSession, Room, Visitor, VisitorColour } from '../api/client';
+import type { AccountSession, Message, Room, Visitor, VisitorColour } from '../api/client';
 import type { ComposerUpload, RoomChat } from '../chat/timeline';
 import type { PaletteName } from '../fx/palette';
 import { idleVoice, type VoiceSnapshot } from '../voice/types';
@@ -36,6 +36,8 @@ export interface AppState {
   notice: Notice | null;
   /** Someone in a room's voice calling this person to join it, until answered or dismissed. */
   knock: { id: number; roomId: string; fromName: string } | null;
+  /** The message the composer of a room answers or changes; one at a time. */
+  composing: { roomId: string; kind: 'reply' | 'edit'; message: Message } | null;
   settings: Settings;
   /** Only server-confirmed assignments; missing IDs render without a visitor colour. */
   colours: Record<string, VisitorColour>;
@@ -60,6 +62,7 @@ let state: AppState = {
   voice: idleVoice,
   notice: null,
   knock: null,
+  composing: null,
   settings: prefs.settings(),
   colours: {},
   colourSave: null,
