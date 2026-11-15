@@ -6,7 +6,7 @@ import { useApp } from '../app/store';
 import { onTick } from '../fx/ticker';
 import { t } from '../strings';
 import { canUseCamera } from '../voice/camera';
-import { REACTIONS } from '../voice/reactions';
+import { EMOJI_REACTIONS, SOUND_REACTIONS } from '../voice/reactions';
 import { canShareScreen } from '../voice/share';
 import { Button } from './Button';
 import { IconButton } from './IconButton';
@@ -153,11 +153,20 @@ function ReactButton() {
         <Icon name="smile" />
       </IconButton>
       <div id="react-tray" className="react-tray" role="group" aria-label={t.reactions} inert={!open}>
-        {REACTIONS.map((r, i) => (
-          <button key={r.id} type="button" className="react-pick" aria-label={t.reactionNames[r.id]} data-tip={`${t.reactionNames[r.id]} (${i + 1})`} onClick={() => voice.react(r.id)}>
-            {r.emoji}
-          </button>
-        ))}
+        <div className="react-row">
+          {EMOJI_REACTIONS.map((r, i) => (
+            <button key={r.id} type="button" className="react-pick" aria-label={t.reactionNames[r.id]} data-tip={`${t.reactionNames[r.id]} (${i + 1})`} onClick={() => voice.react(r.id)}>
+              {r.emoji}
+            </button>
+          ))}
+        </div>
+        <div className="react-row react-sounds" role="group" aria-label={t.roomSounds}>
+          {SOUND_REACTIONS.map((r) => (
+            <button key={r.id} type="button" className="react-pick" aria-label={t.reactionNames[r.id]} data-tip={t.reactionNames[r.id]} onClick={() => voice.react(r.id)}>
+              {r.emoji}
+            </button>
+          ))}
+        </div>
       </div>
     </div>
   );

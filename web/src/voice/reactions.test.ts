@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { allowReaction, emitReaction, encodeReaction, onReaction, parseReaction, resetReactions } from './reactions';
+import { allowReaction, allowSound, emitReaction, soundOf, encodeReaction, onReaction, parseReaction, resetReactions } from './reactions';
 
 afterEach(resetReactions);
 
@@ -35,5 +35,19 @@ describe('allowReaction', () => {
     expect(allowReaction('a', 500)).toBe(false);
     expect(allowReaction('b', 500)).toBe(true);
     expect(allowReaction('a', 2100)).toBe(true);
+  });
+});
+
+describe('board sounds', () => {
+  it('belong only to the sound reactions', () => {
+    expect(soundOf('horn')).toBe('horn');
+    expect(soundOf('up')).toBeNull();
+  });
+
+  it('let one sound per sender through every few seconds', () => {
+    expect(allowSound('a', 0)).toBe(true);
+    expect(allowSound('a', 1000)).toBe(false);
+    expect(allowSound('b', 1000)).toBe(true);
+    expect(allowSound('a', 3000)).toBe(true);
   });
 });
