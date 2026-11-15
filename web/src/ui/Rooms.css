@@ -5,7 +5,8 @@
 .room-now[disabled] { cursor: default; padding-right: 16px; }
 @media (hover:hover) and (pointer:fine) { .room-now:not([disabled]):hover { background: var(--fill); } }
 .room-now-name { font-size: 28px; font-weight: 500; line-height: 1.15; letter-spacing: -.02em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.room-chevron { color: var(--text-2); transition: transform 240ms var(--ease-out); }
+/* A filled circle, so a finger sees it can be pressed; a mouse opens the list by hovering. */
+.room-chevron { flex: none; width: 26px; height: 26px; padding: 4px; border-radius: var(--round); background: var(--fill); color: var(--text-2); transition: transform 240ms var(--ease-out); }
 .room-now[aria-expanded="true"] .room-chevron { transform: rotate(180deg); }
 .clock { display: flex; gap: 8px; align-items: center; justify-content: center; margin-top: 4px; color: var(--text-2); font-size: 15px; height: 20px; font-variant-numeric: tabular-nums; transition: opacity 160ms ease; }
 .room-list { position: absolute; left: 0; right: 0; top: 64px; display: flex; gap: 4px; padding: 6px 24px 24px; overflow-x: auto; justify-content: safe center; scrollbar-width: none; text-align: left;
