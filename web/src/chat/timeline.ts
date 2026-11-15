@@ -1,4 +1,4 @@
-import type { Attachment, Message } from '../api/client';
+import type { Attachment, Message, MessageReply } from '../api/client';
 import { t } from '../strings';
 
 /** A message on its way to the server, shown until the server has it. */
@@ -8,6 +8,8 @@ export interface PendingMessage {
   body: string;
   /** Drafts already on the server, in order; shown from the person's own copies while sending. */
   attachments: Attachment[];
+  /** The message this one answers, as it read when the reply was written. */
+  replyTo?: MessageReply;
   failed: boolean;
   /** Why it failed, for the person; empty while sending. */
   reason: string;
@@ -50,6 +52,15 @@ export function mergeMessages(list: Message[], incoming: Message[]): Message[] {
   const byId = new Map(list.map((m) => [m.id, m]));
   for (const m of incoming) byId.set(m.id, m);
   return [...byId.values()].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+}
+
+/** Replaces messages already held; one not held stays out, so history keeps no gaps. */
+export function replaceMessage(list: Message[], m: Message): Message[] {
+  const i = list.findIndex((x) => x.id === m.id);
+  if (i === -1) return list;
+  const next = list.slice();
+  next[i] = m;
+  return next;
 }
 
 export function countUnread(messages: Message[], lastReadId: string | null, selfId: string | undefined): number {

@@ -1,11 +1,12 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import type { Attachment, Message, Room } from '../api/client';
-import { addFiles, discardMessage, knock, loadOlder, markLatestRead, postMessage, retryMessage, setChatOpen, voice } from '../app/controller';
+import type { Attachment, Message, MessageReply, Room } from '../api/client';
+import { addFiles, compose, deleteMessage, discardMessage, knock, loadOlder, markLatestRead, postMessage, retryMessage, setChatOpen, stopComposing, toggleReaction, voice } from '../app/controller';
 import { shortcuts } from '../app/shortcuts';
 import { getState, useApp } from '../app/store';
 import { atBottom, followingLatest, rememberedPlace, rememberPlace, scrollToAnchor, sliceRange, stack, type Anchor } from '../chat/place';
 import { gallerySize } from '../chat/gallery';
 import { isImage } from '../chat/images';
+import { emojiFor, MESSAGE_REACTIONS } from '../chat/reactions';
 import { buildFeed, canPost, MESSAGE_MAX, messageLength, type FeedItem, type PendingMessage, splitLinks } from '../chat/timeline';
 import { type PaletteName, paletteStyle } from '../fx/palette';
 import { t } from '../strings';
@@ -36,7 +37,9 @@ function estimateHeight(row: FeedRow): number {
   const lines = text.trim() ? Math.max(1, Math.ceil(text.length / 36)) : 0;
   const head = row.continued ? 3 : 36;
   const media = (images.length ? gallerySize(images, 300).height + 4 : 0) + (attachments.length - images.length) * 52;
-  return head + lines * 20 + media + (row.kind === 'pending' ? 22 : 0);
+  const quote = (row.kind === 'message' ? row.message.replyTo : row.pending.replyTo) ? 44 : 0;
+  const reactions = row.kind === 'message' && row.message.reactions.length ? 34 : 0;
+  return head + lines * 20 + media + quote + reactions + (row.kind === 'pending' ? 22 : 0);
 }
 
 const leadOf = (rows: FeedRow[], index: number) => {
@@ -83,9 +86,57 @@ function Body({ text }: { text: string }) {
   );
 }
 
-const MessageRow = memo(function MessageRow({ message, own, continued, lead, palette, onOpen, knockable }: { message: Message; own: boolean; continued: boolean; lead: boolean; palette: PaletteName | undefined; onOpen: OpenImage; knockable: boolean }) {
+function Quote({ reply }: { reply: MessageReply }) {
   return (
-    <article className={`msg${own ? ' own' : ''}${continued ? ' cont' : ''}${lead ? ' lead' : ''}`} style={paletteStyle(palette)}>
+    <div className="msg-quote">
+      <span className="msg-quote-author">{reply.authorName}</span>
+      <span className="msg-quote-text">{reply.deleted ? t.messageDeleted : reply.excerpt || t.imagesSummary(1)}</span>
+    </div>
+  );
+}
+
+/** What can be done to a message: shown on hover with a mouse, after a tap on touch. */
+function MessageTools({ message, own }: { message: Message; own: boolean }) {
+  const [picking, setPicking] = useState(false);
+  const [confirming, setConfirming] = useState(false);
+  return (
+    <div className="msg-tools" role="toolbar" aria-label={t.messageActions} onMouseLeave={() => { setPicking(false); setConfirming(false); }}>
+      {picking ? MESSAGE_REACTIONS.map((r) => (
+        <button key={r.id} type="button" className="msg-tool emoji" aria-label={t.messageReactionNames[r.id]} title={t.messageReactionNames[r.id]} onClick={() => { setPicking(false); void toggleReaction(message, r.id); }}>{r.emoji}</button>
+      )) : (
+        <>
+          <button type="button" className="msg-tool" aria-label={t.messageReact} title={t.messageReact} onClick={() => setPicking(true)}><Icon name="smile" /></button>
+          <button type="button" className="msg-tool" aria-label={t.messageReply} title={t.messageReply} onClick={() => compose('reply', message)}><Icon name="reply" /></button>
+          {own && <button type="button" className="msg-tool" aria-label={t.messageEdit} title={t.messageEdit} onClick={() => compose('edit', message)}><Icon name="edit" /></button>}
+          {own && (confirming
+            ? <button type="button" className="msg-tool danger wide" onClick={() => void deleteMessage(message)}>{t.deleteAsk}</button>
+            : <button type="button" className="msg-tool" aria-label={t.messageDelete} title={t.messageDelete} onClick={() => setConfirming(true)}><Icon name="trash" /></button>)}
+        </>
+      )}
+    </div>
+  );
+}
+
+function Reactions({ message, selfId }: { message: Message; selfId: string }) {
+  if (!message.reactions.length) return null;
+  return (
+    <div className="msg-reactions">
+      {message.reactions.map((g) => {
+        const mine = g.visitorIds.includes(selfId);
+        return (
+          <button key={g.reaction} type="button" className={`msg-reaction${mine ? ' mine' : ''}`} aria-pressed={mine}
+            aria-label={`${t.messageReactionNames[g.reaction]}: ${g.visitorIds.length}`} onClick={() => void toggleReaction(message, g.reaction)}>
+            <span aria-hidden="true">{emojiFor(g.reaction)}</span>{g.visitorIds.length}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+const MessageRow = memo(function MessageRow({ message, own, continued, lead, palette, onOpen, selfId, knockable }: { message: Message; own: boolean; continued: boolean; lead: boolean; palette: PaletteName | undefined; onOpen: OpenImage; selfId: string; knockable: boolean }) {
+  return (
+    <article className={`msg${own ? ' own' : ''}${continued ? ' cont' : ''}${lead ? ' lead' : ''}${message.deleted ? ' deleted' : ''}`} style={paletteStyle(palette)} tabIndex={-1}>
       {!continued && (
         <div className="msg-meta">
           <span className="msg-avatar"><Orb seed={message.authorId} palette={palette} level={talkOf(message.authorId)} /></span>
@@ -98,8 +149,16 @@ const MessageRow = memo(function MessageRow({ message, own, continued, lead, pal
           )}
         </div>
       )}
-      {message.attachments.length > 0 && <Gallery attachments={message.attachments} onOpen={onOpen} />}
-      {message.body.trim() && <Body text={message.body} />}
+      {!message.deleted && <MessageTools message={message} own={own} />}
+      {message.replyTo && <Quote reply={message.replyTo} />}
+      {message.deleted ? <div className="msg-text gone">{t.messageDeleted}</div> : (
+        <>
+          {message.attachments.length > 0 && <Gallery attachments={message.attachments} onOpen={onOpen} />}
+          {message.body.trim() && <Body text={message.body} />}
+          {message.editedAt && <span className="msg-edited">{t.messageEdited}</span>}
+          <Reactions message={message} selfId={selfId} />
+        </>
+      )}
     </article>
   );
 });
@@ -108,6 +167,7 @@ function PendingRow({ pending, continued, lead, name, seed, palette }: { pending
   return (
     <article className={`msg own pending${continued ? ' cont' : ''}${lead ? ' lead' : ''}`} style={paletteStyle(palette)}>
       {!continued && <div className="msg-meta"><span className="msg-avatar"><Orb seed={seed} palette={palette} level={talkOf(seed)} /></span><span className="msg-author">{name}</span></div>}
+      {pending.replyTo && <Quote reply={pending.replyTo} />}
       {pending.attachments.length > 0 && <Gallery attachments={pending.attachments} local />}
       {pending.body.trim() && <Body text={pending.body} />}
       <div className={`msg-state${pending.failed ? ' err' : ''}`}>
@@ -168,8 +228,11 @@ export function Chat({ room }: { room: Room | null }) {
   const announced = useRef('');
   const [live, setLive] = useState('');
 
+  const composingAny = useApp((s) => s.composing);
+  const composing = composingAny && room && composingAny.roomId === room.id ? composingAny : null;
+  const editing = composing?.kind === 'edit' ? composing.message : null;
   const draft = room ? (drafts[room.id] ?? '') : '';
-  const sendable = canPost(draft, readyCount) && !busy;
+  const sendable = editing ? canPost(draft, editing.attachments.length) : canPost(draft, readyCount) && !busy;
   const items = useMemo(() => (chat ? buildFeed(chat, visitor?.id, newAfterId) : []), [chat, visitor?.id, newAfterId, lang]);
   const rows = useMemo<FeedRow[]>(() => {
     const list: FeedRow[] = [];
@@ -345,8 +408,24 @@ export function Chat({ room }: { room: Room | null }) {
     if (room) setDrafts((d) => ({ ...d, [room.id]: value }));
   };
 
+  // Starting an edit puts its text in the field; leaving it clears what was being changed.
+  const editingId = editing?.id;
+  useEffect(() => {
+    if (!room || !editingId) return;
+    setDrafts((d) => ({ ...d, [room.id]: editing!.body }));
+    input.current?.focus({ preventScroll: true });
+    return () => setDrafts((d) => ({ ...d, [room.id]: '' }));
+  }, [room?.id, editingId]);
+  useEffect(() => {
+    if (composing?.kind === 'reply') input.current?.focus({ preventScroll: true });
+  }, [composing?.kind, composing?.message.id]);
+
   const send = () => {
     if (!room || !sendable) return;
+    if (editing) {
+      postMessage(room.id, draft);
+      return;
+    }
     rememberPlace(room.id, { following: true, anchor: null });
     postMessage(room.id, draft);
     setDraft('');
@@ -446,7 +525,7 @@ export function Chat({ room }: { room: Room | null }) {
                   {row.kind === 'loading' ? <div className="day">{t.loadingOlder}</div>
                     : row.kind === 'day' ? <div className="day">{row.label}</div>
                       : row.kind === 'new' ? <div className="new-line">{t.newMessages}</div>
-                        : row.kind === 'message' ? <MessageRow message={row.message} own={row.message.authorId === selfId} continued={row.continued} lead={lead} palette={paletteFor(row.message.authorId)} onOpen={openImage} knockable={canKnock(row.message.authorId)} />
+                        : row.kind === 'message' ? <MessageRow message={row.message} own={row.message.authorId === selfId} continued={row.continued} lead={lead} palette={paletteFor(row.message.authorId)} onOpen={openImage} selfId={selfId} knockable={canKnock(row.message.authorId)} />
                           : <PendingRow pending={row.pending} continued={row.continued} lead={lead} name={visitor?.name ?? ''} seed={selfId} palette={paletteFor(selfId)} />}
                 </div>
               );
@@ -469,7 +548,17 @@ export function Chat({ room }: { room: Room | null }) {
         >
           <Icon name="down" />{t.toLatest}
         </button>
-        {room && <ComposerTray roomId={room.id} />}
+        {composing && (
+          <div className="composing">
+            <Icon name={composing.kind === 'edit' ? 'edit' : 'reply'} />
+            <div className="composing-text">
+              <strong>{composing.kind === 'edit' ? t.editingMessage : t.replyingTo(composing.message.authorName)}</strong>
+              {composing.kind === 'reply' && <span>{composing.message.body.trim() || t.imagesSummary(composing.message.attachments.length)}</span>}
+            </div>
+            <IconButton size="small" aria-label={t.stopComposing} onClick={stopComposing}><Icon name="x" /></IconButton>
+          </div>
+        )}
+        {room && !editing && <ComposerTray roomId={room.id} />}
         {count > MESSAGE_MAX - 400 && <span className={`count${count > MESSAGE_MAX ? ' over' : ''}`}>{count} / {MESSAGE_MAX}</span>}
         <div className="field" data-tip={`${t.focusChat} (${shortcuts.chat.label} · ${shortcuts.chatEnter.label})`}>
           <IconButton size="small" className="attach" aria-label={t.attachImage} disabled={!room} onClick={() => picker.current?.click()}><Icon name="plus" /></IconButton>
@@ -502,9 +591,22 @@ export function Chat({ room }: { room: Room | null }) {
               takeFiles(pasted);
             }}
             onKeyDown={(e) => {
+              if (e.key === 'Escape' && composing) {
+                e.preventDefault();
+                stopComposing();
+                return;
+              }
               if (e.key === 'Escape') {
                 e.currentTarget.blur();
                 setChatOpen(false);
+              }
+              // As in most chats: Up in an empty field edits your last message.
+              if (e.key === 'ArrowUp' && !draft && !composing && chat) {
+                const last = [...chat.messages].reverse().find((m) => m.authorId === selfId && !m.deleted);
+                if (last) {
+                  e.preventDefault();
+                  compose('edit', last);
+                }
               }
               if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
                 e.preventDefault();

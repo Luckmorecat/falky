@@ -22,11 +22,13 @@ export type AccessRevoked = Schemas['AccessRevoked'];
 export type Attachment = Schemas['Attachment'];
 export type AttachmentsExpired = Schemas['AttachmentsExpired'];
 export type Knock = Schemas['Knock'];
+export type MessageReply = Schemas['MessageReply'];
+export type MessageReaction = Schemas['MessageReaction'];
 
 /** A live update, narrowed by its type. Unknown types are ignored by callers. */
 export type LiveEvent = { eventId: string; timestamp: string; roomId?: string } & (
   | { type: 'account.signin.requested' | 'account.signin.state_changed'; payload: SignInRequest }
-  | { type: 'message.created'; payload: Message }
+  | { type: 'message.created' | 'message.updated'; payload: Message }
   | { type: 'attachments.expired'; payload: AttachmentsExpired }
   | { type: 'room.changed'; payload: RoomChange }
   | { type: 'occupancy.changed'; payload: OccupancyChange }
@@ -160,8 +162,14 @@ export const api = {
     const qs = params.size ? `?${params}` : '';
     return call<Schemas['MessageList']>('GET', `/api/rooms/${encodeURIComponent(roomId)}/messages${qs}`).then((r) => r.messages);
   },
-  post: (roomId: string, requestKey: string, body: string, attachmentIds: string[] = []) =>
-    call<Message>('POST', `/api/rooms/${encodeURIComponent(roomId)}/messages`, { requestKey, body, ...(attachmentIds.length ? { attachmentIds } : {}) }),
+  post: (roomId: string, requestKey: string, body: string, attachmentIds: string[] = [], replyTo?: string) =>
+    call<Message>('POST', `/api/rooms/${encodeURIComponent(roomId)}/messages`, { requestKey, body, ...(attachmentIds.length ? { attachmentIds } : {}), ...(replyTo ? { replyTo } : {}) }),
+  editMessage: (roomId: string, messageId: string, body: string) =>
+    call<Message>('PATCH', `/api/rooms/${encodeURIComponent(roomId)}/messages/${encodeURIComponent(messageId)}`, { body }),
+  deleteMessage: (roomId: string, messageId: string) =>
+    call<Message>('DELETE', `/api/rooms/${encodeURIComponent(roomId)}/messages/${encodeURIComponent(messageId)}`),
+  react: (roomId: string, messageId: string, reaction: MessageReaction, on: boolean) =>
+    call<Message>(on ? 'PUT' : 'DELETE', `/api/rooms/${encodeURIComponent(roomId)}/messages/${encodeURIComponent(messageId)}/reactions/${reaction}`),
   attachmentLimits: () => call<Schemas['AttachmentLimits']>('GET', '/api/attachments/limits'),
   attachment: (id: string) => call<Attachment>('GET', `/api/attachments/${encodeURIComponent(id)}`),
   cancelAttachment: (id: string) => call<void>('DELETE', `/api/attachments/${encodeURIComponent(id)}`),

@@ -62,6 +62,43 @@
   opacity: 0; transform: translateY(6px); pointer-events: none; transition: opacity 140ms ease, transform 200ms var(--ease-out); }
 .to-latest.show { opacity: 1; transform: none; pointer-events: auto; }
 .to-latest svg.i { width: 16px; height: 16px; }
+/* What can be done to a message: a small bar at its top corner, on hover or once tapped. */
+.msg { position: relative; outline: none; }
+.msg-tools { position: absolute; top: 4px; right: 0; z-index: 2; display: flex; gap: 2px; padding: 3px; border-radius: calc(18px * var(--corner)); background: var(--raised-2); box-shadow: 0 6px 18px var(--shadow);
+  opacity: 0; translate: 0 2px; pointer-events: none; transition: opacity 100ms ease, translate 140ms var(--ease-out); }
+.msg.own .msg-tools { right: auto; left: 0; }
+.msg.cont .msg-tools { top: -10px; }
+.msg:focus-within .msg-tools { opacity: 1; translate: 0 0; pointer-events: auto; }
+@media (hover:hover) and (pointer:fine) { .msg:hover .msg-tools { opacity: 1; translate: 0 0; pointer-events: auto; } }
+.msg-tool { height: 30px; min-width: 30px; padding: 0 6px; border-radius: calc(15px * var(--corner)); display: grid; place-items: center; color: var(--text-2); font-size: 13px; white-space: nowrap; transition: background-color 100ms ease, color 100ms ease; }
+.msg-tool svg.i { width: 16px; height: 16px; }
+.msg-tool.emoji { font-size: 17px; padding: 0 4px; }
+.msg-tool.danger { color: var(--danger); background: var(--danger-bg); }
+@media (hover:hover) and (pointer:fine) { .msg-tool:not(.danger):hover { background: var(--fill); color: var(--text); } }
+
+.msg-quote { display: grid; gap: 1px; width: fit-content; max-width: 100%; margin: 2px 0 4px; padding: 4px 10px; border-left: 2px solid color-mix(in srgb, var(--base) 60%, var(--text-3)); font-size: 13px; line-height: 1.35; text-align: left; }
+.msg.own .msg-quote { margin-left: auto; }
+.msg-quote-author { color: var(--text-2); font-weight: 500; }
+.msg-quote-text { color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.msg-text.gone { color: var(--text-3); font-style: italic; }
+.msg.own .msg-text.gone { background: none; padding: 0; }
+.msg-edited { display: block; font-size: 11px; color: var(--text-3); margin-top: 1px; }
+.msg-reactions { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+.msg.own .msg-reactions { justify-content: flex-end; }
+.msg-reaction { display: inline-flex; align-items: center; gap: 4px; height: 26px; padding: 0 9px 0 7px; border-radius: calc(13px * var(--corner)); background: var(--fill); font-size: 12px; color: var(--text-2); font-variant-numeric: tabular-nums; transition: background-color 100ms ease, transform 120ms var(--ease-out); }
+.msg-reaction span { font-size: 14px; }
+.msg-reaction.mine { background: color-mix(in srgb, var(--level) 22%, transparent); color: var(--text); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--level) 45%, transparent); }
+.msg-reaction:active { transform: scale(.94); }
+@media (hover:hover) and (pointer:fine) { .msg-reaction:not(.mine):hover { background: var(--fill-2); } }
+
+/* Above the field while it answers or changes a message. */
+.composing { display: flex; align-items: center; gap: 10px; margin: 0 4px 8px; padding: 6px 4px 6px 12px; border-radius: calc(18px * var(--corner)); background: var(--fill); font-size: 13px; }
+.composing > svg.i { width: 16px; height: 16px; color: var(--text-2); flex: none; }
+.composing-text { display: grid; min-width: 0; flex: 1; }
+.composing-text strong { font-weight: 500; }
+.composing-text span { color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.composing .ib { background: transparent; flex: none; }
+
 /* Inset by 12px at the sides and bottom, so its corners follow the card's; lines end right at its top. */
 .composer { flex: none; padding: 0 12px 12px; position: relative; }
 .count { position: absolute; right: 34px; top: -14px; font-size: 12px; color: var(--text-2); }
