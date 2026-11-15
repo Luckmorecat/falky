@@ -45,6 +45,7 @@ test('same-person connections keep separate prejoin entries, remote screen/camer
   await expect(page.locator('.share-label')).toHaveText("Alex's screen");
   await expect.poll(() => page.locator('.share video').evaluate((el: HTMLVideoElement) => el.videoWidth)).toBeGreaterThan(0);
   await page.getByRole('button', { name: 'Leave voice', exact: true }).click();
+  await page.getByRole('dialog').getByRole('button', { name: 'Leave', exact: true }).click();
   await expect(page.getByRole('toolbar')).toHaveCount(0);
   await expect(page.locator('.stage .tile')).toHaveCount(2);
   expect((await state(page)).rooms[0]!.occupancy.map((p) => p.connectionId)).toEqual(peers.map((p) => p.connectionId));
@@ -92,9 +93,11 @@ test('two app instances in one session keep their own media through another inst
     await expect.poll(async () => Object.keys((await state(page)).voiceConnections).sort()).toEqual([secondGrant, thirdGrant].sort());
     await expect(other.getByRole('toolbar')).toBeVisible();
     await page.getByRole('button', { name: 'Leave voice', exact: true }).click();
+    await page.getByRole('dialog').getByRole('button', { name: 'Leave', exact: true }).click();
     await expect.poll(async () => Object.keys((await state(page)).voiceConnections)).toEqual([secondGrant]);
     await expect(other.getByRole('toolbar')).toBeVisible();
     await expect(other.locator('.stage .tile')).toHaveCount(3);
     await other.getByRole('button', { name: 'Leave voice', exact: true }).click();
+    await other.getByRole('dialog').getByRole('button', { name: 'Leave', exact: true }).click();
   } finally { await other.close(); }
 });

@@ -115,11 +115,38 @@ function Controls({ room, unreadRef, onSettings }: { room: Room | null; unreadRe
       <span className="dock-sep" />
       <SettingsButton onOpen={onSettings} />
       <ChatButton unreadRef={unreadRef} />
-      <button className="leave" data-cue="none" aria-label={t.leaveVoice} onClick={() => void voice.leave()}>
+      <LeaveButton />
+    </div>
+  );
+}
+
+function LeaveButton() {
+  const dialog = useRef<HTMLDialogElement>(null);
+
+  function leave() {
+    dialog.current?.close();
+    void voice.leave();
+  }
+
+  return (
+    <>
+      <button className="leave" data-cue="none" aria-label={t.leaveVoice} aria-haspopup="dialog" onClick={() => dialog.current?.showModal()}>
         <span>{t.leave}</span>
         <i><Icon name="x" /></i>
       </button>
-    </div>
+      <dialog
+        ref={dialog}
+        className="leave-confirm"
+        aria-labelledby="leave-confirm-title"
+        onClick={(e) => { if (e.target === e.currentTarget) e.currentTarget.close(); }}
+      >
+        <h2 id="leave-confirm-title">{t.leaveAsk}</h2>
+        <div className="leave-confirm-actions">
+          <Button autoFocus onClick={() => dialog.current?.close()}>{t.leaveCancel}</Button>
+          <Button variant="danger" data-cue="none" onClick={leave}>{t.leave}</Button>
+        </div>
+      </dialog>
+    </>
   );
 }
 

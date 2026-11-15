@@ -8,10 +8,19 @@
 .mic-wrap { position: relative; width: 56px; height: 56px; flex: none; display: grid; place-items: center; }
 .dock .mic-wrap .ib:not(.off) { background: var(--invert); color: var(--on-invert); }
 .mic-ring { position: absolute; inset: 0; border-radius: var(--round); background: color-mix(in srgb, var(--invert) 30%, transparent); opacity: 0; will-change: transform, opacity; pointer-events: none; }
-.leave { display: flex; align-items: center; gap: 10px; height: 56px; padding: 0 6px 0 20px; border-radius: calc(28px * var(--corner)); background: var(--fill); transition: transform 140ms var(--ease-out), background-color 160ms ease; }
+.leave { display: flex; align-items: center; gap: 10px; height: 56px; padding: 0 6px 0 20px; border-radius: calc(28px * var(--corner)); background: var(--danger-bg); color: var(--danger); transition: transform 140ms var(--ease-out), background-color 160ms ease; }
 .leave:active { transform: scale(.97); }
-.leave i { width: 44px; height: 44px; border-radius: var(--round); background: var(--fill-2); display: grid; place-items: center; }
+.leave i { width: 44px; height: 44px; border-radius: var(--round); background: var(--danger); color: var(--danger-bg); display: grid; place-items: center; }
 .leave i svg.i { width: 18px; height: 18px; }
+
+.leave-confirm { width: min(360px, calc(100vw - 32px)); margin: auto; padding: 24px; border: 0; border-radius: calc(32px * var(--corner)); background: var(--surface); color: var(--text); box-shadow: 0 24px 60px var(--shadow);
+  opacity: 0; transform: scale(.97) translateY(8px); transition: opacity 140ms ease, transform 200ms var(--ease-out), overlay 200ms allow-discrete, display 200ms allow-discrete; }
+.leave-confirm[open] { opacity: 1; transform: none; @starting-style { opacity: 0; transform: scale(.97) translateY(8px); } }
+.leave-confirm::backdrop { background: rgba(0,0,0,.55); opacity: 0; transition: opacity 160ms ease, overlay 160ms allow-discrete, display 160ms allow-discrete; }
+.leave-confirm[open]::backdrop { opacity: 1; @starting-style { opacity: 0; } }
+[data-theme="light"] .leave-confirm::backdrop { background: rgba(0,0,0,.32); }
+.leave-confirm h2 { font-size: 20px; font-weight: 500; letter-spacing: -.01em; }
+.leave-confirm-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 24px; }
 .dock-sep { width: 1px; height: 28px; background: var(--fill-2); margin: 0 4px; }
 .dock-room { padding: 0 8px 0 14px; max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-2); height: 56px; transition: color 120ms ease; }
 @media (hover:hover) and (pointer:fine) { .dock-room:hover { color: var(--text); } }

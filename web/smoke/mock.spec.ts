@@ -187,6 +187,7 @@ test('settings, simulated voice errors and animated local/remote sharing avoid h
   await action(page, { type: 'faults', faults: { voiceReconnecting: false } });
   await expect(page.getByText('Reconnecting voice', { exact: true })).toHaveCount(0);
   await page.getByRole('button', { name: 'Leave voice', exact: true }).click();
+  await page.getByRole('dialog').getByRole('button', { name: 'Leave', exact: true }).click();
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
   await settingsTab(page, 'Audio & video');
   await page.getByLabel('Join with microphone off', { exact: true }).uncheck();
@@ -197,6 +198,7 @@ test('settings, simulated voice errors and animated local/remote sharing avoid h
   await expect(page.getByRole('toolbar', { name: 'Games' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Unmute microphone', exact: true })).toHaveAttribute('aria-pressed', 'true');
   await page.getByRole('button', { name: 'Leave voice', exact: true }).click();
+  await page.getByRole('dialog').getByRole('button', { name: 'Leave', exact: true }).click();
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
   await page.getByRole('button', { name: 'Test microphone', exact: true }).click();
   await expect(page.getByRole('dialog', { name: 'Settings' }).getByRole('alert')).toHaveText('No access to the microphone');
@@ -542,6 +544,7 @@ test('offline Leave disconnects immediately without a server request and stays i
   try {
     await context.setOffline(true);
     await page.getByRole('button', { name: 'Leave voice', exact: true }).click();
+    await page.getByRole('dialog').getByRole('button', { name: 'Leave', exact: true }).click();
     await expect(page.getByRole('toolbar')).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'Join', exact: true })).toBeVisible();
   } finally { await context.setOffline(false); }
