@@ -55,7 +55,6 @@ export function Main() {
     <div className="screen room-screen">
       <span className="build-version">{import.meta.env.VITE_BUILD_VERSION}</span>
       <LiveBackground ref={background} unreadTarget={unreadCounter} />
-      <div className="topbar"><span className="mark">falky</span></div>
 
       <div className="main">
         <Rooms
