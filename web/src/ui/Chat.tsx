@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { memo, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { Attachment, Message, MessageReply, Room } from '../api/client';
 import { addFiles, compose, deleteMessage, discardMessage, knock, loadOlder, markLatestRead, postMessage, retryMessage, setChatOpen, stopComposing, toggleReaction, voice } from '../app/controller';
 import { shortcuts } from '../app/shortcuts';
@@ -95,26 +95,126 @@ function Quote({ reply }: { reply: MessageReply }) {
   );
 }
 
-/** What can be done to a message: shown on hover with a mouse, after a tap on touch. */
-function MessageTools({ message, own }: { message: Message; own: boolean }) {
+type OpenMenu = (message: Message, own: boolean, row: HTMLElement) => void;
+type MenuTarget = { message: Message; own: boolean; row: HTMLElement };
+
+const LONG_PRESS_MS = 450;
+const LONG_PRESS_SLOP = 8;
+
+/** Next to the bubble (or the picture, when there is no text), centred on its first line, and kept inside the row when the text fills it. */
+function besideBody(row: HTMLElement, bar: HTMLElement, own: boolean) {
+  const body = ['.msg-text', '.msg-gallery', '.att-file', '.msg-quote'].map((q) => row.querySelector<HTMLElement>(q)).find(Boolean);
+  if (!body) return;
+  const r = row.getBoundingClientRect();
+  const b = body.getBoundingClientRect();
+  const w = bar.offsetWidth;
+  const x = own ? Math.max(0, b.left - r.left - w - 4) : Math.min(r.width - w, b.right - r.left + 4);
+  bar.style.left = `${x}px`;
+  bar.style.top = `${b.top - r.top + Math.min(b.height, 34) / 2 - bar.offsetHeight / 2}px`;
+}
+
+/** With a mouse, a few bare icons beside the message on hover; the rest is in its menu. */
+function MessageTools({ message, own, onMenu }: { message: Message; own: boolean; onMenu: OpenMenu }) {
   const [picking, setPicking] = useState(false);
-  const [confirming, setConfirming] = useState(false);
+  const bar = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const el = bar.current?.closest<HTMLElement>('.msg');
+    if (!el) return;
+    const place = () => { if (bar.current) besideBody(el, bar.current, own); };
+    place();
+    el.addEventListener('mouseenter', place);
+    return () => el.removeEventListener('mouseenter', place);
+  }, [own, picking]);
   return (
-    <div className="msg-tools" role="toolbar" aria-label={t.messageActions} onMouseLeave={() => { setPicking(false); setConfirming(false); }}>
+    <div ref={bar} className="msg-tools" role="toolbar" aria-label={t.messageActions} onMouseLeave={() => setPicking(false)}>
       {picking ? MESSAGE_REACTIONS.map((r) => (
         <button key={r.id} type="button" className="msg-tool emoji" aria-label={t.messageReactionNames[r.id]} title={t.messageReactionNames[r.id]} onClick={() => { setPicking(false); void toggleReaction(message, r.id); }}>{r.emoji}</button>
       )) : (
         <>
           <button type="button" className="msg-tool" aria-label={t.messageReact} title={t.messageReact} onClick={() => setPicking(true)}><Icon name="smile" /></button>
           <button type="button" className="msg-tool" aria-label={t.messageReply} title={t.messageReply} onClick={() => compose('reply', message)}><Icon name="reply" /></button>
-          {own && <button type="button" className="msg-tool" aria-label={t.messageEdit} title={t.messageEdit} onClick={() => compose('edit', message)}><Icon name="edit" /></button>}
-          {own && (confirming
-            ? <button type="button" className="msg-tool danger wide" onClick={() => void deleteMessage(message)}>{t.deleteAsk}</button>
-            : <button type="button" className="msg-tool" aria-label={t.messageDelete} title={t.messageDelete} onClick={() => setConfirming(true)}><Icon name="trash" /></button>)}
+          <button type="button" className="msg-tool" aria-label={t.messageMore} title={t.messageMore} aria-haspopup="menu" onClick={(e) => { const el = e.currentTarget.closest<HTMLElement>('.msg'); if (el) onMenu(message, own, el); }}><Icon name="dots" /></button>
         </>
       )}
     </div>
   );
+}
+
+/** Right-click or a long press: the page dims, the message is shown again on top, reactions above it and what can be done below. */
+function MessageMenu({ target, selfId, onClose }: { target: MenuTarget; selfId: string; onClose: () => void }) {
+  const { message, own, row } = target;
+  const dialog = useRef<HTMLDialogElement>(null);
+  const [confirming, setConfirming] = useState(false);
+  const [place, setPlace] = useState<{ top: number; left?: number; right?: number } | null>(null);
+
+  useLayoutEffect(() => {
+    const el = dialog.current;
+    if (!el) return;
+    if (!el.open) el.showModal();
+    const body = row.querySelector<HTMLElement>('.msg-text, .msg-gallery, .att-file') ?? row;
+    const at = body.getBoundingClientRect();
+    const head = el.querySelector<HTMLElement>('.msg-menu-react')?.offsetHeight ?? 0;
+    const room = window.innerHeight - el.offsetHeight - 12;
+    const top = Math.max(12, Math.min(at.top - head - 8, room));
+    setPlace(own ? { top, right: Math.max(12, window.innerWidth - at.right) } : { top, left: Math.max(12, at.left) });
+  }, [row, own, confirming]);
+
+  const act = (fn: () => void) => { fn(); onClose(); };
+  const mine = new Set(message.reactions.filter((g) => g.visitorIds.includes(selfId)).map((g) => g.reaction));
+  const text = message.body.trim();
+  return (
+    <dialog ref={dialog} className={`msg-menu${own ? ' own' : ''}`} aria-label={t.messageActions}
+      style={place ?? { visibility: 'hidden' }}
+      onCancel={(e) => { e.preventDefault(); onClose(); }}
+      onKeyDown={(e) => { if (e.key === 'Escape') e.stopPropagation(); }}
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="msg-menu-react">
+        {MESSAGE_REACTIONS.map((r) => (
+          <button key={r.id} type="button" className={mine.has(r.id) ? 'mine' : ''} aria-pressed={mine.has(r.id)} aria-label={t.messageReactionNames[r.id]}
+            onClick={() => act(() => void toggleReaction(message, r.id))}>{r.emoji}</button>
+        ))}
+      </div>
+      <div className="msg-menu-preview">{text || t.imagesSummary(message.attachments.length)}</div>
+      <div className="msg-menu-list" role="menu">
+        {confirming ? (
+          <button type="button" role="menuitem" className="danger" autoFocus onClick={() => act(() => void deleteMessage(message))}>{t.deleteAsk}<Icon name="trash" /></button>
+        ) : (
+          <>
+            <button type="button" role="menuitem" onClick={() => act(() => compose('reply', message))}>{t.messageReply}<Icon name="reply" /></button>
+            {text && <button type="button" role="menuitem" onClick={() => act(() => void navigator.clipboard?.writeText(message.body))}>{t.messageCopy}<Icon name="copy" /></button>}
+            {own && <button type="button" role="menuitem" onClick={() => act(() => compose('edit', message))}>{t.messageEdit}<Icon name="edit" /></button>}
+            {own && <button type="button" role="menuitem" className="danger" onClick={() => setConfirming(true)}>{t.messageDelete}<Icon name="trash" /></button>}
+          </>
+        )}
+      </div>
+    </dialog>
+  );
+}
+
+/** A held finger opens the menu, as right-click does with a mouse; moving it scrolls instead. */
+function useLongPress(open: (el: HTMLElement) => void) {
+  const press = useRef<{ timer: number; x: number; y: number } | null>(null);
+  const cancel = () => { if (press.current) clearTimeout(press.current.timer); press.current = null; };
+  return {
+    onPointerDown: (e: ReactPointerEvent<HTMLElement>) => {
+      if (e.pointerType !== 'touch') return;
+      cancel();
+      const el = e.currentTarget;
+      press.current = { x: e.clientX, y: e.clientY, timer: window.setTimeout(() => { press.current = null; navigator.vibrate?.(8); open(el); }, LONG_PRESS_MS) };
+    },
+    onPointerMove: (e: ReactPointerEvent<HTMLElement>) => {
+      const p = press.current;
+      if (p && Math.hypot(e.clientX - p.x, e.clientY - p.y) > LONG_PRESS_SLOP) cancel();
+    },
+    onPointerUp: cancel,
+    onPointerCancel: cancel,
+    onContextMenu: (e: ReactMouseEvent<HTMLElement>) => {
+      if ((e.target as HTMLElement).closest('a')) return;
+      e.preventDefault();
+      cancel();
+      open(e.currentTarget);
+    },
+  };
 }
 
 function Reactions({ message, selfId }: { message: Message; selfId: string }) {
@@ -134,9 +234,11 @@ function Reactions({ message, selfId }: { message: Message; selfId: string }) {
   );
 }
 
-const MessageRow = memo(function MessageRow({ message, own, continued, lead, palette, onOpen, selfId, knockable }: { message: Message; own: boolean; continued: boolean; lead: boolean; palette: PaletteName | undefined; onOpen: OpenImage; selfId: string; knockable: boolean }) {
+const MessageRow = memo(function MessageRow({ message, own, continued, lead, palette, onOpen, selfId, knockable, onMenu }: { message: Message; own: boolean; continued: boolean; lead: boolean; palette: PaletteName | undefined; onOpen: OpenImage; selfId: string; knockable: boolean; onMenu: OpenMenu }) {
+  const press = useLongPress((el) => onMenu(message, own, el));
   return (
-    <article className={`msg${own ? ' own' : ''}${continued ? ' cont' : ''}${lead ? ' lead' : ''}${message.deleted ? ' deleted' : ''}`} style={paletteStyle(palette)} tabIndex={-1}>
+    <article className={`msg${own ? ' own' : ''}${continued ? ' cont' : ''}${lead ? ' lead' : ''}${message.deleted ? ' deleted' : ''}`} style={paletteStyle(palette)} tabIndex={-1}
+      {...(message.deleted ? {} : press)}>
       {!continued && (
         <div className="msg-meta">
           <span className="msg-avatar"><Orb seed={message.authorId} palette={palette} level={talkOf(message.authorId)} /></span>
@@ -149,7 +251,7 @@ const MessageRow = memo(function MessageRow({ message, own, continued, lead, pal
           )}
         </div>
       )}
-      {!message.deleted && <MessageTools message={message} own={own} />}
+      {!message.deleted && <MessageTools message={message} own={own} onMenu={onMenu} />}
       {message.replyTo && <Quote reply={message.replyTo} />}
       {message.deleted ? <div className="msg-text gone">{t.messageDeleted}</div> : (
         <>
@@ -451,9 +553,12 @@ export function Chat({ room }: { room: Room | null }) {
     .map((attachment: Attachment) => ({ attachment, authorName: m.authorName, createdAt: m.createdAt }))), [chat?.messages]);
 
   const openImage = useCallback<OpenImage>((id) => setViewing(id), []);
+  const [menu, setMenu] = useState<MenuTarget | null>(null);
+  const openMenu = useCallback<OpenMenu>((message, own, row) => setMenu({ message, own, row }), []);
   const closeViewer = () => setViewing(null);
 
-  useEffect(() => { setViewing(null); }, [room?.id]);
+  useEffect(() => { setViewing(null); setMenu(null); }, [room?.id]);
+  useEffect(() => { if (!open) setMenu(null); }, [open]);
 
   // Files dragged anywhere over the page open the chat and land in it.
   const roomId = room?.id;
@@ -525,7 +630,7 @@ export function Chat({ room }: { room: Room | null }) {
                   {row.kind === 'loading' ? <div className="day">{t.loadingOlder}</div>
                     : row.kind === 'day' ? <div className="day">{row.label}</div>
                       : row.kind === 'new' ? <div className="new-line">{t.newMessages}</div>
-                        : row.kind === 'message' ? <MessageRow message={row.message} own={row.message.authorId === selfId} continued={row.continued} lead={lead} palette={paletteFor(row.message.authorId)} onOpen={openImage} selfId={selfId} knockable={canKnock(row.message.authorId)} />
+                        : row.kind === 'message' ? <MessageRow message={row.message} own={row.message.authorId === selfId} continued={row.continued} lead={lead} palette={paletteFor(row.message.authorId)} onOpen={openImage} selfId={selfId} knockable={canKnock(row.message.authorId)} onMenu={openMenu} />
                           : <PendingRow pending={row.pending} continued={row.continued} lead={lead} name={visitor?.name ?? ''} seed={selfId} palette={paletteFor(selfId)} />}
                 </div>
               );
@@ -618,6 +723,7 @@ export function Chat({ room }: { room: Room | null }) {
         </div>
       </div>
     </aside>
+    {menu && <MessageMenu target={menu} selfId={selfId} onClose={() => setMenu(null)} />}
     {viewing && <Lightbox items={viewerItems} startId={viewing} onClose={closeViewer} />}
     </div>
   );
