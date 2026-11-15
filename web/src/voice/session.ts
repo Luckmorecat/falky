@@ -12,6 +12,7 @@ import type {
 import { api, ApiError } from '../api/client';
 import { cameraOptions } from './camera';
 import { loudness } from './meter';
+import { emitReaction, encodeReaction, parseReaction, REACTION_ATTRIBUTE, type ReactionId } from './reactions';
 import { shareOptions } from './share';
 import { softClipCurve } from './softclip';
 
@@ -61,6 +62,7 @@ export class VoiceSession implements VoiceClient {
   private knownShares = new Set<string>();
   /** What each remote track is raised by above 100%. */
   private boosts = new WeakMap<RemoteAudioTrack, GainNode>();
+  private reactionSeq = 0;
 
   constructor(private readonly host: VoiceHost) {
     this.sinkHost = document.createElement('div');
@@ -165,6 +167,14 @@ export class VoiceSession implements VoiceClient {
     if (room.localParticipant.isMicrophoneEnabled) await room.localParticipant.setMicrophoneEnabled(false).catch(() => {});
     else await this.enableMic(room);
     this.refresh();
+  }
+
+  react(id: ReactionId): void {
+    const room = this.room;
+    if (!room || this.snap.status !== 'connected') return;
+    const local = room.localParticipant;
+    if (!emitReaction(local.identity, id)) return;
+    void local.setAttributes({ [REACTION_ATTRIBUTE]: encodeReaction(id, ++this.reactionSeq) }).catch(() => {});
   }
 
   async toggleDeafen(): Promise<void> {
@@ -339,7 +349,11 @@ export class VoiceSession implements VoiceClient {
       .on(sdk.RoomEvent.TrackUnmuted, refresh)
       .on(sdk.RoomEvent.LocalTrackPublished, refresh)
       .on(sdk.RoomEvent.LocalTrackUnpublished, refresh)
-      .on(sdk.RoomEvent.ParticipantAttributesChanged, refresh)
+      .on(sdk.RoomEvent.ParticipantAttributesChanged, (changed, participant) => {
+        const reaction = !participant.isLocal && REACTION_ATTRIBUTE in changed && parseReaction(changed[REACTION_ATTRIBUTE]);
+        if (reaction) emitReaction(participant.identity, reaction);
+        refresh();
+      })
       .on(sdk.RoomEvent.ParticipantNameChanged, refresh)
       .on(sdk.RoomEvent.ActiveSpeakersChanged, refresh)
       .on(sdk.RoomEvent.ConnectionQualityChanged, (_q, p) => {

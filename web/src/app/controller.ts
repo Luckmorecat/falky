@@ -121,7 +121,7 @@ const voiceSession: VoiceClient = new VoiceSession({
   volumeOf: (id) => prefs.volume(id),
 });
 
-const pausedVoiceActions = new Set<PropertyKey>(['join', 'toggleMute', 'toggleDeafen', 'toggleShare', 'toggleCamera', 'restartCamera', 'setCamera', 'setMic', 'setSpeaker', 'applyMicProcessing']);
+const pausedVoiceActions = new Set<PropertyKey>(['join', 'toggleMute', 'toggleDeafen', 'toggleShare', 'toggleCamera', 'restartCamera', 'setCamera', 'setMic', 'setSpeaker', 'applyMicProcessing', 'react']);
 const voiceMethods = new Map<PropertyKey, unknown>();
 export const voice: VoiceClient = new Proxy(voiceSession, {
   get(target, key) {

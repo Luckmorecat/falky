@@ -1,4 +1,5 @@
 import type { PaletteName } from './fx/palette';
+import type { ReactionId } from './voice/reactions';
 import type { VoiceProblem } from './voice/types';
 
 export type Language = 'uk' | 'en';
@@ -222,6 +223,8 @@ const uk = {
   leaveVoice: 'Вийти з голосу',
   leaveAsk: 'Вийти з голосу?',
   leaveCancel: 'Скасувати',
+  reactions: 'Реакції',
+  reactionNames: { up: 'Клас', heart: 'Серце', laugh: 'Сміх', wow: 'Ого', fire: 'Вогонь', clap: 'Оплески' } satisfies Record<ReactionId, string>,
   muteOn: 'Вимкнути мікрофон',
   muteOff: 'Увімкнути мікрофон',
   deafOn: 'Вимкнути звук',
@@ -272,6 +275,7 @@ const uk = {
   keyMute: 'Вимкнути чи ввімкнути мікрофон',
   keyDeafen: 'Вимкнути чи ввімкнути звук',
   keyCamera: 'Вимкнути чи ввімкнути камеру',
+  keyReact: 'Надіслати реакцію',
   keyChat: 'Написати в чат',
   keyRooms: 'Попередня чи наступна кімната',
   keyClose: 'Закрити вікно чи список кімнат',
@@ -581,6 +585,8 @@ const en: Strings = {
   leaveVoice: 'Leave voice',
   leaveAsk: 'Leave voice?',
   leaveCancel: 'Cancel',
+  reactions: 'Reactions',
+  reactionNames: { up: 'Thumbs up', heart: 'Heart', laugh: 'Laugh', wow: 'Wow', fire: 'Fire', clap: 'Applause' },
   muteOn: 'Mute microphone',
   muteOff: 'Unmute microphone',
   deafOn: 'Turn sound off',
@@ -631,6 +637,7 @@ const en: Strings = {
   keyMute: 'Mute or unmute microphone',
   keyDeafen: 'Turn sound off or on',
   keyCamera: 'Turn camera off or on',
+  keyReact: 'Send a reaction',
   keyChat: 'Write in chat',
   keyRooms: 'Previous or next room',
   keyClose: 'Close a window or the room list',

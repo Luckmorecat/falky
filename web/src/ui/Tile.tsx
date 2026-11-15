@@ -6,6 +6,7 @@ import { type PaletteName, paletteStyle } from '../fx/palette';
 import { t } from '../strings';
 import { Icon } from './Icon';
 import { Orb } from './Orb';
+import { Reactions } from './Reactions';
 import { VolumeSlider } from './VolumeSlider';
 import './Tile.css';
 
@@ -85,6 +86,7 @@ export function Tile({ id, visitorId, name, palette, isSelf, level, muted, deafe
             : muted ? <span className="t-flag" title={t.statusMuted}><Icon name="micOff" /></span> : null}
           {locallyMuted && <span className="t-flag" title={localStatus}><Icon name="speakerOff" /></span>}
         </div>}
+        <Reactions id={id} />
         {adjustable && !mini && (
           <VolumeSlider
             wheelTarget={tile}

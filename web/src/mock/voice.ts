@@ -1,4 +1,5 @@
 import { api, ApiError } from '../api/client';
+import { emitReaction, type ReactionId } from '../voice/reactions';
 import { idleVoice, type VoiceHost, type VoiceSnapshot, type VoiceClient, type ShareTrack } from '../voice/types';
 import { SyntheticShare } from './share';
 import { mockAction, mockState, refreshMockState, subscribeMockState } from './state';
@@ -119,6 +120,11 @@ export class VoiceSession implements VoiceClient {
   async setMic(_deviceId: string): Promise<void> {}
   async setSpeaker(_deviceId: string): Promise<void> {}
   async applyMicProcessing(): Promise<void> {}
+
+  react(id: ReactionId): void {
+    const self = this.snap.status === 'connected' && this.snap.people.find((p) => p.local);
+    if (self) emitReaction(self.id, id);
+  }
 
   level(visitorId: string): number {
     const person = this.snap.people.find((person) => person.id === visitorId);

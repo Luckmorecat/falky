@@ -6,6 +6,7 @@ import { useApp } from '../app/store';
 import { onTick } from '../fx/ticker';
 import { t } from '../strings';
 import { canUseCamera } from '../voice/camera';
+import { REACTIONS } from '../voice/reactions';
 import { canShareScreen } from '../voice/share';
 import { Button } from './Button';
 import { IconButton } from './IconButton';
@@ -112,10 +113,51 @@ function Controls({ room, unreadRef, onSettings }: { room: Room | null; unreadRe
           <Icon name="screen" />
         </IconButton>
       )}
+      <ReactButton />
       <span className="dock-sep" />
       <SettingsButton onOpen={onSettings} />
       <ChatButton unreadRef={unreadRef} />
       <LeaveButton />
+    </div>
+  );
+}
+
+/** A tray of reactions above the dock, open until the pointer goes elsewhere. */
+function ReactButton() {
+  const [open, setOpen] = useState(false);
+  const wrap = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const away = (e: PointerEvent) => { if (!wrap.current?.contains(e.target as Node)) setOpen(false); };
+    const escape = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
+    addEventListener('pointerdown', away);
+    addEventListener('keydown', escape);
+    return () => {
+      removeEventListener('pointerdown', away);
+      removeEventListener('keydown', escape);
+    };
+  }, [open]);
+
+  return (
+    <div ref={wrap} className={`react-wrap${open ? ' open' : ''}`}>
+      <IconButton
+        aria-expanded={open}
+        aria-controls="react-tray"
+        aria-label={t.reactions}
+        data-cue={open ? 'off' : 'open'}
+        data-tip={open ? undefined : `${t.reactions} (${shortcuts.react.label})`}
+        onClick={() => setOpen(!open)}
+      >
+        <Icon name="smile" />
+      </IconButton>
+      <div id="react-tray" className="react-tray" role="group" aria-label={t.reactions} inert={!open}>
+        {REACTIONS.map((r, i) => (
+          <button key={r.id} type="button" className="react-pick" aria-label={t.reactionNames[r.id]} data-tip={`${t.reactionNames[r.id]} (${i + 1})`} onClick={() => voice.react(r.id)}>
+            {r.emoji}
+          </button>
+        ))}
+      </div>
     </div>
   );
 }

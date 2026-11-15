@@ -272,6 +272,7 @@ function KeysPanel() {
             <Shortcut label={t.keyMute} keys={<kbd>{shortcuts.mute.label}</kbd>} />
             <Shortcut label={t.keyDeafen} keys={<kbd>{shortcuts.deafen.label}</kbd>} />
             {canUseCamera && <Shortcut label={t.keyCamera} keys={<kbd>{shortcuts.camera.label}</kbd>} />}
+            <Shortcut label={t.keyReact} keys={<kbd>{shortcuts.react.label}</kbd>} />
           </dl>
         </section>
       </div>
