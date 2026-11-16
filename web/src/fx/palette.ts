@@ -2,22 +2,22 @@ import type { CSSProperties } from 'react';
 
 /** An orb's body, the cloud poured over it, the darker patch beneath and the light at the cloud's heart. */
 export const PALETTES = {
-  sky: ['#4f98ee', '#a5d6f6', '#3a7fe6', '#f3fbf8'],
-  apricot: ['#a7a0c8', '#f6983c', '#8f86b8', '#e8e0f2'],
-  lagoon: ['#35d3ad', '#86ecd0', '#147a70', '#4fe36c'],
-  rose: ['#f08ca8', '#ffc9c4', '#c9477e', '#fff1e6'],
-  violet: ['#7b6cf0', '#b6a8ff', '#4a38c8', '#f0b8f0'],
-  amber: ['#f2b441', '#ffe08a', '#e4762a', '#fff7dc'],
-  moss: ['#9dc65a', '#dceca0', '#4f8a4a', '#f8ffd8'],
-  coral: ['#f0684c', '#ffab7d', '#b8305a', '#ffe3c4'],
-  indigo: ['#4a5ee0', '#8fa4ff', '#26308f', '#d4dcff'],
-  plum: ['#a84aa6', '#e08ad8', '#5e2268', '#ffd0f2'],
-  sunset: ['#f25f8b', '#ffb35c', '#b62d78', '#ffe9a8'],
-  aurora: ['#2fb7c9', '#b58cff', '#1a6f9c', '#d8fff0'],
-  lime: ['#c5e334', '#f2ff8a', '#7aa61e', '#fdffd6'],
-  clay: ['#b9785a', '#e8b795', '#7d4630', '#f7e3d0'],
-  ocean: ['#1f8fa8', '#6fd3dc', '#0f5a78', '#d8fbff'],
-  ruby: ['#d42a55', '#ff7a86', '#7f1238', '#ffccc2'],
+  sky: ['oklch(0.672 0.148 254)', 'oklch(0.853 0.068 237.2)', 'oklch(0.606 0.171 258.5)', 'oklch(0.981 0.009 171.8)'],
+  apricot: ['oklch(0.725 0.058 292.9)', 'oklch(0.762 0.152 60.9)', 'oklch(0.646 0.074 292.4)', 'oklch(0.918 0.026 305.8)'],
+  lagoon: ['oklch(0.778 0.139 172.2)', 'oklch(0.873 0.104 174)', 'oklch(0.523 0.088 184.6)', 'oklch(0.811 0.204 146.9)'],
+  rose: ['oklch(0.754 0.125 2.5)', 'oklch(0.882 0.062 24.5)', 'oklch(0.592 0.172 357.6)', 'oklch(0.966 0.021 60.8)'],
+  violet: ['oklch(0.613 0.191 284.4)', 'oklch(0.776 0.123 290.6)', 'oklch(0.46 0.211 279.8)', 'oklch(0.851 0.097 326.4)'],
+  amber: ['oklch(0.808 0.145 79.1)', 'oklch(0.914 0.111 90.3)', 'oklch(0.681 0.16 50.5)', 'oklch(0.975 0.036 93.3)'],
+  moss: ['oklch(0.774 0.144 126.8)', 'oklch(0.913 0.099 118.1)', 'oklch(0.577 0.113 142.3)', 'oklch(0.985 0.051 115.6)'],
+  coral: ['oklch(0.681 0.174 33.3)', 'oklch(0.813 0.116 49.2)', 'oklch(0.53 0.174 7.1)', 'oklch(0.931 0.051 70)'],
+  indigo: ['oklch(0.543 0.198 271.5)', 'oklch(0.74 0.134 272.9)', 'oklch(0.368 0.155 271.6)', 'oklch(0.899 0.049 275.2)'],
+  plum: ['oklch(0.564 0.168 328.3)', 'oklch(0.748 0.144 330.3)', 'oklch(0.373 0.129 321.7)', 'oklch(0.908 0.068 336.2)'],
+  sunset: ['oklch(0.685 0.184 4.8)', 'oklch(0.823 0.136 67.6)', 'oklch(0.533 0.185 351.9)', 'oklch(0.937 0.086 91.6)'],
+  aurora: ['oklch(0.717 0.113 208.4)', 'oklch(0.726 0.166 298.7)', 'oklch(0.515 0.104 237.9)', 'oklch(0.968 0.045 170.1)'],
+  lime: ['oklch(0.865 0.189 119.4)', 'oklch(0.966 0.142 114.3)', 'oklch(0.669 0.162 126.9)', 'oklch(0.988 0.053 109.6)'],
+  clay: ['oklch(0.634 0.092 45.4)', 'oklch(0.815 0.073 56.2)', 'oklch(0.455 0.083 42.2)', 'oklch(0.927 0.034 65.9)'],
+  ocean: ['oklch(0.602 0.1 217.3)', 'oklch(0.81 0.094 203.2)', 'oklch(0.44 0.083 231.3)', 'oklch(0.964 0.037 205)'],
+  ruby: ['oklch(0.572 0.203 12.9)', 'oklch(0.737 0.162 16.3)', 'oklch(0.393 0.143 7.2)', 'oklch(0.887 0.06 31.1)'],
 } as const;
 
 export type PaletteName = keyof typeof PALETTES;

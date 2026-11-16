@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { hexToRgb, isDue } from './orbRenderer';
+import { oklchToRgb, isDue } from './orbRenderer';
 
 describe('isDue', () => {
   it('gives a voice every frame', () => {
@@ -12,8 +12,13 @@ describe('isDue', () => {
   });
 });
 
-describe('hexToRgb', () => {
+describe('oklchToRgb', () => {
   it('reads a colour as parts of one', () => {
-    expect(hexToRgb('#ff0033')).toEqual([1, 0, 0.2]);
+    const [r, g, b] = oklchToRgb('oklch(0.672 0.148 254)');
+    expect([r * 255, g * 255, b * 255].map(Math.round)).toEqual([79, 152, 238]);
+  });
+
+  it('keeps colours out of gamut within one', () => {
+    expect(oklchToRgb('oklch(1 0.4 150)').every((c) => c >= 0 && c <= 1)).toBe(true);
   });
 });

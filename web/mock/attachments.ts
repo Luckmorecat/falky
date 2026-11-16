@@ -72,13 +72,13 @@ export function fixtureImage(seed: number, width: number, height: number): Buffe
     const x = ((seed * 37 + i * 211) % 100) / 100 * width;
     const y = ((seed * 53 + i * 131) % 100) / 100 * height;
     const r = (0.12 + ((seed + i) % 5) * 0.05) * Math.min(width, height);
-    return `<circle cx="${x.toFixed(0)}" cy="${y.toFixed(0)}" r="${r.toFixed(0)}" fill="hsl(${(a + i * 25) % 360} 85% ${55 + i * 6}%)" opacity=".55"/>`;
+    return `<circle cx="${x.toFixed(0)}" cy="${y.toFixed(0)}" r="${r.toFixed(0)}" fill="oklch(${0.66 + i * 0.04} 0.17 ${(a + i * 25) % 360})" opacity=".55"/>`;
   }).join('');
   return Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">`
-    + `<defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="hsl(${a} 70% 45%)"/><stop offset="1" stop-color="hsl(${b} 75% 30%)"/></linearGradient>`
+    + `<defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="oklch(0.52 0.15 ${a})"/><stop offset="1" stop-color="oklch(0.38 0.12 ${b})"/></linearGradient>`
     + `<filter id="b"><feGaussianBlur stdDeviation="${Math.round(Math.min(width, height) / 18)}"/></filter></defs>`
     + `<rect width="100%" height="100%" fill="url(#g)"/><g filter="url(#b)">${circles}</g>`
-    + `<text x="50%" y="52%" text-anchor="middle" font-family="system-ui, sans-serif" font-size="${Math.round(Math.min(width, height) / 9)}" fill="rgba(255,255,255,.85)">${width}×${height}</text></svg>`);
+    + `<text x="50%" y="52%" text-anchor="middle" font-family="system-ui, sans-serif" font-size="${Math.round(Math.min(width, height) / 9)}" fill="oklch(1 0 0 / 0.85)">${width}×${height}</text></svg>`);
 }
 
 export function newAttachmentId(): string {

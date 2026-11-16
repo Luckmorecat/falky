@@ -1,5 +1,5 @@
 /** Two passes on one canvas: a theme surface and a shared field of voice-reactive dots. */
-import { hexToRgb } from './orbRenderer';
+import { oklchToRgb } from './orbRenderer';
 import { PALETTES } from './palette';
 import { UNREAD_BEACON_GLSL, type BeaconFrame } from './unreadBeacon';
 import { THEME_WAVE_GLSL, type ThemeFrame } from './themeWave';
@@ -218,8 +218,8 @@ export function createBackground(canvas: HTMLCanvasElement, initialSources: Voic
       for (let i = 0; i < next.length; i++) {
         const source = next[i]!;
         resized.observe(source.element);
-        colorsDark.set(hexToRgb(PALETTES[source.palette][1]), i * 3);
-        colorsLight.set(hexToRgb(PALETTES[source.palette][0]), i * 3);
+        colorsDark.set(oklchToRgb(PALETTES[source.palette][1]), i * 3);
+        colorsLight.set(oklchToRgb(PALETTES[source.palette][0]), i * 3);
       }
       field.clear();
       geometryDirty = true;

@@ -1,8 +1,8 @@
 /* Lines beside the dock with a mouse, over it on a phone; newest at the bottom, level with the dock. */
 .ticker { position: absolute; z-index: 11; right: max(16px, calc(50% - 280px)); bottom: calc(var(--edge) + 88px); width: min(340px, calc(100vw - 32px)); display: flex; flex-direction: column; align-items: flex-end; gap: 4px; pointer-events: none; }
 .ticker-line { pointer-events: auto; max-width: 100%; display: flex; gap: 8px; align-items: center; padding: 8px 14px; border-radius: calc(20px * var(--corner)); background: var(--raised); box-shadow: 0 12px 32px -10px var(--shadow), 0 0 0 1px var(--fill); text-align: left; animation: ticker-life 6s var(--ease-out) both; }
-.ticker-line b { flex: none; font-weight: 500; font-size: 14px; color: color-mix(in srgb, var(--base) 72%, var(--text)); }
-[data-theme="light"] .ticker-line b { color: color-mix(in srgb, var(--base) 50%, var(--text)); }
+.ticker-line b { flex: none; font-weight: 500; font-size: 14px; color: color-mix(in oklch, var(--base) 72%, var(--text)); }
+[data-theme="light"] .ticker-line b { color: color-mix(in oklch, var(--base) 50%, var(--text)); }
 .ticker-avatar { flex: none; width: 18px; height: 18px; margin-right: -2px; }
 .ticker-avatar .orb { width: 100%; height: 100%; }
 .ticker-line > span:last-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }

@@ -15,7 +15,7 @@ export function applyAppearance(): void {
   const resolved = theme === 'system' ? (systemDark.matches ? 'dark' : 'light') : theme;
   root.dataset.theme = resolved;
   root.style.setProperty('--squircle', squircleMask());
-  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', resolved === 'dark' ? '#000000' : '#ffffff');
+  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', resolved === 'dark' ? 'oklch(0 0 0)' : 'oklch(1 0 0)');
   document.body.classList.toggle('reduced', fewerEffects);
   setOrbLook(orbLight);
 }

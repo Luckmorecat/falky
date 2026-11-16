@@ -19,15 +19,15 @@ export class SyntheticShare implements ShareTrack {
       if (!ctx) return;
       const draw = (time: number) => {
         const gradient = ctx.createLinearGradient(0, 0, 960, 540);
-        gradient.addColorStop(0, '#17243b');
-        gradient.addColorStop(1, '#45245a');
+        gradient.addColorStop(0, 'oklch(0.261 0.047 261.2)');
+        gradient.addColorStop(1, 'oklch(0.331 0.097 310.4)');
         ctx.fillStyle = gradient;
         ctx.fillRect(0, 0, 960, 540);
-        ctx.fillStyle = '#92dfcb';
+        ctx.fillStyle = 'oklch(0.848 0.081 176)';
         ctx.beginPath();
         ctx.arc(480 + Math.sin(time / 1300) * 230, 275 + Math.cos(time / 1800) * 90, 65, 0, Math.PI * 2);
         ctx.fill();
-        ctx.fillStyle = '#ffffff';
+        ctx.fillStyle = 'oklch(1 0 0)';
         ctx.font = '28px sans-serif';
         ctx.fillText(`${this.name} · Simulated screen`, 38, 60);
         ctx.font = '18px sans-serif';

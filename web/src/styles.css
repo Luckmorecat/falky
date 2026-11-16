@@ -1,25 +1,31 @@
 :root {
   color-scheme: dark;
-  --bg: #161615;
-  --surface: #232322;
-  --raised: #2a2a29;
-  --raised-2: #40403e;
-  --fill: rgba(255,255,255,.09);
-  --fill-2: rgba(255,255,255,.17);
-  --text: #fff;
-  --text-2: rgba(255,255,255,.62);
-  --text-3: rgba(255,255,255,.48);
-  --invert: #fff;
-  --on-invert: #000;
-  --signal: #fff;
-  --on-signal: #000;
-  --signal-text: #fff;
-  --level: #fff;
-  --danger: #ff8a66;
-  --danger-bg: #3a1610;
-  --dot: rgba(255,255,255,.07);
+  /* Chroma and hue every grey shares; the dark greys lean faintly warm. */
+  --neutral: 0.002 106.6;
+  /* What every translucent fill, line and secondary text is made of: light poured over the dark. */
+  --wash: oklch(1 0 0);
+  --ink: oklch(1 0 0);
+  --bg: oklch(0.2 var(--neutral));
+  --surface: oklch(0.256 var(--neutral));
+  --raised: oklch(0.285 var(--neutral));
+  --raised-2: oklch(0.371 var(--neutral));
+  --fill: oklch(from var(--wash) l c h / 0.09);
+  --fill-2: oklch(from var(--wash) l c h / 0.17);
+  --text: var(--ink);
+  --text-2: oklch(from var(--wash) l c h / 0.62);
+  --text-3: oklch(from var(--wash) l c h / 0.48);
+  --bg-ink: oklch(0 0 0);
+  --invert: var(--ink);
+  --on-invert: var(--bg-ink);
+  --signal: var(--ink);
+  --on-signal: var(--bg-ink);
+  --signal-text: var(--ink);
+  --level: var(--ink);
+  --danger: oklch(0.755 0.151 37.9);
+  --danger-bg: oklch(0.254 0.059 31.2);
+  --dot: oklch(from var(--wash) l c h / 0.07);
   --dots: radial-gradient(var(--dot) .8px, transparent 1.1px);
-  --shadow: rgba(0,0,0,.6);
+  --shadow: oklch(0 0 0 / 0.6);
   --ease-out: cubic-bezier(.23,1,.32,1);
   --ease-drawer: cubic-bezier(.32,.72,0,1);
   --edge: 20px;
@@ -30,25 +36,22 @@
 @supports not (corner-shape: superellipse(2)) { :root { --round: 32%; --corner: .64; } }
 [data-theme="light"] {
   color-scheme: light;
-  --bg: #fff;
-  --surface: #fff;
-  --raised: #f2f2f2;
-  --raised-2: #e6e6e6;
-  --fill: rgba(0,0,0,.06);
-  --fill-2: rgba(0,0,0,.12);
-  --text: #111;
-  --text-2: rgba(0,0,0,.62);
-  --text-3: rgba(0,0,0,.56);
-  --invert: #111;
-  --on-invert: #fff;
-  --signal: #111;
-  --on-signal: #fff;
-  --signal-text: #111;
-  --level: #111;
-  --danger: #d0342c;
-  --danger-bg: #fdeceb;
-  --dot: rgba(0,0,0,.12);
-  --shadow: rgba(0,0,0,.14);
+  --neutral: 0 0;
+  --wash: oklch(0 0 0);
+  --ink: oklch(0.178 var(--neutral));
+  --bg-ink: oklch(1 0 0);
+  --bg: oklch(1 0 0);
+  --surface: oklch(1 0 0);
+  --raised: oklch(0.961 var(--neutral));
+  --raised-2: oklch(0.925 var(--neutral));
+  --fill: oklch(from var(--wash) l c h / 0.06);
+  --fill-2: oklch(from var(--wash) l c h / 0.12);
+  --text-2: oklch(from var(--wash) l c h / 0.62);
+  --text-3: oklch(from var(--wash) l c h / 0.56);
+  --danger: oklch(0.566 0.194 28.1);
+  --danger-bg: oklch(0.956 0.019 21.6);
+  --dot: oklch(from var(--wash) l c h / 0.12);
+  --shadow: oklch(0 0 0 / 0.14);
 }
 * { box-sizing: border-box; margin: 0; }
 /* Every corner has the orbs' shape: 2^1.77 is SQUIRCLE_N in fx/squircle.ts, so a square at --round is exactly an orb. */
@@ -82,8 +85,8 @@ button { background: none; border: 0; cursor: pointer; -webkit-tap-highlight-col
 /* "Fewer effects": things change at once and stay still; what tells of a voice keeps working. */
 .reduced *, .reduced *::before, .reduced *::after { transition-duration: 1ms !important; transition-delay: 0s !important; animation: none !important; }
 @media (prefers-contrast: more) {
-  :root { --text-2: rgba(255,255,255,.85); --text-3: rgba(255,255,255,.7); }
-  [data-theme="light"] { --text-2: rgba(0,0,0,.85); --text-3: rgba(0,0,0,.7); }
+  /* Opaque, so the contrast is set by lightness alone and no longer depends on the surface beneath. */
+  :root { --text-2: color-mix(in oklch, var(--ink) 85%, var(--bg)); --text-3: color-mix(in oklch, var(--ink) 70%, var(--bg)); }
 }
 
 @keyframes shimmer { to { background-position: -150% 0; } }

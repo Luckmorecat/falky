@@ -1,5 +1,6 @@
 import { test, expect, type Page } from '@playwright/test';
 import type { MockAction, MockState } from '../mock/protocol';
+import { PALETTES } from '../src/fx/palette';
 import { launchMock } from './launcher';
 
 let app: Awaited<ReturnType<typeof launchMock>>;
@@ -271,7 +272,7 @@ test('settings window: keyboard stays inside, tabs move by arrows, one confirmed
   const shown = () => settings.locator('.profile-card .orb').evaluate((el: HTMLElement) => el.style.getPropertyValue('--base'));
   await expect(settings.getByRole('radio')).toHaveCount(16);
   await expect(settings.locator('.color input:checked')).toHaveCount(1);
-  for (const [name, base] of [['Lagoon', '#35d3ad'], ['Moss', '#9dc65a'], ['Coral', '#f0684c']] as const) {
+  for (const [name, base] of [['Lagoon', PALETTES.lagoon[0]], ['Moss', PALETTES.moss[0]], ['Coral', PALETTES.coral[0]]] as const) {
     await color(name).click();
     await expect(color(name)).toBeChecked();
     await expect.poll(shown).toBe(base);
@@ -287,7 +288,7 @@ test('settings window: keyboard stays inside, tabs move by arrows, one confirmed
   await settingsTab(page, 'Profile');
   await expect(color('Coral')).toBeChecked();
   await expect(settings.locator('.color input:checked')).toHaveCount(1);
-  expect(await shown()).toBe('#f0684c');
+  expect(await shown()).toBe(PALETTES.coral[0]);
   await settings.getByRole('button', { name: 'Close', exact: true }).click();
   await expect(settings).toBeHidden();
   await opener.click();
