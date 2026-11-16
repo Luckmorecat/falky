@@ -1,5 +1,32 @@
 # Changelog
 
+## [1.4.0](https://github.com/Luckmorecat/falky/compare/v1.3.0...v1.4.0) (2026-11-16)
+
+
+### Features
+
+* **server:** knock to call someone into your voice ([56b9e24](https://github.com/Luckmorecat/falky/commit/56b9e24b0a4566f71e1e0b2ca95cea3cd4260789))
+* **server:** reply to, edit, delete and react to chat messages ([efb79d0](https://github.com/Luckmorecat/falky/commit/efb79d0bfc69a8af11fbcf09c52dce71507fcdf6))
+* **web:** confirm before leaving voice ([d99fea3](https://github.com/Luckmorecat/falky/commit/d99fea3ceacb37c378e3e568a30d628091ccd574))
+* **web:** knock from the chat and answer a knock in one tap ([03dc288](https://github.com/Luckmorecat/falky/commit/03dc288795cdaa6bdf0b2a4c90639626467de862))
+* **web:** message actions beside the bubble and in a menu ([17592cd](https://github.com/Luckmorecat/falky/commit/17592cd7db697c6a4f2376c1908114be08dbaa18))
+* **web:** open chat from the dock as a card ([117b963](https://github.com/Luckmorecat/falky/commit/117b963b0f4b7085192f924147914566131990ef))
+* **web:** play soundboard sounds to the room ([7632f70](https://github.com/Luckmorecat/falky/commit/7632f704b5a500599753c8e8a04605aa692e13b9))
+* **web:** push to talk, away mute and a Leave shortcut ([132ee27](https://github.com/Luckmorecat/falky/commit/132ee27b353b396a1f17efeadf630c773a23dc4e))
+* **web:** reply to, edit, delete and react to chat messages ([cc81318](https://github.com/Luckmorecat/falky/commit/cc81318c992505aa9b0f9c7578c2974bbda15d05))
+* **web:** send emoji reactions that rise from your orb ([0c87a3b](https://github.com/Luckmorecat/falky/commit/0c87a3bc7cda397ed6ad50c621ac7e77327e15cd))
+
+
+### Bug Fixes
+
+* **web:** keep sound names from covering the reaction row ([7be6c5c](https://github.com/Luckmorecat/falky/commit/7be6c5c93a6264cd26d0e50dacf4375aa7357bde))
+* **web:** nest the chat's corners and drop the field's focus ring ([c9f2bb9](https://github.com/Luckmorecat/falky/commit/c9f2bb9644a49b4b9de93fc7594721eb4ebad882))
+* **web:** reveal the volume slider without a sideways lurch ([307b3d6](https://github.com/Luckmorecat/falky/commit/307b3d68eb3cdaeb5e75cade77f7b83617b3a023))
+* **web:** slide the chat card in without scaling it ([d67b62d](https://github.com/Luckmorecat/falky/commit/d67b62d84e1c9282724c3e476eeb3a22470e2c8b))
+* **web:** soften the voice halo in the live background ([c666df2](https://github.com/Luckmorecat/falky/commit/c666df23955675d640a744e580f844acc8a24c74))
+* **web:** stop the chat feed pulling back while scrolling ([933e791](https://github.com/Luckmorecat/falky/commit/933e79187f31bf228e4a0f0e46f0d66231cced14))
+* **web:** turn only the room chevron, not its plate ([d31f24c](https://github.com/Luckmorecat/falky/commit/d31f24cd5363571edc71722f237eaff4565a24d7))
+
 ## [1.3.0](https://github.com/Luckmorecat/falky/compare/v1.2.0...v1.3.0) (2026-11-13)
 
 
