@@ -26,12 +26,12 @@
 .feed-gap { pointer-events: none; transition-property: none; }
 .day { text-align: center; font-size: 12px; color: var(--text-3); padding: 8px 0 14px; }
 .new-line { display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--signal-text); padding: 8px 0 12px; }
-.new-line::after { content: ""; flex: 1; height: 1px; background: color-mix(in srgb, var(--level) 28%, transparent); }
+.new-line::after { content: ""; flex: 1; height: 1px; background: color-mix(in oklch, var(--level) 28%, transparent); }
 .msg { --avatar: 28px; --avatar-gap: 10px; padding-top: 16px; padding-left: calc(var(--avatar) + var(--avatar-gap)); }
 .msg.own { padding-left: 0; padding-right: calc(var(--avatar) + var(--avatar-gap)); }
 .msg.own { text-align: right; }
 .msg.own .msg-meta, .msg.own .msg-state { justify-content: flex-end; }
-.msg.own .msg-text { width: fit-content; max-width: 100%; margin-left: auto; padding: 6px 10px; border-radius: calc(24px * var(--corner)); background: color-mix(in srgb, var(--base) 9%, transparent); }
+.msg.own .msg-text { width: fit-content; max-width: 100%; margin-left: auto; padding: 6px 10px; border-radius: calc(24px * var(--corner)); background: color-mix(in oklch, var(--base) 9%, transparent); }
 .msg.cont { padding-top: 3px; }
 /* `lead` stands in for the next sibling when the day or the divider above is unmounted. */
 .msg.lead, .day + .msg, .new-line + .msg { padding-top: 0; }
@@ -49,8 +49,8 @@
   .msg:hover .msg-knock, .msg-knock:focus-visible { opacity: 1; }
   .msg-knock:hover { background: var(--fill); color: var(--text); }
 }
-.msg-author { font-size: 14px; color: color-mix(in srgb, var(--base) 72%, var(--text)); max-width: 75%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-[data-theme="light"] .msg-author { color: color-mix(in srgb, var(--base) 50%, var(--text)); }
+.msg-author { font-size: 14px; color: color-mix(in oklch, var(--base) 72%, var(--text)); max-width: 75%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+[data-theme="light"] .msg-author { color: color-mix(in oklch, var(--base) 50%, var(--text)); }
 .msg-time { font-size: 12px; color: var(--text-3); }
 .msg-text { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.42; }
 .msg-text a { color: inherit; text-decoration: underline; text-decoration-color: var(--text-3); text-underline-offset: 3px; }
@@ -66,7 +66,7 @@
    It is opaque, so it also covers text a long message may run under. */
 .msg { position: relative; outline: none; }
 .msg:not(.own) .msg-text { width: fit-content; max-width: 100%; }
-.msg-tools { position: absolute; top: 0; left: 0; z-index: 2; display: none; gap: 2px; padding: 2px; border-radius: calc(14px * var(--corner) + 2px); background: color-mix(in srgb, var(--text) 8%, var(--chat-bg));
+.msg-tools { position: absolute; top: 0; left: 0; z-index: 2; display: none; gap: 2px; padding: 2px; border-radius: calc(14px * var(--corner) + 2px); background: color-mix(in oklch, var(--text) 8%, var(--chat-bg));
   opacity: 0; pointer-events: none; transition: opacity 100ms ease; }
 @media (hover:hover) and (pointer:fine) {
   .msg-tools { display: flex; }
@@ -85,11 +85,11 @@
 .msg-menu.own { align-items: flex-end; }
 .msg-menu:not([open]) { display: none; }
 @starting-style { .msg-menu[open] { opacity: 0; transform: scale(.96); } }
-.msg-menu::backdrop { background: rgba(0,0,0,.45); -webkit-backdrop-filter: blur(3px); backdrop-filter: blur(3px); }
-[data-theme="light"] .msg-menu::backdrop { background: rgba(0,0,0,.22); }
+.msg-menu::backdrop { background: oklch(0 0 0 / 0.45); -webkit-backdrop-filter: blur(3px); backdrop-filter: blur(3px); }
+[data-theme="light"] .msg-menu::backdrop { background: oklch(0 0 0 / 0.22); }
 .msg-menu-react { display: flex; gap: 2px; padding: 4px; border-radius: calc(20px * var(--corner) + 4px); background: var(--raised-2); }
 .msg-menu-react button { width: 40px; height: 40px; border-radius: var(--round); font-size: 22px; line-height: 1; padding-top: 3px; display: grid; place-items: center; transition: background-color 100ms ease, scale 140ms var(--ease-out); }
-.msg-menu-react button.mine { background: color-mix(in srgb, var(--level) 22%, transparent); }
+.msg-menu-react button.mine { background: color-mix(in oklch, var(--level) 22%, transparent); }
 .msg-menu-react button:active { scale: .9; }
 @media (hover:hover) and (pointer:fine) { .msg-menu-react button:not(.mine):hover { background: var(--fill-2); } }
 .msg-menu-preview { max-width: 100%; padding: 6px 10px; border-radius: calc(24px * var(--corner)); background: var(--raised); white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.42;
@@ -101,7 +101,7 @@
 .msg-menu-list button:focus-visible { outline-offset: -2px; }
 @media (hover:hover) and (pointer:fine) { .msg-menu-list button:hover { background: var(--fill); } }
 
-.msg-quote { display: grid; gap: 1px; width: fit-content; max-width: 100%; margin: 2px 0 4px; padding: 4px 10px; border-left: 2px solid color-mix(in srgb, var(--base) 60%, var(--text-3)); font-size: 13px; line-height: 1.35; text-align: left; }
+.msg-quote { display: grid; gap: 1px; width: fit-content; max-width: 100%; margin: 2px 0 4px; padding: 4px 10px; border-left: 2px solid color-mix(in oklch, var(--base) 60%, var(--text-3)); font-size: 13px; line-height: 1.35; text-align: left; }
 .msg.own .msg-quote { margin-left: auto; }
 .msg-quote-author { color: var(--text-2); font-weight: 500; }
 .msg-quote-text { color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -112,7 +112,7 @@
 .msg.own .msg-reactions { justify-content: flex-end; }
 .msg-reaction { display: inline-flex; align-items: center; gap: 4px; height: 26px; padding: 0 9px 0 7px; border-radius: calc(13px * var(--corner)); background: var(--fill); font-size: 12px; color: var(--text-2); font-variant-numeric: tabular-nums; transition: background-color 100ms ease, transform 120ms var(--ease-out); }
 .msg-reaction span { font-size: 14px; line-height: 1; translate: 0 1px; }
-.msg-reaction.mine { background: color-mix(in srgb, var(--level) 22%, transparent); color: var(--text); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--level) 45%, transparent); }
+.msg-reaction.mine { background: color-mix(in oklch, var(--level) 22%, transparent); color: var(--text); box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--level) 45%, transparent); }
 .msg-reaction:active { transform: scale(.94); }
 @media (hover:hover) and (pointer:fine) { .msg-reaction:not(.mine):hover { background: var(--fill-2); } }
 
@@ -130,7 +130,7 @@
 .count { position: absolute; right: 34px; top: -14px; font-size: 12px; color: var(--text-2); }
 .count.over { color: var(--danger); }
 .field { position: relative; display: flex; align-items: flex-end; gap: 4px; background: var(--fill); border-radius: var(--field-r); padding: 4px; transition: background-color 160ms ease; }
-.field:focus-within { background: color-mix(in srgb, var(--text) 12%, transparent); }
+.field:focus-within { background: color-mix(in oklch, var(--text) 12%, transparent); }
 .field textarea { flex: 1; min-width: 0; background: none; border: 0; outline: 0; resize: none; padding: 9px 6px 9px 12px; max-height: 140px; line-height: 22px; field-sizing: content; }
 .field textarea::placeholder { color: var(--text-3); }
 .field .ib { background: transparent; }
@@ -142,7 +142,7 @@
 .field .attach + input + textarea { padding-left: 8px; }
 
 /* Files held over the chat. */
-.drop-zone { position: absolute; inset: 8px; z-index: 4; display: grid; place-items: center; border-radius: calc(24px * var(--corner)); border: 2px dashed color-mix(in srgb, var(--level) 45%, transparent); background: color-mix(in srgb, var(--bg) 82%, transparent); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); pointer-events: none; animation: drop-in 160ms ease; }
+.drop-zone { position: absolute; inset: 8px; z-index: 4; display: grid; place-items: center; border-radius: calc(24px * var(--corner)); border: 2px dashed color-mix(in oklch, var(--level) 45%, transparent); background: color-mix(in oklch, var(--bg) 82%, transparent); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); pointer-events: none; animation: drop-in 160ms ease; }
 .drop-zone div { display: grid; justify-items: center; gap: 10px; color: var(--text); font-size: 15px; }
 .drop-zone svg.i { width: 32px; height: 32px; }
 @keyframes drop-in { from { opacity: 0; } }

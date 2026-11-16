@@ -1,9 +1,9 @@
 .live-background-preview {
-  --bg: #161615;
-  --text: #fff;
-  --text-2: rgba(255,255,255,.62);
-  --raised: #2a2a29;
-  --dot: rgba(255,255,255,.07);
+  --bg: oklch(0.2 0.002 106.6);
+  --text: oklch(1 0 0);
+  --text-2: oklch(1 0 0 / 0.62);
+  --raised: oklch(0.285 0.002 106.5);
+  --dot: oklch(1 0 0 / 0.07);
   --dots: radial-gradient(var(--dot) .8px, transparent 1.1px);
   position: relative;
   isolation: isolate;
@@ -17,11 +17,11 @@
   background: var(--dots) 0 0 / 20px 20px, var(--bg);
 }
 .live-background-preview[data-theme="light"] {
-  --bg: #fff;
-  --text: #111;
-  --text-2: rgba(0,0,0,.62);
-  --raised: #f2f2f2;
-  --dot: rgba(0,0,0,.12);
+  --bg: oklch(1 0 0);
+  --text: oklch(0.178 0 0);
+  --text-2: oklch(0 0 0 / 0.62);
+  --raised: oklch(0.961 0 0);
+  --dot: oklch(0 0 0 / 0.12);
 }
 .live-background-preview:has(canvas[data-ready]:not([hidden])) { background: var(--bg); }
 .live-background-field { position: absolute; inset: 0; width: 100%; height: 100%; z-index: -1; pointer-events: none; }

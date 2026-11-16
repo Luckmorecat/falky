@@ -58,16 +58,16 @@ function fakeCamera(): MediaStream {
   const paint = () => {
     const t = performance.now() / 1000;
     const sky = ctx.createLinearGradient(0, 0, 0, 360);
-    sky.addColorStop(0, '#3b4a63');
-    sky.addColorStop(1, '#c9a27e');
+    sky.addColorStop(0, 'oklch(0.407 0.046 260.5)');
+    sky.addColorStop(1, 'oklch(0.739 0.067 64.2)');
     ctx.fillStyle = sky;
     ctx.fillRect(0, 0, 640, 360);
     const x = 320 + Math.sin(t) * 14;
-    ctx.fillStyle = '#2a2f3a';
+    ctx.fillStyle = 'oklch(0.305 0.021 265.9)';
     ctx.beginPath();
     ctx.ellipse(x, 400, 130, 130, 0, 0, Math.PI * 2);
     ctx.fill();
-    ctx.fillStyle = '#e6bd9c';
+    ctx.fillStyle = 'oklch(0.826 0.065 60.6)';
     ctx.beginPath();
     ctx.ellipse(x, 170, 62, 78, 0, 0, Math.PI * 2);
     ctx.fill();
@@ -181,11 +181,11 @@ function Design() {
   return (
     <>
       {scene === 'orbs' ? <OrbSheet /> : phase === 'entry' ? <Entry /> : phase === 'noaccess' ? <Message title={t.noAccessTitle} body={t.noAccessBody} /> : phase === 'revoked' ? <Message title={t.revokedTitle} body={t.revokedBody} /> : <Main key={scene} />}
-      <nav style={{ position: 'fixed', left: 12, bottom: 12, zIndex: 100, display: 'flex', flexDirection: 'column', gap: 2, padding: 6, borderRadius: 16, background: 'rgba(30,30,34,.92)', fontSize: 12 }}>
+      <nav style={{ position: 'fixed', left: 12, bottom: 12, zIndex: 100, display: 'flex', flexDirection: 'column', gap: 2, padding: 6, borderRadius: 16, background: 'oklch(0.237 0.008 285.8 / 0.92)', fontSize: 12 }}>
         {(Object.keys(SCENES) as Scene[]).map((s) => (
-          <button key={s} onClick={() => pick(s)} style={{ padding: '5px 10px', borderRadius: 10, textAlign: 'left', background: s === scene ? '#fff' : 'none', color: s === scene ? '#000' : '#fff' }}>{SCENES[s]}</button>
+          <button key={s} onClick={() => pick(s)} style={{ padding: '5px 10px', borderRadius: 10, textAlign: 'left', background: s === scene ? 'oklch(1 0 0)' : 'none', color: s === scene ? 'oklch(0 0 0)' : 'oklch(1 0 0)' }}>{SCENES[s]}</button>
         ))}
-        <button onClick={fakeIncoming} style={{ padding: '5px 10px', borderRadius: 10, textAlign: 'left', color: '#fff', opacity: .7 }}>+ повідомлення</button>
+        <button onClick={fakeIncoming} style={{ padding: '5px 10px', borderRadius: 10, textAlign: 'left', color: 'oklch(1 0 0)', opacity: .7 }}>+ повідомлення</button>
       </nav>
     </>
   );
