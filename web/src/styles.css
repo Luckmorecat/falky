@@ -66,6 +66,15 @@ body {
 }
 button, input, textarea, select { font: inherit; color: inherit; }
 button { background: none; border: 0; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+/* Onest leaves more room above its letters than below, so a centred line looks high. Centre the capitals instead:
+   a block button trims its own text, and a flex one trims the label it wraps in `.tx`. */
+button, .tx { text-box: trim-both cap alphabetic; }
+/* A palette's colours as this theme shows them; fx/palette.ts sets both sets on the element. */
+[style*="--base"] { --pal-base: var(--base); --pal-bright: var(--bright); --pal-deep: var(--deep); --pal-core: var(--core);
+  /* A name in this colour that reads on the page, and a wash behind a person's own words. */
+  --pal-name: oklch(from var(--pal-base) 0.82 clamp(0.05, c, 0.14) h); --pal-wash: oklch(from var(--pal-base) l c h / 0.16); }
+[data-theme="light"] [style*="--base"] { --pal-name: oklch(from var(--pal-base) 0.47 clamp(0.07, c, 0.17) h); --pal-wash: oklch(from var(--pal-base) 0.95 calc(c * 0.35) h); }
+[data-theme="light"] [style*="--base-l"] { --pal-base: var(--base-l); --pal-bright: var(--bright-l); --pal-deep: var(--deep-l); --pal-core: var(--core-l); }
 :focus-visible { outline: 2px solid var(--level); outline-offset: 2px; }
 [hidden] { display: none !important; }
 

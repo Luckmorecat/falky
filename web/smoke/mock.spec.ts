@@ -45,8 +45,8 @@ async function settingsTab(page: Page, name: string) {
 }
 async function english(page: Page) {
   await page.getByRole('button', { name: 'Налаштування', exact: true }).click();
-  await settingsTab(page, 'Система');
-  await page.getByRole('button', { name: 'English', exact: true }).click();
+  await settingsTab(page, 'Загальне');
+  await page.getByRole('combobox', { name: 'Мова', exact: true }).selectOption('en');
   await page.keyboard.press('Escape');
 }
 async function send(page: Page, body: string) {
@@ -134,15 +134,15 @@ test('settings, simulated voice errors and animated local/remote sharing avoid h
   await english(page);
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
   const settings = page.getByRole('dialog', { name: 'Settings' });
-  await settingsTab(page, 'Audio & video');
+  await settingsTab(page, 'Voice');
   await settings.getByRole('combobox', { name: /^Microphone/ }).selectOption({ label: 'Simulated microphone' });
-  await settings.getByRole('combobox', { name: /^Speakers/ }).selectOption({ label: 'Simulated speakers' });
   await settings.getByRole('button', { name: 'Test microphone', exact: true }).click();
   await expect.poll(() => settings.locator('.meter > div').evaluate((el) => el.getAttribute('style'))).toMatch(/scaleX\(0\.[1-9]/);
   await settings.getByRole('button', { name: 'Stop test', exact: true }).click();
-  await settings.getByRole('button', { name: 'Test sound', exact: true }).click();
   await settings.getByLabel('Join with microphone off', { exact: true }).check();
-  await settingsTab(page, 'System');
+  await settingsTab(page, 'Sound & notifications');
+  await settings.getByRole('combobox', { name: /^Speakers/ }).selectOption({ label: 'Simulated speakers' });
+  await settings.getByRole('button', { name: 'Test sound', exact: true }).click();
   await settings.getByLabel('Message notifications', { exact: true }).check();
   await page.keyboard.press('Escape');
   await page.getByRole('button', { name: 'Join', exact: true }).click();
@@ -190,7 +190,7 @@ test('settings, simulated voice errors and animated local/remote sharing avoid h
   await page.getByRole('button', { name: 'Leave voice', exact: true }).click();
   await page.getByRole('dialog').getByRole('button', { name: 'Leave', exact: true }).click();
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
-  await settingsTab(page, 'Audio & video');
+  await settingsTab(page, 'Voice');
   await page.getByLabel('Join with microphone off', { exact: true }).uncheck();
   await page.keyboard.press('Escape');
   await action(page, { type: 'faults', faults: { roomFull: null, micDenied: true } });
@@ -225,11 +225,11 @@ test('settings downloads on first open and retains its tab when reopened', async
   release();
   const settings = page.getByRole('dialog', { name: 'Налаштування' });
   await expect(settings).toBeVisible();
-  await settingsTab(page, 'Система');
+  await settingsTab(page, 'Загальне');
   await page.keyboard.press('Escape');
   await expect(opener).toBeFocused();
   await opener.click();
-  await expect(settings.getByRole('tab', { name: 'Система', exact: true })).toHaveAttribute('aria-selected', 'true');
+  await expect(settings.getByRole('tab', { name: 'Загальне', exact: true })).toHaveAttribute('aria-selected', 'true');
   expect(requests).toBe(1);
 });
 
@@ -249,17 +249,17 @@ test('settings window: keyboard stays inside, tabs move by arrows, one confirmed
   await opener.click();
   const settings = page.getByRole('dialog', { name: 'Settings' });
   const tabs = settings.getByRole('tab');
-  await expect(tabs).toHaveText(['Audio & video', 'Screen sharing', 'Profile', 'Account', 'Shortcuts', 'System']);
+  await expect(tabs).toHaveText(['General', 'Voice', 'Sound & notifications', 'Video', 'Screen sharing', 'Profile', 'Account', 'Shortcuts']);
 
-  await settingsTab(page, 'Audio & video');
-  await page.keyboard.press('ArrowRight');
-  await expect(settings.getByRole('tab', { name: 'Screen sharing' })).toBeFocused();
-  await expect(settings.getByRole('tab', { name: 'Screen sharing' })).toHaveAttribute('aria-selected', 'true');
-  await page.keyboard.press('ArrowLeft');
-  await page.keyboard.press('ArrowLeft');
-  await expect(settings.getByRole('tab', { name: 'System' })).toBeFocused();
+  await settingsTab(page, 'General');
+  await page.keyboard.press('ArrowDown');
+  await expect(settings.getByRole('tab', { name: 'Voice' })).toBeFocused();
+  await expect(settings.getByRole('tab', { name: 'Voice' })).toHaveAttribute('aria-selected', 'true');
+  await page.keyboard.press('ArrowUp');
+  await page.keyboard.press('ArrowUp');
+  await expect(settings.getByRole('tab', { name: 'Shortcuts' })).toBeFocused();
   await page.keyboard.press('Home');
-  await expect(settings.getByRole('tab', { name: 'Audio & video' })).toBeFocused();
+  await expect(settings.getByRole('tab', { name: 'General' })).toBeFocused();
 
   // Shortcuts of the page behind must not fire, and the room must not change.
   await expect(page.getByRole('heading', { level: 1 })).toHaveText('Lounge');
@@ -380,7 +380,7 @@ test('two instances in one browser context isolate visitors and survive a fresh 
     await other.getByRole('button', { name: 'Увійти як гість', exact: true }).click();
     await english(other);
     await other.getByRole('button', { name: 'Settings', exact: true }).click();
-    await settingsTab(other, 'System');
+    await settingsTab(other, 'General');
     await other.getByRole('button', { name: 'Light', exact: true }).click();
     await other.keyboard.press('Escape');
     await send(other, 'Only the second instance');
@@ -400,7 +400,7 @@ test('two instances in one browser context isolate visitors and survive a fresh 
     await other.getByRole('button', { name: 'Settings', exact: true }).click();
     await settingsTab(other, 'Profile');
     await expect(other.getByRole('textbox', { name: 'Name', exact: true })).toHaveValue('Second visitor');
-    await settingsTab(other, 'System');
+    await settingsTab(other, 'General');
     await expect(other.getByRole('button', { name: 'Light', exact: true })).toHaveAttribute('aria-pressed', 'true');
     await other.keyboard.press('Escape');
     const port = Number(new URL(second.url).port);
@@ -413,7 +413,7 @@ test('two instances in one browser context isolate visitors and survive a fresh 
     await other.getByRole('button', { name: 'Settings', exact: true }).click();
     await settingsTab(other, 'Profile');
     await expect(other.getByRole('textbox', { name: 'Name', exact: true })).toHaveValue('Alex');
-    await settingsTab(other, 'System');
+    await settingsTab(other, 'General');
     await expect(other.getByRole('button', { name: 'Dark', exact: true })).toHaveAttribute('aria-pressed', 'true');
     await page.goto(`${app.url}/design.html?scene=voice`);
     await expect(page.locator('.room-screen')).toBeVisible();

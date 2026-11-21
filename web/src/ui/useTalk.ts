@@ -30,8 +30,6 @@ export function holdToTalk(live: boolean): void {
   void settle();
 }
 
-/** How long a live microphone may stay silent before it is turned off. */
-export const AWAY_AFTER = 10 * 60_000;
 
 /** Push to talk while a setting asks for it, and the microphone off for anyone long silent. */
 export function useTalk(): void {
@@ -69,9 +67,10 @@ export function useTalk(): void {
       const live = v.status === 'connected' && !v.muted && !s.settings.pushToTalk;
       if (!live || !self || !wasLive || v.speakers.includes(self)) lastHeard = performance.now();
       wasLive = live;
-      if (live && s.settings.awayMute && performance.now() - lastHeard > AWAY_AFTER) {
+      const minutes = Number(s.settings.awayMinutes);
+      if (live && s.settings.awayMute && performance.now() - lastHeard > minutes * 60_000) {
         void voice.toggleMute();
-        showNotice(t.awayMutedTitle, t.awayMutedBody);
+        showNotice(t.awayMutedTitle, t.awayMutedBody(minutes));
       }
     }, 2000);
     return () => clearInterval(check);

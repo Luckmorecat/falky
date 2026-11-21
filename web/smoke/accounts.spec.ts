@@ -91,8 +91,9 @@ test('settings add restarts on proof expiry at finish; remove, last-key race, re
     }
     await route.continue();
   });
-  await page.getByRole('textbox', { name: 'Passkey label (optional)', exact: true }).fill('Travel key with a long but useful label');
   await page.getByRole('button', { name: 'Add passkey', exact: true }).click();
+  await page.getByRole('textbox', { name: 'Passkey label (optional)', exact: true }).fill('Travel key with a long but useful label');
+  await page.getByRole('button', { name: 'Create passkey', exact: true }).click();
   const remove = page.getByRole('button', { name: 'Remove: Travel key with a long but useful label', exact: true });
   await expect(remove).toBeVisible(); expect(begins).toBe(2); expect(reauths).toBe(1);
   await page.request.post(app.url + '/__mock/action', { data: { type: 'account-fault', fault: 'last-passkey' } });

@@ -16,7 +16,7 @@ function Scene({ scenario, responseDelay }: { scenario: Scenario; responseDelay:
     </aside>
     <main className="device-link-story-settings">
       <header><h2>{t.settings}</h2><span aria-hidden="true">×</span></header>
-      <div className="device-link-story-tabs"><span>{t.sectionProfile}</span><strong>{t.account.account}</strong><span>{t.tabSystem}</span></div>
+      <div className="device-link-story-tabs"><span>{t.sectionProfile}</span><strong>{t.account.account}</strong><span>{t.tabGeneral}</span></div>
       <section className="device-link-story-stub" aria-label="Account layout placeholder"><span /><span /></section>
       <DeviceLinkFlow issuer={fixture.issuer} active disabled={false} defaultOpen={!['idle', 'revoked'].includes(scenario)} onScan={() => setScanner(true)} scanFocusRequested={false} onScanFocused={() => {}} />
       {scanner && <p className="sb-note" role="status">QR scanner placeholder. This story focuses on the sign-in link.</p>}

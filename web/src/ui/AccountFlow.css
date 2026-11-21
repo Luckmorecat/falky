@@ -17,7 +17,7 @@
 .auth-field-note { font-size: 12px; line-height: 1.65; color: var(--text-2); }
 .auth-content > .auth-field-note { margin-top: 14px; }
 .auth-back { display: block; margin: 0 auto 24px; padding: 5px; color: var(--text-2); font-size: 12px; border-radius: 10px; }
-.auth-error { margin-top: 20px; padding: 14px 16px; background: var(--danger-bg); color: var(--danger); font-size: 13px; line-height: 1.55; border-radius: 20px; text-align: left; overflow-wrap: anywhere; }
+.auth-error { margin-top: 20px; padding: 14px 16px; background: oklch(from var(--danger) l c h / 0.14); color: var(--danger); font-size: 13px; line-height: 1.55; border-radius: 20px; text-align: left; overflow-wrap: anywhere; }
 .auth-voice { width: 160px; margin-bottom: 32px; }
 .auth-voice .orb { width: 100%; }
 .auth-step-recover .auth-voice { width: 72px; margin-bottom: 24px; }
