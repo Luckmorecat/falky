@@ -53,7 +53,7 @@ export function DeviceReceiver({ token, onClose }: { token?: string; onClose(): 
   const terminal = ['expired', 'denied', 'cancelled', 'unavailable'].includes(state.phase);
   const title = state.phase === 'complete' ? t.device.complete : state.phase === 'finishing' ? t.device.finishing : terminal ? t.device[state.phase as 'expired' | 'denied' | 'cancelled' | 'unavailable'] : method === 'link' ? t.device.codeTitle : t.device.qrTitle;
   return <div className="device-task">
-    <button className="auth-back" disabled={state.busy} onClick={() => { void candidate.cancel().catch(() => {}); onClose(); }}><Icon name="left" />{t.account.back}</button>
+    <button className="auth-back" disabled={state.busy} onClick={() => { void candidate.cancel().catch(() => {}); onClose(); }}><Icon name="left" /><span className="tx">{t.account.back}</span></button>
     <div className="auth-heading"><h1 tabIndex={-1}>{title}</h1>{!terminal && state.phase !== 'complete' && <p>{method === 'qr' ? t.device.qrHint : t.device.codeHint}</p>}</div>
     {!consent ? <><p className="device-note">{t.device.switchWarning}</p><Button variant="primary" onClick={() => setConsent(true)}>{t.account.continue}</Button></>
       : state.phase === 'complete' ? <Button variant="primary" onClick={onClose}>{t.device.done}</Button>
@@ -93,7 +93,7 @@ export function DeviceScanner({ token, onClose }: { token?: string; onClose(): v
   const blocked = state.busy || (state.retryAt ?? 0) > now;
   const expired = state.preview && Date.parse(state.preview.request.expiresAt) <= now;
   return <div className="device-scanner">
-    <header><button className="auth-back" disabled={blocked} onClick={onClose}><Icon name="left" />{t.back(t.account.account)}</button></header>
+    <header><button className="auth-back" disabled={blocked} onClick={onClose}><Icon name="left" /><span className="tx">{t.back(t.account.account)}</span></button></header>
     <section className="device-scanner-content">
       <div className="auth-heading"><h1 tabIndex={-1}>{state.phase === 'preview' ? t.device.previewTitle : state.phase === 'approved' ? t.device.approved : state.phase === 'denied' ? t.device.denied : t.device.scanTitle}</h1><p>{state.phase === 'idle' ? t.device.scanHint : state.phase === 'preview' ? t.device.selfWarning : ''}</p></div>
       {state.phase === 'idle' && <><div className="device-camera"><video ref={video} muted playsInline aria-label={t.device.scan} /><div className="device-scan-frame" aria-hidden="true"><span /><span /><span /><span />{!scanning && <Icon name="camera" />}</div></div>{scanning && <p role="status" className="device-note">{t.device.cameraScanning}</p>}{!scanning && <Button variant="primary" disabled={blocked} onClick={() => { setError(''); setScanning(true); }}>{error ? t.device.retry : t.device.cameraStart}</Button>}<button className="auth-text" aria-expanded={paste} disabled={blocked} onClick={() => setPaste(!paste)}>{t.device.pasteQR}</button>{paste && <form className="auth-fields" onSubmit={e => { e.preventDefault(); setScanning(false); read(input); }}><label>{t.device.pasteQR}<input value={input} autoComplete="off" autoCapitalize="none" spellCheck={false} onChange={e => setInput(e.target.value)} /></label><Button type="submit" disabled={!input || blocked}>{t.account.continue}</Button></form>}</>}

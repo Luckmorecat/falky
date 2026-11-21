@@ -38,3 +38,5 @@ export function notify(title: string, options: NotificationOptions, onClick: () 
 }
 
 export { startQRScanner } from './qrScanner';
+/** The camera alone, for a person to see themselves before anyone else does. */
+export const startCamera = (video: MediaTrackConstraints): Promise<MediaStream> => navigator.mediaDevices.getUserMedia({ video, audio: false });

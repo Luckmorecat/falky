@@ -429,6 +429,7 @@ function receiveKnock(roomId: string, fromName: string): void {
   if (knockTimer) clearTimeout(knockTimer);
   setState({ knock: { id: ++knockSeq, roomId, fromName } });
   knockTimer = setTimeout(() => setState({ knock: null }), 30_000);
+  if (!s.settings.knockAlerts) return;
   if (s.settings.sounds && !s.voice.deafened) playSound('knock', s.settings.speakerId);
   if (s.settings.notifications && document.visibilityState !== 'visible') {
     const epoch = session;

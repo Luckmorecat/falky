@@ -343,6 +343,8 @@ export function Chat({ room }: { room: Room | null }) {
     return list;
   }, [chat?.loadingOlder, items]);
   const count = messageLength(draft);
+  const limits = useApp((s) => s.attachmentLimits);
+  const limitsText = t.attachLimits(limits.maxAttachments, Math.round(limits.maxFileBytes / 1024 / 1024));
   const keys = useMemo(() => rows.map((row) => row.key), [rows]);
   const heightsNow = rows.map((row) => heights.current.get(row.key) ?? estimateHeight(row));
   const laid = stack(heightsNow, frame.top, frame.bottom, frame.height);
@@ -641,7 +643,7 @@ export function Chat({ room }: { room: Room | null }) {
       </div>
       {dropping && (
         <div className="drop-zone" aria-hidden="true">
-          <div><Icon name="image" />{t.dropImages}</div>
+          <div><Icon name="image" />{t.dropImages}<small>{limitsText}</small></div>
         </div>
       )}
       <div className="composer">
@@ -651,7 +653,7 @@ export function Chat({ room }: { room: Room | null }) {
           aria-hidden={atBottomNow}
           onClick={followBottom}
         >
-          <Icon name="down" />{t.toLatest}
+          <Icon name="down" /><span className="tx">{t.toLatest}</span>
         </button>
         {composing && (
           <div className="composing">
@@ -666,7 +668,7 @@ export function Chat({ room }: { room: Room | null }) {
         {room && !editing && <ComposerTray roomId={room.id} />}
         {count > MESSAGE_MAX - 400 && <span className={`count${count > MESSAGE_MAX ? ' over' : ''}`}>{count} / {MESSAGE_MAX}</span>}
         <div className="field" data-tip={`${t.focusChat} (${shortcuts.chat.label} · ${shortcuts.chatEnter.label})`}>
-          <IconButton size="small" className="attach" aria-label={t.attachImage} disabled={!room} onClick={() => picker.current?.click()}><Icon name="plus" /></IconButton>
+          <IconButton size="small" className="attach" aria-label={t.attachImage} data-tip={limitsText} disabled={!room} onClick={() => picker.current?.click()}><Icon name="plus" /></IconButton>
           <input
             ref={picker}
             type="file"

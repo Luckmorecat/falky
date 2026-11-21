@@ -405,6 +405,14 @@ export function addOrb(options: OrbOptions): () => void {
     if (size === orb.size) return;
     orb.size = options.canvas.width = options.canvas.height = size;
     orb.stale = true;
+    // Resizing clears the canvas after this frame was drawn; paint it again now, or it shows empty for a frame.
+    const p = painter ?? getPainter();
+    const shown = shownLook();
+    const program = p && programFor(p, shown);
+    if (p && program) {
+      p.gl.useProgram(program.program);
+      draw(orb, p, program, shown === 'volume' ? VOLUME_PAD : 1, performance.now() / 1000);
+    }
   });
   resized.observe(options.canvas);
   orbs.add(orb);

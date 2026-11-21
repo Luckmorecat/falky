@@ -13,7 +13,7 @@ export function DeviceLoading({ scanner, onClose }: { scanner: boolean; onClose(
     <div className="device-skeleton-link device-skeleton-fill" />
   </div>;
   return <div className={`${scanner ? 'device-scanner' : 'device-task'} device-loading`}>
-    <header><button className="auth-back" onClick={onClose}><Icon name="left" />{scanner ? t.back(t.account.account) : t.account.back}</button></header>
+    <header><button className="auth-back" onClick={onClose}><Icon name="left" /><span className="tx">{scanner ? t.back(t.account.account) : t.account.back}</span></button></header>
     <div className="device-loading-status" role="status" aria-label={t.device.loading} aria-busy="true" tabIndex={-1}>{placeholders}</div>
   </div>;
 }
