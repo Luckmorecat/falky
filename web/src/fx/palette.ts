@@ -37,8 +37,39 @@ export function hashString(s: string): number {
 /** Rooms take colours in their stable list order, so the first rooms never repeat. */
 export const roomPalette = (index: number): PaletteName => at(index);
 
+type Colours = readonly [string, string, string, string];
+
+/**
+ * The same palette for a white page: every stop a little darker and richer, so pale
+ * colours keep their shape against white and no highlight dissolves into it. The hue
+ * and the order of the stops stay, so a person is the same colour in either theme.
+ */
+function forLight([base, bright, deep, core]: Colours): Colours {
+  const shift = (colour: string, lightness: (l: number) => number, chroma: (c: number) => number) => {
+    const [l, c, h] = colour.slice(6, -1).split(' ').map(Number) as [number, number, number];
+    return `oklch(${lightness(l).toFixed(3)} ${Math.min(0.26, chroma(c)).toFixed(3)} ${h})`;
+  };
+  return [
+    shift(base, (l) => l * 0.9 + 0.02, (c) => c * 1.15),
+    shift(bright, (l) => Math.min(l * 0.9 + 0.02, 0.86), (c) => c * 1.2),
+    shift(deep, (l) => l * 0.9, (c) => c * 1.1),
+    // Only a near-white heart needs colour added; a vivid one is already enough.
+    shift(core, (l) => Math.min(l, 0.92), (c) => (c < 0.08 ? Math.max(0.045, c * 1.6) : c)),
+  ];
+}
+
+const LIGHT = Object.fromEntries(PALETTE_NAMES.map((name) => [name, forLight(PALETTES[name])])) as Record<PaletteName, Colours>;
+
+/** A palette's four stops as they should look in the given theme. */
+export const themedPalette = (name: PaletteName, light: boolean): Colours => (light ? LIGHT[name] : PALETTES[name]);
+
+/**
+ * `--base` and the others name the palette itself; styles draw with `--pal-*`,
+ * which styles.css points at the light stops (`--*-l`) on a light page.
+ */
 export function paletteStyle(name: PaletteName | undefined): CSSProperties {
   if (!name) return { '--base': 'var(--text-3)', '--deep': 'var(--fill)' } as CSSProperties;
   const [base, bright, deep, core] = PALETTES[name];
-  return { '--base': base, '--bright': bright, '--deep': deep, '--core': core } as CSSProperties;
+  const [baseL, brightL, deepL, coreL] = LIGHT[name];
+  return { '--base': base, '--bright': bright, '--deep': deep, '--core': core, '--base-l': baseL, '--bright-l': brightL, '--deep-l': deepL, '--core-l': coreL } as CSSProperties;
 }
