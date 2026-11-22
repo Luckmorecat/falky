@@ -248,7 +248,7 @@ export const es: Strings = {
   leaveCancel: 'Cancelar',
   reactions: 'Reacciones',
   roomSounds: 'Sonidos para la sala',
-  reactionNames: { up: 'Me gusta', heart: 'Corazón', laugh: 'Risa', wow: 'Guau', fire: 'Fuego', clap: 'Aplausos', rimshot: 'Ba-dum-tss', horn: 'Bocina', tada: 'Tachán', crickets: 'Grillos' },
+  reactionNames: { up: 'Me gusta', heart: 'Corazón', laugh: 'Risa', wow: 'Guau', fire: 'Fuego', clap: 'Aplausos', boom: 'Vine boom', airhorn: 'Bocina de aire', sad: 'Trombón triste', pipe: 'Tubo de metal', dun: 'Dun dun duuun', bonk: 'Bonk' },
   muteOn: 'Silenciar micrófono',
   muteOff: 'Activar micrófono',
   deafOn: 'Desactivar sonido',

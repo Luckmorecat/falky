@@ -248,7 +248,7 @@ export const fr: Strings = {
   leaveCancel: 'Annuler',
   reactions: 'Réactions',
   roomSounds: 'Sons pour le salon',
-  reactionNames: { up: 'Pouce levé', heart: 'Cœur', laugh: 'Rire', wow: 'Waouh', fire: 'Feu', clap: 'Applaudissements', rimshot: 'Ba-dum-tss', horn: 'Klaxon', tada: 'Tadam', crickets: 'Grillons' },
+  reactionNames: { up: 'Pouce levé', heart: 'Cœur', laugh: 'Rire', wow: 'Waouh', fire: 'Feu', clap: 'Applaudissements', boom: 'Vine boom', airhorn: 'Corne de brume', sad: 'Trombone triste', pipe: 'Tuyau en métal', dun: 'Dun dun duuun', bonk: 'Bonk' },
   muteOn: 'Couper le micro',
   muteOff: 'Activer le micro',
   deafOn: 'Couper le son',

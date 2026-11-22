@@ -123,7 +123,7 @@ function Controls({ room, unreadRef, onSettings }: { room: Room | null; unreadRe
   );
 }
 
-/** A tray of reactions above the dock, open until the pointer goes elsewhere. */
+/** A tray of reactions above the dock, open until the pointer goes elsewhere. Each press is heard by itself, so the tap stays quiet. */
 function ReactButton() {
   const [open, setOpen] = useState(false);
   const wrap = useRef<HTMLDivElement>(null);
@@ -155,14 +155,14 @@ function ReactButton() {
       <div id="react-tray" className="react-tray" role="group" aria-label={t.reactions} inert={!open}>
         <div className="react-row">
           {EMOJI_REACTIONS.map((r, i) => (
-            <button key={r.id} type="button" className="react-pick" aria-label={t.reactionNames[r.id]} data-tip={`${t.reactionNames[r.id]} (${i + 1})`} onClick={() => voice.react(r.id)}>
+            <button key={r.id} type="button" className="react-pick" data-cue="none" aria-label={t.reactionNames[r.id]} data-tip={`${t.reactionNames[r.id]} (${i + 1})`} onClick={() => voice.react(r.id)}>
               {r.emoji}
             </button>
           ))}
         </div>
         <div className="react-row react-sounds" role="group" aria-label={t.roomSounds}>
           {SOUND_REACTIONS.map((r) => (
-            <button key={r.id} type="button" className="react-pick" aria-label={t.reactionNames[r.id]} title={t.reactionNames[r.id]} onClick={() => voice.react(r.id)}>
+            <button key={r.id} type="button" className="react-pick" data-cue="none" aria-label={t.reactionNames[r.id]} title={t.reactionNames[r.id]} onClick={() => voice.react(r.id)}>
               {r.emoji}
             </button>
           ))}

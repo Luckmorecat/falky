@@ -1,6 +1,6 @@
 import type { BoardSound } from './sounds';
 
-/** The reactions anyone in voice can send; anything else that arrives is ignored. The last ones also play a sound to the room. */
+/** The reactions anyone in voice can send; anything else that arrives is ignored. Every one pops; the last ones play a meme to the room. */
 export const REACTIONS = [
   { id: 'up', emoji: '👍' },
   { id: 'heart', emoji: '❤️' },
@@ -8,10 +8,12 @@ export const REACTIONS = [
   { id: 'wow', emoji: '😮' },
   { id: 'fire', emoji: '🔥' },
   { id: 'clap', emoji: '👏' },
-  { id: 'rimshot', emoji: '🥁', sound: 'rimshot' },
-  { id: 'horn', emoji: '📯', sound: 'horn' },
-  { id: 'tada', emoji: '🎉', sound: 'tada' },
-  { id: 'crickets', emoji: '🦗', sound: 'crickets' },
+  { id: 'boom', emoji: '💥', sound: 'boom' },
+  { id: 'airhorn', emoji: '📢', sound: 'airhorn' },
+  { id: 'sad', emoji: '🎺', sound: 'sad' },
+  { id: 'pipe', emoji: '🔩', sound: 'pipe' },
+  { id: 'dun', emoji: '😱', sound: 'dun' },
+  { id: 'bonk', emoji: '🔨', sound: 'bonk' },
 ] as const satisfies readonly { id: string; emoji: string; sound?: BoardSound }[];
 
 export type ReactionId = (typeof REACTIONS)[number]['id'];
@@ -44,14 +46,10 @@ export function soundOf(id: ReactionId): BoardSound | null {
   return reaction && 'sound' in reaction ? reaction.sound : null;
 }
 
-/** Sounds are louder than pictures: one per sender in this long, the rest arrive silent. */
-const SOUND_GAP = 3000;
-const lastSound = new Map<string, number>();
-
-export function allowSound(from: string, now: number): boolean {
-  if (now - (lastSound.get(from) ?? -Infinity) < SOUND_GAP) return false;
-  lastSound.set(from, now);
-  return true;
+/** How high an emoji's pop goes, from 0 to 1, so that each one sounds like itself. */
+export function popPitch(id: ReactionId): number {
+  const i = EMOJI_REACTIONS.findIndex((r) => r.id === id);
+  return i < 0 ? 0.5 : i / (EMOJI_REACTIONS.length - 1);
 }
 
 type Listener = (from: string, id: ReactionId) => void;
@@ -62,8 +60,8 @@ export function onReaction(listener: Listener): () => void {
   return () => listeners.delete(listener);
 }
 
-/** A short burst reads as excitement; more than that within the window is a flood. */
-const BURST = 5;
+/** Mashing a button is the point, as on a soundboard; past this many in the window it is a flood. */
+const BURST = 12;
 const BURST_WINDOW = 2000;
 
 /** Recent reaction times by connection, for allowReaction. */
@@ -92,5 +90,4 @@ export function emitReaction(from: string, id: ReactionId, now = performance.now
 
 export function resetReactions(): void {
   recent.clear();
-  lastSound.clear();
 }
