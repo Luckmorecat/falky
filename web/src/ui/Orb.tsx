@@ -1,6 +1,6 @@
 import { type ReactNode, useEffect, useRef } from 'react';
 import { addOrb } from '../fx/orbRenderer';
-import { hashString, PALETTES, type PaletteName, paletteStyle } from '../fx/palette';
+import { hashString, PALETTES, type PaletteName, paletteStyle, themedPalette } from '../fx/palette';
 import './Orb.css';
 
 /**
@@ -14,7 +14,7 @@ export function Orb({ seed, palette, level, still, children }: { seed: string; p
   const hash = hashString(seed);
 
   useEffect(
-    () => palette ? addOrb({ root: root.current!, canvas: canvas.current!, seed: hash, colors: PALETTES[palette], level, still }) : undefined,
+    () => palette ? addOrb({ root: root.current!, canvas: canvas.current!, seed: hash, colors: PALETTES[palette], colorsLight: themedPalette(palette, true), level, still }) : undefined,
     [hash, palette, level, still],
   );
 

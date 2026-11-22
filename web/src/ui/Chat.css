@@ -31,7 +31,7 @@
 .msg.own { padding-left: 0; padding-right: calc(var(--avatar) + var(--avatar-gap)); }
 .msg.own { text-align: right; }
 .msg.own .msg-meta, .msg.own .msg-state { justify-content: flex-end; }
-.msg.own .msg-text { width: fit-content; max-width: 100%; margin-left: auto; padding: 6px 10px; border-radius: calc(24px * var(--corner)); background: color-mix(in oklch, var(--base) 9%, transparent); }
+.msg.own .msg-text { width: fit-content; max-width: 100%; margin-left: auto; padding: 6px 10px; border-radius: calc(24px * var(--corner)); background: var(--pal-wash); }
 .msg.cont { padding-top: 3px; }
 /* `lead` stands in for the next sibling when the day or the divider above is unmounted. */
 .msg.lead, .day + .msg, .new-line + .msg { padding-top: 0; }
@@ -49,8 +49,7 @@
   .msg:hover .msg-knock, .msg-knock:focus-visible { opacity: 1; }
   .msg-knock:hover { background: var(--fill); color: var(--text); }
 }
-.msg-author { font-size: 14px; color: color-mix(in oklch, var(--base) 72%, var(--text)); max-width: 75%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-[data-theme="light"] .msg-author { color: color-mix(in oklch, var(--base) 50%, var(--text)); }
+.msg-author { font-size: 14px; color: var(--pal-name); max-width: 75%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .msg-time { font-size: 12px; color: var(--text-3); }
 .msg-text { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.42; }
 .msg-text a { color: inherit; text-decoration: underline; text-decoration-color: var(--text-3); text-underline-offset: 3px; }
@@ -101,7 +100,7 @@
 .msg-menu-list button:focus-visible { outline-offset: -2px; }
 @media (hover:hover) and (pointer:fine) { .msg-menu-list button:hover { background: var(--fill); } }
 
-.msg-quote { display: grid; gap: 1px; width: fit-content; max-width: 100%; margin: 2px 0 4px; padding: 4px 10px; border-left: 2px solid color-mix(in oklch, var(--base) 60%, var(--text-3)); font-size: 13px; line-height: 1.35; text-align: left; }
+.msg-quote { display: grid; gap: 1px; width: fit-content; max-width: 100%; margin: 2px 0 4px; padding: 4px 10px; border-left: 2px solid color-mix(in oklch, var(--pal-name) 70%, transparent); font-size: 13px; line-height: 1.35; text-align: left; }
 .msg.own .msg-quote { margin-left: auto; }
 .msg-quote-author { color: var(--text-2); font-weight: 500; }
 .msg-quote-text { color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -145,6 +144,9 @@
 .drop-zone { position: absolute; inset: 8px; z-index: 4; display: grid; place-items: center; border-radius: calc(24px * var(--corner)); border: 2px dashed color-mix(in oklch, var(--level) 45%, transparent); background: color-mix(in oklch, var(--bg) 82%, transparent); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); pointer-events: none; animation: drop-in 160ms ease; }
 .drop-zone div { display: grid; justify-items: center; gap: 10px; color: var(--text); font-size: 15px; }
 .drop-zone svg.i { width: 32px; height: 32px; }
+.drop-zone small { margin-top: -4px; font-size: 13px; color: var(--text-2); }
+/* Over the attach button its own hint shows, not the field's. */
+.field:has(.attach:hover)::after { opacity: 0; }
 @keyframes drop-in { from { opacity: 0; } }
 .empty-chat { text-align: center; color: var(--text-2); padding: 72px 20px; }
 .empty-chat strong { display: block; color: var(--text); font-weight: 500; font-size: 17px; margin-bottom: 4px; }

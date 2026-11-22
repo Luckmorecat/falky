@@ -8,7 +8,9 @@
 .join { display: flex; align-items: center; gap: 10px; height: 56px; padding: 0 26px 0 22px; border-radius: calc(28px * var(--corner)); background: var(--invert); color: var(--on-invert); font-weight: 600; transition: transform 140ms var(--ease-out); }
 .join:active { transform: scale(.97); }
 .join[disabled] { opacity: .6; cursor: default; }
-.btn2.danger { background: var(--danger-bg); color: var(--danger); }
+/* Tinted by the danger colour itself, so the plate reads on any surface in either theme. */
+.btn2.danger { background: oklch(from var(--danger) l c h / 0.16); color: var(--danger); }
+@media (hover:hover) and (pointer:fine) { .btn2.danger:not([disabled]):hover { background: oklch(from var(--danger) l c h / 0.24); } }
 
 @media (max-width: 1000px) {
   .join { height: 48px; }

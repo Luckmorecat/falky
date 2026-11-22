@@ -94,7 +94,7 @@ export function Main() {
               <strong>{t.knockFrom(knockCall.fromName, rooms.find((r) => r.id === knockCall.roomId)?.name ?? '')}</strong>
             </div>
             <div className="knock-actions">
-              <Button variant="join" data-cue="none" onClick={answerKnock}><Icon name="mic" />{t.join}</Button>
+              <Button variant="join" data-cue="none" onClick={answerKnock}><Icon name="mic" /><span className="tx">{t.join}</span></Button>
               <IconButton size="small" aria-label={t.close} onClick={dismissKnock}><Icon name="x" /></IconButton>
             </div>
           </div>

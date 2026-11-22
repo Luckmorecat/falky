@@ -56,7 +56,7 @@ for (const viewport of [{ width: 390, height: 844 }, { width: 1440, height: 1000
     await page.keyboard.press('ArrowRight');
     await expect(background).toHaveAttribute('data-beacon', '');
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
-    await page.getByRole('tab', { name: 'System', exact: true }).click();
+    await page.getByRole('tab', { name: 'General', exact: true }).click();
     await page.getByRole('switch', { name: 'Fewer effects', exact: true }).click();
     await expect(background).not.toHaveAttribute('data-ready');
     await page.getByRole('switch', { name: 'Fewer effects', exact: true }).click();

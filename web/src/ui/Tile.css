@@ -1,4 +1,4 @@
-.orb-video { position: absolute; inset: 2.5%; z-index: 1; will-change: transform; background: var(--deep); -webkit-mask: var(--squircle) center / 100% 100% no-repeat; mask: var(--squircle) center / 100% 100% no-repeat; }
+.orb-video { position: absolute; inset: 2.5%; z-index: 1; will-change: transform; background: var(--pal-deep); -webkit-mask: var(--squircle) center / 100% 100% no-repeat; mask: var(--squircle) center / 100% 100% no-repeat; }
 .orb-video video { display: block; width: 100%; height: 100%; object-fit: cover; opacity: 0; transition: opacity 240ms ease; }
 .orb-video video.on { opacity: 1; }
 .orb-video video.mirror { transform: scaleX(-1); }

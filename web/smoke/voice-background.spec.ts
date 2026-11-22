@@ -12,13 +12,13 @@ test.beforeEach(async ({ page }) => { await page.request.post(`${app.url}/__mock
 async function state(page: Page): Promise<MockState> { return (await page.request.get(`${app.url}/__mock/state`)).json(); }
 async function english(page: Page) {
   await page.getByRole('button', { name: 'Налаштування', exact: true }).click();
-  await page.getByRole('tab', { name: 'Система', exact: true }).click();
-  await page.getByRole('button', { name: 'English', exact: true }).click();
+  await page.getByRole('tab', { name: 'Загальне', exact: true }).click();
+  await page.getByRole('combobox', { name: 'Мова', exact: true }).selectOption('en');
   await page.keyboard.press('Escape');
 }
 async function systemSettings(page: Page) {
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
-  await page.getByRole('tab', { name: 'System', exact: true }).click();
+  await page.getByRole('tab', { name: 'General', exact: true }).click();
 }
 async function action(page: Page, data: MockAction) {
   const response = await page.request.post(`${app.url}/__mock/action`, { data });

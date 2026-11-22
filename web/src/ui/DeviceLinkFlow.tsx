@@ -7,6 +7,7 @@ import { Icon } from './Icon';
 import { IconButton } from './IconButton';
 import { SignInRequestDetails } from './SignInRequestDetails';
 import { InputOTP } from './InputOTP';
+import { LinkQR } from './LinkQR';
 import './AccountFlow.css';
 import './AccountPanel.css';
 import './DeviceSignIn.css';
@@ -107,11 +108,14 @@ export function DeviceLinkFlow({ issuer, active, disabled, onScan, scanFocusRequ
     content.current = { links: [], urls: {} }; setCreating(true); setLoadingVisible(false); setCopied(''); setFallback(''); setCodeIssue('');
     void issuer.create().then(() => setDrawerOpen(true), () => setDrawerOpen(true)).finally(() => setCreating(false));
   };
-  return <section className="device-issuer"><h3>{t.device.another}</h3><p className="set-note">{t.device.createHint}</p>
-    <div className="account-actions"><Button ref={scanButton} disabled={blocked} onClick={onScan}><Icon name="camera" />{t.device.scan}</Button>
-      <Button className={`device-link-slot${activeLink ? ' device-link-item' : ''}`} disabled={blocked && !activeLink} aria-haspopup="dialog" onClick={activeLink ? openDrawer : create}>
-        {activeLink ? <><span><strong>{t.device.linkButton}</strong><small><DeviceDeadline at={activeLink.expiresAt} now={now} /></small></span><span aria-hidden="true">→</span></> : t.device.create}
-      </Button>
+  return <section className="set-group device-issuer"><h3>{t.device.another}</h3>
+    <div className="set-card">
+      <div className="account-row"><div><strong>{t.device.scanRow}</strong><p className="set-note">{t.device.scanRowHint}</p></div>
+        <Button ref={scanButton} disabled={blocked} onClick={onScan}><Icon name="qr" /><span className="tx">{t.device.scan}</span></Button></div>
+      <div className="account-row"><div><strong>{t.device.linkRow}</strong><p className="set-note">{t.device.linkRowHint}</p></div>
+        <Button className={`device-link-slot${activeLink ? ' device-link-item' : ''}`} disabled={blocked && !activeLink} aria-haspopup="dialog" onClick={activeLink ? openDrawer : create}>
+          {activeLink ? <><span><strong>{t.device.linkButton}</strong><small><DeviceDeadline at={activeLink.expiresAt} now={now} /></small></span><span aria-hidden="true">→</span></> : t.device.create}
+        </Button></div>
     </div>
     {createPortal(<dialog ref={drawer} className="auth-dialog device-link-drawer device-issuer" aria-labelledby="device-link-title"
       onCancel={e => { e.preventDefault(); e.stopPropagation(); setDrawerOpen(false); }}
@@ -132,7 +136,7 @@ export function DeviceLinkFlow({ issuer, active, disabled, onScan, scanFocusRequ
       </div> : <>
       {drawerLinks.map(link => { const expired = Date.parse(link.expiresAt) <= now; const url = drawerURLs[link.id]; const pending = link.requests.filter(request => request.state === 'pending' && Date.parse(request.expiresAt) > now); return <div className="device-inline-link" key={link.id}>
         <p className="device-wait">{expired ? t.device.expired : link.state === 'approved' ? t.device.linkApproved : link.state === 'consumed' ? t.device.consumed : <DeviceDeadline at={link.expiresAt} now={now} />}</p>
-        {(link.state === 'open' || link.state === 'approved') && !expired && <>{link.state === 'open' && (url ? <label className="device-copy"><span>{fallback === link.id ? t.device.copyFallback : t.device.link}</span><input readOnly value={url} onFocus={e => e.target.select()} /></label> : <p className="set-note">{t.device.lostLink}</p>)}<div className="account-actions">{link.state === 'open' && url && <Button disabled={blocked} onClick={() => { void (navigator.clipboard?.writeText(url) ?? Promise.reject(new Error('clipboard unavailable'))).then(() => setCopied(link.id), () => setFallback(link.id)); }}>{copied === link.id ? t.device.copied : t.device.copy}</Button>}<Button variant="danger" disabled={blocked} onClick={() => void issuer.revoke(link.id).catch(() => {})}>{t.device.revoke}</Button></div></>}
+        {(link.state === 'open' || link.state === 'approved') && !expired && <>{link.state === 'open' && url && <div className="device-link-qr"><LinkQR url={url} label={t.device.linkQRAlt} /><p className="set-note">{t.device.linkQR}</p></div>}{link.state === 'open' && (url ? <label className="device-copy"><span>{fallback === link.id ? t.device.copyFallback : t.device.link}</span><input readOnly value={url} onFocus={e => e.target.select()} /></label> : <p className="set-note">{t.device.lostLink}</p>)}<div className="account-actions">{link.state === 'open' && url && <Button disabled={blocked} onClick={() => { void (navigator.clipboard?.writeText(url) ?? Promise.reject(new Error('clipboard unavailable'))).then(() => setCopied(link.id), () => setFallback(link.id)); }}>{copied === link.id ? t.device.copied : t.device.copy}</Button>}<Button variant="danger" disabled={blocked} onClick={() => void issuer.revoke(link.id).catch(() => {})}>{t.device.revoke}</Button></div></>}
         {pending.length > 0 && <><h4>{t.device.pending}</h4><div className="device-pending-list" role="list">{pending.map(request => <div className="account-key device-pending" role="listitem" key={request.id}><SignInRequestDetails request={request} /><Button disabled={blocked} onClick={() => void issuer.deny(link.id, request.id).catch(() => {})}>{t.device.deny}</Button></div>)}</div><p className="set-note">{t.device.selfWarning}</p><form className="device-code-form" onSubmit={e => { e.preventDefault(); const code = codes[link.id] ?? ''; if (/^[0-9]{4}$/.test(code)) { setCodeIssue(link.id); void issuer.approve(link.id, code).then(() => setCodes(current => ({ ...current, [link.id]: '' }))).catch(() => {}); } }}><label className="device-code-label" htmlFor={`device-code-${link.id}`}>{t.device.codeLabel}<span className="device-code-beacon" aria-hidden="true" data-active={!blocked && (codes[link.id] ?? '').length < 4 || undefined} /></label><InputOTP id={`device-code-${link.id}`} maxLength={4} disabled={blocked} value={codes[link.id] ?? ''} onChange={code => setCodes(current => ({ ...current, [link.id]: code }))} /><Button variant="primary" type="submit" disabled={blocked || !/^[0-9]{4}$/.test(codes[link.id] ?? '')}>{t.device.approve}</Button></form><p className="set-note">{t.device.codePolicy}</p></>}
       </div>; })}</>}
       </div>{!waitingForLink && <DeviceError problem={state.problem?.code === 'invalid_proof' && state.links.some(link => link.id === codeIssue && link.state === 'open' && Date.parse(link.expiresAt) > now) ? { code: 'invalid_code' } : state.problem} now={now} />}

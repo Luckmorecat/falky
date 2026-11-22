@@ -42,7 +42,7 @@ for (const width of [1440, 390]) {
     await expect(page.getByRole('dialog')).toBeVisible();
     await expect(label).toHaveCount(0);
     await expect(page.getByRole('dialog').locator('.build-version')).toHaveCount(0);
-    await page.getByRole('tab', { name: 'Система', exact: true }).click();
+    await page.getByRole('tab', { name: 'Загальне', exact: true }).click();
     await page.getByRole('button', { name: 'Світла', exact: true }).click();
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
     await expect(label).toHaveCount(0);

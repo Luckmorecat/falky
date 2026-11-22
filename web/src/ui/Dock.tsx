@@ -100,7 +100,7 @@ function Controls({ room, unreadRef, onSettings }: { room: Room | null; unreadRe
       </IconButton>
       <div className="mic-wrap">
         <span ref={ring} className="mic-ring" />
-        <IconButton className={v.muted ? 'off' : ''} aria-pressed={v.muted} data-cue={v.muted ? 'on' : 'off'} aria-label={muteLabel} data-tip={pushToTalk && v.muted ? t.holdToTalk : `${muteLabel} (${shortcuts.mute.label})`} onClick={() => void voice.toggleMute()}>
+        <IconButton className={v.muted ? 'off' : ''} aria-pressed={v.muted} data-cue={v.muted ? 'on' : 'off'} aria-label={muteLabel} data-tip={pushToTalk && v.muted ? t.holdToTalk(shortcuts.pushToTalk.label) : `${muteLabel} (${shortcuts.mute.label})`} onClick={() => void voice.toggleMute()}>
           <Icon name={v.muted ? 'micOff' : 'mic'} />
         </IconButton>
       </div>
