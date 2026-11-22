@@ -234,6 +234,79 @@ it('retries a paused or waiting native sink even when LiveKit reports playback w
   }
 });
 
+function addIncomingAudio(element: HTMLAudioElement, source: string) {
+  const track = {
+    kind: 'audio', attachedElements: [] as HTMLAudioElement[],
+    attach() { this.attachedElements.push(element); return element; },
+    detach() { return this.attachedElements.splice(0); },
+  };
+  const publication = { track };
+  const participant = {
+    identity: source, attributes: {}, getTrackPublication: () => undefined, setVolume: vi.fn(),
+    audioTrackPublications: new Map([[source, publication]]),
+  };
+  remotes.set(participant.identity, participant);
+  listeners.get('TrackSubscribed')!(track, publication, participant);
+  return track;
+}
+
+it('recovers the first pause when LiveKit reuses an element for a new subscription', async () => {
+  vi.stubGlobal('navigator', { userAgent: 'iPhone Mobile/1' });
+  const { VoiceSession } = await import('./session');
+  const session = new VoiceSession(host);
+  const element = document.createElement('audio');
+  const play = vi.spyOn(element, 'play').mockResolvedValue();
+  try {
+    const joining = session.join('lounge'); download.resolve(); await joining;
+    const oldTrack = addIncomingAudio(element, 'mic');
+    element.dispatchEvent(new Event('pause'));
+    expect(play).toHaveBeenCalledOnce();
+    remotes.delete('mic');
+    listeners.get('TrackUnsubscribed')!(oldTrack);
+    addIncomingAudio(element, 'screen-audio');
+    element.dispatchEvent(new Event('pause'));
+    expect(play).toHaveBeenCalledTimes(2);
+  } finally {
+    session.end();
+  }
+});
+
+it('detaches old-room receive tracks before disconnect while playback is still pending', async () => {
+  vi.stubGlobal('navigator', { userAgent: 'iPhone Mobile/1' });
+  const priorPlayback = deferred();
+  const oldRoomClosed = deferred();
+  startAudio.mockImplementationOnce(() => priorPlayback.promise);
+  const { VoiceSession } = await import('./session');
+  const session = new VoiceSession(host);
+  try {
+    const joining = session.join('lounge'); download.resolve(); await joining;
+    const oldElement = document.createElement('audio');
+    const oldTrack = addIncomingAudio(oldElement, 'mic');
+    let leftWithAudio = false;
+    disconnect.mockImplementationOnce(() => {
+      leftWithAudio = oldTrack.attachedElements.length > 0;
+      remotes.clear();
+      return oldRoomClosed.promise;
+    });
+    await session.join('games');
+    expect(disconnect).toHaveBeenCalledOnce();
+    expect(leftWithAudio).toBe(false);
+    expect(oldTrack.attachedElements).toHaveLength(0);
+    expect(oldElement.isConnected).toBe(false);
+    const newTrack = addIncomingAudio(document.createElement('audio'), 'screen-audio');
+    priorPlayback.resolve();
+    oldRoomClosed.resolve();
+    await Promise.resolve();
+    expect(newTrack.attachedElements).toHaveLength(1);
+    expect(session.snapshot.roomId).toBe('games');
+    expect(enableMicrophone).not.toHaveBeenCalled();
+  } finally {
+    priorPlayback.resolve();
+    oldRoomClosed.resolve();
+    session.end();
+  }
+});
+
 it('retries blocked native audio within a trusted click without starting the microphone', async () => {
   vi.stubGlobal('navigator', { userAgent: 'iPhone' });
   startAudio.mockRejectedValueOnce(new DOMException('User activation required', 'NotAllowedError'));
@@ -273,9 +346,14 @@ it('keeps the iOS room usable while the first native playback request is pending
     const joining = session.join('lounge'); download.resolve();
     await vi.waitFor(() => expect(startAudio).toHaveBeenCalledOnce());
     expect(session.snapshot.status).toBe('connected');
+    rooms.at(-1)!.canPlaybackAudio = true;
+    const sink = document.createElement('audio');
+    const play = vi.spyOn(sink, 'play').mockResolvedValue();
+    addIncomingAudio(sink, 'mic');
     const click = addListener.mock.calls.find(([type, , capture]) => type === 'click' && capture === true)?.[1] as EventListener;
     click({ isTrusted: true } as Event);
-    expect(startAudio).toHaveBeenCalledTimes(2);
+    expect(play).toHaveBeenCalledOnce();
+    expect(startAudio).toHaveBeenCalledOnce();
     await joining;
     expect(enableMicrophone).not.toHaveBeenCalled();
   } finally {

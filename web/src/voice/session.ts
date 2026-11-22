@@ -56,6 +56,7 @@ export class VoiceSession implements VoiceClient {
   private readonly nativePlayback = /iPhone|iPad|iPod/.test(navigator.userAgent)
     || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
   private stopPlaybackRecovery?: () => void;
+  private readonly interruptedAudio = new WeakMap<HTMLMediaElement, 'waiting' | 'paused'>();
   private mutedBeforeDeaf = false;
   private refreshQueued = false;
   /** A refused admission keeps the current room intact. */
@@ -328,7 +329,6 @@ export class VoiceSession implements VoiceClient {
     const refresh = () => this.queueRefresh();
     const canRestoreAudio = () => this.room === room && this.snap.status === 'connected'
       && !document.hidden && !this.snap.deafened;
-    const interrupted = new WeakMap<HTMLAudioElement, 'waiting' | 'paused'>();
     const replay = (element: HTMLAudioElement) => { void element.play().catch(() => {}); };
     const restoreAudio = (foreground = false) => {
       if (!canRestoreAudio()) return;
@@ -337,7 +337,7 @@ export class VoiceSession implements VoiceClient {
         return;
       }
       for (const element of this.sinkHost.querySelectorAll('audio')) {
-        if (element.paused || interrupted.has(element)) replay(element);
+        if (element.paused || this.interruptedAudio.has(element)) replay(element);
       }
     };
     if (this.nativePlayback) {
@@ -347,15 +347,15 @@ export class VoiceSession implements VoiceClient {
         const element = event.target;
         if (!(element instanceof HTMLAudioElement) || element.parentNode !== this.sinkHost) return;
         if (event.type === 'playing') {
-          interrupted.delete(element);
+          this.interruptedAudio.delete(element);
           return;
         }
         if (event.type === 'pause') {
-          if (!element.paused || interrupted.get(element) === 'paused') return;
-          interrupted.set(element, 'paused');
+          if (!element.paused || this.interruptedAudio.get(element) === 'paused') return;
+          this.interruptedAudio.set(element, 'paused');
           if (canRestoreAudio()) replay(element);
-        } else if (!interrupted.has(element)) {
-          interrupted.set(element, 'waiting');
+        } else if (!this.interruptedAudio.has(element)) {
+          this.interruptedAudio.set(element, 'waiting');
         }
       };
       const playbackEvents = ['playing', 'pause', 'waiting', 'stalled'];
@@ -444,7 +444,12 @@ export class VoiceSession implements VoiceClient {
         // iOS ignores element volume. LiveKit's foreground recovery can also unmute
         // attached elements, so detach them altogether at zero/deafened.
         if (v === 0) track.detach().forEach((el) => el.remove());
-        else if (!track.attachedElements.length) this.sinkHost.append(track.attach());
+        else if (!track.attachedElements.length) {
+          const element = track.attach();
+          // LiveKit may recycle the element from a previous subscription.
+          this.interruptedAudio.delete(element);
+          this.sinkHost.append(element);
+        }
         continue;
       }
       const boost = this.boosts.get(track as RemoteAudioTrack);
@@ -550,6 +555,12 @@ export class VoiceSession implements VoiceClient {
     this.stopPlaybackRecovery = undefined;
     for (const meter of this.meters.values()) meter.source.disconnect();
     this.meters.clear();
+    if (room && this.nativePlayback) {
+      // Removing an audio element from the DOM doesn't stop it. LiveKit disconnects asynchronously.
+      for (const participant of room.remoteParticipants.values()) {
+        for (const { track } of participant.audioTrackPublications.values()) track?.detach();
+      }
+    }
     this.sinkHost.replaceChildren();
     if (room) this.disconnectRoom(room);
   }
