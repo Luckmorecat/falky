@@ -1,0 +1,5 @@
+interface:
+  display_name: "Define"
+  short_description: "Grill ideas and resolve consequential feature decisions"
+policy:
+  allow_implicit_invocation: false

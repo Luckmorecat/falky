@@ -1,0 +1,4 @@
+interface:
+  display_name: "Code Review"
+  short_description: "Review diffs against standards and plans"
+  default_prompt: "Use $code-review to review this branch against repository standards and the approved plan."
