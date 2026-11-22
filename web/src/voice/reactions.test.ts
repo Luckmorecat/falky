@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { allowReaction, allowSound, emitReaction, soundOf, encodeReaction, onReaction, parseReaction, resetReactions } from './reactions';
+import { allowReaction, emitReaction, popPitch, soundOf, encodeReaction, onReaction, parseReaction, resetReactions } from './reactions';
 
 afterEach(resetReactions);
 
@@ -30,24 +30,23 @@ describe('emitReaction', () => {
 
 describe('allowReaction', () => {
   it('lets a short burst through, stops a flood, and recovers', () => {
-    const burst = [0, 100, 200, 300, 400].map((at) => allowReaction('a', at));
-    expect(burst).toEqual([true, true, true, true, true]);
-    expect(allowReaction('a', 500)).toBe(false);
-    expect(allowReaction('b', 500)).toBe(true);
+    const burst = Array.from({ length: 12 }, (_, i) => allowReaction('a', i * 100));
+    expect(burst.every(Boolean)).toBe(true);
+    expect(allowReaction('a', 1250)).toBe(false);
+    expect(allowReaction('b', 1250)).toBe(true);
     expect(allowReaction('a', 2100)).toBe(true);
   });
 });
 
 describe('board sounds', () => {
   it('belong only to the sound reactions', () => {
-    expect(soundOf('horn')).toBe('horn');
+    expect(soundOf('airhorn')).toBe('airhorn');
     expect(soundOf('up')).toBeNull();
   });
 
-  it('let one sound per sender through every few seconds', () => {
-    expect(allowSound('a', 0)).toBe(true);
-    expect(allowSound('a', 1000)).toBe(false);
-    expect(allowSound('b', 1000)).toBe(true);
-    expect(allowSound('a', 3000)).toBe(true);
+  it('give every emoji a pop of its own pitch', () => {
+    expect(popPitch('up')).toBe(0);
+    expect(popPitch('clap')).toBe(1);
+    expect(popPitch('heart')).toBeGreaterThan(0);
   });
 });

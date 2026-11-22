@@ -7,7 +7,7 @@ import { type PaletteName } from '../fx/palette';
 import { resolveLanguage, setLanguage, t } from '../strings';
 import { VoiceSession } from '@falky/voice';
 import type { VoiceClient } from '../voice/types';
-import { allowSound, onReaction, soundOf } from '../voice/reactions';
+import { onReaction, popPitch, soundOf } from '../voice/reactions';
 import { playSound, notificationPermission, requestNotificationPermission, notificationsAvailable, notify } from '@falky/browser';
 import { applyAppearance } from './appearance';
 import { prefs, type Settings } from './prefs';
@@ -122,12 +122,11 @@ const voiceSession: VoiceClient = new VoiceSession({
   volumeOf: (id) => prefs.volume(id),
 });
 
-// Board sounds play for everyone who hears the sender: not while deafened, nor if their volume is down to nothing.
+// Every reaction is heard by everyone who hears the sender, each press of it: not while deafened, nor if their volume is down to nothing.
 onReaction((from, id) => {
-  const sound = soundOf(id);
   const s = getState();
-  if (!sound || sessionChanging || !s.settings.sounds || s.voice.deafened || prefs.volume(from) === 0 || !allowSound(from, performance.now())) return;
-  playSound(sound, s.settings.speakerId);
+  if (sessionChanging || !s.settings.sounds || s.voice.deafened || prefs.volume(from) === 0) return;
+  playSound(soundOf(id) ?? 'pop', s.settings.speakerId, popPitch(id));
 });
 
 const pausedVoiceActions = new Set<PropertyKey>(['join', 'toggleMute', 'toggleDeafen', 'toggleShare', 'toggleCamera', 'restartCamera', 'setCamera', 'setMic', 'setSpeaker', 'applyMicProcessing', 'react']);

@@ -3,8 +3,8 @@ import type { VoiceSound } from './types';
 /** What the interface itself says, next to what happens in a room. */
 export type InterfaceCue = 'tap' | 'on' | 'off' | 'open' | 'close' | 'tick';
 /** Played to the whole room from the reactions tray. */
-export type BoardSound = 'rimshot' | 'horn' | 'tada' | 'crickets';
-export type Sound = VoiceSound | InterfaceCue | BoardSound | 'knock' | 'test';
+export type BoardSound = 'boom' | 'airhorn' | 'sad' | 'pipe' | 'dun' | 'bonk';
+export type Sound = VoiceSound | InterfaceCue | BoardSound | 'pop' | 'knock' | 'test';
 
 const MASTER_VOLUME = 0.3;
 
@@ -14,7 +14,7 @@ let noise: AudioBuffer | null = null;
 const lastPlayed = new Map<Sound, number>();
 
 /** Milliseconds a sound stays quiet after playing, so a sweep over buttons does not rattle. */
-const MIN_GAP: Partial<Record<Sound, number>> = { tap: 30, tick: 35 };
+const MIN_GAP: Partial<Record<Sound, number>> = { tap: 30, tick: 35, pop: 20, boom: 30, airhorn: 30, sad: 30, pipe: 30, dun: 30, bonk: 30 };
 
 function output(): { audio: AudioContext; out: GainNode } {
   if (!ctx || !master) {
@@ -97,6 +97,53 @@ function tone(start: number, type: OscillatorType, from: number, to: number, att
   osc.stop(start + attack + decay + 0.05);
 }
 
+interface NoteShape {
+  lowpass?: number;
+  /** How far the pitch wobbles, as a fraction of it, growing as the note is held. */
+  vibrato?: number;
+  /** Seconds for the filter to open from muffled, as a mute pulled away from a bell. */
+  wah?: number;
+  /** Where the pitch ends, as a fraction of where it began. */
+  bend?: number;
+}
+
+/** A held note that sustains before it lets go, for horns and brass. */
+function note(start: number, type: OscillatorType, freq: number, length: number, peak: number, { lowpass = 0, vibrato = 0, wah = 0, bend = 1 }: NoteShape = {}): void {
+  const { audio, out } = output();
+  const osc = audio.createOscillator();
+  osc.type = type;
+  osc.frequency.setValueAtTime(freq, start);
+  if (bend !== 1) osc.frequency.exponentialRampToValueAtTime(freq * bend, start + length);
+  if (vibrato) {
+    const lfo = audio.createOscillator();
+    lfo.frequency.value = 5.5;
+    const depth = audio.createGain();
+    depth.gain.setValueAtTime(0, start);
+    depth.gain.linearRampToValueAtTime(freq * vibrato, start + length * 0.6);
+    lfo.connect(depth).connect(osc.frequency);
+    lfo.start(start);
+    lfo.stop(start + length + 0.05);
+  }
+  const gain = audio.createGain();
+  gain.gain.setValueAtTime(0.0001, start);
+  gain.gain.exponentialRampToValueAtTime(peak, start + 0.02);
+  gain.gain.setValueAtTime(peak, start + length * 0.75);
+  gain.gain.exponentialRampToValueAtTime(0.0001, start + length);
+  gain.connect(out);
+  let tail: AudioNode = osc;
+  if (lowpass) {
+    const filter = audio.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.Q.value = wah ? 6 : 0.7;
+    filter.frequency.setValueAtTime(wah ? lowpass * 0.3 : lowpass, start);
+    if (wah) filter.frequency.exponentialRampToValueAtTime(lowpass, start + Math.min(wah, length));
+    tail = osc.connect(filter);
+  }
+  tail.connect(gain);
+  osc.start(start);
+  osc.stop(start + length + 0.05);
+}
+
 const SOUNDS: Record<Sound, (t: number, vary: number, pitch: number) => void> = {
   tap(t, v) {
     bubble(t, 340 * v, 720 * v, 0.085, 0.5);
@@ -120,26 +167,52 @@ const SOUNDS: Record<Sound, (t: number, vary: number, pitch: number) => void> = 
   leave: (t, v) => stream(t, 5, 1050, 340, 0.06, 0.09, 0.5, v),
   share: (t, v) => stream(t, 4, 640, 820, 0.08, 0.09, 0.5, v),
   test: (t, v) => stream(t, 7, 420, 1100, 0.07, 0.1, 0.55, v),
-  rimshot(t, v) {
-    tone(t, 'sine', 200 * v, 90, 0.004, 0.16, 0.7);
-    tone(t + 0.17, 'sine', 150 * v, 70, 0.004, 0.2, 0.7);
-    wash(t + 0.42, 7000, 9000, 0.45, 0.35);
-    tone(t + 0.42, 'triangle', 330 * v, 300, 0.002, 0.08, 0.25);
+  pop(t, v, pitch) {
+    const base = 480 * 2 ** (pitch * 1.3) * v;
+    bubble(t, base, base * 1.9, 0.07, 0.55);
+    bubble(t + 0.03, base * 1.5, base * 2.4, 0.05, 0.2);
   },
-  horn(t, v) {
-    for (const [at, length] of [[0, 0.16], [0.22, 0.16], [0.44, 0.55]] as const) {
-      tone(t + at, 'sawtooth', 415 * v, 415 * v, 0.02, length, 0.22, 2200);
-      tone(t + at, 'sawtooth', 523 * v, 523 * v, 0.02, length, 0.16, 2200);
+  // A deep hit falling away, and its echo.
+  boom(t, v) {
+    for (const [at, level] of [[0, 1], [0.34, 0.3]] as const) {
+      tone(t + at, 'sine', 150 * v, 36, 0.004, 0.95, 0.95 * level);
+      tone(t + at, 'triangle', 310 * v, 55, 0.003, 0.4, 0.4 * level, 900);
+      wash(t + at, 1600, 180, 0.28, 0.35 * level);
     }
   },
-  tada(t, v) {
-    [523, 659, 784].forEach((f, i) => tone(t + i * 0.07, 'triangle', f * v, f * v, 0.01, 0.16, 0.3));
-    for (const f of [523, 659, 784, 1047]) tone(t + 0.24, 'triangle', f * v, f * v, 0.02, 0.9, 0.18);
-  },
-  crickets(t, v) {
-    for (let chirp = 0; chirp < 3; chirp++) {
-      for (let pulse = 0; pulse < 4; pulse++) tone(t + chirp * 0.42 + pulse * 0.045, 'sine', 4300 * v, 4300 * v, 0.006, 0.03, 0.12);
+  // Three blasts and a long one, each sagging a little as the can runs out.
+  airhorn(t, v) {
+    for (const [at, length] of [[0, 0.2], [0.25, 0.11], [0.4, 0.11], [0.55, 0.75]] as const) {
+      for (const [f, peak] of [[392, 0.15], [397, 0.15], [589, 0.09], [786, 0.06]] as const) note(t + at, 'sawtooth', f * v, length, peak, { lowpass: 3400, bend: 0.97 });
     }
+  },
+  // Wah, wah, wah, waaah: each note opening like a plunger mute, the last one wobbling.
+  sad(t, v) {
+    [294, 277, 262].forEach((f, i) => note(t + i * 0.38, 'sawtooth', f * v, 0.34, 0.22, { lowpass: 1500, wah: 0.14 }));
+    note(t + 1.14, 'sawtooth', 247 * v, 1.3, 0.22, { lowpass: 1500, wah: 0.18, vibrato: 0.035 });
+  },
+  // A struck tube rings at partials no string has; then it bounces twice on the floor.
+  pipe(t, v) {
+    for (const [at, level] of [[0, 1], [0.36, 0.45], [0.58, 0.22]] as const) {
+      for (const [ratio, decay] of [[1, 1.5], [2.76, 1], [5.4, 0.65], [8.93, 0.4], [13.3, 0.22]] as const) {
+        tone(t + at, 'sine', 520 * ratio * v, 520 * ratio * v, 0.002, decay * level + 0.08, 0.18 * level);
+      }
+      wash(t + at, 7000, 3000, 0.1, 0.35 * level);
+    }
+  },
+  // Two stabs of a low minor chord over a timpani, then the long one, a step down.
+  dun(t, v) {
+    for (const [at, length, shift] of [[0, 0.2, 1], [0.28, 0.2, 1], [0.6, 1.5, 0.94]] as const) {
+      for (const f of [98, 147, 196, 233]) note(t + at, 'sawtooth', f * shift * v, length, 0.11, { lowpass: 1300, vibrato: length > 1 ? 0.02 : 0 });
+      tone(t + at, 'sine', 110 * shift * v, 60, 0.004, length > 1 ? 0.9 : 0.3, 0.7);
+    }
+  },
+  // A hollow head under a mallet: a pitch dropping fast over a woody knock.
+  bonk(t, v) {
+    tone(t, 'sine', 820 * v, 230 * v, 0.002, 0.15, 0.85);
+    tone(t, 'square', 410 * v, 120 * v, 0.002, 0.06, 0.14, 1800);
+    wash(t, 2600, 1200, 0.05, 0.45);
+    tone(t + 0.05, 'triangle', 300 * v, 290 * v, 0.003, 0.28, 0.22);
   },
   // Two raps on a door, then two more.
   knock(t, v) {
@@ -152,7 +225,7 @@ const SOUNDS: Record<Sound, (t: number, vary: number, pitch: number) => void> = 
 
 /**
  * A short synthesized sound, so that nothing but the client's own code is needed.
- * `pitch`, from 0 to 1, says how high a `tick` goes.
+ * `pitch`, from 0 to 1, says how high a `tick` or a `pop` goes.
  */
 export function playSound(sound: Sound, sinkId = '', pitch = 0.5): void {
   const now = performance.now();

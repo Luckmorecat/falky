@@ -1,12 +1,12 @@
-/* Rises from the lower part of the orb and fades out above it; sizes follow the tile. */
+/* Bursts from the lower part of the orb and fades out above it; sizes follow the tile. */
 .t-react { position: absolute; inset: 0; z-index: 4; pointer-events: none; }
-.t-react span { position: absolute; left: calc(50% + var(--x, 0px)); bottom: 22%; font-size: clamp(24px, 13cqw, 60px); line-height: 1;
+.t-react span { position: absolute; left: calc(50% + var(--x, 0px)); bottom: 22%; font-size: calc(clamp(24px, 13cqw, 60px) * var(--size, 1)); line-height: 1;
   translate: -50% 0; opacity: 0; will-change: translate, scale, opacity;
-  animation: react-rise 1700ms cubic-bezier(.22,.8,.36,1) forwards; }
+  animation: react-rise var(--rise, 1700ms) cubic-bezier(.22,.8,.36,1) var(--delay, 0ms) forwards; }
 
 @keyframes react-rise {
   0% { opacity: 0; scale: .5; rotate: 0deg; translate: -50% 0; }
-  12% { opacity: 1; scale: 1.08; }
+  10% { opacity: 1; scale: 1.25; }
   22% { scale: 1; }
   70% { opacity: 1; }
   100% { opacity: 0; scale: .9; rotate: var(--tilt, 0deg); translate: calc(-50% + var(--drift, 0px)) -62cqh; }
