@@ -8,7 +8,7 @@ type HoldSource = 'shortcut' | 'pointer' | 'button-key';
 
 function canTalk(): boolean {
   const { voice: v, settings, sessionPaused } = getState();
-  return settings.pushToTalk && !sessionPaused && !document.hidden && v.status === 'connected' && !v.deafened && !v.listenOnly;
+  return settings.pushToTalk && !sessionPaused && !document.hidden && v.status === 'connected' && !v.deafened;
 }
 
 /** Returns the same hold interaction for hardware keys and the dock button. */

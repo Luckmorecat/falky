@@ -91,3 +91,31 @@ it('holds from touch and releases on pointer cancellation or loss of capture', a
   button.click();
   expect(vi.mocked(voice.setMuted).mock.calls).toEqual([[false], [true], [false], [true]]);
 });
+
+it('retries microphone capture on a fresh touch hold after a listen-only failure', async () => {
+  const setMuted = vi.mocked(voice.setMuted);
+  setMuted.mockImplementationOnce(async () => {
+    setState({ voice: { ...getState().voice, muted: true, listenOnly: true } });
+  });
+  setState({ voice: { ...activeVoice, muted: true }, settings: { ...getState().settings, pushToTalk: true } });
+  await act(async () => root.render(createElement(TestDock)));
+  const button = document.querySelector<HTMLButtonElement>('.dock-talk')!;
+  const touch = (event: string) => button.dispatchEvent(new PointerEvent(event, {
+    pointerType: 'touch', isPrimary: true, pointerId: 4, bubbles: true, button: 0,
+  }));
+
+  await act(async () => { touch('pointerdown'); });
+  expect(getState().voice.listenOnly).toBe(true);
+  expect(setMuted).toHaveBeenCalledExactlyOnceWith(false);
+  await act(async () => { touch('pointerup'); });
+  expect(setMuted.mock.calls).toEqual([[false], [true]]);
+  expect(button.getAttribute('aria-disabled')).toBe('false');
+
+  setMuted.mockImplementationOnce(async () => {
+    setState({ voice: { ...getState().voice, muted: false, listenOnly: false } });
+  });
+  await act(async () => { touch('pointerdown'); });
+  expect(button.getAttribute('aria-pressed')).toBe('true');
+  await act(async () => { touch('pointerup'); });
+  expect(setMuted.mock.calls).toEqual([[false], [true], [false], [true]]);
+});

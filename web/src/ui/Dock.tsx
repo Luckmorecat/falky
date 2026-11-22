@@ -120,7 +120,7 @@ function Controls({ room, unreadRef, holdToTalk, onSettings }: { room: Room | nu
               className={v.muted ? 'dock-talk off' : 'dock-talk'}
               aria-label={t.pressToTalk}
               aria-pressed={!v.muted}
-              aria-disabled={v.status !== 'connected' || v.deafened || v.listenOnly}
+              aria-disabled={v.status !== 'connected' || v.deafened}
               data-cue="none"
               data-tip={t.holdToTalk(shortcuts.pushToTalk.label)}
               onPointerDown={(e) => {
