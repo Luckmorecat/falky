@@ -64,3 +64,12 @@
 @media (max-width: 560px) {
   .hide-phone { display: none; }
 }
+
+.dock-joining { color: var(--text-2); padding-left: 10px; font-size: 14px; }
+.dock .dock-cancel { height: 48px; }
+.dock-talk { touch-action: none; -webkit-user-select: none; user-select: none; }
+.dock-talk-label { display: none; }
+@media (hover: none), (pointer: coarse) {
+  .dock-talk-label { display: block; position: absolute; bottom: calc(100% + 14px); left: 50%; translate: -50% 0;
+    padding: 6px 10px; border-radius: var(--round); background: var(--raised); color: var(--text-2); font-size: 13px; white-space: nowrap; pointer-events: none; }
+}

@@ -182,18 +182,43 @@ function levelOf(id: string): () => number {
   return fn;
 }
 
+interface NativeFullscreenVideo extends HTMLVideoElement {
+  webkitEnterFullscreen?(): void;
+  webkitExitFullscreen?(): void;
+  webkitEnterFullScreen?(): void;
+  webkitExitFullScreen?(): void;
+}
+
+const canFullscreenFrame = (frame: HTMLElement) => document.fullscreenEnabled !== false
+  && typeof frame.requestFullscreen === 'function' && typeof document.exitFullscreen === 'function';
+const nativeEnterFullscreen = (player: NativeFullscreenVideo) => player.webkitEnterFullscreen ?? player.webkitEnterFullScreen;
+const nativeExitFullscreen = (player: NativeFullscreenVideo) => player.webkitExitFullscreen ?? player.webkitExitFullScreen;
+
 export function ShareView({ width, person, others, onPick }: { width: number; person: Person; others: Person[]; onPick(id: string): void }) {
   const frame = useRef<HTMLDivElement>(null);
-  const video = useRef<HTMLVideoElement>(null);
+  const video = useRef<NativeFullscreenVideo>(null);
   const trackId = useApp((s) => s.voice.people.find((p) => p.id === person.id)?.shareTrackId ?? '');
   // Esc and other browser exits never pass through the button, so the label follows the element.
-  const [fullscreen, setFullscreen] = useState(false);
+  const [fullscreen, setFullscreen] = useState<'frame' | 'video' | null>(null);
+  const [canFullscreen, setCanFullscreen] = useState(false);
 
   useEffect(() => {
-    const sync = () => setFullscreen(document.fullscreenElement === frame.current);
+    const el = frame.current;
+    const player = video.current;
+    if (!el || !player) return;
+    setCanFullscreen(canFullscreenFrame(el) || typeof nativeEnterFullscreen(player) === 'function');
+    const sync = () => setFullscreen((mode) => document.fullscreenElement === el ? 'frame' : mode === 'video' ? 'video' : null);
+    const begin = () => setFullscreen('video');
+    const end = () => setFullscreen(null);
     sync();
     document.addEventListener('fullscreenchange', sync);
-    return () => document.removeEventListener('fullscreenchange', sync);
+    player.addEventListener('webkitbeginfullscreen', begin);
+    player.addEventListener('webkitendfullscreen', end);
+    return () => {
+      document.removeEventListener('fullscreenchange', sync);
+      player.removeEventListener('webkitbeginfullscreen', begin);
+      player.removeEventListener('webkitendfullscreen', end);
+    };
   }, []);
 
   useEffect(() => {
@@ -206,11 +231,20 @@ export function ShareView({ width, person, others, onPick }: { width: number; pe
     };
   }, [person.id, trackId]);
 
-  const toggleFullscreen = () => {
+  const toggleFullscreen = async () => {
     const el = frame.current;
-    if (!el) return;
-    if (document.fullscreenElement === el) void document.exitFullscreen();
-    else void el.requestFullscreen();
+    const player = video.current;
+    if (!el || !player) return;
+    try {
+      if (document.fullscreenElement === el) await document.exitFullscreen?.();
+      else if (fullscreen === 'video') nativeExitFullscreen(player)?.call(player);
+      else if (canFullscreenFrame(el)) {
+        try { await el.requestFullscreen(); }
+        catch { if (video.current === player) nativeEnterFullscreen(player)?.call(player); }
+      } else nativeEnterFullscreen(player)?.call(player);
+    } catch {
+      // The player stays inline if the browser refuses fullscreen.
+    }
   };
 
   return (
@@ -227,9 +261,9 @@ export function ShareView({ width, person, others, onPick }: { width: number; pe
             </button>
           ))}
         </div>
-        <IconButton size="small" className="ghost" aria-label={fullscreen ? t.exitFullscreen : t.fullscreen} aria-pressed={fullscreen} onClick={toggleFullscreen}>
+        {canFullscreen && <IconButton size="small" className="ghost" aria-label={fullscreen ? t.exitFullscreen : t.fullscreen} aria-pressed={!!fullscreen} onClick={() => void toggleFullscreen()}>
           <Icon name={fullscreen ? 'collapse' : 'expand'} />
-        </IconButton>
+        </IconButton>}
       </div>
     </div>
   );

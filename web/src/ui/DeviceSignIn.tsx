@@ -3,9 +3,10 @@ import { startQRScanner } from '@falky/browser';
 import { createDeviceCandidate, createQRApprover, deviceIssuer, type DeviceProblem } from '../app/deviceSignIn';
 import { parseDeviceSignInURL } from '../app/entryLinks';
 import { subscribeSessionEpoch } from '../app/controller';
-import { useApp } from '../app/store';
+import { getState, useApp } from '../app/store';
 import { t } from '../strings';
 import { Button } from './Button';
+import { callCameraInUse } from './callCameraInUse';
 import { SignInRequestDetails } from './SignInRequestDetails';
 import { Icon } from './Icon';
 import { DeviceDeadline, DeviceError, DeviceLinkFlow, useDeviceClock, type DeviceLinkFlowProps } from './DeviceLinkFlow';
@@ -72,6 +73,8 @@ export function DeviceReceiver({ token, onClose }: { token?: string; onClose(): 
   </div>;
 }
 
+const canUseScannerCamera = () => !callCameraInUse(getState());
+
 export function DeviceScanner({ token, onClose }: { token?: string; onClose(): void }) {
   const [approver] = useState(createQRApprover);
   const state = useSyncExternalStore(approver.subscribe, approver.getSnapshot);
@@ -79,6 +82,8 @@ export function DeviceScanner({ token, onClose }: { token?: string; onClose(): v
   const [scanning, setScanning] = useState(false);
   const [error, setError] = useState('');
   const [input, setInput] = useState('');
+  const cameraInUse = useApp(callCameraInUse);
+  const cameraScanning = scanning && !cameraInUse;
   const video = useRef<HTMLVideoElement>(null);
   const now = useDeviceClock();
   useEffect(() => () => approver.dispose(), [approver]);
@@ -87,16 +92,31 @@ export function DeviceScanner({ token, onClose }: { token?: string; onClose(): v
   const read = (value: string) => { setScanning(false); const entry = parseDeviceSignInURL(value); if (entry?.type !== 'qr') { setError(t.device.invalidQR); return; } setError(''); setInput(''); void approver.preview(entry.token).catch(() => {}); };
   useEffect(() => {
     if (!scanning || !video.current) return;
-    const scanner = startQRScanner(video.current, read, error => { setScanning(false); const name = error instanceof Error ? error.name : ''; setError(name === 'NotAllowedError' ? t.device.cameraDenied : name === 'NotFoundError' ? t.device.cameraMissing : name === 'NotReadableError' ? t.device.cameraBusy : t.device.cameraFailed); });
+    if (cameraInUse) { setScanning(false); return; }
+    const scanner = startQRScanner(video.current, read, error => {
+      setScanning(false);
+      if (!canUseScannerCamera()) return;
+      const name = error instanceof Error ? error.name : '';
+      setError(name === 'NotAllowedError' ? t.device.cameraDenied : name === 'NotFoundError' ? t.device.cameraMissing : name === 'NotReadableError' ? t.device.cameraBusy : t.device.cameraFailed);
+    }, canUseScannerCamera);
     return () => scanner.stop();
-  }, [scanning]);
+  }, [scanning, cameraInUse]);
   const blocked = state.busy || (state.retryAt ?? 0) > now;
   const expired = state.preview && Date.parse(state.preview.request.expiresAt) <= now;
   return <div className="device-scanner">
     <header><button className="auth-back" disabled={blocked} onClick={onClose}><Icon name="left" /><span className="tx">{t.back(t.account.account)}</span></button></header>
     <section className="device-scanner-content">
-      <div className="auth-heading"><h1 tabIndex={-1}>{state.phase === 'preview' ? t.device.previewTitle : state.phase === 'approved' ? t.device.approved : state.phase === 'denied' ? t.device.denied : t.device.scanTitle}</h1><p>{state.phase === 'idle' ? t.device.scanHint : state.phase === 'preview' ? t.device.selfWarning : ''}</p></div>
-      {state.phase === 'idle' && <><div className="device-camera"><video ref={video} muted playsInline aria-label={t.device.scan} /><div className="device-scan-frame" aria-hidden="true"><span /><span /><span /><span />{!scanning && <Icon name="camera" />}</div></div>{scanning && <p role="status" className="device-note">{t.device.cameraScanning}</p>}{!scanning && <Button variant="primary" disabled={blocked} onClick={() => { setError(''); setScanning(true); }}>{error ? t.device.retry : t.device.cameraStart}</Button>}<button className="auth-text" aria-expanded={paste} disabled={blocked} onClick={() => setPaste(!paste)}>{t.device.pasteQR}</button>{paste && <form className="auth-fields" onSubmit={e => { e.preventDefault(); setScanning(false); read(input); }}><label>{t.device.pasteQR}<input value={input} autoComplete="off" autoCapitalize="none" spellCheck={false} onChange={e => setInput(e.target.value)} /></label><Button type="submit" disabled={!input || blocked}>{t.account.continue}</Button></form>}</>}
+      <div className="auth-heading">
+        <h1 tabIndex={-1}>{state.phase === 'preview' ? t.device.previewTitle : state.phase === 'approved' ? t.device.approved : state.phase === 'denied' ? t.device.denied : t.device.scanTitle}</h1>
+        <p aria-live="polite">{state.phase === 'idle' ? cameraInUse ? t.device.callCameraBusy : t.device.scanHint : state.phase === 'preview' ? t.device.selfWarning : ''}</p>
+      </div>
+      {state.phase === 'idle' && <>
+        <div className="device-camera"><video ref={video} muted playsInline aria-label={t.device.scan} /><div className="device-scan-frame" aria-hidden="true"><span /><span /><span /><span />{!cameraScanning && <Icon name="camera" />}</div></div>
+        {cameraScanning && <p role="status" className="device-note">{t.device.cameraScanning}</p>}
+        {!cameraScanning && <Button variant="primary" disabled={blocked || cameraInUse} onClick={() => { if (!canUseScannerCamera()) return; setError(''); setScanning(true); }}>{error && !cameraInUse ? t.device.retry : t.device.cameraStart}</Button>}
+        <button className="auth-text" aria-expanded={paste} disabled={blocked} onClick={() => setPaste(!paste)}>{t.device.pasteQR}</button>
+        {paste && <form className="auth-fields" onSubmit={e => { e.preventDefault(); setScanning(false); read(input); }}><label>{t.device.pasteQR}<input value={input} autoComplete="off" autoCapitalize="none" spellCheck={false} onChange={e => setInput(e.target.value)} /></label><Button type="submit" disabled={!input || blocked}>{t.account.continue}</Button></form>}
+      </>}
       {state.phase === 'preview' && <><div className="device-request">{state.preview && <SignInRequestDetails request={state.preview.request} />}{state.preview && <DeviceDeadline at={state.preview.request.expiresAt} now={now} />}</div>{expired && <p role="status">{t.device.expired}</p>}<Button variant="primary" disabled={blocked || !!expired} onClick={() => void approver.approve().catch(() => {})}>{t.device.approve}</Button><Button disabled={blocked || !!expired} onClick={() => void approver.deny().catch(() => {})}>{t.device.deny}</Button><button className="auth-text" disabled={blocked} onClick={() => { approver.clear(); setError(''); }}>{t.device.scan}</button></>}
       {(state.phase === 'approved' || state.phase === 'denied') && <Button variant="primary" onClick={onClose}>{t.device.done}</Button>}
       {error && <p className="auth-error" role="alert">{error}</p>}<DeviceError problem={state.problem} now={now} />

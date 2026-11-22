@@ -27,7 +27,7 @@ export interface AppState {
   /** Pictures waiting in each room's composer. */
   uploads: Record<string, ComposerUpload[]>;
   /** What the server takes per message, from its limits; defaults until they are read. */
-  attachmentLimits: { maxAttachments: number; maxFileBytes: number };
+  attachmentLimits: { maxAttachments: number; maxFileBytes: number; uploadTimeoutSeconds: number };
   /** Where the viewed room's "new messages" line goes. */
   newAfterId: string | null;
   chatOpen: boolean;
@@ -55,7 +55,7 @@ let state: AppState = {
   live: 'off',
   chats: {},
   uploads: {},
-  attachmentLimits: { maxAttachments: 4, maxFileBytes: 25 * 1024 * 1024 },
+  attachmentLimits: { maxAttachments: 4, maxFileBytes: 25 * 1024 * 1024, uploadTimeoutSeconds: 60 },
   newAfterId: null,
   chatOpen: false,
   roomsOpen: false,
@@ -77,7 +77,7 @@ export function setState(patch: Partial<AppState>): void {
   listeners.forEach((l) => l());
 }
 
-function subscribe(listener: () => void): () => void {
+export function subscribe(listener: () => void): () => void {
   listeners.add(listener);
   return () => listeners.delete(listener);
 }

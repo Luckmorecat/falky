@@ -1,8 +1,8 @@
 import { type KeyboardEvent as ReactKeyboardEvent, type ReactNode, useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
-import { updateSettings } from '../app/controller';
+import { updateSettings, voice } from '../app/controller';
 import type { Theme } from '../app/prefs';
 import { type Bindable, isDefault, rebind, resetShortcut, shortcuts, shortcutsRevision, subscribeShortcuts } from '../app/shortcuts';
-import { useApp } from '../app/store';
+import { getState, useApp } from '../app/store';
 import { createBackground } from '../fx/backgroundRenderer';
 import type { PaletteName } from '../fx/palette';
 import { createThemeWave } from '../fx/themeWave';
@@ -10,6 +10,7 @@ import { onTick } from '../fx/ticker';
 import { t } from '../strings';
 import { playSound, startCamera } from '@falky/browser';
 import type { Sound } from '../voice/sounds';
+import { callCameraInUse } from './callCameraInUse';
 import { Icon } from './Icon';
 import { IconButton } from './IconButton';
 import { Orb } from './Orb';
@@ -150,31 +151,43 @@ export function PlaySample({ sound, label }: { sound: Sound; label: string }) {
   return <IconButton className="set-play" data-cue="none" aria-label={`${t.playSample}: ${label}`} onClick={() => playSound(sound, speakerId)}><Icon name="play" /></IconButton>;
 }
 
-/** What the chosen camera sees, as the person will see themselves; stopped when not shown. */
 export function CameraPreview({ active }: { active: boolean }) {
   const { cameraId, cameraResolution, cameraMirror } = useApp((s) => s.settings);
+  const inUse = useApp(callCameraInUse);
+  const connectionId = useApp(s => s.voice.people.find(p => p.local && p.camera)?.id ?? '');
+  const trackId = useApp(s => s.voice.people.find(p => p.local && p.camera)?.cameraTrackId ?? '');
   const video = useRef<HTMLVideoElement>(null);
   const [failed, setFailed] = useState(false);
   useEffect(() => {
-    if (!active) return;
+    const el = video.current;
+    if (!active || !el) return;
+    setFailed(false);
+    if (inUse || callCameraInUse(getState())) return;
     let stream: MediaStream | undefined;
     let cancelled = false;
-    setFailed(false);
     const height = Number(cameraResolution);
     startCamera({ deviceId: cameraId || undefined, width: Math.round((height * 16) / 9), height }).then(
       (started) => {
-        if (cancelled) { started.getTracks().forEach((track) => track.stop()); return; }
+        if (cancelled || callCameraInUse(getState())) { started.getTracks().forEach((track) => track.stop()); return; }
         stream = started;
-        if (video.current) video.current.srcObject = started;
+        el.srcObject = started;
       },
-      () => { if (!cancelled) setFailed(true); },
+      () => { if (!cancelled && !callCameraInUse(getState())) setFailed(true); },
     );
     return () => {
       cancelled = true;
       stream?.getTracks().forEach((track) => track.stop());
-      if (video.current) video.current.srcObject = null;
+      if (stream && el.srcObject === stream) el.srcObject = null;
     };
-  }, [active, cameraId, cameraResolution]);
+  }, [active, cameraId, cameraResolution, inUse]);
+  useEffect(() => {
+    const el = video.current;
+    if (!active || !el || !trackId) return;
+    const track = voice.cameraTrack(connectionId);
+    if (!track) return;
+    track.attach(el);
+    return () => { track.detach(el); };
+  }, [active, connectionId, trackId]);
   return (
     <div className="set-camera">
       <video ref={video} className={cameraMirror ? 'mirror' : undefined} autoPlay muted playsInline aria-label={t.camera} />

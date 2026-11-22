@@ -69,6 +69,10 @@ afterEach(async () => {
   setState({ voice: idleVoice });
 });
 
+function mount() {
+  return act(async () => { root.render(createElement(ShareView, { width: 640, person, others: [person], onPick: () => {} })); });
+}
+
 function button(): HTMLButtonElement {
   const el = container.querySelector<HTMLButtonElement>('.share .ib');
   if (!el) throw new Error('fullscreen button missing');
@@ -76,7 +80,7 @@ function button(): HTMLButtonElement {
 }
 
 it('toggles the screen-share viewer fullscreen and follows an Esc exit', async () => {
-  await act(async () => { root.render(createElement(ShareView, { width: 640, person, others: [person], onPick: () => {} })); });
+  await mount();
   const video = container.querySelector('video');
   const track = vi.mocked(voice.shareTrack).mock.results.at(-1)?.value as ShareTrack;
   expect(button().getAttribute('aria-label')).toBe(t.fullscreen);
@@ -113,4 +117,53 @@ it('toggles the screen-share viewer fullscreen and follows an Esc exit', async (
   expect(container.querySelector('video')).toBe(video);
   expect(track.attach).toHaveBeenCalledTimes(1);
   expect(track.detach).not.toHaveBeenCalled();
+});
+
+it('omits the control when neither fullscreen API is available', async () => {
+  Reflect.deleteProperty(HTMLElement.prototype, 'requestFullscreen');
+  Reflect.deleteProperty(document, 'exitFullscreen');
+  await mount();
+  expect(container.querySelector('.share .ib')).toBeNull();
+  expect(voice.shareTrack(person.id)?.attach).toHaveBeenCalledOnce();
+});
+
+it.each([
+  ['webkitEnterFullscreen', 'webkitExitFullscreen'],
+  ['webkitEnterFullScreen', 'webkitExitFullScreen'],
+])('uses %s native fullscreen when element fullscreen is disabled and follows native exits', async (enterMethod, exitMethod) => {
+  const enter = vi.fn(function (this: HTMLVideoElement) { this.dispatchEvent(new Event('webkitbeginfullscreen')); });
+  const exit = vi.fn(function (this: HTMLVideoElement) { this.dispatchEvent(new Event('webkitendfullscreen')); });
+  Object.defineProperty(document, 'fullscreenEnabled', { configurable: true, value: false });
+  Object.assign(HTMLVideoElement.prototype, { [enterMethod]: enter, [exitMethod]: exit });
+  try {
+    await mount();
+    expect(button().getAttribute('aria-label')).toBe(t.fullscreen);
+    await act(async () => { button().click(); });
+    expect(enter).toHaveBeenCalledOnce();
+    expect(requestFullscreen).not.toHaveBeenCalled();
+    expect(button().getAttribute('aria-label')).toBe(t.exitFullscreen);
+    await act(async () => { button().click(); });
+    expect(exit).toHaveBeenCalledOnce();
+    await act(async () => { button().click(); });
+    await act(async () => { container.querySelector('video')?.dispatchEvent(new Event('webkitendfullscreen')); });
+    expect(button().getAttribute('aria-pressed')).toBe('false');
+  } finally {
+    Reflect.deleteProperty(document, 'fullscreenEnabled');
+    Reflect.deleteProperty(HTMLVideoElement.prototype, enterMethod);
+    Reflect.deleteProperty(HTMLVideoElement.prototype, exitMethod);
+  }
+});
+
+it('keeps the viewer usable when fullscreen requests throw or reject', async () => {
+  const denied = new DOMException('Unsupported', 'NotSupportedError');
+  requestFullscreen.mockImplementationOnce(() => { throw denied; }).mockRejectedValueOnce(denied);
+  await mount();
+  await act(async () => { button().click(); });
+  await act(async () => { button().click(); });
+  expect(button().getAttribute('aria-pressed')).toBe('false');
+  expect(container.querySelector('video')).toBeTruthy();
+  await act(async () => { button().click(); });
+  exitFullscreen.mockRejectedValueOnce(denied);
+  await act(async () => { button().click(); });
+  expect(button().getAttribute('aria-pressed')).toBe('true');
 });

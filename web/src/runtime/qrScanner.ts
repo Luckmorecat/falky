@@ -1,7 +1,7 @@
 import type { IScannerControls } from '@zxing/browser';
 
 export interface QRScanner { stop(): void }
-export function startQRScanner(video: HTMLVideoElement, onResult: (value: string) => void, onError: (error: unknown) => void): QRScanner {
+export function startQRScanner(video: HTMLVideoElement, onResult: (value: string) => void, onError: (error: unknown) => void, canUseCamera = () => true): QRScanner {
   let stopped = false;
   let stream: MediaStream | undefined;
   let decoder: IScannerControls | undefined;
@@ -12,10 +12,13 @@ export function startQRScanner(video: HTMLVideoElement, onResult: (value: string
   };
   void (async () => {
     try {
+      if (!canUseCamera()) throw new DOMException('Camera already in use', 'NotReadableError');
       if (!navigator.mediaDevices?.getUserMedia) throw new DOMException('Camera unavailable', 'NotFoundError');
       const acquired = await navigator.mediaDevices.getUserMedia({ audio: false, video: { facingMode: { ideal: 'environment' } } });
       if (stopped) { acquired.getTracks().forEach(track => track.stop()); return; }
-      stream = acquired; video.srcObject = stream;
+      stream = acquired;
+      if (!canUseCamera()) throw new DOMException('Camera already in use', 'NotReadableError');
+      video.srcObject = stream;
       await video.play();
       if (stopped) return;
       const [{ BrowserQRCodeReader }, { NotFoundException, ChecksumException, FormatException }] = await Promise.all([import('@zxing/browser'), import('@zxing/library')]);

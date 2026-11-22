@@ -95,13 +95,16 @@ async function failure(status: number, statusText: string, text: string): Promis
  * Sends one file as a private draft. XHR rather than fetch, because only XHR
  * tells how much of the body has gone; `onProgress` gets 0..1.
  */
-function uploadAttachment(roomId: string, file: File, onProgress: (sent: number) => void, signal?: AbortSignal): Promise<Attachment> {
+function uploadAttachment(roomId: string, file: File, onProgress: (sent: number) => void, signal?: AbortSignal, serverTimeoutSeconds = 60): Promise<Attachment> {
   return new Promise((resolve, reject) => {
+    if (signal?.aborted) { reject(new ApiError(0, 'aborted', 'Upload cancelled')); return; }
     const xhr = new XMLHttpRequest();
     const form = new FormData();
     form.append('file', file, file.name);
     xhr.open('POST', `/api/rooms/${encodeURIComponent(roomId)}/attachments`);
     xhr.responseType = 'text';
+    // Allow the server to deliver its own timeout response after its upload deadline.
+    xhr.timeout = (serverTimeoutSeconds + 10) * 1000;
     xhr.upload.onprogress = (e) => { if (e.lengthComputable) onProgress(e.loaded / e.total); };
     xhr.onload = () => {
       if (xhr.status >= 200 && xhr.status < 300) {
@@ -111,8 +114,14 @@ function uploadAttachment(roomId: string, file: File, onProgress: (sent: number)
     xhr.onerror = () => reject(new ApiError(0, 'network', 'the server cannot be reached'));
     xhr.ontimeout = () => reject(new ApiError(408, 'upload_timeout', 'Upload took too long'));
     xhr.onabort = () => reject(new ApiError(0, 'aborted', 'Upload cancelled'));
-    signal?.addEventListener('abort', () => xhr.abort(), { once: true });
-    xhr.send(form);
+    const abort = () => xhr.abort();
+    xhr.onloadend = () => signal?.removeEventListener('abort', abort);
+    signal?.addEventListener('abort', abort, { once: true });
+    try { xhr.send(form); }
+    catch (err) {
+      signal?.removeEventListener('abort', abort);
+      reject(err);
+    }
   });
 }
 
@@ -174,6 +183,6 @@ export const api = {
   attachment: (id: string) => call<Attachment>('GET', `/api/attachments/${encodeURIComponent(id)}`),
   cancelAttachment: (id: string) => call<void>('DELETE', `/api/attachments/${encodeURIComponent(id)}`),
   upload: uploadAttachment,
-  joinVoice: (roomId: string) => call<VoiceCredentials>('POST', `/api/rooms/${encodeURIComponent(roomId)}/voice`),
+  joinVoice: (roomId: string, signal?: AbortSignal) => call<VoiceCredentials>('POST', `/api/rooms/${encodeURIComponent(roomId)}/voice`, undefined, signal),
   knock: (roomId: string, visitorId: string) => call<void>('POST', `/api/rooms/${encodeURIComponent(roomId)}/knock`, { visitorId }),
 };

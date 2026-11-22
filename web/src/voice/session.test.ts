@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import type { CreateLocalTracksOptions } from 'livekit-client';
 import { prefs } from '../app/prefs';
 import { idleVoice, type VoiceHost } from './types';
 
@@ -11,7 +12,7 @@ function deferred() {
 
 let download: ReturnType<typeof deferred>;
 let host: VoiceHost;
-const rooms: { disconnect: ReturnType<typeof vi.fn>; canPlaybackAudio: boolean }[] = [];
+const rooms: { disconnect: ReturnType<typeof vi.fn>; canPlaybackAudio: boolean; localParticipant: { isMicrophoneEnabled: boolean } }[] = [];
 const resume = vi.fn(async () => {});
 const startAudio = vi.fn(async () => {});
 const connect = vi.fn(async () => {});
@@ -23,9 +24,30 @@ let localTracks = new Map();
 const disconnect = vi.fn();
 const constructRoom = vi.fn();
 const listeners = new Map<string, (...args: any[]) => void>();
-const enableMicrophone = vi.fn(async () => {});
+const enableMicrophone = vi.fn(async (_enabled: boolean, _options?: unknown) => {});
+class MockLocalTrack {
+  capture = { id: 'microphone', enabled: true, readyState: 'live' };
+  constraints: MediaTrackConstraints = {};
+  get mediaStreamTrack() { return this.capture; }
+  get isMuted() { return !this.capture.enabled; }
+  async mute() { this.capture.enabled = false; }
+  async unmute() { this.capture.enabled = true; }
+  stop = vi.fn(() => { this.capture.readyState = 'ended'; this.capture.enabled = false; });
+}
+class MockLocalAudioTrack extends MockLocalTrack {
+  override unmute = vi.fn(async () => { await super.unmute(); });
+}
+const localMic = () => new MockLocalAudioTrack();
+const acquireMic = vi.fn(async (_options: unknown) => [localMic()]);
+const publishMic = vi.fn(async (track: MockLocalAudioTrack) => {
+  const publication = { track, get isMuted() { return track.isMuted; } };
+  localTracks.set('mic', publication);
+  listeners.get('LocalTrackPublished')?.();
+  return publication;
+});
 const enableShare = vi.fn(async () => {});
 const enableCamera = vi.fn(async () => {});
+const switchActiveDevice = vi.fn(async (_kind: string, _id: string) => {});
 
 beforeEach(() => {
   localStorage.clear();
@@ -38,30 +60,60 @@ beforeEach(() => {
     loadSDK();
     await download.promise;
     return {
-      ConnectionQuality: {}, DisconnectReason: {}, RemoteAudioTrack: class {},
+      ConnectionQuality: {}, DisconnectReason: {}, LocalTrack: MockLocalTrack, RemoteAudioTrack: class {},
       Track: { Kind: { Audio: 'audio' }, Source: { Camera: 'camera', ScreenShare: 'screen', Microphone: 'mic', ScreenShareAudio: 'screen-audio' } },
+      TrackEvent: { AudioPlaybackFailed: 'audioPlaybackFailed', ElementDetached: 'elementDetached' },
       RoomEvent: new Proxy({}, { get: (_, key) => key }),
       Room: class {
         constructor(options: unknown) { constructRoom(options); rooms.push(this); }
-        localParticipant = { identity: 'self.nonce', setCameraEnabled: enableCamera, setScreenShareEnabled: enableShare, setMicrophoneEnabled: enableMicrophone, setAttributes: vi.fn(async () => {}), trackPublications: localTracks, attributes: {}, isMicrophoneEnabled: false, getTrackPublication(source: string) { return this.trackPublications.get(source); } };
+        localParticipant = {
+          identity: 'self.nonce', setCameraEnabled: enableCamera, setScreenShareEnabled: enableShare,
+          async setMicrophoneEnabled(enabled: boolean, options?: unknown) {
+            await enableMicrophone(enabled, options);
+            const track = this.getTrackPublication('mic')?.track;
+            if (enabled) await track?.unmute();
+            else await track?.mute();
+          },
+          createTracks: acquireMic, publishTrack: publishMic, setAttributes: vi.fn(async () => {}),
+          trackPublications: localTracks, attributes: {},
+          get isMicrophoneEnabled() {
+            const publication = this.getTrackPublication('mic');
+            return !!publication && !publication.isMuted;
+          },
+          get isCameraEnabled() { return this.trackPublications.has('camera'); },
+          getTrackPublication(source: string) { return this.trackPublications.get(source); },
+          async unpublishTrack(track: { stop(): void }, stop: boolean) {
+            for (const [source, publication] of this.trackPublications) {
+              if (publication.track === track) this.trackPublications.delete(source);
+            }
+            if (stop) track.stop();
+            listeners.get('LocalTrackUnpublished')?.();
+          },
+        };
         remoteParticipants = remotes;
         activeSpeakers = speakers;
         connect = connect;
         startAudio = startAudio;
         canPlaybackAudio = false;
+        switchActiveDevice = switchActiveDevice;
         on(event: string, listener: (...args: any[]) => void) { listeners.set(event, listener); return this; }
         removeAllListeners() { listeners.clear(); }
         disconnect = vi.fn(() => disconnect());
       },
     };
   });
-  vi.stubGlobal('AudioContext', class { resume = resume; });
+  vi.stubGlobal('AudioContext', class {
+    resume = resume;
+    createMediaStreamSource() { return { connect() {}, disconnect() {} }; }
+    createAnalyser() { return { fftSize: 0 }; }
+  });
+  vi.stubGlobal('MediaStream', class {});
   vi.stubGlobal('fetch', fetchVoice);
   host = {
     onChange: vi.fn(), onProblem: vi.fn(), onSound: vi.fn(),
     micId: () => '', speakerId: () => '',
     micProcessing: () => ({ echoCancellation: true, noiseSuppression: true, autoGainControl: true }),
-    joinMuted: () => true, cameraSettings: () => prefs.settings(),
+    joinMuted: () => true, pushToTalk: () => false, cameraSettings: () => prefs.settings(),
     shareSettings: () => prefs.settings(), volumeOf: () => 1,
   };
 });
@@ -124,7 +176,7 @@ it.each([
   expect(constructRoom).toHaveBeenCalledWith(expect.objectContaining({ webAudioMix: false }));
   const subscribe = (source: string) => {
     const track = {
-      kind: 'audio', attachedElements: [] as HTMLAudioElement[],
+      kind: 'audio', on: vi.fn(), off: vi.fn(), attachedElements: [] as HTMLAudioElement[],
       attach: vi.fn(() => {
         const el = document.createElement('audio');
         track.attachedElements.push(el);
@@ -152,7 +204,7 @@ it.each([
   expect(share.attachedElements).toHaveLength(0);
 
   await session.toggleDeafen();
-  expect(enableMicrophone.mock.calls).toEqual([[false]]);
+  expect(enableMicrophone).not.toHaveBeenCalled();
   expect(document.querySelectorAll('audio')).toHaveLength(2);
   volume = 0;
   session.applyVolumes();
@@ -187,7 +239,7 @@ it('retries a paused or waiting native sink even when LiveKit reports playback w
     const makeSink = (source: string) => {
       const element = document.createElement('audio');
       const track = {
-        kind: 'audio', attachedElements: [] as HTMLAudioElement[],
+        kind: 'audio', on: vi.fn(), off: vi.fn(), attachedElements: [] as HTMLAudioElement[],
         attach() { this.attachedElements.push(element); return element; },
         detach() { return this.attachedElements.splice(0); },
       };
@@ -235,10 +287,18 @@ it('retries a paused or waiting native sink even when LiveKit reports playback w
 });
 
 function addIncomingAudio(element: HTMLAudioElement, source: string) {
+  const trackListeners = new Map<string, (element: HTMLAudioElement) => void>();
   const track = {
-    kind: 'audio', attachedElements: [] as HTMLAudioElement[],
+    kind: 'audio',
+    on: vi.fn((event: string, callback: (element: HTMLAudioElement) => void) => trackListeners.set(event, callback)),
+    off: vi.fn((event: string) => trackListeners.delete(event)),
+    attachedElements: [] as HTMLAudioElement[],
     attach() { this.attachedElements.push(element); return element; },
-    detach() { return this.attachedElements.splice(0); },
+    detach() {
+      const detached = this.attachedElements.splice(0);
+      for (const sink of detached) trackListeners.get('elementDetached')?.(sink);
+      return detached;
+    },
   };
   const publication = { track };
   const participant = {
@@ -516,31 +576,29 @@ it('discards an abandoned late Join after access ends', async () => {
 
 it('stops microphone media that becomes available after explicit Leave', async () => {
   const micReady = deferred();
-  const stop = vi.fn();
-  enableMicrophone.mockImplementationOnce(async () => {
-    await micReady.promise;
-    localTracks.set('mic', { track: { stop } });
-  });
+  const track = localMic();
+  acquireMic.mockImplementationOnce(async () => { await micReady.promise; return [track]; });
   host.joinMuted = () => false;
   const { VoiceSession } = await import('./session');
   const session = new VoiceSession(host);
   const joining = session.join('lounge'); download.resolve();
-  await vi.waitFor(() => expect(enableMicrophone).toHaveBeenCalledOnce());
+  await vi.waitFor(() => expect(acquireMic).toHaveBeenCalledOnce());
   await session.leave();
   micReady.resolve();
   await joining;
-  expect(stop).toHaveBeenCalledOnce();
+  expect(track.stop).toHaveBeenCalledOnce();
+  expect(publishMic).not.toHaveBeenCalled();
   expect(session.snapshot.status).toBe('idle');
 });
 
 it('ignores a canceled microphone failure after a replacement Join', async () => {
   const micReady = deferred();
-  enableMicrophone.mockImplementationOnce(() => micReady.promise);
+  acquireMic.mockImplementationOnce(async () => { await micReady.promise; return []; });
   host.joinMuted = () => false;
   const { VoiceSession } = await import('./session');
   const session = new VoiceSession(host);
   const oldJoin = session.join('lounge'); download.resolve();
-  await vi.waitFor(() => expect(enableMicrophone).toHaveBeenCalledOnce());
+  await vi.waitFor(() => expect(acquireMic).toHaveBeenCalledOnce());
   await session.leave();
   host.joinMuted = () => true;
   await session.join('games');
@@ -666,5 +724,574 @@ it('stops a late camera on its captured old room while a replacement keeps its m
   expect(rooms[1]!.disconnect).not.toHaveBeenCalled();
   expect(session.snapshot).toMatchObject({ status: 'connected', roomId: 'games' });
   expect(fetchVoice).toHaveBeenCalledTimes(2);
+  session.end();
+});
+
+it('cancels a first Join immediately and aborts its HTTP request even when it resolves late', async () => {
+  const request = deferred();
+  fetchVoice.mockImplementationOnce(async () => {
+    await request.promise;
+    return Response.json({ url: 'ws://localhost/rtc', token: 'late', grantId: 'self.late' });
+  });
+  const { VoiceSession } = await import('./session');
+  const session = new VoiceSession(host);
+  const joining = session.join('lounge'); download.resolve();
+  await vi.waitFor(() => expect(fetchVoice).toHaveBeenCalledOnce());
+  const signal = fetchVoice.mock.calls[0]![1]!.signal;
+  session.cancelJoin();
+  expect(signal?.aborted).toBe(true);
+  expect(session.snapshot).toEqual(idleVoice);
+  await joining;
+  await session.join('games');
+  request.resolve();
+  await Promise.resolve();
+  expect(connect).toHaveBeenCalledOnce();
+  expect(session.snapshot.roomId).toBe('games');
+  expect(host.onProblem).not.toHaveBeenCalled();
+  session.end();
+});
+
+it('bounds an unresponsive admission and keeps the current call during a failed move', async () => {
+  const { VoiceSession } = await import('./session');
+  const session = new VoiceSession(host);
+  const first = session.join('lounge'); download.resolve(); await first;
+  vi.useFakeTimers();
+  try {
+    fetchVoice.mockReturnValueOnce(new Promise(() => {}));
+    const moving = session.join('games');
+    await vi.advanceTimersByTimeAsync(30_000);
+    await moving;
+    expect(fetchVoice.mock.calls[1]![1]!.signal?.aborted).toBe(true);
+    expect(session.snapshot).toMatchObject({ status: 'connected', roomId: 'lounge', joiningRoomId: null });
+    expect(disconnect).not.toHaveBeenCalled();
+    expect(host.onProblem).toHaveBeenCalledWith('join_failed');
+  } finally {
+    session.end();
+    vi.useRealTimers();
+  }
+});
+
+it.each(['release', 'reconnect', 'deafen'])('discards acquisition after %s before any microphone can publish', async (interrupt) => {
+  host.pushToTalk = () => true;
+  const { VoiceSession } = await import('./session');
+  const session = new VoiceSession(host);
+  const joining = session.join('lounge'); download.resolve(); await joining;
+  const micReady = deferred();
+  const track = localMic();
+  acquireMic.mockImplementationOnce(async () => { await micReady.promise; return [track]; });
+  try {
+    const pressed = session.setMuted(false);
+    await vi.waitFor(() => expect(acquireMic).toHaveBeenCalledOnce());
+    let interrupted: Promise<void> | undefined;
+    if (interrupt === 'release') interrupted = session.setMuted(true);
+    if (interrupt === 'deafen') interrupted = session.toggleDeafen();
+    if (interrupt === 'reconnect') {
+      listeners.get('Reconnecting')!();
+      await session.setMuted(false);
+      listeners.get('Reconnected')!();
+    }
+    micReady.resolve();
+    await Promise.all([pressed, interrupted]);
+    expect(publishMic).not.toHaveBeenCalled();
+    expect(enableMicrophone).not.toHaveBeenCalled();
+    expect(track.stop).toHaveBeenCalledOnce();
+    expect(session.snapshot.muted).toBe(true);
+    expect(host.onProblem).not.toHaveBeenCalled();
+  } finally {
+    micReady.resolve();
+    session.end();
+  }
+});
+
+it.each(['release', 'deafen'])('keeps the microphone silent when %s follows the SDK publication event', async (interrupt) => {
+  host.pushToTalk = () => true;
+  const { VoiceSession } = await import('./session');
+  const session = new VoiceSession(host);
+  const joining = session.join('lounge'); download.resolve(); await joining;
+  const acknowledged = deferred();
+  const track = localMic();
+  acquireMic.mockResolvedValueOnce([track]);
+  const publish = publishMic.getMockImplementation()!;
+  let sendingAtPublication: boolean | undefined;
+  publishMic.mockImplementationOnce(async (candidate) => {
+    sendingAtPublication = candidate.capture.enabled;
+    const publication = await publish(candidate);
+    await acknowledged.promise;
+    return publication;
+  });
+  try {
+    const pressed = session.setMuted(false);
+    await vi.waitFor(() => expect(localTracks.has('mic')).toBe(true));
+    expect(sendingAtPublication).toBe(false);
+    expect(track.capture.enabled).toBe(false);
+    expect(track.unmute).not.toHaveBeenCalled();
+    expect(session.snapshot.muted).toBe(true);
+    const interrupted = interrupt === 'release' ? session.setMuted(true) : session.toggleDeafen();
+    expect(track.stop).toHaveBeenCalledOnce();
+    acknowledged.resolve();
+    await Promise.all([pressed, interrupted]);
+    expect(track.unmute).not.toHaveBeenCalled();
+    expect(localTracks.has('mic')).toBe(false);
+    expect(session.snapshot.muted).toBe(true);
+  } finally {
+    acknowledged.resolve();
+    session.end();
+  }
+});
+
+it('enables a still-held microphone after publication and reuses it on the next hold', async () => {
+  host.pushToTalk = () => true;
+  const { VoiceSession } = await import('./session');
+  const session = new VoiceSession(host);
+  const joining = session.join('lounge'); download.resolve(); await joining;
+  const track = localMic();
+  acquireMic.mockResolvedValueOnce([track]);
+  try {
+    await session.setMuted(false);
+    expect(publishMic).toHaveBeenCalledWith(track);
+    expect(track.capture.enabled).toBe(true);
+    expect(session.snapshot.muted).toBe(false);
+    await session.setMuted(true);
+    expect(track.capture.enabled).toBe(false);
+    await session.setMuted(false);
+    expect(track.capture.enabled).toBe(true);
+    expect(acquireMic).toHaveBeenCalledOnce();
+    expect(publishMic).toHaveBeenCalledOnce();
+    expect(track.unmute).not.toHaveBeenCalled();
+  } finally {
+    session.end();
+  }
+});
+
+it('never queues activation behind the audio track unmute lock after publication', async () => {
+  host.pushToTalk = () => true;
+  const { VoiceSession } = await import('./session');
+  const session = new VoiceSession(host);
+  const joining = session.join('lounge'); download.resolve(); await joining;
+  const track = localMic();
+  const unlock = deferred();
+  const sent = vi.fn();
+  acquireMic.mockResolvedValueOnce([track]);
+  track.unmute.mockImplementationOnce(async () => {
+    await unlock.promise;
+    // The audio override can restart an ended track and expose it to the sender.
+    if (track.capture.readyState === 'ended') track.capture = { id: 'restarted', enabled: true, readyState: 'live' };
+    sent(track.capture.enabled);
+  });
+  try {
+    const pressed = session.setMuted(false);
+    await vi.waitFor(() => expect(publishMic).toHaveBeenCalledOnce());
+    const released = session.setMuted(true);
+    unlock.resolve();
+    await Promise.all([pressed, released]);
+    expect(track.unmute).not.toHaveBeenCalled();
+    expect(sent).not.toHaveBeenCalled();
+    expect(track.capture.enabled).toBe(false);
+  } finally {
+    unlock.resolve();
+    session.end();
+  }
+});
+
+it.each(['ended', 'new device'])('retires the %s microphone and drops a replacement acquired after release', async (reason) => {
+  host.pushToTalk = () => true;
+  const { VoiceSession } = await import('./session');
+  const session = new VoiceSession(host);
+  const joining = session.join('lounge'); download.resolve(); await joining;
+  const oldTrack = localMic();
+  const replacement = localMic();
+  const microphoneReady = deferred();
+  acquireMic.mockResolvedValueOnce([oldTrack]).mockImplementationOnce(async () => {
+    await microphoneReady.promise;
+    return [replacement];
+  });
+  try {
+    await session.setMuted(false);
+    await session.setMuted(true);
+    if (reason === 'ended') {
+      oldTrack.capture.readyState = 'ended';
+      oldTrack.constraints.deviceId = 'previous-input';
+    } else await session.setMic('usb-microphone');
+    expect(acquireMic).toHaveBeenCalledOnce();
+
+    const pressed = session.setMuted(false);
+    await vi.waitFor(() => expect(acquireMic).toHaveBeenCalledTimes(2));
+    expect(localTracks.has('mic')).toBe(false);
+    expect(oldTrack.stop).toHaveBeenCalledOnce();
+    expect(acquireMic).toHaveBeenLastCalledWith({
+      audio: expect.objectContaining({ deviceId: reason === 'ended' ? { ideal: 'previous-input' } : { exact: 'usb-microphone' } }),
+    });
+    const released = session.setMuted(true);
+    microphoneReady.resolve();
+    await Promise.all([pressed, released]);
+    expect(replacement.stop).toHaveBeenCalledOnce();
+    expect(publishMic).toHaveBeenCalledOnce();
+    expect(oldTrack.unmute).not.toHaveBeenCalled();
+    expect(replacement.unmute).not.toHaveBeenCalled();
+    expect(session.snapshot.muted).toBe(true);
+  } finally {
+    microphoneReady.resolve();
+    session.end();
+  }
+});
+
+it('replaces the selected microphone while talking and preserves normal deafen and mute', async () => {
+  host.joinMuted = () => false;
+  host.micId = () => 'saved-mic';
+  const oldTrack = localMic();
+  const selectedTrack = localMic();
+  acquireMic.mockResolvedValueOnce([oldTrack]).mockResolvedValueOnce([selectedTrack]);
+  const { VoiceSession } = await import('./session');
+  const session = new VoiceSession(host);
+  const joining = session.join('lounge'); download.resolve(); await joining;
+  try {
+    expect(oldTrack.capture.enabled).toBe(true);
+    expect(acquireMic).toHaveBeenLastCalledWith({ audio: expect.objectContaining({ deviceId: { ideal: 'saved-mic' } }) });
+    await session.setMic('new-mic');
+    expect(switchActiveDevice).not.toHaveBeenCalled();
+    expect(acquireMic).toHaveBeenLastCalledWith({ audio: expect.objectContaining({ deviceId: { exact: 'new-mic' } }) });
+    expect(oldTrack.stop).toHaveBeenCalledOnce();
+    expect(selectedTrack.capture.enabled).toBe(true);
+    await session.toggleDeafen();
+    expect(selectedTrack.capture.enabled).toBe(false);
+    await session.toggleDeafen();
+    expect(selectedTrack.capture.enabled).toBe(true);
+    await session.toggleMute();
+    expect(selectedTrack.capture.enabled).toBe(false);
+    await session.toggleMute();
+    expect(selectedTrack.capture.enabled).toBe(true);
+    expect(acquireMic).toHaveBeenCalledTimes(2);
+  } finally {
+    session.end();
+  }
+});
+
+it('uses the saved input as a preference after leaving during an exact device switch', async () => {
+  host.joinMuted = () => false;
+  let savedDevice = '';
+  host.micId = () => savedDevice;
+  const original = localMic();
+  const stale = localMic();
+  const fallback = localMic();
+  const usbReady = deferred();
+  acquireMic.mockResolvedValueOnce([original]).mockImplementationOnce(async () => {
+    await usbReady.promise;
+    return [stale];
+  }).mockImplementationOnce(async (options) => {
+    const { audio } = options as { audio: { deviceId: ConstrainDOMStringParameters } };
+    if (audio.deviceId.exact) throw new DOMException('USB input unavailable', 'OverconstrainedError');
+    return [fallback];
+  });
+  const { VoiceSession } = await import('./session');
+  const session = new VoiceSession(host);
+  let switching: Promise<void> | undefined;
+  try {
+    const joining = session.join('lounge'); download.resolve(); await joining;
+    savedDevice = 'usb-microphone';
+    switching = session.setMic(savedDevice);
+    await vi.waitFor(() => expect(acquireMic).toHaveBeenCalledTimes(2));
+    expect(acquireMic).toHaveBeenLastCalledWith({ audio: expect.objectContaining({ deviceId: { exact: savedDevice } }) });
+    await session.leave();
+    localTracks = new Map();
+    await session.join('games');
+    expect(constructRoom).toHaveBeenLastCalledWith(expect.objectContaining({
+      audioCaptureDefaults: expect.objectContaining({ deviceId: { ideal: savedDevice } }),
+    }));
+    expect(acquireMic).toHaveBeenLastCalledWith({ audio: expect.objectContaining({ deviceId: { ideal: savedDevice } }) });
+    expect(session.snapshot).toMatchObject({ roomId: 'games', muted: false, listenOnly: false });
+    usbReady.resolve();
+    await switching;
+    expect(stale.stop).toHaveBeenCalledOnce();
+    expect(publishMic.mock.calls).toEqual([[original], [fallback]]);
+    expect(fallback.capture.enabled).toBe(true);
+  } finally {
+    usbReady.resolve();
+    session.end();
+    await switching;
+  }
+});
+
+it('keeps the input selection for the next hold when release interrupts a live device switch', async () => {
+  host.pushToTalk = () => true;
+  const oldTrack = localMic();
+  const abandonedTrack = localMic();
+  const nextTrack = localMic();
+  const microphoneReady = deferred();
+  acquireMic.mockResolvedValueOnce([oldTrack]).mockImplementationOnce(async () => {
+    await microphoneReady.promise;
+    return [abandonedTrack];
+  }).mockResolvedValueOnce([nextTrack]);
+  const { VoiceSession } = await import('./session');
+  const session = new VoiceSession(host);
+  const joining = session.join('lounge'); download.resolve(); await joining;
+  try {
+    await session.setMuted(false);
+    const switching = session.setMic('other-input');
+    await vi.waitFor(() => expect(acquireMic).toHaveBeenCalledTimes(2));
+    expect(oldTrack.capture.enabled).toBe(false);
+    const released = session.setMuted(true);
+    microphoneReady.resolve();
+    await Promise.all([switching, released]);
+    expect(abandonedTrack.stop).toHaveBeenCalledOnce();
+    expect(publishMic).toHaveBeenCalledTimes(1);
+
+    await session.setMuted(false);
+    expect(acquireMic).toHaveBeenLastCalledWith({ audio: expect.objectContaining({ deviceId: { exact: 'other-input' } }) });
+    expect(publishMic).toHaveBeenLastCalledWith(nextTrack);
+    expect(nextTrack.capture.enabled).toBe(true);
+  } finally {
+    microphoneReady.resolve();
+    session.end();
+  }
+});
+
+it.each(['release', 'deafen'])('lets LiveKit make one device request when an exact input fails after %s', async (interrupt) => {
+  host.pushToTalk = () => true;
+  const ready = deferred();
+  const getUserMedia = vi.fn(async (_constraints: MediaStreamConstraints) => {
+    await ready.promise;
+    throw new DOMException('Device was unplugged', 'OverconstrainedError');
+  });
+  vi.stubGlobal('navigator', { userAgent: navigator.userAgent, mediaDevices: { getUserMedia } });
+  const { createLocalTracks } = await vi.importActual<typeof import('livekit-client')>('livekit-client');
+  acquireMic.mockImplementationOnce(async (options) => {
+    await createLocalTracks({ ...(options as CreateLocalTracksOptions), video: false });
+    return [];
+  });
+  const { VoiceSession } = await import('./session');
+  const session = new VoiceSession(host);
+  const joining = session.join('lounge'); download.resolve(); await joining;
+  try {
+    await session.setMic('usb-microphone');
+    const pressed = session.setMuted(false);
+    await vi.waitFor(() => expect(getUserMedia).toHaveBeenCalledOnce());
+    const interrupted = interrupt === 'release' ? session.setMuted(true) : session.toggleDeafen();
+    ready.resolve();
+    await Promise.all([pressed, interrupted]);
+    expect(getUserMedia).toHaveBeenCalledExactlyOnceWith({
+      audio: expect.objectContaining({ deviceId: { exact: 'usb-microphone' } }), video: false,
+    });
+    expect(publishMic).not.toHaveBeenCalled();
+    expect(host.onProblem).not.toHaveBeenCalled();
+  } finally {
+    ready.resolve();
+    session.end();
+  }
+});
+
+it.each(['input', 'processing'])('keeps the microphone muted by LiveKit when %s settings change', async (setting) => {
+  host.joinMuted = () => false;
+  const track = localMic();
+  acquireMic.mockResolvedValueOnce([track]);
+  const { VoiceSession } = await import('./session');
+  const session = new VoiceSession(host);
+  const joining = session.join('lounge'); download.resolve(); await joining;
+  try {
+    expect(session.snapshot.muted).toBe(false);
+    await track.mute();
+    listeners.get('TrackMuted')!();
+    await Promise.resolve();
+    expect(session.snapshot.muted).toBe(true);
+
+    if (setting === 'input') await session.setMic('different-input');
+    else await session.applyMicProcessing();
+    expect(acquireMic).toHaveBeenCalledOnce();
+    expect(publishMic).toHaveBeenCalledOnce();
+    expect(track.capture.enabled).toBe(false);
+    expect(session.snapshot.muted).toBe(true);
+  } finally {
+    session.end();
+  }
+});
+
+it('allows a fresh hold after selecting a usable input following a failed replacement', async () => {
+  host.pushToTalk = () => true;
+  const track = localMic();
+  acquireMic.mockResolvedValueOnce([localMic()])
+    .mockRejectedValueOnce(new DOMException('Missing input', 'OverconstrainedError'))
+    .mockResolvedValueOnce([track]);
+  const { VoiceSession } = await import('./session');
+  const session = new VoiceSession(host);
+  const joining = session.join('lounge'); download.resolve(); await joining;
+  try {
+    await session.setMuted(false);
+    await session.setMic('missing-input');
+    expect(session.snapshot).toMatchObject({ muted: true, listenOnly: true });
+    expect(host.onProblem).toHaveBeenCalledWith('mic_denied');
+    await session.applyMicProcessing();
+    expect(session.snapshot.listenOnly).toBe(true);
+
+    await session.setMic('usable-input');
+    expect(acquireMic).toHaveBeenCalledTimes(2);
+    expect(session.snapshot).toMatchObject({ muted: true, listenOnly: false });
+    await session.setMuted(false);
+    expect(acquireMic).toHaveBeenLastCalledWith({ audio: expect.objectContaining({ deviceId: { exact: 'usable-input' } }) });
+    expect(publishMic).toHaveBeenLastCalledWith(track);
+    expect(session.snapshot).toMatchObject({ muted: false, listenOnly: false });
+  } finally {
+    session.end();
+  }
+});
+
+it.each([
+  ['NotFoundError', 'mic_missing'],
+  ['NotAllowedError', 'mic_denied'],
+])('keeps a successful room join listen-only when capture fails with %s', async (errorName, problem) => {
+  host.joinMuted = () => false;
+  acquireMic.mockRejectedValueOnce(new DOMException('Capture unavailable', errorName));
+  const { VoiceSession } = await import('./session');
+  const session = new VoiceSession(host);
+  try {
+    const joining = session.join('lounge'); download.resolve(); await joining;
+    expect(session.snapshot).toMatchObject({ status: 'connected', muted: true, listenOnly: true });
+    expect(host.onProblem).toHaveBeenCalledWith(problem);
+    expect(publishMic).not.toHaveBeenCalled();
+  } finally {
+    session.end();
+  }
+});
+
+it.each(['Reconnecting', 'SignalReconnecting'])('silences an active hold before %s can republish the track', async (event) => {
+  host.pushToTalk = () => true;
+  const track = localMic();
+  acquireMic.mockResolvedValueOnce([track]);
+  const { VoiceSession } = await import('./session');
+  const session = new VoiceSession(host);
+  const joining = session.join('lounge'); download.resolve(); await joining;
+  try {
+    await session.setMuted(false);
+    listeners.get(event)!();
+    expect(track.capture.enabled).toBe(false);
+    await session.setMuted(false);
+    listeners.get('Reconnected')!();
+    expect(track.capture.enabled).toBe(false);
+    await session.setMuted(false);
+    expect(track.capture.enabled).toBe(true);
+    expect(acquireMic).toHaveBeenCalledOnce();
+  } finally {
+    session.end();
+  }
+});
+
+it('prompts for actual SDK and per-sink autoplay block, retries in the action, and stays quiet when deafened', async () => {
+  vi.stubGlobal('navigator', { userAgent: 'iPhone Mobile/1' });
+  const denied = new DOMException('Autoplay disabled', 'NotAllowedError');
+  startAudio.mockRejectedValueOnce(denied);
+  const { VoiceSession } = await import('./session');
+  const session = new VoiceSession(host);
+  try {
+    const joining = session.join('lounge'); download.resolve(); await joining;
+    expect(session.snapshot).toMatchObject({ status: 'connected', audioBlocked: true });
+    rooms[0]!.canPlaybackAudio = true;
+    listeners.get('AudioPlaybackStatusChanged')!(true);
+    expect(session.snapshot.audioBlocked).toBe(false);
+
+    const mic = document.createElement('audio');
+    const play = vi.spyOn(mic, 'play').mockRejectedValueOnce(denied).mockResolvedValue();
+    const track = addIncomingAudio(mic, 'mic');
+    const playbackFailed = track.on.mock.calls[0]![1] as () => void;
+    playbackFailed();
+    await Promise.resolve();
+    expect(session.snapshot.audioBlocked).toBe(true);
+    listeners.get('AudioPlaybackStatusChanged')!(true);
+    expect(session.snapshot.audioBlocked).toBe(true);
+
+    // The user action calls play before yielding the event handler.
+    session.retryAudio();
+    expect(play).toHaveBeenCalledTimes(2);
+    await Promise.resolve();
+    expect(session.snapshot.audioBlocked).toBe(false);
+
+    const late = deferred();
+    play.mockReturnValueOnce(late.promise);
+    playbackFailed();
+    await session.toggleDeafen();
+    late.reject(denied);
+    await Promise.resolve();
+    session.retryAudio();
+    expect(play).toHaveBeenCalledTimes(3);
+    expect(session.snapshot.audioBlocked).toBe(false);
+    expect(enableMicrophone).not.toHaveBeenCalled();
+    expect(acquireMic).not.toHaveBeenCalled();
+  } finally {
+    session.end();
+  }
+});
+
+it('clears a blocked native sink when LiveKit detaches it before TrackUnsubscribed', async () => {
+  vi.stubGlobal('navigator', { userAgent: 'iPhone Mobile/1' });
+  const { VoiceSession } = await import('./session');
+  const session = new VoiceSession(host);
+  try {
+    const joining = session.join('lounge'); download.resolve(); await joining;
+    rooms[0]!.canPlaybackAudio = true;
+    const element = document.createElement('audio');
+    const play = vi.spyOn(element, 'play').mockRejectedValue(new DOMException('Autoplay disabled', 'NotAllowedError'));
+    const track = addIncomingAudio(element, 'mic');
+    listeners.get('AudioPlaybackStatusChanged')!(false);
+    await Promise.resolve();
+    expect(session.snapshot.audioBlocked).toBe(true);
+
+    // RemoteTrackPublication.setTrack detaches the old track before notifying the room.
+    track.detach();
+    remotes.delete('mic');
+    listeners.get('TrackUnsubscribed')!(track);
+    expect(session.snapshot.audioBlocked).toBe(false);
+    expect(element.isConnected).toBe(false);
+    session.retryAudio();
+    expect(play).toHaveBeenCalledOnce();
+  } finally {
+    session.end();
+  }
+});
+
+it('ignores benign pause failures and playback results from a recycled sink attachment', async () => {
+  vi.stubGlobal('navigator', { userAgent: 'iPhone Mobile/1' });
+  const { VoiceSession } = await import('./session');
+  const session = new VoiceSession(host);
+  try {
+    const joining = session.join('lounge'); download.resolve(); await joining;
+    const element = document.createElement('audio');
+    const late = deferred();
+    const play = vi.spyOn(element, 'play').mockRejectedValueOnce(new DOMException('Detached', 'AbortError'))
+      .mockReturnValueOnce(late.promise).mockResolvedValue();
+    const original = addIncomingAudio(element, 'mic');
+    listeners.get('AudioPlaybackStatusChanged')!(false);
+    await Promise.resolve();
+    expect(session.snapshot.audioBlocked).toBe(false);
+    session.retryAudio();
+    expect(play).toHaveBeenCalledTimes(2);
+    listeners.get('TrackUnsubscribed')!(original);
+    addIncomingAudio(element, 'screen');
+    late.reject(new DOMException('Autoplay disabled', 'NotAllowedError'));
+    await Promise.resolve();
+    expect(session.snapshot.audioBlocked).toBe(false);
+  } finally {
+    session.end();
+  }
+});
+
+it('keeps call camera acquisition marked while replacing a camera at a new quality', async () => {
+  const { VoiceSession } = await import('./session');
+  const session = new VoiceSession(host);
+  const joining = session.join('lounge'); download.resolve(); await joining;
+  const old = { stop: vi.fn(), mediaStreamTrack: { id: 'before' } };
+  enableCamera.mockImplementationOnce(async () => { localTracks.set('camera', { track: old }); });
+  await session.toggleCamera();
+  expect(session.snapshot).toMatchObject({ camera: true, cameraStarting: false });
+
+  const pending = deferred();
+  enableCamera.mockImplementationOnce(async () => {
+    await pending.promise;
+    localTracks.set('camera', { track: { stop: vi.fn(), mediaStreamTrack: { id: 'after' } } });
+  });
+  const change = session.restartCamera();
+  expect(session.snapshot.cameraStarting).toBe(true);
+  await vi.waitFor(() => expect(enableCamera).toHaveBeenCalledTimes(2));
+  expect(old.stop).toHaveBeenCalledOnce();
+  expect(session.snapshot).toMatchObject({ camera: false, cameraStarting: true });
+  pending.resolve();
+  await change;
+  expect(session.snapshot).toMatchObject({ camera: true, cameraStarting: false });
   session.end();
 });
