@@ -1,5 +1,5 @@
 interface:
   display_name: "Weave"
-  short_description: "Land settled work from its session through subagents"
+  short_description: "Deliver settled work from its session through subagents"
 policy:
   allow_implicit_invocation: false

@@ -54,10 +54,10 @@
     },
     "weave": {
       "source": "Luckmorecat/skills",
-      "commit": "2d51cd690c8f39e37038b49c1c953d28dc651bf8",
+      "commit": "16671bc28e55616b45d7e63b624fec231d9852b3",
       "sourceType": "github",
       "skillPath": "skills/weave/SKILL.md",
-      "computedHash": "9bdf9fa57856def019be63bf5f69c8d4d9fff9e850a1080da5e99de004504a06"
+      "computedHash": "63d06b8b8ba3f58fe34dae86651c45c1267d5de14e11beb85af6935ba6555f3a"
     }
   }
 }
