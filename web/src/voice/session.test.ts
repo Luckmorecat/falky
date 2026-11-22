@@ -22,6 +22,7 @@ const speakers: { identity: string }[] = [];
 let localTracks = new Map();
 const disconnect = vi.fn();
 const constructRoom = vi.fn();
+const listeners = new Map<string, (...args: any[]) => void>();
 const enableMicrophone = vi.fn(async () => {});
 const enableShare = vi.fn(async () => {});
 const enableCamera = vi.fn(async () => {});
@@ -31,24 +32,25 @@ beforeEach(() => {
   vi.resetModules();
   vi.clearAllMocks();
   fetchVoice.mockImplementation(async () => Response.json({ url: 'ws://localhost/rtc', token: 'test', grantId: 'self.old' }));
-  remotes.clear(); speakers.length = 0; localTracks = new Map(); rooms.length = 0;
+  listeners.clear(); remotes.clear(); speakers.length = 0; localTracks = new Map(); rooms.length = 0;
   download = deferred();
   vi.doMock('livekit-client', async () => {
     loadSDK();
     await download.promise;
     return {
       ConnectionQuality: {}, DisconnectReason: {}, RemoteAudioTrack: class {},
-      Track: { Source: { Camera: 'camera', ScreenShare: 'screen', Microphone: 'mic' } },
-      RoomEvent: {},
+      Track: { Kind: { Audio: 'audio' }, Source: { Camera: 'camera', ScreenShare: 'screen', Microphone: 'mic', ScreenShareAudio: 'screen-audio' } },
+      RoomEvent: new Proxy({}, { get: (_, key) => key }),
       Room: class {
-        constructor() { constructRoom(); rooms.push(this); }
-        localParticipant = { identity: 'self.nonce', setCameraEnabled: enableCamera, setScreenShareEnabled: enableShare, setMicrophoneEnabled: enableMicrophone, trackPublications: localTracks, attributes: {}, isMicrophoneEnabled: false, getTrackPublication(source: string) { return this.trackPublications.get(source); } };
+        constructor(options: unknown) { constructRoom(options); rooms.push(this); }
+        localParticipant = { identity: 'self.nonce', setCameraEnabled: enableCamera, setScreenShareEnabled: enableShare, setMicrophoneEnabled: enableMicrophone, setAttributes: vi.fn(async () => {}), trackPublications: localTracks, attributes: {}, isMicrophoneEnabled: false, getTrackPublication(source: string) { return this.trackPublications.get(source); } };
         remoteParticipants = remotes;
         activeSpeakers = speakers;
         connect = connect;
         startAudio = startAudio;
-        on() { return this; }
-        removeAllListeners() {}
+        canPlaybackAudio = false;
+        on(event: string, listener: (...args: any[]) => void) { listeners.set(event, listener); return this; }
+        removeAllListeners() { listeners.clear(); }
         disconnect = vi.fn(() => disconnect());
       },
     };
@@ -99,8 +101,70 @@ it('resumes audio in the click and shares a pending background download with Joi
   expect(fetchVoice).toHaveBeenCalledOnce();
   expect(fetchVoice.mock.calls[0]).toEqual(['/api/rooms/lounge/voice', expect.any(Object)]);
   expect(connect).toHaveBeenCalledWith('ws://localhost/rtc', 'test');
+  expect(constructRoom).toHaveBeenCalledWith(expect.objectContaining({ webAudioMix: { audioContext: expect.any(AudioContext) } }));
   expect(session.snapshot).toMatchObject({ status: 'connected', roomId: 'lounge' });
   session.end();
+});
+
+it.each([
+  ['iPhone', { userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X)' }],
+  ['iPad in desktop mode', { userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X)', platform: 'MacIntel', maxTouchPoints: 5 }],
+])('uses direct playback and keeps deafened tracks detached on %s', async (_, device) => {
+  vi.stubGlobal('navigator', { ...device });
+  const participant = {
+    identity: 'other.phone', attributes: {}, getTrackPublication: () => undefined, setVolume: vi.fn(),
+    audioTrackPublications: new Map(),
+  };
+  let volume = 1.5;
+  host.volumeOf = () => volume;
+  remotes.set(participant.identity, participant);
+  const { VoiceSession } = await import('./session');
+  const session = new VoiceSession(host);
+  const joining = session.join('lounge'); download.resolve(); await joining;
+  expect(constructRoom).toHaveBeenCalledWith(expect.objectContaining({ webAudioMix: false }));
+  const subscribe = (source: string) => {
+    const track = {
+      kind: 'audio', attachedElements: [] as HTMLAudioElement[],
+      attach: vi.fn(() => {
+        const el = document.createElement('audio');
+        track.attachedElements.push(el);
+        return el;
+      }),
+      detach: vi.fn(() => track.attachedElements.splice(0)),
+    };
+    const publication = { track };
+    participant.audioTrackPublications.set(source, publication);
+    listeners.get('TrackSubscribed')!(track, publication, participant);
+    return track;
+  };
+  const mic = subscribe('mic');
+  expect(mic.attachedElements).toHaveLength(1);
+  expect(participant.setVolume).toHaveBeenCalledWith(1, 'mic');
+
+  await session.toggleDeafen();
+  const share = subscribe('screen-audio');
+  expect(document.querySelectorAll('audio')).toHaveLength(0);
+  expect(share.attach).not.toHaveBeenCalled();
+  // LiveKit playback recovery can unmute all attached elements, but has none here.
+  listeners.get('Reconnected')!();
+  expect(startAudio).toHaveBeenCalledTimes(2);
+  expect(mic.attachedElements).toHaveLength(0);
+  expect(share.attachedElements).toHaveLength(0);
+
+  await session.toggleDeafen();
+  expect(enableMicrophone.mock.calls).toEqual([[false]]);
+  expect(document.querySelectorAll('audio')).toHaveLength(2);
+  volume = 0;
+  session.applyVolumes();
+  expect(document.querySelectorAll('audio')).toHaveLength(0);
+  volume = 0.5;
+  session.applyVolumes();
+  expect(document.querySelectorAll('audio')).toHaveLength(2);
+  participant.audioTrackPublications.delete('screen-audio');
+  listeners.get('TrackUnsubscribed')!(share);
+  expect(document.querySelectorAll('audio')).toHaveLength(1);
+  session.end();
+  expect(document.querySelectorAll('audio')).toHaveLength(0);
 });
 
 it('does not join after access ends while the SDK is downloading', async () => {

@@ -53,6 +53,8 @@ export class VoiceSession implements VoiceClient {
   private audio: AudioContext | null = null;
   private meters = new Map<string, Meter>();
   private readonly sinkHost: HTMLElement;
+  private readonly nativePlayback = /iPhone|iPad|iPod/.test(navigator.userAgent)
+    || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
   private mutedBeforeDeaf = false;
   private refreshQueued = false;
   /** A refused admission keeps the current room intact. */
@@ -120,8 +122,8 @@ export class VoiceSession implements VoiceClient {
         dynacast: true,
         audioCaptureDefaults: this.micOptions(),
         audioOutput: speakerId ? { deviceId: speakerId } : undefined,
-        // Through Web Audio, because an audio element cannot play above 100%.
-        webAudioMix: { audioContext: this.audio },
+        // On iOS an interrupted AudioContext must not gate voice playback.
+        webAudioMix: this.nativePlayback ? false : { audioContext: this.audio },
       });
       this.room = room;
       this.bind(room);
@@ -324,9 +326,10 @@ export class VoiceSession implements VoiceClient {
     room
       .on(sdk.RoomEvent.TrackSubscribed, (track, _pub, participant) => {
         if (track.kind === sdk.Track.Kind.Audio) {
-          if (track instanceof sdk.RemoteAudioTrack) this.addBoost(track);
-          const el = track.attach();
-          this.sinkHost.append(el);
+          if (!this.nativePlayback) {
+            if (track instanceof sdk.RemoteAudioTrack) this.addBoost(track);
+            this.sinkHost.append(track.attach());
+          }
           this.applyVolumesFor(participant);
         }
         refresh();
@@ -362,6 +365,7 @@ export class VoiceSession implements VoiceClient {
       .on(sdk.RoomEvent.Reconnecting, () => this.set({ status: 'reconnecting' }))
       .on(sdk.RoomEvent.Reconnected, () => {
         this.set({ status: 'connected' });
+        if (this.nativePlayback && !document.hidden && !room.canPlaybackAudio) void room.startAudio().catch(() => {});
         refresh();
       })
       .on(sdk.RoomEvent.Disconnected, (reason) => {
@@ -384,7 +388,16 @@ export class VoiceSession implements VoiceClient {
     p.setVolume(Math.min(v, 1), sdk.Track.Source.Microphone);
     p.setVolume(Math.min(v, 1), sdk.Track.Source.ScreenShareAudio);
     for (const pub of p.audioTrackPublications.values()) {
-      const boost = pub.track && this.boosts.get(pub.track as RemoteAudioTrack);
+      const track = pub.track;
+      if (!track) continue;
+      if (this.nativePlayback) {
+        // iOS ignores element volume. LiveKit's foreground recovery can also unmute
+        // attached elements, so detach them altogether at zero/deafened.
+        if (v === 0) track.detach().forEach((el) => el.remove());
+        else if (!track.attachedElements.length) this.sinkHost.append(track.attach());
+        continue;
+      }
+      const boost = this.boosts.get(track as RemoteAudioTrack);
       if (boost) boost.gain.value = Math.max(v, 1);
     }
   }
