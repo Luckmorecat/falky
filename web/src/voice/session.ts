@@ -55,6 +55,7 @@ export class VoiceSession implements VoiceClient {
   private readonly sinkHost: HTMLElement;
   private readonly nativePlayback = /iPhone|iPad|iPod/.test(navigator.userAgent)
     || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  private stopPlaybackRecovery?: () => void;
   private mutedBeforeDeaf = false;
   private refreshQueued = false;
   /** A refused admission keeps the current room intact. */
@@ -323,6 +324,25 @@ export class VoiceSession implements VoiceClient {
 
   private bind(room: Room): void {
     const refresh = () => this.queueRefresh();
+    const restoreAudio = (foreground = false) => {
+      if (this.room !== room || this.snap.status !== 'connected' || document.hidden || this.snap.deafened) return;
+      if (!foreground && room.canPlaybackAudio) return;
+      void room.startAudio().catch(() => {});
+    };
+    if (this.nativePlayback) {
+      // Safari may require a fresh gesture after joining muted or returning from the background.
+      // LiveKit's own visibility hook does not cover desktop-mode iPads.
+      const onClick = (event: MouseEvent) => {
+        if (event.isTrusted) restoreAudio();
+      };
+      const onVisibility = () => restoreAudio(!/mobile\//i.test(navigator.userAgent));
+      document.addEventListener('click', onClick, true);
+      document.addEventListener('visibilitychange', onVisibility);
+      this.stopPlaybackRecovery = () => {
+        document.removeEventListener('click', onClick, true);
+        document.removeEventListener('visibilitychange', onVisibility);
+      };
+    }
     room
       .on(sdk.RoomEvent.TrackSubscribed, (track, _pub, participant) => {
         if (track.kind === sdk.Track.Kind.Audio) {
@@ -365,7 +385,7 @@ export class VoiceSession implements VoiceClient {
       .on(sdk.RoomEvent.Reconnecting, () => this.set({ status: 'reconnecting' }))
       .on(sdk.RoomEvent.Reconnected, () => {
         this.set({ status: 'connected' });
-        if (this.nativePlayback && !document.hidden && !room.canPlaybackAudio) void room.startAudio().catch(() => {});
+        if (this.nativePlayback) restoreAudio();
         refresh();
       })
       .on(sdk.RoomEvent.Disconnected, (reason) => {
@@ -496,6 +516,8 @@ export class VoiceSession implements VoiceClient {
   private teardownRoom(): void {
     const room = this.room;
     this.room = null;
+    this.stopPlaybackRecovery?.();
+    this.stopPlaybackRecovery = undefined;
     for (const meter of this.meters.values()) meter.source.disconnect();
     this.meters.clear();
     this.sinkHost.replaceChildren();

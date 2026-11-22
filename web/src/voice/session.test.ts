@@ -11,7 +11,7 @@ function deferred() {
 
 let download: ReturnType<typeof deferred>;
 let host: VoiceHost;
-const rooms: { disconnect: ReturnType<typeof vi.fn> }[] = [];
+const rooms: { disconnect: ReturnType<typeof vi.fn>; canPlaybackAudio: boolean }[] = [];
 const resume = vi.fn(async () => {});
 const startAudio = vi.fn(async () => {});
 const connect = vi.fn(async () => {});
@@ -147,7 +147,7 @@ it.each([
   expect(share.attach).not.toHaveBeenCalled();
   // LiveKit playback recovery can unmute all attached elements, but has none here.
   listeners.get('Reconnected')!();
-  expect(startAudio).toHaveBeenCalledTimes(2);
+  expect(startAudio).toHaveBeenCalledOnce();
   expect(mic.attachedElements).toHaveLength(0);
   expect(share.attachedElements).toHaveLength(0);
 
@@ -165,6 +165,71 @@ it.each([
   expect(document.querySelectorAll('audio')).toHaveLength(1);
   session.end();
   expect(document.querySelectorAll('audio')).toHaveLength(0);
+});
+
+it('retries blocked native audio within a trusted click without starting the microphone', async () => {
+  vi.stubGlobal('navigator', { userAgent: 'iPhone' });
+  startAudio.mockRejectedValueOnce(new DOMException('User activation required', 'NotAllowedError'));
+  const addListener = vi.spyOn(document, 'addEventListener');
+  const { VoiceSession } = await import('./session');
+  const session = new VoiceSession(host);
+  try {
+    const joining = session.join('lounge');
+    expect(startAudio).not.toHaveBeenCalled();
+    download.resolve();
+    await joining;
+    expect(startAudio).toHaveBeenCalledOnce();
+
+    const click = addListener.mock.calls.find(([type, , capture]) => type === 'click' && capture === true)?.[1] as EventListener;
+    document.body.click();
+    expect(startAudio).toHaveBeenCalledOnce();
+    click({ isTrusted: true } as Event);
+    expect(startAudio).toHaveBeenCalledTimes(2);
+    expect(enableMicrophone).not.toHaveBeenCalled();
+    await session.toggleDeafen();
+    click({ isTrusted: true } as Event);
+    expect(startAudio).toHaveBeenCalledTimes(2);
+  } finally {
+    session.end();
+    addListener.mockRestore();
+  }
+});
+
+it('retries a desktop-mode iPad after a hidden reconnect and removes old room listeners', async () => {
+  vi.stubGlobal('navigator', { userAgent: 'Macintosh; Intel Mac OS X', platform: 'MacIntel', maxTouchPoints: 5 });
+  const visibility = vi.spyOn(document, 'hidden', 'get');
+  const removeListener = vi.spyOn(document, 'removeEventListener');
+  const { VoiceSession } = await import('./session');
+  const session = new VoiceSession(host);
+  try {
+    const joining = session.join('lounge'); download.resolve(); await joining;
+    rooms.at(-1)!.canPlaybackAudio = true;
+    visibility.mockReturnValue(true);
+    listeners.get('Reconnected')!();
+    document.dispatchEvent(new Event('visibilitychange'));
+    document.body.click();
+    expect(startAudio).toHaveBeenCalledOnce();
+
+    visibility.mockReturnValue(false);
+    document.dispatchEvent(new Event('visibilitychange'));
+    expect(startAudio).toHaveBeenCalledTimes(2);
+
+    await session.leave();
+    expect(removeListener).toHaveBeenCalledWith('click', expect.any(Function), true);
+    expect(removeListener).toHaveBeenCalledWith('visibilitychange', expect.any(Function));
+    document.dispatchEvent(new Event('visibilitychange'));
+    document.body.click();
+    expect(startAudio).toHaveBeenCalledTimes(2);
+
+    await session.join('games');
+    document.dispatchEvent(new Event('visibilitychange'));
+    expect(startAudio).toHaveBeenCalledTimes(4);
+    expect(enableMicrophone).not.toHaveBeenCalled();
+  } finally {
+    session.end();
+    visibility.mockRestore();
+    removeListener.mockRestore();
+  }
 });
 
 it('does not join after access ends while the SDK is downloading', async () => {
