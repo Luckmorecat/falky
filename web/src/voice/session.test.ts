@@ -167,6 +167,73 @@ it.each([
   expect(document.querySelectorAll('audio')).toHaveLength(0);
 });
 
+it('retries a paused or waiting native sink even when LiveKit reports playback works', async () => {
+  vi.stubGlobal('navigator', { userAgent: 'iPhone Mobile/1' });
+  const addListener = vi.spyOn(document, 'addEventListener');
+  const { VoiceSession } = await import('./session');
+  const session = new VoiceSession(host);
+  const participant = {
+    identity: 'other.phone', attributes: {}, getTrackPublication: () => undefined, setVolume: vi.fn(),
+    audioTrackPublications: new Map(),
+  };
+  remotes.set(participant.identity, participant);
+  let volume = 1;
+  host.volumeOf = () => volume;
+  try {
+    const joining = session.join('lounge'); download.resolve(); await joining;
+    rooms.at(-1)!.canPlaybackAudio = true;
+    const click = addListener.mock.calls.find(([type, , capture]) => type === 'click' && capture === true)?.[1] as EventListener;
+    const input = { isTrusted: true } as Event;
+    const makeSink = (source: string) => {
+      const element = document.createElement('audio');
+      const track = {
+        kind: 'audio', attachedElements: [] as HTMLAudioElement[],
+        attach() { this.attachedElements.push(element); return element; },
+        detach() { return this.attachedElements.splice(0); },
+      };
+      const publication = { track };
+      participant.audioTrackPublications.set(source, publication);
+      listeners.get('TrackSubscribed')!(track, publication, participant);
+      const paused = vi.spyOn(element, 'paused', 'get').mockReturnValue(false);
+      const play = vi.spyOn(element, 'play').mockResolvedValue();
+      return { element, paused, play };
+    };
+    const mic = makeSink('mic');
+    const share = makeSink('screen-audio');
+    mic.paused.mockReturnValue(true);
+    mic.element.dispatchEvent(new Event('pause'));
+    mic.element.dispatchEvent(new Event('pause'));
+    expect(mic.play).toHaveBeenCalledOnce();
+
+    mic.paused.mockReturnValue(false);
+    mic.element.dispatchEvent(new Event('playing'));
+    mic.element.dispatchEvent(new Event('waiting'));
+    const pending = deferred();
+    mic.play.mockImplementationOnce(() => pending.promise);
+    click(input);
+    click(input);
+    expect(mic.play).toHaveBeenCalledTimes(3);
+    pending.resolve();
+    mic.element.dispatchEvent(new Event('playing'));
+    click(input);
+    expect(mic.play).toHaveBeenCalledTimes(3);
+    expect(share.play).not.toHaveBeenCalled();
+    expect(startAudio).toHaveBeenCalledOnce();
+
+    volume = 0;
+    session.applyVolumes();
+    mic.paused.mockReturnValue(true);
+    mic.element.dispatchEvent(new Event('pause'));
+    click(input);
+    expect(mic.play).toHaveBeenCalledTimes(3);
+    expect(enableMicrophone).not.toHaveBeenCalled();
+    expect(fetchVoice).toHaveBeenCalledOnce();
+  } finally {
+    session.end();
+    addListener.mockRestore();
+  }
+});
+
 it('retries blocked native audio within a trusted click without starting the microphone', async () => {
   vi.stubGlobal('navigator', { userAgent: 'iPhone' });
   startAudio.mockRejectedValueOnce(new DOMException('User activation required', 'NotAllowedError'));
@@ -190,6 +257,29 @@ it('retries blocked native audio within a trusted click without starting the mic
     click({ isTrusted: true } as Event);
     expect(startAudio).toHaveBeenCalledTimes(2);
   } finally {
+    session.end();
+    addListener.mockRestore();
+  }
+});
+
+it('keeps the iOS room usable while the first native playback request is pending', async () => {
+  vi.stubGlobal('navigator', { userAgent: 'iPhone Mobile/1' });
+  const pending = deferred();
+  startAudio.mockImplementationOnce(() => pending.promise);
+  const addListener = vi.spyOn(document, 'addEventListener');
+  const { VoiceSession } = await import('./session');
+  const session = new VoiceSession(host);
+  try {
+    const joining = session.join('lounge'); download.resolve();
+    await vi.waitFor(() => expect(startAudio).toHaveBeenCalledOnce());
+    expect(session.snapshot.status).toBe('connected');
+    const click = addListener.mock.calls.find(([type, , capture]) => type === 'click' && capture === true)?.[1] as EventListener;
+    click({ isTrusted: true } as Event);
+    expect(startAudio).toHaveBeenCalledTimes(2);
+    await joining;
+    expect(enableMicrophone).not.toHaveBeenCalled();
+  } finally {
+    pending.resolve();
     session.end();
     addListener.mockRestore();
   }
