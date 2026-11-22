@@ -56,6 +56,7 @@ export class VoiceSession implements VoiceClient {
   private readonly nativePlayback = /iPhone|iPad|iPod/.test(navigator.userAgent)
     || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
   private stopPlaybackRecovery?: () => void;
+  private readonly interruptedAudio = new WeakMap<HTMLMediaElement, 'waiting' | 'paused'>();
   private mutedBeforeDeaf = false;
   private refreshQueued = false;
   /** A refused admission keeps the current room intact. */
@@ -137,7 +138,9 @@ export class VoiceSession implements VoiceClient {
       return;
     }
     if (this.room !== room) { this.disconnectRoom(room); return; }
-    await room.startAudio().catch(() => {});
+    const audioStarted = room.startAudio().catch(() => {});
+    // A native element may leave play() pending until it receives media or a tap.
+    if (!this.nativePlayback) await audioStarted;
     if (this.room !== room) { this.disconnectRoom(room); return; }
     this.knownShares.clear();
     this.set({ status: 'connected', roomId, joiningRoomId: null, joinedAt: performance.now(), deafened, listenOnly: false });
@@ -324,21 +327,48 @@ export class VoiceSession implements VoiceClient {
 
   private bind(room: Room): void {
     const refresh = () => this.queueRefresh();
+    const canRestoreAudio = () => this.room === room && this.snap.status === 'connected'
+      && !document.hidden && !this.snap.deafened;
+    const replay = (element: HTMLAudioElement) => { void element.play().catch(() => {}); };
     const restoreAudio = (foreground = false) => {
-      if (this.room !== room || this.snap.status !== 'connected' || document.hidden || this.snap.deafened) return;
-      if (!foreground && room.canPlaybackAudio) return;
-      void room.startAudio().catch(() => {});
+      if (!canRestoreAudio()) return;
+      if (foreground || !room.canPlaybackAudio) {
+        void room.startAudio().catch(() => {});
+        return;
+      }
+      for (const element of this.sinkHost.querySelectorAll('audio')) {
+        if (element.paused || this.interruptedAudio.has(element)) replay(element);
+      }
     };
     if (this.nativePlayback) {
-      // Safari may require a fresh gesture after joining muted or returning from the background.
-      // LiveKit's own visibility hook does not cover desktop-mode iPads.
+      // LiveKit reports playback for the room as a whole, not for each audio element.
+      // Safari can interrupt one element without changing the room's playback status.
+      const trackPlayback = (event: Event) => {
+        const element = event.target;
+        if (!(element instanceof HTMLAudioElement) || element.parentNode !== this.sinkHost) return;
+        if (event.type === 'playing') {
+          this.interruptedAudio.delete(element);
+          return;
+        }
+        if (event.type === 'pause') {
+          if (!element.paused || this.interruptedAudio.get(element) === 'paused') return;
+          this.interruptedAudio.set(element, 'paused');
+          if (canRestoreAudio()) replay(element);
+        } else if (!this.interruptedAudio.has(element)) {
+          this.interruptedAudio.set(element, 'waiting');
+        }
+      };
+      const playbackEvents = ['playing', 'pause', 'waiting', 'stalled'];
+      for (const type of playbackEvents) this.sinkHost.addEventListener(type, trackPlayback, true);
       const onClick = (event: MouseEvent) => {
         if (event.isTrusted) restoreAudio();
       };
+      // LiveKit's own visibility hook does not cover desktop-mode iPads.
       const onVisibility = () => restoreAudio(!/mobile\//i.test(navigator.userAgent));
       document.addEventListener('click', onClick, true);
       document.addEventListener('visibilitychange', onVisibility);
       this.stopPlaybackRecovery = () => {
+        for (const type of playbackEvents) this.sinkHost.removeEventListener(type, trackPlayback, true);
         document.removeEventListener('click', onClick, true);
         document.removeEventListener('visibilitychange', onVisibility);
       };
@@ -414,7 +444,12 @@ export class VoiceSession implements VoiceClient {
         // iOS ignores element volume. LiveKit's foreground recovery can also unmute
         // attached elements, so detach them altogether at zero/deafened.
         if (v === 0) track.detach().forEach((el) => el.remove());
-        else if (!track.attachedElements.length) this.sinkHost.append(track.attach());
+        else if (!track.attachedElements.length) {
+          const element = track.attach();
+          // LiveKit may recycle the element from a previous subscription.
+          this.interruptedAudio.delete(element);
+          this.sinkHost.append(element);
+        }
         continue;
       }
       const boost = this.boosts.get(track as RemoteAudioTrack);
@@ -520,6 +555,12 @@ export class VoiceSession implements VoiceClient {
     this.stopPlaybackRecovery = undefined;
     for (const meter of this.meters.values()) meter.source.disconnect();
     this.meters.clear();
+    if (room && this.nativePlayback) {
+      // Removing an audio element from the DOM doesn't stop it. LiveKit disconnects asynchronously.
+      for (const participant of room.remoteParticipants.values()) {
+        for (const { track } of participant.audioTrackPublications.values()) track?.detach();
+      }
+    }
     this.sinkHost.replaceChildren();
     if (room) this.disconnectRoom(room);
   }
