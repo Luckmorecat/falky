@@ -333,8 +333,8 @@ export async function startMockServer(options: { port?: number; scenario?: strin
           else if (key === 'roomFull' && (value === null || state.rooms.some((room) => room.id === value))) state.faults.roomFull = value as string | null;
           else if (key === 'scannerError' && ['', 'NotAllowedError', 'NotFoundError', 'NotReadableError', 'DecodeError'].includes(String(value))) state.faults.scannerError = value as typeof state.faults.scannerError;
           else if (key === 'scannerDelayMs' && typeof value === 'number' && value >= 0 && value <= 30000) state.faults.scannerDelayMs = value;
-          else if (['liveDisconnected', 'micDenied', 'shareFailure', 'voiceReconnecting'].includes(key) && typeof value === 'boolean') {
-            state.faults[key as 'micDenied' | 'shareFailure' | 'voiceReconnecting' | 'liveDisconnected'] = value;
+          else if (['liveDisconnected', 'micDenied', 'shareFailure', 'voiceReconnecting', 'audioBlocked'].includes(key) && typeof value === 'boolean') {
+            state.faults[key as 'micDenied' | 'shareFailure' | 'voiceReconnecting' | 'liveDisconnected' | 'audioBlocked'] = value;
           } else throw new Refused(400, 'invalid_request', 'Invalid fault value');
         }
         if (state.faults.liveDisconnected) for (const socket of sockets.clients) socket.close(4000, 'Scripted disconnect');

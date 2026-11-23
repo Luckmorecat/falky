@@ -9,6 +9,7 @@ import { useApp } from './store';
 import { Main } from '../ui/Main';
 import { Entry } from '../ui/Screens';
 import { AccountFlowProvider, useAccountUI } from '../ui/AccountFlow';
+import { ToastHost } from '../ui/Toast';
 
 function Screen() {
   const phase = useApp((s) => s.phase);
@@ -54,18 +55,11 @@ function Screen() {
     };
   }, [phase]);
 
-  switch (phase) {
-    case 'loading':
-      return <div className="screen" />;
-    case 'entry':
-      return <Entry />;
-    case 'noaccess':
-      return <Entry />;
-    case 'revoked':
-      return <Entry />;
-    case 'ready':
-      return <div inert={paused || accountUI.locked}><Main key={ownerRevision} /></div>;
-  }
+  return (
+    <ToastHost inert={phase === 'ready' && (paused || accountUI.locked)}>
+      {phase === 'loading' ? <div className="screen" /> : phase === 'ready' ? <Main key={ownerRevision} /> : <Entry />}
+    </ToastHost>
+  );
 }
 
 function App() {

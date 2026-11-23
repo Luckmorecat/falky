@@ -16,9 +16,11 @@ import { hashString, PALETTE_NAMES } from '../fx/palette';
 import { t } from '../strings';
 import { idleVoice, type VoicePerson, type VoiceSnapshot } from '../voice/types';
 import { Main } from '../ui/Main';
+import { AccountFlowProvider } from '../ui/AccountFlow';
 import { Orb } from '../ui/Orb';
 import { Entry } from '../ui/Screens';
 import { Message } from '../ui/Message';
+import { ToastHost } from '../ui/Toast';
 
 const NAMES = ['Олена', 'Марк', 'Софія', 'Тарас', 'Ірина', 'Богдан', 'Катя', 'Дмитро'];
 const person = (i: number): VoicePerson => ({
@@ -124,7 +126,7 @@ function stage(scene: Scene): void {
   const chats = Object.fromEntries(rooms.map((r) => [r.id, { ...emptyChat(), loaded: true, messages: r.id === 'lounge' ? messages : [] }]));
   const many = NAMES.map((_, i) => person(i));
   setState({
-    phase: 'ready', visitor: { id: self.visitorId, name: self.name, nameTaken: false, colour: { visitorId: self.visitorId, palette: 'sky', revision: 1 } }, live: 'open', chats, notice: null, roomsOpen: false,
+    phase: 'ready', visitor: { id: self.visitorId, name: self.name, nameTaken: false, colour: { visitorId: self.visitorId, palette: 'sky', revision: 1 } }, live: 'open', chats, roomsOpen: false,
     colours: Object.fromEntries(NAMES.map((_, i) => { const id = person(i).visitorId; return [id, { visitorId: id, palette: PALETTE_NAMES[i % PALETTE_NAMES.length]!, revision: 1 }]; })),
     rooms, viewedRoomId: scene === 'empty' ? 'work' : 'lounge', chatOpen: scene === 'chat', voice: idleVoice,
   });
@@ -180,7 +182,7 @@ function Design() {
   };
 
   return (
-    <>
+    <ToastHost>
       {scene === 'orbs' ? <OrbSheet /> : phase === 'entry' ? <Entry /> : phase === 'noaccess' ? <Message title={t.noAccessTitle} body={t.noAccessBody} /> : phase === 'revoked' ? <Message title={t.revokedTitle} body={t.revokedBody} /> : <Main key={scene} />}
       <nav style={{ position: 'fixed', left: 12, bottom: 12, zIndex: 100, display: 'flex', flexDirection: 'column', gap: 2, padding: 6, borderRadius: 16, background: 'oklch(0.237 0.008 285.8 / 0.92)', fontSize: 12 }}>
         {(Object.keys(SCENES) as Scene[]).map((s) => (
@@ -188,10 +190,10 @@ function Design() {
         ))}
         <button onClick={fakeIncoming} style={{ padding: '5px 10px', borderRadius: 10, textAlign: 'left', color: 'oklch(1 0 0)', opacity: .7 }}>+ повідомлення</button>
       </nav>
-    </>
+    </ToastHost>
   );
 }
 
 applyAppearance();
 installInterfaceSounds();
-createRoot(document.getElementById('root')!).render(<Design />);
+createRoot(document.getElementById('root')!).render(<AccountFlowProvider><Design /></AccountFlowProvider>);

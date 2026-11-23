@@ -1,9 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
-import { answerKnock, dismissKnock, dismissNotice, voice } from '../app/controller';
+import { answerKnock, dismissKnock, voice } from '../app/controller';
 import { useApp } from '../app/store';
 import { t } from '../strings';
 import { Button } from './Button';
-import { IconButton } from './IconButton';
 import { Chat } from './Chat';
 import { ChatTicker } from './ChatTicker';
 import { Dock } from './Dock';
@@ -14,7 +13,7 @@ import { Stage } from './Stage';
 import { useShortcuts } from './useShortcuts';
 import { useTalk } from './useTalk';
 import { LiveBackground, type LiveBackgroundHandle } from './LiveBackground';
-import './Notices.css';
+import { Toast, TopNoticeSlot } from './Toast';
 import './Main.css';
 
 function Clock({ joinedAt }: { joinedAt: number }) {
@@ -42,7 +41,6 @@ export function Main() {
   const chatOpen = useApp((s) => s.chatOpen);
   const roomsOpen = useApp((s) => s.roomsOpen);
   const live = useApp((s) => s.live);
-  const notice = useApp((s) => s.notice);
   const knockCall = useApp((s) => s.knock);
   const rooms = useApp((s) => s.rooms);
   const nameTaken = useApp((s) => s.visitor?.nameTaken);
@@ -80,36 +78,30 @@ export function Main() {
       <Chat room={room} />
       {room && <ChatTicker room={room} />}
 
-      <div className="float-top" aria-live="polite">
+      <TopNoticeSlot position="banner">
         {banner && <div className="banner"><span className="pulse" />{banner}</div>}
-        {voiceState.audioBlocked && voiceState.roomId && voiceState.status !== 'reconnecting' && (
-          <div className="toast audio-blocked">
-            <strong>{t.audioPlaybackBlocked}</strong>
-            <Button data-enable-voice-audio data-cue="none" onClick={() => voice.retryAudio()}>{t.enableAudio}</Button>
-          </div>
-        )}
-        {notice && (
-          <div className="toast" key={notice.id} role="status">
-            <div>
-              <strong>{notice.title}</strong>
-              {notice.body && <p>{notice.body}</p>}
-            </div>
-            <IconButton size="small" aria-label={t.close} onClick={dismissNotice}><Icon name="x" /></IconButton>
-          </div>
-        )}
-        {knockCall && (
-          <div className="toast knock-toast" key={`knock-${knockCall.id}`} role="alert">
-            <div>
-              <strong>{t.knockFrom(knockCall.fromName, rooms.find((r) => r.id === knockCall.roomId)?.name ?? '')}</strong>
-            </div>
-            <div className="knock-actions">
-              <Button variant="join" data-cue="none" onClick={answerKnock}><Icon name="mic" /><span className="tx">{t.join}</span></Button>
-              <IconButton size="small" aria-label={t.close} onClick={dismissKnock}><Icon name="x" /></IconButton>
-            </div>
-          </div>
-        )}
+      </TopNoticeSlot>
+      <Toast
+        open={voiceState.audioBlocked && !!voiceState.roomId && voiceState.status !== 'reconnecting'}
+        position="before"
+        className="audio-blocked"
+        title={t.audioPlaybackBlocked}
+        action={<Button data-enable-voice-audio data-cue="none" onClick={() => voice.retryAudio()}>{t.enableAudio}</Button>}
+      />
+      {knockCall && (
+        <Toast
+          key={knockCall.id}
+          open
+          role="alert"
+          className="knock-toast"
+          title={t.knockFrom(knockCall.fromName, rooms.find((r) => r.id === knockCall.roomId)?.name ?? '')}
+          action={<Button variant="join" data-cue="none" onClick={() => answerKnock(knockCall.id)}><Icon name="mic" /><span className="tx">{t.join}</span></Button>}
+          onDismiss={() => dismissKnock(knockCall.id)}
+        />
+      )}
+      <TopNoticeSlot position="form">
         {nameTaken && <NameConflict />}
-      </div>
+      </TopNoticeSlot>
     </div>
   );
 }

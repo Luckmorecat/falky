@@ -14,6 +14,7 @@ import { prefs, type Settings } from './prefs';
 import { getState, setState } from './store';
 import { clearSignInHints, retainSignInHint } from './signInHints';
 import { captureEntryLinks, clearEntryLinks, getEntryLinks } from './entryLinks';
+import { clearToasts, showToast } from './toasts';
 
 const PAGE = 100;
 // A response from a previous access/boot must never populate the next visitor's state.
@@ -94,16 +95,13 @@ async function refreshColours(all = false): Promise<void> {
   }
 }
 
-let noticeSeq = 0;
-let noticeTimer: ReturnType<typeof setTimeout> | null = null;
-
 const voiceSession: VoiceClient = new VoiceSession({
   onChange: (snapshot) => { setState({ voice: snapshot }); if (!sessionChanging) void refreshColours(); },
   onProblem(problem) {
     if (sessionChanging) return;
     if (problem === 'visitor_required') return endAccess();
     if (problem === 'name_taken') void refreshMe();
-    showNotice(t.voiceProblems[problem].title, t.voiceProblems[problem].body);
+    showToast(t.voiceProblems[problem]);
   },
   onSound(sound) {
     if (sessionChanging) return;
@@ -173,7 +171,8 @@ let live = makeLive(session);
 
 function clearOwner(clearPreferences = true): void {
   dropUploads();
-  dismissNotice();
+  clearToasts();
+  dismissKnock();
   if (clearPreferences) prefs.clearIdentity();
   setState({ visitor: null, accountSession: null, ownerRevision: getState().ownerRevision + 1, rooms: [], chats: {}, colours: {}, colourSave: null, viewedRoomId: null, newAfterId: null, chatOpen: false, roomsOpen: false });
 }
@@ -191,17 +190,6 @@ function accessEnded(err: unknown): boolean {
     return true;
   }
   return false;
-}
-
-export function showNotice(title: string, body?: string): void {
-  if (noticeTimer) clearTimeout(noticeTimer);
-  setState({ notice: { id: ++noticeSeq, title, body } });
-  noticeTimer = setTimeout(() => setState({ notice: null }), 7000);
-}
-
-export function dismissNotice(): void {
-  if (noticeTimer) clearTimeout(noticeTimer);
-  setState({ notice: null });
 }
 
 /* ---------- Entering ---------- */
@@ -427,8 +415,9 @@ function receiveKnock(roomId: string, fromName: string): void {
   const room = s.rooms.find((r) => r.id === roomId);
   if (!room || (s.voice.roomId === roomId && s.voice.status !== 'idle')) return;
   if (knockTimer) clearTimeout(knockTimer);
-  setState({ knock: { id: ++knockSeq, roomId, fromName } });
-  knockTimer = setTimeout(() => setState({ knock: null }), 30_000);
+  const id = ++knockSeq;
+  setState({ knock: { id, roomId, fromName } });
+  knockTimer = setTimeout(() => dismissKnock(id), 30_000);
   if (!s.settings.knockAlerts) return;
   if (s.settings.sounds && !s.voice.deafened) playSound('knock', s.settings.speakerId);
   if (s.settings.notifications && document.visibilityState !== 'visible') {
@@ -442,27 +431,32 @@ function receiveKnock(roomId: string, fromName: string): void {
 }
 
 /** Goes to the room that knocked and joins its voice. */
-export function answerKnock(): void {
+export function answerKnock(id?: number): void {
   const k = getState().knock;
+  if (id !== undefined && k?.id !== id) return;
   dismissKnock();
   if (!k || sessionChanging) return;
   viewRoom(k.roomId);
   void voice.join(k.roomId);
 }
 
-export function dismissKnock(): void {
+export function dismissKnock(id?: number): void {
+  if (id !== undefined && getState().knock?.id !== id) return;
   if (knockTimer) clearTimeout(knockTimer);
+  knockTimer = null;
   setState({ knock: null });
 }
 
 /** Calls someone into the voice of the room this person is in. */
 export async function knock(roomId: string, visitorId: string, name: string): Promise<void> {
+  const epoch = session;
   try {
     await api.knock(roomId, visitorId);
-    showNotice(t.knockSent(name), t.knockSentBody);
+    if (epoch === session) showToast({ title: t.knockSent(name), body: t.knockSentBody });
   } catch (err) {
-    if (err instanceof ApiError && err.code === 'knock_too_soon') showNotice(t.knockTooSoon, t.knockTooSoonBody);
-    else showNotice(t.knockFailed, err instanceof ApiError ? err.message : undefined);
+    if (epoch !== session) return;
+    if (err instanceof ApiError && err.code === 'knock_too_soon') showToast({ title: t.knockTooSoon, body: t.knockTooSoonBody });
+    else showToast({ title: t.knockFailed, body: err instanceof ApiError ? err.message : undefined });
   }
 }
 
@@ -667,7 +661,7 @@ async function changeMessage(change: () => Promise<Message>, failed: string): Pr
     return true;
   } catch (err) {
     if (epoch !== session || accessEnded(err)) return false;
-    showNotice(failed, err instanceof ApiError && err.code !== 'network' ? err.message : t.errors.postNetwork);
+    showToast({ title: failed, body: err instanceof ApiError && err.code !== 'network' ? err.message : t.errors.postNetwork });
     return false;
   }
 }
@@ -784,8 +778,8 @@ export function addFiles(roomId: string, picked: Iterable<File>): void {
   const images = list.filter((f) => f.type.startsWith('image/'));
   const room = limits.maxAttachments - (uploads[roomId]?.length ?? 0);
   const taken = images.slice(0, Math.max(0, room));
-  if (images.length < list.length) showNotice(t.onlyImages);
-  else if (taken.length < images.length) showNotice(t.tooManyImages(limits.maxAttachments));
+  if (images.length < list.length) showToast({ title: t.onlyImages });
+  else if (taken.length < images.length) showToast({ title: t.tooManyImages(limits.maxAttachments) });
   for (const file of taken) {
     const u: ComposerUpload = {
       localId: crypto.randomUUID(), roomId, name: file.name || 'image', size: file.size,
