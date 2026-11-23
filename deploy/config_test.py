@@ -12,7 +12,7 @@ import unittest
 ROOT = Path(__file__).resolve().parent
 
 
-def render(project, domain, tcp, udp, production=True):
+def render(project, domain, tcp, udp, production=True, turn_host='', turn_secret_file=''):
     environment = os.environ | {
         "FALKY_PROJECT_NAME": project,
         "FALKY_DOMAIN": domain,
@@ -25,6 +25,8 @@ def render(project, domain, tcp, udp, production=True):
         "LIVEKIT_UDP_PORT": str(udp),
         "FALKY_INSTANCE_DIR": "/srv/" + project,
         "FALKY_LIVEKIT_CONFIG_SHA": "c" * 64,
+        "FALKY_TURN_HOST": turn_host,
+        "FALKY_TURN_SECRET_FILE": turn_secret_file,
     }
     # Never read a developer's private .env while testing configuration.
     with tempfile.NamedTemporaryFile() as env_file:
@@ -85,6 +87,42 @@ class IsolationTests(unittest.TestCase):
         mounts = config["services"]["caddy"]["volumes"]
         self.assertTrue(any(m["target"] == "/etc/caddy/Caddyfile" and m["read_only"] for m in mounts))
         self.assertFalse(any(m["target"] == "/etc/caddy/web.caddy" for m in mounts))
+
+    def test_livekit_turn_is_opt_in_and_uses_the_mounted_secret_for_both_transports(self):
+        instance = ('falky-staging', 'staging.falky.lunari.win', 7901, 7902)
+        disabled = render(*instance)['services']['livekit']
+        self.assertEqual(disabled['environment']['FALKY_TURN_HOST'], '')
+        self.assertEqual(disabled['volumes'][1]['source'], '/dev/null')
+        with tempfile.TemporaryDirectory() as directory:
+            secret_file = Path(directory) / 'turn.secret'
+            host = 'turn.falky.lunari.win'
+            enabled = render(*instance, turn_host=host, turn_secret_file=str(secret_file))['services']['livekit']
+            secret_mount = enabled['volumes'][1]
+            self.assertEqual(secret_mount['source'], str(secret_file))
+            self.assertEqual(secret_mount['target'], '/run/secrets/falky-turn')
+            self.assertTrue(secret_mount['read_only'])
+            self.assertFalse(secret_mount.get('bind', {}).get('create_host_path', False))
+            command = enabled['command'][0].replace('$$', '$').replace(
+                '/etc/livekit.yaml', str(ROOT / 'livekit.yaml')).replace(
+                '/run/secrets/falky-turn', str(secret_file)).replace(
+                'exec /livekit-server --config ' + str(ROOT / 'livekit.yaml'), 'printf "%s" "$LIVEKIT_CONFIG"')
+            args = enabled['entrypoint'] + [command]
+            environment = enabled['environment']
+            missing = subprocess.run(args, env=environment, capture_output=True, text=True)
+            self.assertNotEqual(missing.returncode, 0)
+            self.assertIn('FALKY_TURN_SECRET_FILE', missing.stderr)
+            secret_file.write_text('dummy-shared-secret')
+            secret_file.chmod(0o644)
+            exposed = subprocess.run(args, env=environment, capture_output=True, text=True)
+            self.assertNotEqual(exposed.returncode, 0)
+            self.assertIn('must have mode 0400 or 0600', exposed.stderr)
+            secret_file.chmod(0o600)
+            config = subprocess.check_output(args, env=environment, text=True)
+            self.assertIn(f'    - host: "{host}"\n      port: 443\n      protocol: tls', config)
+            self.assertIn(f'    - host: "{host}"\n      port: 3478\n      protocol: udp', config)
+            self.assertEqual(config.count(f'      secret_file: {secret_file}'), 2)
+            self.assertNotIn(secret_file.read_text(), config)
+            self.assertIn('http://falky:9090/livekit/webhook', config)
 
     def test_attachment_defaults_use_the_existing_data_mount(self):
         for production in (False, True):
