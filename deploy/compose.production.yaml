@@ -61,7 +61,41 @@ services:
       win.lunari.falky.livekit-config: ${FALKY_LIVEKIT_CONFIG_SHA:?release config digest required}
     image: livekit/livekit-server:v1.13.11@sha256:25cd902de7cacbd5f1f779f6a6ac1eae20ba8f56b0935934ce6b0ab80d1e3d20
     restart: unless-stopped
-    command: ["--config", "/etc/livekit.yaml"]
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        if [ -n "$$FALKY_TURN_HOST" ]; then
+          case "$$FALKY_TURN_HOST" in
+            *[!A-Za-z0-9.-]*|.*|-*|*.) echo 'Invalid FALKY_TURN_HOST' >&2; exit 1 ;;
+          esac
+          if [ ! -f /run/secrets/falky-turn ] || [ ! -s /run/secrets/falky-turn ]; then
+            echo 'FALKY_TURN_SECRET_FILE must point to a nonempty TURN secret file' >&2
+            exit 1
+          fi
+          case "$$(stat -c '%a' /run/secrets/falky-turn)" in
+            400|600) ;;
+            *) echo 'FALKY_TURN_SECRET_FILE must have mode 0400 or 0600' >&2; exit 1 ;;
+          esac
+          LIVEKIT_CONFIG="$$(awk -v "host=$$FALKY_TURN_HOST" '
+            /^  turn_servers: \[\]$$/ {
+              print "  turn_servers:"
+              print "    - host: \"" host "\""
+              print "      port: 443"
+              print "      protocol: tls"
+              print "      secret_file: /run/secrets/falky-turn"
+              print "    - host: \"" host "\""
+              print "      port: 3478"
+              print "      protocol: udp"
+              print "      secret_file: /run/secrets/falky-turn"
+              count++
+              next
+            }
+            { print }
+            END { if (count != 1) exit 1 }
+          ' /etc/livekit.yaml)"
+          export LIVEKIT_CONFIG
+        fi
+        exec /livekit-server --config /etc/livekit.yaml
     environment:
       # The same key pair the server signs tokens and verifies webhooks with.
       # LiveKit reads each config key from LIVEKIT_<KEY> as well (listed by
@@ -74,8 +108,15 @@ services:
       LIVEKIT_RTC_TCP_PORT: ${LIVEKIT_TCP_PORT:-7881}
       LIVEKIT_RTC_UDP_PORT_START: ${LIVEKIT_UDP_PORT:-7882}
       LIVEKIT_RTC_UDP_PORT_END: ${LIVEKIT_UDP_PORT:-7882}
+      FALKY_TURN_HOST: ${FALKY_TURN_HOST:-}
     volumes:
       - ${FALKY_INSTANCE_DIR:?instance directory required}/.deploy/livekit.yaml:/etc/livekit.yaml:ro
+      - type: bind
+        source: ${FALKY_TURN_SECRET_FILE:-/dev/null}
+        target: /run/secrets/falky-turn
+        read_only: true
+        bind:
+          create_host_path: false
     ports:
       - "${LIVEKIT_TCP_PORT:-7881}:${LIVEKIT_TCP_PORT:-7881}/tcp"
       - "${LIVEKIT_UDP_PORT:-7882}:${LIVEKIT_UDP_PORT:-7882}/udp"
