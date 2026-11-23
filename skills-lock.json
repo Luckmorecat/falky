@@ -58,6 +58,13 @@
       "sourceType": "github",
       "skillPath": "skills/weave/SKILL.md",
       "computedHash": "63d06b8b8ba3f58fe34dae86651c45c1267d5de14e11beb85af6935ba6555f3a"
+    },
+    "wire": {
+      "source": "Luckmorecat/skills",
+      "commit": "67181d00d514e56814492f7a6d7341b00a7aa968",
+      "sourceType": "github",
+      "skillPath": "skills/wire/SKILL.md",
+      "computedHash": "823bcfe92555e3e15f87f1bea083b9b52efc5960a45733c5bfa0398e012ebd64"
     }
   }
 }

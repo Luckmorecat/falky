@@ -1,0 +1,4 @@
+interface:
+  display_name: "Wire"
+  short_description: "Implement requested work directly with fit-for-purpose proof"
+  default_prompt: "Use $wire to implement the requested work directly with fit-for-purpose proof."
