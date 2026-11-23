@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef } from 'react';
 import { t } from '../strings';
-import { showNotice, voice } from '../app/controller';
+import { voice } from '../app/controller';
 import { shortcuts } from '../app/shortcuts';
 import { getState, subscribe } from '../app/store';
+import { showToast } from '../app/toasts';
 
 type HoldSource = 'shortcut' | 'pointer' | 'button-key';
 
@@ -96,14 +97,14 @@ function trackSilence(): () => void {
     // A suspended or throttled browser did not observe silence during the gap.
     if (!self || gap < 0 || gap > 2 * SILENCE_POLL_MS) { silentFor = 0; return; }
     silentFor += gap;
-    const { voice: v, settings } = getState();
+    const { voice: v, settings, ownerRevision } = getState();
     const minutes = Number(settings.awayMinutes);
     if (silentFor < minutes * 60_000) return;
     silentFor = 0;
     void voice.setMuted(true).then(() => {
-      const current = getState().voice;
-      if (current.joinedAt === v.joinedAt && current.roomId === v.roomId && current.muted && !current.deafened) {
-        showNotice(t.awayMutedTitle, t.awayMutedBody(minutes));
+      const { voice: current, ownerRevision: currentOwner, sessionPaused } = getState();
+      if (currentOwner === ownerRevision && !sessionPaused && current.joinedAt === v.joinedAt && current.roomId === v.roomId && current.muted && !current.deafened) {
+        showToast({ title: t.awayMutedTitle, body: t.awayMutedBody(minutes) });
       }
     });
   }, SILENCE_POLL_MS);

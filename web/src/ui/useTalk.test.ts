@@ -4,14 +4,15 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { prefs } from '../app/prefs';
 import { getState, setState } from '../app/store';
 import { idleVoice } from '../voice/types';
-import { showNotice, voice } from '../app/controller';
+import { voice } from '../app/controller';
+import { showToast } from '../app/toasts';
 import { Dock } from './Dock';
 import { useTalk } from './useTalk';
 
 vi.mock('../app/controller', () => ({
-  showNotice: vi.fn(),
   voice: { setMuted: vi.fn(async () => {}) },
 }));
+vi.mock('../app/toasts', () => ({ showToast: vi.fn() }));
 const activeVoice = {
   ...idleVoice, status: 'connected' as const, roomId: 'lounge', joinedAt: 1,
   people: [{
@@ -56,7 +57,7 @@ it('counts continuous silence, resetting after throttled polls and speech betwee
   });
   await vi.advanceTimersByTimeAsync(3_000);
   expect(voice.setMuted).toHaveBeenCalledExactlyOnceWith(true);
-  expect(showNotice).toHaveBeenCalledOnce();
+  expect(showToast).toHaveBeenCalledOnce();
 });
 
 it('releases an active keyboard hold on hide and does not reopen on stale keyup after reconnect', async () => {

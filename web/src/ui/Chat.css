@@ -126,6 +126,7 @@
 /* Inset by 12px at the sides and bottom, so its corners follow the card's; lines end right at its top.
    Corners nest: the field is the 40px button's radius plus its 4px padding, the card that plus the 12px inset. */
 .composer { flex: none; padding: 0 12px 12px; position: relative; }
+.composer-context { display: contents; }
 .count { position: absolute; right: 34px; top: -14px; font-size: 12px; color: var(--text-2); }
 .count.over { color: var(--danger); }
 .field { position: relative; display: flex; align-items: flex-end; gap: 4px; background: var(--fill); border-radius: var(--field-r); padding: 4px; transition: background-color 160ms ease; }

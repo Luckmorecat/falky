@@ -295,6 +295,7 @@ export function Chat({ room }: { room: Room | null }) {
   const lang = useApp((s) => s.settings.language);
   const drawer = useDrawerLayout();
   const strip = useRef<HTMLDivElement>(null);
+  const composer = useRef<HTMLDivElement>(null);
   const chat = useApp((s) => (room ? s.chats[room.id] : undefined));
   const newAfterId = useApp((s) => s.newAfterId);
   const visitor = useApp((s) => s.visitor);
@@ -470,6 +471,57 @@ export function Chat({ room }: { room: Room | null }) {
     return () => cancelAnimationFrame(id);
   }, [open, room?.id]);
 
+  useLayoutEffect(() => {
+    const panel = strip.current;
+    const controls = composer.current;
+    const field = input.current;
+    const viewport = panel?.closest<HTMLElement>('.app-viewport');
+    const notices = viewport?.querySelector('.float-top');
+    if (!open || !panel || !controls || !field || !viewport || !notices) return;
+    const latest = controls.querySelector<HTMLElement>('.to-latest');
+
+    const measure = () => {
+      const chat = panel.getBoundingClientRect();
+      const host = notices.getBoundingClientRect();
+      const overlaps = chat.left < host.right && chat.right > host.left;
+      viewport.toggleAttribute('data-chat-toast-overlap', overlaps);
+      if (!overlaps) {
+        viewport.removeAttribute('data-chat-latest-gutter');
+        return;
+      }
+      const frame = viewport.getBoundingClientRect();
+      const latestAbove = !atBottomNow && latest ? -latest.offsetTop : 0;
+      const gutterEnd = chat.left - frame.left + 12 + (latest?.offsetWidth ?? 0) + 6;
+      const noticeSpace = chat.bottom - frame.top - controls.offsetHeight - latestAbove;
+      const useGutter = drawer && latestAbove > 0 && noticeSpace < 120 && frame.width - gutterEnd >= 296;
+      if (useGutter) viewport.style.setProperty('--chat-latest-right', `${gutterEnd}px`);
+      viewport.toggleAttribute('data-chat-latest-gutter', useGutter);
+      const above = useGutter ? 0 : latestAbove;
+      const capacity = chat.bottom - frame.top - above;
+      viewport.style.setProperty('--chat-composer-capacity', `${capacity}px`);
+      viewport.style.setProperty('--chat-field-space', `${capacity - controls.offsetHeight + field.offsetHeight}px`);
+      // The strip stays put while its card slides in. Its bottom defines the final composer edge.
+      viewport.style.setProperty('--chat-composer-space', `${frame.bottom - chat.bottom + controls.offsetHeight + above}px`);
+    };
+    measure();
+    const resize = new ResizeObserver(measure);
+    resize.observe(viewport);
+    resize.observe(panel);
+    resize.observe(controls);
+    if (latest) resize.observe(latest);
+    const dock = viewport.querySelector('.dock');
+    if (dock) resize.observe(dock);
+    return () => {
+      resize.disconnect();
+      viewport.removeAttribute('data-chat-toast-overlap');
+      viewport.removeAttribute('data-chat-latest-gutter');
+      viewport.style.removeProperty('--chat-composer-capacity');
+      viewport.style.removeProperty('--chat-composer-space');
+      viewport.style.removeProperty('--chat-field-space');
+      viewport.style.removeProperty('--chat-latest-right');
+    };
+  }, [open, atBottomNow, drawer]);
+
   const newest = chat?.messages.at(-1);
 
   // The card goes away when the person turns to the page, not while they look at a picture from it or use the dock.
@@ -477,7 +529,7 @@ export function Chat({ room }: { room: Room | null }) {
     if (!open) return;
     const away = (e: PointerEvent) => {
       const target = e.target as Element | null;
-      if (viewingRef.current || strip.current?.contains(target) || target?.closest('.dock, dialog')) return;
+      if (viewingRef.current || strip.current?.contains(target) || target?.closest('.dock, dialog, .float-top')) return;
       setChatOpen(false);
     };
     addEventListener('pointerdown', away);
@@ -646,7 +698,7 @@ export function Chat({ room }: { room: Room | null }) {
           <div><Icon name="image" />{t.dropImages}<small>{limitsText}</small></div>
         </div>
       )}
-      <div className="composer">
+      <div ref={composer} className="composer">
         <button
           className={`to-latest${atBottomNow ? '' : ' show'}`}
           tabIndex={atBottomNow ? -1 : 0}
@@ -655,17 +707,19 @@ export function Chat({ room }: { room: Room | null }) {
         >
           <Icon name="down" /><span className="tx">{t.toLatest}</span>
         </button>
-        {composing && (
-          <div className="composing">
-            <Icon name={composing.kind === 'edit' ? 'edit' : 'reply'} />
-            <div className="composing-text">
-              <strong>{composing.kind === 'edit' ? t.editingMessage : t.replyingTo(composing.message.authorName)}</strong>
-              {composing.kind === 'reply' && <span>{composing.message.body.trim() || t.imagesSummary(composing.message.attachments.length)}</span>}
+        <div className="composer-context">
+          {composing && (
+            <div className="composing">
+              <Icon name={composing.kind === 'edit' ? 'edit' : 'reply'} />
+              <div className="composing-text">
+                <strong>{composing.kind === 'edit' ? t.editingMessage : t.replyingTo(composing.message.authorName)}</strong>
+                {composing.kind === 'reply' && <span>{composing.message.body.trim() || t.imagesSummary(composing.message.attachments.length)}</span>}
+              </div>
+              <IconButton size="small" aria-label={t.stopComposing} onClick={stopComposing}><Icon name="x" /></IconButton>
             </div>
-            <IconButton size="small" aria-label={t.stopComposing} onClick={stopComposing}><Icon name="x" /></IconButton>
-          </div>
-        )}
-        {room && !editing && <ComposerTray roomId={room.id} />}
+          )}
+          {room && !editing && <ComposerTray roomId={room.id} />}
+        </div>
         {count > MESSAGE_MAX - 400 && <span className={`count${count > MESSAGE_MAX ? ' over' : ''}`}>{count} / {MESSAGE_MAX}</span>}
         <div className="field" data-tip={`${t.focusChat} (${shortcuts.chat.label} · ${shortcuts.chatEnter.label})`}>
           <IconButton size="small" className="attach" aria-label={t.attachImage} data-tip={limitsText} disabled={!room} onClick={() => picker.current?.click()}><Icon name="plus" /></IconButton>

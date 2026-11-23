@@ -1,7 +1,8 @@
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Locator, type Page } from '@playwright/test';
 import type { MockAction, MockState } from '../mock/protocol';
 import { PALETTES } from '../src/fx/palette';
 import { launchMock } from './launcher';
+import { showBrowserToast } from './toast-browser';
 
 let app: Awaited<ReturnType<typeof launchMock>>;
 let forbiddenCalls: string[] = [];
@@ -237,9 +238,464 @@ test('a failed settings download leaves the interface usable and shows a notice'
   await page.route('**/src/ui/Settings.tsx*', (route) => route.abort('failed'));
   await page.goto(app.url);
   await page.getByRole('button', { name: 'Налаштування', exact: true }).click();
-  await expect(page.getByRole('status')).toContainText('Перевір інтернет');
+  const notice = page.locator('.float-top').getByRole('status');
+  await expect(notice).toContainText('Перевір інтернет');
+  await page.getByRole('button', { name: 'Кімнати: Lounge', exact: true }).hover({ timeout: 3_000 });
+  await notice.getByRole('button', { name: 'Закрити', exact: true }).focus();
+  await page.keyboard.press('Enter');
+  await expect(notice).toHaveCount(0);
   await expect(page.getByRole('heading', { level: 1 })).toHaveText('Lounge');
   await expect(page.locator('.composer textarea')).toBeEnabled();
+});
+
+test('the app-wide toast host spans entry and room navigation and clears previous visitors on revocation', async ({ page }) => {
+  await page.goto(`${app.url}/?scenario=entry`);
+  const name = page.getByRole('textbox', { name: "Ім'я", exact: true });
+  await expect(name).toBeVisible();
+  const top = page.locator('.float-top');
+  const initialHost = await top.elementHandle();
+  await showBrowserToast(page, 'Guest entry task', null, 'dismiss-entry-toast');
+  await expect(top.getByRole('status')).toHaveText('Guest entry task');
+
+  await name.fill('Taylor');
+  await page.getByRole('button', { name: 'Увійти як гість', exact: true }).click();
+  await english(page);
+  await expect(top.getByRole('status')).toHaveCount(0);
+  await showBrowserToast(page, 'Room task', null, 'dismiss-room-toast');
+  await showBrowserToast(page, 'Room notice');
+  await expect(top.getByRole('status')).toHaveText(['Room task', 'Room notice']);
+  await room(page, 'Games');
+  await expect(top.getByText('Room task', { exact: true })).toBeVisible();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.getByRole('button', { name: 'Rooms: Games', exact: true }).hover();
+  await page.getByRole('navigation', { name: 'Rooms', exact: true }).getByRole('button', { name: /^Lounge/ }).click();
+  await expect(page.getByRole('button', { name: 'Rooms: Lounge', exact: true })).toBeVisible();
+  await expect(top.getByText('Room task', { exact: true })).toBeVisible();
+
+  const lounge = (await state(page)).rooms[0]!.id;
+  await action(page, { type: 'knock', roomId: lounge, name: 'Sam' });
+  await expect(top.getByRole('alert')).toContainText('Sam');
+  await action(page, { type: 'revoke' });
+  await expect(page.getByRole('heading', { name: 'Come on in.', exact: true })).toBeVisible();
+  expect(await initialHost.evaluate(host => host === document.querySelector('.float-top'))).toBe(true);
+  await expect(top.locator('.toast')).toHaveCount(0);
+  await showBrowserToast(page, 'Signed-out feedback', null);
+  await page.evaluate(() => {
+    window.dispatchEvent(new Event('dismiss-entry-toast'));
+    window.dispatchEvent(new Event('dismiss-room-toast'));
+  });
+  await expect(top.getByRole('status')).toHaveText('Signed-out feedback');
+});
+
+test('incoming knock close, expiry and join coexist with timed and Enable audio toasts', async ({ page }) => {
+  await page.clock.install();
+  await page.goto(app.url);
+  await english(page);
+  const games = (await state(page)).rooms.find(({ name }) => name === 'Games')!.id;
+  const top = page.locator('.float-top');
+  const knock = top.getByRole('alert');
+  await action(page, { type: 'knock', roomId: games, name: 'Sam' });
+  await expect(knock).toContainText('Sam is calling you to Games');
+  await showBrowserToast(page, 'Timed notice');
+  await expect(top.getByRole('status')).toHaveText('Timed notice');
+  await knock.getByRole('button', { name: 'Close', exact: true }).click();
+  await expect(knock).toHaveCount(0);
+  await expect(top.getByRole('status')).toHaveText('Timed notice');
+
+  await action(page, { type: 'knock', roomId: games, name: 'Robin' });
+  await expect(knock).toContainText('Robin');
+  await page.clock.fastForward(28_000);
+  await expect(knock).toBeVisible();
+  await expect(top.getByRole('status')).toHaveCount(0);
+  await page.clock.fastForward(2_000);
+  await expect(knock).toHaveCount(0);
+
+  await action(page, { type: 'faults', faults: { audioBlocked: true } });
+  await action(page, { type: 'knock', roomId: games, name: 'Sam' });
+  await knock.getByRole('button', { name: 'Join', exact: true }).click();
+  await expect(knock).toHaveCount(0);
+  await expect(page.getByRole('toolbar', { name: 'Games', exact: true })).toBeVisible();
+  const enable = top.getByRole('button', { name: 'Enable audio', exact: true });
+  await expect(enable).toBeVisible();
+  await action(page, { type: 'faults', faults: { voiceReconnecting: true } });
+  await expect(top.getByText('Reconnecting voice', { exact: true })).toBeVisible();
+  await expect(enable).toHaveCount(0);
+  await action(page, { type: 'faults', faults: { voiceReconnecting: false } });
+  await showBrowserToast(page, 'Another timed notice');
+  await expect(top.getByRole('status')).toContainText(['Call audio is blocked', 'Another timed notice']);
+  await enable.click();
+  await expect(enable).toHaveCount(0);
+  await expect(top.getByRole('status')).toHaveText('Another timed notice');
+});
+
+test.describe('short touch viewport', () => {
+  test.use({ hasTouch: true, isMobile: true, viewport: { width: 667, height: 390 } });
+
+  async function swipeIn(page: Page, surface: Locator, direction: 'up' | 'down', distance?: number) {
+    const stack = (await surface.boundingBox())!;
+    const x = Math.round(stack.x + 26);
+    const inset = Math.min(20, stack.height / 6);
+    const travel = Math.min(stack.height - 2 * inset, distance ?? Infinity);
+    const first = direction === 'up' ? stack.y + stack.height - inset : stack.y + inset;
+    const last = first + (direction === 'up' ? -travel : travel);
+    const touch = await page.context().newCDPSession(page);
+    try {
+      await touch.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x, y: Math.round(first) }] });
+      for (const step of [0.15, 0.3, 0.5, 0.75, 1]) {
+        const y = Math.round(first + (last - first) * step);
+        await touch.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x, y }] });
+      }
+      if (distance !== undefined) await page.waitForTimeout(100); // Lift after pausing for a swipe without a fling.
+      await touch.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+    } finally {
+      await touch.detach();
+    }
+  }
+
+  const swipeToastStack = (page: Page, direction: 'up' | 'down', distance?: number) => swipeIn(page, page.locator('.float-top'), direction, distance);
+
+  function noticeHit(target: Locator) {
+    return target.evaluate(el => {
+      const { x, y, width, height } = el.getBoundingClientRect();
+      return el.contains(document.elementFromPoint(x + width / 2, y + height / 2));
+    }, undefined, { timeout: 1_500 });
+  }
+
+  async function swipeToNotice(page: Page, host: Locator, target: Locator) {
+    for (let attempt = 0; attempt < 8; attempt++) {
+      const [stack, box] = await Promise.all([host.boundingBox(), target.boundingBox({ timeout: 1_500 })]);
+      if (!stack || !box) break;
+      const distance = box.y + box.height / 2 - stack.y - stack.height / 2;
+      if (Math.abs(distance) <= (stack.height - box.height) / 2 + 1 && await noticeHit(target)) return;
+      await swipeToastStack(page, distance > 0 ? 'up' : 'down', Math.max(15, Math.abs(distance) + 8));
+    }
+    await expect.poll(() => noticeHit(target)).toBe(true);
+  }
+
+  async function attachComposerImage(page: Page, picker: Locator) {
+    const png = await page.evaluate(() => {
+      const canvas = document.createElement('canvas');
+      canvas.width = 20;
+      canvas.height = 20;
+      canvas.getContext('2d')!.fillRect(0, 0, 20, 20);
+      return canvas.toDataURL('image/png').split(',')[1]!;
+    });
+    await picker.setInputFiles({ name: 'preview.png', mimeType: 'image/png', buffer: Buffer.from(png, 'base64') });
+  }
+
+  const longDraft = Array.from({ length: 12 }, (_, index) => `Line ${index + 1}`).join('\n');
+
+  test('room controls, rename, and lower toast dismissals stay reachable in an overflowing stack', async ({ page }) => {
+    await page.goto(app.url);
+    await english(page);
+    const lounge = (await state(page)).rooms[0]!.id;
+    const top = page.locator('.float-top');
+    await showBrowserToast(page, 'Persistent work', null);
+    await showBrowserToast(page, 'Timed feedback', 60_000);
+    await action(page, { type: 'knock', roomId: lounge, name: 'Sam' });
+    await expect(top.getByRole('alert')).toContainText('Sam');
+    await action(page, { type: 'name-conflict', active: true });
+    const conflict = top.getByRole('alertdialog');
+    const name = conflict.getByRole('textbox', { name: 'Name', exact: true });
+    await expect(name).toBeFocused();
+    await expect(name).toBeInViewport({ ratio: 0.98 });
+    await expect(top.getByRole('status')).toHaveText(['Persistent work', 'Timed feedback']);
+
+    for (const height of [390, 375]) {
+      await page.setViewportSize({ width: 667, height });
+      await expect.poll(async () => await top.evaluate(el => el.getBoundingClientRect().bottom)).toBeLessThanOrEqual(height);
+    }
+    const rooms = page.getByRole('button', { name: 'Rooms: Lounge', exact: true });
+    await rooms.tap();
+    await expect(rooms).toHaveAttribute('aria-expanded', 'true');
+    await page.getByRole('navigation', { name: 'Rooms', exact: true }).getByRole('button', { name: /^Games/ }).tap();
+    await expect(page.getByRole('button', { name: 'Rooms: Games', exact: true })).toBeVisible();
+
+    await top.evaluate(el => { el.scrollTop = 0; });
+    for (let swipe = 0; swipe < 3; swipe++) await swipeToastStack(page, 'up');
+
+    await expect.poll(async () => await top.evaluate(el => el.scrollTop)).toBeGreaterThan(0);
+    const submit = conflict.getByRole('button', { name: 'Change name', exact: true });
+    await expect(name).toBeInViewport({ ratio: 0.98 });
+    await expect(submit).toBeInViewport({ ratio: 0.98 });
+    await name.fill('Morgan');
+    await submit.tap();
+    await expect(conflict).toHaveCount(0);
+    await expect(top.getByRole('alert')).toContainText('Sam');
+
+    for (let task = 1; task <= 6; task++) await showBrowserToast(page, `Extra task ${task}`, null);
+    await expect(top).toHaveAttribute('data-overflowing', '');
+    await page.getByRole('button', { name: 'Settings', exact: true }).tap({ timeout: 3_000 });
+    const settings = page.getByRole('dialog', { name: 'Settings', exact: true });
+    await expect(settings).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(settings).toHaveCount(0);
+    const close = top.getByRole('status').filter({ hasText: 'Extra task 6' }).getByRole('button', { name: 'Close', exact: true });
+    await top.getByRole('button', { name: 'Close', exact: true }).first().focus();
+    for (let tab = 0; tab < 7; tab++) await page.keyboard.press('Tab');
+    await expect(close).toBeFocused();
+    await expect(close).toBeInViewport({ ratio: 0.98 });
+    await page.keyboard.press('Enter');
+    await expect(top.getByText('Extra task 6', { exact: true })).toHaveCount(0);
+    await expect(top.getByText('Extra task 5', { exact: true })).toBeVisible();
+  });
+
+  test('a smaller scroll viewport reveals the focused rename field and still allows swiping away', async ({ page }) => {
+    await page.setViewportSize({ width: 667, height: 500 });
+    await page.goto(app.url);
+    await english(page);
+    for (let task = 1; task <= 9; task++) await showBrowserToast(page, `Task ${task}`, null);
+    await action(page, { type: 'name-conflict', active: true });
+    const top = page.locator('.float-top');
+    const name = top.getByRole('alertdialog').getByRole('textbox', { name: 'Name', exact: true });
+    await expect(top).toHaveAttribute('data-overflowing', '');
+    await expect(name).toBeFocused();
+    await expect(name).toBeInViewport({ ratio: 0.98 });
+
+    await page.setViewportSize({ width: 667, height: 375 });
+    await expect(top).toHaveAttribute('data-overflowing', '');
+    await expect(name).toBeFocused();
+    await expect(name).toBeInViewport({ ratio: 0.98 });
+
+    await swipeToastStack(page, 'down');
+    await expect(name).toBeFocused();
+    await expect(name).not.toBeInViewport();
+  });
+
+  test('the active chat surface and toast stack take turns receiving touch input', async ({ page }) => {
+    await page.setViewportSize({ width: 667, height: 375 });
+    await page.goto(app.url);
+    await english(page);
+    for (let task = 1; task <= 6; task++) await showBrowserToast(page, `Task ${task}`, null);
+    const top = page.locator('.float-top');
+    await expect(top).toHaveAttribute('data-overflowing', '');
+
+    const chatToggle = page.locator('.dock-chat');
+    await chatToggle.tap();
+    const chat = page.getByRole('complementary', { name: 'Chat', exact: true });
+    const composer = chat.getByRole('textbox', { name: 'Message', exact: true });
+    await composer.tap({ timeout: 3_000 });
+    await expect(composer).toBeFocused();
+    await expect(chatToggle).toHaveAttribute('aria-expanded', 'true');
+    await composer.fill('Sent with overflowing toasts');
+    const sent = page.waitForResponse(response => response.request().method() === 'POST' && response.url().endsWith('/messages'));
+    await chat.getByRole('button', { name: 'Send', exact: true }).tap();
+    expect((await sent).ok()).toBe(true);
+    await expect(chat.getByText('Sent with overflowing toasts', { exact: true })).toBeVisible();
+
+    await action(page, { type: 'name-conflict', active: true });
+    const conflict = top.getByRole('alertdialog');
+    const name = conflict.getByRole('textbox', { name: 'Name', exact: true });
+    await expect(name).toBeFocused();
+    await expect.poll(() => name.evaluate(el => {
+      const { x, y, width, height } = el.getBoundingClientRect();
+      return document.elementFromPoint(x + width / 2, y + height / 2) === el;
+    })).toBe(true);
+    await name.fill('Morgan');
+    await name.press('Enter');
+    await expect(conflict).toHaveCount(0);
+    await expect(chatToggle).toHaveAttribute('aria-expanded', 'true');
+
+    await chatToggle.tap();
+    await expect(chatToggle).toHaveAttribute('aria-expanded', 'false');
+    await expect(top.getByRole('status')).toHaveCount(6);
+    await top.evaluate(el => { el.scrollTop = 0; });
+    for (let swipe = 0; swipe < 3; swipe++) await swipeToastStack(page, 'up');
+    const lastTask = top.getByRole('status').filter({ hasText: 'Task 6' });
+    const close = lastTask.getByRole('button', { name: 'Close', exact: true });
+    await expect(close).toBeInViewport({ ratio: 0.98 });
+    await close.tap();
+    await expect(lastTask).toHaveCount(0);
+    await expect(top.getByRole('status')).toHaveCount(5);
+  });
+
+  test('Chat stays usable with a reconnect banner, an attachment notice, and a late knock', async ({ page }) => {
+    await page.setViewportSize({ width: 667, height: 375 });
+    await page.goto(app.url);
+    await english(page);
+    const games = (await state(page)).rooms.find(({ name }) => name === 'Games')!.id;
+    const top = page.locator('.float-top');
+    const chatToggle = page.locator('.dock-chat');
+    await chatToggle.tap();
+    const chat = page.getByRole('complementary', { name: 'Chat', exact: true });
+    const composer = chat.getByRole('textbox', { name: 'Message', exact: true });
+    await action(page, { type: 'knock', roomId: games, name: 'Sam' });
+    const knock = top.getByRole('alert');
+    const join = knock.getByRole('button', { name: 'Join', exact: true });
+    await expect(knock).toContainText('Sam');
+    await action(page, { type: 'faults', faults: { liveDisconnected: true } });
+    const reconnect = top.getByText('Reconnecting', { exact: true });
+    await expect(reconnect).toBeVisible();
+    await chat.locator('input[type="file"]').setInputFiles({ name: 'notes.txt', mimeType: 'text/plain', buffer: Buffer.from('Unsupported attachment') });
+    const unsupported = top.getByRole('status').getByText('Only images can be added for now.');
+    await expect(unsupported).toBeVisible();
+    await expect.poll(() => reconnect.evaluate(el => {
+      const { x, y, width, height } = el.getBoundingClientRect();
+      return el.contains(document.elementFromPoint(x + width / 2, y + height / 2));
+    }), { timeout: 3_000 }).toBe(true);
+    await expect(join).toBeInViewport({ ratio: 0.98 });
+    await expect(unsupported).toBeInViewport({ ratio: 0.98 });
+
+    await composer.tap({ timeout: 3_000 });
+    await expect(composer).toBeFocused();
+    const message = 'Sending with Chat open\nand multiple lines\nabove the dock';
+    await composer.fill(message);
+    await expect.poll(async () => {
+      const [stack, controls] = await Promise.all([top.boundingBox(), chat.locator('.composer').boundingBox()]);
+      return !!stack && !!controls && stack.y + stack.height <= controls.y;
+    }).toBe(true);
+    const sent = page.waitForResponse(response => response.request().method() === 'POST' && response.url().endsWith('/messages'));
+    await chat.getByRole('button', { name: 'Send', exact: true }).tap();
+    expect((await sent).ok()).toBe(true);
+    await expect(chatToggle).toHaveAttribute('aria-expanded', 'true');
+
+    await action(page, { type: 'faults', faults: { liveDisconnected: false } });
+    await expect(reconnect).toHaveCount(0);
+    for (let task = 1; task <= 9; task++) await showBrowserToast(page, `Pending ${task}`, null);
+    const pendingClose = (task: number) => top.getByRole('status').filter({ hasText: `Pending ${task}` }).getByRole('button', { name: 'Close', exact: true });
+    await pendingClose(3).focus();
+    await page.keyboard.press('Tab');
+    await expect(pendingClose(4)).toBeFocused();
+    await expect.poll(() => noticeHit(pendingClose(4))).toBe(true);
+    for (let swipe = 0; swipe < 3; swipe++) await swipeToastStack(page, 'up');
+    await expect.poll(() => top.evaluate(el => el.scrollTop)).toBeGreaterThan(100);
+    await expect(chatToggle).toHaveAttribute('aria-expanded', 'true');
+    await action(page, { type: 'knock', roomId: games, name: 'Robin' });
+    await expect(knock).toContainText('Robin');
+    await expect.poll(() => top.evaluate(el => el.scrollTop)).toBeGreaterThan(100);
+    await expect(join).toBeInViewport({ ratio: 0.98 });
+    await join.tap({ timeout: 3_000 });
+    await expect(page.getByRole('toolbar', { name: 'Games', exact: true })).toBeVisible();
+    await expect(knock).toHaveCount(0);
+  });
+
+  for (const width of [667, 568]) {
+    test(`every room notice can scroll into reach in a full composer at ${width}×320`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 320 });
+      await page.goto(app.url);
+      await english(page);
+      const games = (await state(page)).rooms.find(({ name }) => name === 'Games')!.id;
+      const top = page.locator('.float-top');
+      const chatToggle = page.locator('.dock-chat');
+      await chatToggle.tap();
+      const chat = page.getByRole('complementary', { name: 'Chat', exact: true });
+      const composer = chat.getByRole('textbox', { name: 'Message', exact: true });
+      const picker = chat.locator('input[type="file"]');
+      await attachComposerImage(page, picker);
+      await expect(chat.locator('.tray-item.ready')).toBeVisible();
+      await composer.fill(longDraft);
+      await chat.locator('.feed').evaluate(el => { el.scrollTop = 0; });
+      const latest = chat.getByRole('button', { name: 'Latest', exact: true });
+      await expect(latest).toBeVisible();
+
+      await action(page, { type: 'knock', roomId: games, name: 'Sam' });
+      const knock = top.getByRole('alert');
+      await expect(knock).toContainText('Sam');
+      const join = knock.getByRole('button', { name: 'Join', exact: true });
+      await action(page, { type: 'faults', faults: { liveDisconnected: true } });
+      const reconnect = top.getByText('Reconnecting', { exact: true });
+      await expect(reconnect).toBeVisible();
+      await expect(top).toHaveAttribute('data-overflowing', '');
+      await expect.poll(() => noticeHit(latest)).toBe(true);
+      await swipeToNotice(page, top, reconnect);
+
+      await picker.setInputFiles({ name: 'notes.txt', mimeType: 'text/plain', buffer: Buffer.from('Unsupported attachment') });
+      const ordinary = top.getByRole('status').filter({ hasText: 'Only images can be added for now.' });
+      await expect(ordinary).toBeVisible();
+      expect(await noticeHit(reconnect)).toBe(true);
+      const close = ordinary.getByRole('button', { name: 'Close', exact: true });
+      await swipeToNotice(page, top, close);
+      await expect(ordinary.getByText('Only images can be added for now.')).toBeInViewport({ ratio: 0.75 });
+      await close.tap();
+      await expect(ordinary).toHaveCount(0);
+      await composer.tap();
+      await expect(composer).toBeFocused();
+      await expect(composer).toHaveValue(longDraft);
+      await expect(chat.locator('.tray-item.ready')).toBeVisible();
+      await swipeToNotice(page, top, join);
+      await expect.poll(() => noticeHit(latest)).toBe(true);
+      await latest.tap();
+      await expect(latest).toHaveCount(0);
+      await expect(chatToggle).toHaveAttribute('aria-expanded', 'true');
+      await swipeToNotice(page, top, join);
+      await join.tap();
+      await expect(page.getByRole('toolbar', { name: 'Games', exact: true })).toBeVisible();
+      await expect(knock).toHaveCount(0);
+    });
+  }
+
+  test('a late knock is revealed once in a short, unpinned stack', async ({ page }) => {
+    await page.setViewportSize({ width: 667, height: 320 });
+    await page.goto(app.url);
+    await english(page);
+    const games = (await state(page)).rooms.find(({ name }) => name === 'Games')!.id;
+    const top = page.locator('.float-top');
+    await page.locator('.dock-chat').tap();
+    const chat = page.getByRole('complementary', { name: 'Chat', exact: true });
+    const composer = chat.getByRole('textbox', { name: 'Message', exact: true });
+    await attachComposerImage(page, chat.locator('input[type="file"]'));
+    await expect(chat.locator('.tray-item.ready')).toBeVisible();
+    await composer.fill(longDraft);
+    await chat.locator('.feed').evaluate(el => { el.scrollTop = 0; });
+    await expect(chat.getByRole('button', { name: 'Latest', exact: true })).toBeVisible();
+    for (let task = 1; task <= 8; task++) await showBrowserToast(page, `Pending ${task}`, null);
+    await expect(top).toHaveAttribute('data-overflowing', '');
+    await expect(composer).toBeFocused();
+    for (let swipe = 0; swipe < 4; swipe++) await swipeToastStack(page, 'up');
+    await expect.poll(() => top.evaluate(el => el.scrollTop)).toBeGreaterThanOrEqual(96);
+
+    await action(page, { type: 'knock', roomId: games, name: 'Sam' });
+    const knock = top.getByRole('alert');
+    const join = knock.getByRole('button', { name: 'Join', exact: true });
+    await expect(knock).toHaveCSS('position', 'static');
+    await expect.poll(() => noticeHit(join), { timeout: 3_000 }).toBe(true);
+    await expect(composer).toBeFocused();
+    for (let swipe = 0; swipe < 3; swipe++) await swipeToastStack(page, 'up');
+    await expect.poll(() => top.evaluate(el => el.scrollTop)).toBeGreaterThan(65);
+    await expect.poll(() => noticeHit(join)).toBe(false);
+    await expect(composer).toBeFocused();
+  });
+
+  test('a shallow Reply with an attached image leaves room for notices and can still send', async ({ page }) => {
+    await page.setViewportSize({ width: 568, height: 320 });
+    await page.goto(app.url);
+    await english(page);
+    const games = (await state(page)).rooms.find(({ name }) => name === 'Games')!.id;
+    const top = page.locator('.float-top');
+    await page.locator('.dock-chat').tap();
+    const chat = page.getByRole('complementary', { name: 'Chat', exact: true });
+    const composer = chat.getByRole('textbox', { name: 'Message', exact: true });
+    await chat.getByText('Welcome back! Try sending a message or joining voice.', { exact: true }).click({ button: 'right' });
+    await page.getByRole('dialog', { name: 'Message actions', exact: true }).getByRole('menuitem', { name: 'Reply', exact: true }).tap();
+    await expect(chat.locator('.composing')).toContainText('Replying to');
+    await attachComposerImage(page, chat.locator('input[type="file"]'));
+    await expect(chat.locator('.tray-item.ready')).toBeVisible();
+    await composer.fill(longDraft);
+
+    await action(page, { type: 'knock', roomId: games, name: 'Sam' });
+    const knock = top.getByRole('alert');
+    const join = knock.getByRole('button', { name: 'Join', exact: true });
+    await expect(knock).toContainText('Sam');
+    await expect.poll(() => top.evaluate(el => el.clientHeight), { timeout: 3_000 }).toBeGreaterThanOrEqual(59);
+    await expect.poll(() => noticeHit(join)).toBe(true);
+    const context = chat.locator('.composer-context');
+    await expect.poll(() => context.evaluate(el => el.scrollHeight > el.clientHeight)).toBe(true);
+    await swipeIn(page, context, 'up');
+    await expect.poll(() => context.evaluate(el => el.scrollTop)).toBeGreaterThan(0);
+    await expect.poll(() => noticeHit(context.locator('.tray-remove'))).toBe(true);
+    await composer.tap();
+    await expect(composer).toBeFocused();
+    await expect(composer).toHaveValue(longDraft);
+    const sent = page.waitForResponse(response => response.request().method() === 'POST' && response.url().endsWith('/messages'));
+    await chat.getByRole('button', { name: 'Send', exact: true }).tap();
+    const response = await sent;
+    expect(response.ok()).toBe(true);
+    const posted = await response.json();
+    expect(posted.replyTo?.excerpt).toBe('Welcome back! Try sending a message or joining voice.');
+    expect(posted.attachments).toHaveLength(1);
+    await join.tap();
+    await expect(page.getByRole('toolbar', { name: 'Games', exact: true })).toBeVisible();
+  });
 });
 
 test('settings window: keyboard stays inside, tabs move by arrows, one confirmed colour persists', async ({ page }) => {
@@ -345,8 +801,10 @@ test('entry, history/unread, conflict and reset after revoked or disconnected ac
   await expect(page.getByText('Unread in Lounge', { exact: true })).toBeVisible();
   await action(page, { type: 'name-conflict', active: true });
   await expect(page.getByRole('alertdialog')).toBeVisible();
-  await page.getByRole('alertdialog').getByRole('textbox', { name: 'Name', exact: true }).fill('Morgan');
-  await page.getByRole('button', { name: 'Change name', exact: true }).click();
+  const conflictName = page.getByRole('alertdialog').getByRole('textbox', { name: 'Name', exact: true });
+  await expect(conflictName).toBeFocused();
+  await conflictName.fill('Morgan');
+  await page.keyboard.press('Enter');
   await expect(page.getByRole('alertdialog')).toHaveCount(0);
   await action(page, { type: 'revoke' });
   await expect(page.getByRole('heading', { name: 'Come on in.', exact: true })).toBeVisible();

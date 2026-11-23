@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { test, expect, type Page } from '@playwright/test';
 import { launchMock } from './launcher';
 import { virtualAuthenticator, authPreferences, registerFixture, acknowledgeKit, accountSettings } from './account-browser';
+import { showBrowserToast } from './toast-browser';
 
 let app: Awaited<ReturnType<typeof launchMock>>;
 test.beforeAll(async () => { app = await launchMock(); app.url = app.url.replace('127.0.0.1', 'localhost'); });
@@ -28,8 +29,11 @@ test('native registration, exact recovery kit exports and acknowledgement gate, 
   await acknowledgeKit(page);
   await accountSettings(page);
   await expect(page.getByRole('button', { name: 'Remove: Passkey', exact: true })).toBeDisabled();
+  await showBrowserToast(page, 'Before sign out', null);
+  await expect(page.locator('.float-top .toast')).toHaveText('Before sign out');
   await page.getByRole('button', { name: 'Sign out', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Come on in.', exact: true })).toBeVisible();
+  await expect(page.locator('.float-top .toast')).toHaveCount(0);
   await page.getByRole('button', { name: 'Sign in with a passkey', exact: true }).click();
   await accountSettings(page);
   await expect(page.locator('.account-panel')).toContainText(accountId);
@@ -218,12 +222,18 @@ test('sensitive settings reconcile a shared-cookie account switch before regener
   const secondCookies = await context.cookies();
   await context.addCookies(firstCookies); await page.reload(); await accountSettings(page);
   await expect(page.locator('.account-panel')).toContainText(first.accountId);
+  await showBrowserToast(page, 'First account work', null, 'dismiss-first-account-toast');
+  await expect(page.locator('.float-top .toast')).toHaveText('First account work');
   await page.getByRole('button', { name: 'Regenerate recovery phrase', exact: true }).click();
   await context.addCookies(secondCookies);
   let mutations = 0; page.on('request', request => { if (request.url().endsWith('/accounts/recovery-codes')) mutations++; });
   await page.getByRole('button', { name: 'Create new recovery kit', exact: true }).click();
   await accountSettings(page);
   await expect(page.locator('.account-panel')).toContainText(secondId);
+  await expect(page.locator('.float-top .toast')).toHaveCount(0);
+  await showBrowserToast(page, 'Second account work', null);
+  await page.evaluate(() => window.dispatchEvent(new Event('dismiss-first-account-toast')));
+  await expect(page.locator('.float-top .toast')).toHaveText('Second account work');
   await expect(kit).not.toBeVisible(); expect(mutations).toBe(0);
 });
 

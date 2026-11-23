@@ -78,7 +78,7 @@ export class VoiceSession implements VoiceClient {
       const startMuted = this.host.pushToTalk() || (previous.status === 'idle' ? this.host.joinMuted() : this.snap.muted && !this.snap.listenOnly);
       const deafened = this.snap.deafened;
       const micDenied = !startMuted && !deafened && state.faults.micDenied;
-      this.set({ status: 'connected', roomId, joiningRoomId: null, joinedAt: performance.now(), muted: startMuted || deafened || micDenied, listenOnly: micDenied, sharing: false });
+      this.set({ status: 'connected', roomId, joiningRoomId: null, joinedAt: performance.now(), muted: startMuted || deafened || micDenied, listenOnly: micDenied, sharing: false, audioBlocked: state.faults.audioBlocked ?? false });
       this.host.onSound('join');
       if (micDenied) this.host.onProblem('mic_denied');
       this.refresh();

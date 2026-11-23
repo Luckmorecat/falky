@@ -5,12 +5,6 @@ import type { PaletteName } from '../fx/palette';
 import { idleVoice, type VoiceSnapshot } from '../voice/types';
 import { prefs, type Settings } from './prefs';
 
-export interface Notice {
-  id: number;
-  title: string;
-  body?: string;
-}
-
 export interface AppState {
   phase: 'loading' | 'entry' | 'noaccess' | 'revoked' | 'ready';
   visitor: Visitor | null;
@@ -33,7 +27,6 @@ export interface AppState {
   chatOpen: boolean;
   roomsOpen: boolean;
   voice: VoiceSnapshot;
-  notice: Notice | null;
   /** Someone in a room's voice calling this person to join it, until answered or dismissed. */
   knock: { id: number; roomId: string; fromName: string } | null;
   /** The message the composer of a room answers or changes; one at a time. */
@@ -60,7 +53,6 @@ let state: AppState = {
   chatOpen: false,
   roomsOpen: false,
   voice: idleVoice,
-  notice: null,
   knock: null,
   composing: null,
   settings: prefs.settings(),

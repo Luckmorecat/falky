@@ -1,8 +1,9 @@
 import { type PointerEvent as ReactPointerEvent, type Ref, useEffect, useRef, useState } from 'react';
 import type { Room } from '../api/client';
-import { setChatOpen, showNotice, viewRoom, voice } from '../app/controller';
+import { currentSessionEpoch, setChatOpen, viewRoom, voice } from '../app/controller';
 import { shortcuts } from '../app/shortcuts';
 import { useApp } from '../app/store';
+import { showToast } from '../app/toasts';
 import { onTick } from '../fx/ticker';
 import { t } from '../strings';
 import { canUseCamera } from '../voice/camera';
@@ -22,11 +23,12 @@ export function Dock({ room, unreadRef, holdToTalk }: { room: Room | null; unrea
 
   async function openSettings() {
     if (!Settings) {
+      const epoch = currentSessionEpoch();
       try {
         const module = await import('./Settings');
         setSettings(() => module.Settings);
       } catch {
-        showNotice(t.settings, t.errors.network);
+        if (epoch === currentSessionEpoch()) showToast({ title: t.settings, body: t.errors.network });
         return;
       }
     }

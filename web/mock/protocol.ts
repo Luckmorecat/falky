@@ -25,6 +25,7 @@ export interface MockFaults {
   scannerDelayMs?: number;
   shareFailure: boolean;
   voiceReconnecting: boolean;
+  audioBlocked?: boolean;
 }
 export interface MockState {
   instanceId: string;
