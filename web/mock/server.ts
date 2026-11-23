@@ -485,6 +485,7 @@ export async function startMockServer(options: { port?: number; scenario?: strin
     if (url.pathname === '/api/rooms' && req.method === 'GET') return json(res, 200, { rooms: state.rooms } satisfies Schema['RoomList']);
     const voice = /^\/api\/rooms\/([^/]+)\/voice$/.exec(url.pathname);
     if (voice && req.method === 'POST') {
+      if (res.destroyed) return;
       const roomId = voice[1]!;
       if (!state.rooms.some((room) => room.id === roomId)) throw new Refused(404, 'room_not_found', 'No such room');
       if (state.visitor.nameTaken) throw new Refused(409, 'name_taken', 'Rename before joining voice');

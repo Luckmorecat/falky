@@ -1,4 +1,4 @@
-import { type Ref, useEffect, useRef, useState } from 'react';
+import { type PointerEvent as ReactPointerEvent, type Ref, useEffect, useRef, useState } from 'react';
 import type { Room } from '../api/client';
 import { setChatOpen, showNotice, viewRoom, voice } from '../app/controller';
 import { shortcuts } from '../app/shortcuts';
@@ -12,10 +12,11 @@ import { Button } from './Button';
 import { IconButton } from './IconButton';
 import { Icon } from './Icon';
 import type { Settings as SettingsDialog } from './Settings';
+import type { useTalk } from './useTalk';
 import './Dock.css';
 
 /** The control center and the settings it opens, which outlast any change between its states. */
-export function Dock({ room, unreadRef }: { room: Room | null; unreadRef?: Ref<HTMLSpanElement> }) {
+export function Dock({ room, unreadRef, holdToTalk }: { room: Room | null; unreadRef?: Ref<HTMLSpanElement>; holdToTalk: ReturnType<typeof useTalk> }) {
   const [Settings, setSettings] = useState<typeof SettingsDialog | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
 
@@ -34,19 +35,20 @@ export function Dock({ room, unreadRef }: { room: Room | null; unreadRef?: Ref<H
 
   return (
     <>
-      <Controls room={room} unreadRef={unreadRef} onSettings={() => void openSettings()} />
+      <Controls room={room} unreadRef={unreadRef} holdToTalk={holdToTalk} onSettings={() => void openSettings()} />
       {Settings && <Settings open={settingsOpen} onClose={() => setSettingsOpen(false)} />}
     </>
   );
 }
 
 /** Voice for this visitor, wherever they are looking. */
-function Controls({ room, unreadRef, onSettings }: { room: Room | null; unreadRef?: Ref<HTMLSpanElement>; onSettings(): void }) {
+function Controls({ room, unreadRef, holdToTalk, onSettings }: { room: Room | null; unreadRef?: Ref<HTMLSpanElement>; holdToTalk: ReturnType<typeof useTalk>; onSettings(): void }) {
   const v = useApp((s) => s.voice);
   const rooms = useApp((s) => s.rooms);
   const pushToTalk = useApp((s) => s.settings.pushToTalk);
   const selfId = useApp((s) => s.voice.people.find((p) => p.local)?.id);
   const ring = useRef<HTMLSpanElement>(null);
+  const talkPointer = useRef<number | null>(null);
   const inVoice = v.status === 'connected' || v.status === 'reconnecting' || (v.status === 'joining' && v.roomId !== null);
   const joining = v.status === 'joining';
 
@@ -68,10 +70,15 @@ function Controls({ room, unreadRef, onSettings }: { room: Room | null; unreadRe
     return (
       <div className="dock">
         <div className="dock-bg" />
-        {room && (
-          <Button variant="join" data-cue="none" disabled={joining} onClick={() => void voice.join(room.id)}>
+        {joining ? (
+          <>
+            <span className="dock-joining" role="status">{t.joining}</span>
+            <Button className="dock-cancel" onClick={() => voice.cancelJoin()}>{t.leaveCancel}</Button>
+          </>
+        ) : room && (
+          <Button variant="join" data-cue="none" onClick={() => void voice.join(room.id)}>
             <Icon name="mic" />
-            {joining ? t.joining : t.join}
+            {t.join}
           </Button>
         )}
         <SettingsButton onOpen={onSettings} />
@@ -84,6 +91,12 @@ function Controls({ room, unreadRef, onSettings }: { room: Room | null; unreadRe
   const deafLabel = v.deafened ? t.deafOff : t.deafOn;
   const shareLabel = v.sharing ? t.shareOff : t.shareOn;
   const cameraLabel = v.camera ? t.cameraOff : t.cameraOn;
+
+  const releasePointer = (e: ReactPointerEvent) => {
+    if (talkPointer.current !== e.pointerId) return;
+    talkPointer.current = null;
+    holdToTalk('pointer', false);
+  };
 
   return (
     <div className="dock" role="toolbar" aria-label={voiceRoom?.name}>
@@ -100,9 +113,47 @@ function Controls({ room, unreadRef, onSettings }: { room: Room | null; unreadRe
       </IconButton>
       <div className="mic-wrap">
         <span ref={ring} className="mic-ring" />
-        <IconButton className={v.muted ? 'off' : ''} aria-pressed={v.muted} data-cue={v.muted ? 'on' : 'off'} aria-label={muteLabel} data-tip={pushToTalk && v.muted ? t.holdToTalk(shortcuts.pushToTalk.label) : `${muteLabel} (${shortcuts.mute.label})`} onClick={() => void voice.toggleMute()}>
-          <Icon name={v.muted ? 'micOff' : 'mic'} />
-        </IconButton>
+        {pushToTalk ? (
+          <>
+            <span className="dock-talk-label" aria-hidden="true">{t.pressToTalk}</span>
+            <IconButton
+              className={v.muted ? 'dock-talk off' : 'dock-talk'}
+              aria-label={t.pressToTalk}
+              aria-pressed={!v.muted}
+              aria-disabled={v.status !== 'connected' || v.deafened}
+              data-cue="none"
+              data-tip={t.holdToTalk(shortcuts.pushToTalk.label)}
+              onPointerDown={(e) => {
+                if (!e.isPrimary || e.button !== 0) return;
+                talkPointer.current = e.pointerId;
+                e.currentTarget.setPointerCapture?.(e.pointerId);
+                holdToTalk('pointer', true);
+              }}
+              onPointerUp={releasePointer}
+              onPointerCancel={releasePointer}
+              onLostPointerCapture={releasePointer}
+              onContextMenu={(e) => e.preventDefault()}
+              onKeyDown={(e) => {
+                if (e.key !== ' ' && e.key !== 'Enter') return;
+                e.preventDefault();
+                e.stopPropagation();
+                if (!e.repeat) holdToTalk('button-key', true);
+              }}
+              onKeyUp={(e) => {
+                if (e.key !== ' ' && e.key !== 'Enter') return;
+                e.preventDefault();
+                holdToTalk('button-key', false);
+              }}
+              onBlur={() => holdToTalk('button-key', false)}
+            >
+              <Icon name={v.muted ? 'micOff' : 'mic'} />
+            </IconButton>
+          </>
+        ) : (
+          <IconButton className={v.muted ? 'off' : ''} aria-pressed={v.muted} data-cue={v.muted ? 'on' : 'off'} aria-label={muteLabel} data-tip={`${muteLabel} (${shortcuts.mute.label})`} onClick={() => void voice.toggleMute()}>
+            <Icon name={v.muted ? 'micOff' : 'mic'} />
+          </IconButton>
+        )}
       </div>
       {canUseCamera && (
         <IconButton aria-pressed={v.camera} data-cue={v.camera ? 'off' : 'on'} aria-label={cameraLabel} data-tip={`${cameraLabel} (${shortcuts.camera.label})`} onClick={() => void voice.toggleCamera()}>

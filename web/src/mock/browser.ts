@@ -56,7 +56,11 @@ export async function startCamera(_constraints: MediaTrackConstraints): Promise<
   return stream;
 }
 
-export function startQRScanner(video: HTMLVideoElement, onResult: (value: string) => void, onError: (error: unknown) => void): import('../runtime/qrScanner').QRScanner {
+export function startQRScanner(video: HTMLVideoElement, onResult: (value: string) => void, onError: (error: unknown) => void, canUseCamera = () => true): import('../runtime/qrScanner').QRScanner {
+  if (!canUseCamera()) {
+    onError(new DOMException('Camera already in use', 'NotReadableError'));
+    return { stop() {} };
+  }
   let stopped = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
   const stop = () => { stopped = true; clearTimeout(timer); unsubscribe(); removeEventListener('falky:mock-qr', detect); video.srcObject = null; };

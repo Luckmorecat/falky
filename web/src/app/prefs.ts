@@ -109,5 +109,15 @@ export const prefs = {
     const v = Number(read(`connectionVolume.${connectionId}`));
     return read(`connectionVolume.${connectionId}`) === null || Number.isNaN(v) ? 1 : Math.max(0, Math.min(2, v));
   },
-  setVolume: (connectionId: string, v: number) => write(`connectionVolume.${connectionId}`, String(v)),
+  volumeBeforeMute(connectionId: string): number {
+    const saved = Number(read(`volumeBeforeMute.${connectionId}`));
+    return saved > 0 ? Math.min(2, saved) : 1;
+  },
+  setVolume(connectionId: string, v: number): void {
+    if (v === 0) {
+      const current = this.volume(connectionId);
+      if (current > 0) write(`volumeBeforeMute.${connectionId}`, String(current));
+    }
+    write(`connectionVolume.${connectionId}`, String(v));
+  },
 };

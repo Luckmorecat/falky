@@ -8,9 +8,9 @@ async function client(scenario = 'populated') {
   const server = await startMockServer({ scenario });
   running.push(server);
   let cookie = '';
-  const call = async (path: string, body?: unknown, method = body === undefined ? 'GET' : 'POST') => {
+  const call = async (path: string, body?: unknown, method = body === undefined ? 'GET' : 'POST', signal?: AbortSignal) => {
     const response = await fetch(server.url + path, {
-      method, headers: { cookie, 'Content-Type': 'application/json' },
+      method, signal, headers: { cookie, 'Content-Type': 'application/json' },
       body: body === undefined ? undefined : JSON.stringify(body),
     });
     const nextCookie = response.headers.get('set-cookie');
@@ -368,4 +368,30 @@ test('independent connections list the same person and exact mock disconnect pre
   assert.equal((await call('/__mock/action', { type: 'voice-disconnect', generation: bootstrap.generation })).status, 400);
   await call('/__mock/action', { type: 'voice-disconnect', generation: bootstrap.generation, connectionId: first.grantId });
   assert.deepEqual((await occupants()).map((p: { connectionId: string }) => p.connectionId), [bootstrap.peers[roomId][0].connectionId, bootstrap.peers[roomId][1].connectionId, second.grantId]);
+});
+
+test('aborting the built-in delayed voice POST leaves no mock connection or occupancy', { timeout: 3000 }, async () => {
+  const { call, bootstrap } = await client();
+  const roomId = bootstrap.rooms[0].id;
+  const voice = `/api/rooms/${roomId}/voice`;
+  const readOccupancy = async () => (await (await call('/api/rooms')).json()).rooms[0].occupancy;
+  const original = await readOccupancy();
+  const delayMs = 150;
+  await call('/__mock/action', { type: 'faults', faults: { delayMs } });
+  const controller = new AbortController();
+  const aborted = assert.rejects(call(voice, {}, 'POST', controller.signal), { name: 'AbortError' });
+  let state;
+  do {
+    state = await (await call('/__mock/state')).json();
+  } while (state.faults.delayMs !== 0);
+  controller.abort();
+  await aborted;
+  await new Promise((resolve) => setTimeout(resolve, delayMs));
+  assert.deepEqual((await (await call('/__mock/state')).json()).voiceConnections, {});
+  assert.deepEqual(await readOccupancy(), original);
+
+  const response = await call(voice, {});
+  assert.equal(response.status, 200);
+  const { grantId } = await response.json();
+  assert.deepEqual((await (await call('/__mock/state')).json()).voiceConnections, { [grantId]: roomId });
 });

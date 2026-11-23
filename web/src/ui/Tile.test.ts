@@ -6,7 +6,7 @@ import { setParticipantVolume } from '../app/controller';
 import { setLanguage } from '../strings';
 import { Tile, type TileProps } from './Tile';
 
-vi.mock('../app/prefs', () => ({ prefs: { volume: vi.fn(() => 1) } }));
+vi.mock('../app/prefs', () => ({ prefs: { volume: vi.fn(() => 1), volumeBeforeMute: vi.fn(() => 1) } }));
 vi.mock('../app/controller', () => ({ setParticipantVolume: vi.fn() }));
 vi.mock('../app/store', () => ({ useApp: () => false }));
 vi.mock('../app/interfaceSounds', () => ({ sayTick: vi.fn() }));
@@ -78,4 +78,19 @@ it('never applies a saved participant volume to your own mute status', async () 
   await render({ isSelf: true, adjustable: false });
   expect(container.querySelector('.locally-muted')).toBeNull();
   expect(container.querySelector('article')?.getAttribute('aria-label')).toBe('Sam');
+});
+
+it('shows a binary iPad audio button and restores the saved audible volume', async () => {
+  vi.stubGlobal('navigator', { userAgent: 'Macintosh', platform: 'MacIntel', maxTouchPoints: 5 });
+  vi.mocked(prefs.volumeBeforeMute).mockReturnValue(.65);
+  await render();
+  expect(container.querySelector('input[type=range]')).toBeNull();
+  const speaker = container.querySelector<HTMLButtonElement>('.t-native-audio')!;
+  expect(speaker.getAttribute('aria-label')).toBe('Mute Sam');
+  await act(async () => speaker.click());
+  expect(setParticipantVolume).toHaveBeenLastCalledWith('sam.connection', 0);
+  expect(speaker.getAttribute('aria-label')).toBe('Unmute Sam');
+  expect(container.querySelector('article')?.getAttribute('aria-label')).toBe('Sam, Muted for you');
+  await act(async () => speaker.click());
+  expect(setParticipantVolume).toHaveBeenLastCalledWith('sam.connection', .65);
 });

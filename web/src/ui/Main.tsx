@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { answerKnock, dismissKnock, dismissNotice } from '../app/controller';
+import { answerKnock, dismissKnock, dismissNotice, voice } from '../app/controller';
 import { useApp } from '../app/store';
 import { t } from '../strings';
 import { Button } from './Button';
@@ -33,7 +33,7 @@ function Clock({ joinedAt }: { joinedAt: number }) {
 
 export function Main() {
   useShortcuts();
-  useTalk();
+  const holdToTalk = useTalk();
   const background = useRef<LiveBackgroundHandle>(null);
   const unreadCounter = useRef<HTMLSpanElement>(null);
   const room = useApp((s) => s.rooms.find((r) => r.id === s.viewedRoomId) ?? null);
@@ -71,7 +71,7 @@ export function Main() {
         />
         {room ? <Stage room={room} background={background} /> : <div className="stage" />}
         <div className="dock-space" />
-        <Dock room={room} unreadRef={unreadCounter} />
+        <Dock room={room} unreadRef={unreadCounter} holdToTalk={holdToTalk} />
       </div>
 
       <Chat room={room} />
@@ -79,6 +79,12 @@ export function Main() {
 
       <div className="float-top" aria-live="polite">
         {banner && <div className="banner"><span className="pulse" />{banner}</div>}
+        {voiceState.audioBlocked && voiceState.roomId && voiceState.status !== 'reconnecting' && (
+          <div className="toast audio-blocked">
+            <strong>{t.audioPlaybackBlocked}</strong>
+            <Button data-enable-voice-audio data-cue="none" onClick={() => voice.retryAudio()}>{t.enableAudio}</Button>
+          </div>
+        )}
         {notice && (
           <div className="toast" key={notice.id} role="status">
             <div>

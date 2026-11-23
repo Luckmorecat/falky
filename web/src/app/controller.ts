@@ -116,7 +116,8 @@ const voiceSession: VoiceClient = new VoiceSession({
     const s = getState().settings;
     return { echoCancellation: s.echoCancellation, noiseSuppression: s.noiseSuppression, autoGainControl: s.autoGain };
   },
-  joinMuted: () => getState().settings.joinMuted || getState().settings.pushToTalk,
+  joinMuted: () => getState().settings.joinMuted,
+  pushToTalk: () => getState().settings.pushToTalk,
   shareSettings: () => getState().settings,
   cameraSettings: () => getState().settings,
   volumeOf: (id) => prefs.volume(id),
@@ -129,7 +130,7 @@ onReaction((from, id) => {
   playSound(soundOf(id) ?? 'pop', s.settings.speakerId, popPitch(id));
 });
 
-const pausedVoiceActions = new Set<PropertyKey>(['join', 'toggleMute', 'toggleDeafen', 'toggleShare', 'toggleCamera', 'restartCamera', 'setCamera', 'setMic', 'setSpeaker', 'applyMicProcessing', 'react']);
+const pausedVoiceActions = new Set<PropertyKey>(['join', 'setMuted', 'toggleMute', 'toggleDeafen', 'toggleShare', 'toggleCamera', 'restartCamera', 'setCamera', 'setMic', 'setSpeaker', 'applyMicProcessing', 'retryAudio', 'react']);
 const voiceMethods = new Map<PropertyKey, unknown>();
 export const voice: VoiceClient = new Proxy(voiceSession, {
   get(target, key) {
@@ -151,15 +152,15 @@ function makeLive(epoch: number): LiveConnection { return new LiveConnection({
   },
   onDown: () => { if (epoch === session) setState({ live: 'reconnecting' }); },
   onRevoked: () => { if (epoch === session) endAccess(); },
-  async shouldRetry() {
-    if (epoch !== session) return false;
+  async shouldRetry(signal?: AbortSignal) {
+    if (signal?.aborted || epoch !== session) return false;
     try {
-      if (!await refreshIdentity(epoch)) return false;
+      if (!await refreshIdentity(epoch, signal) || signal?.aborted) return false;
       const me = getState().visitor;
       if (me?.nameTaken) setState({ live: 'off' });
       return !!me && !me.nameTaken;
     } catch (err) {
-      if (epoch !== session) return false;
+      if (signal?.aborted || epoch !== session) return false;
       if (err instanceof ApiError && err.status === 401) {
         endAccess();
         return false;
@@ -331,9 +332,9 @@ export async function logout(): Promise<void> {
   setState({ phase: 'entry' });
 }
 
-async function refreshIdentity(epoch: number): Promise<boolean> {
-  const resolved = await api.accountSession();
-  if (epoch !== session) return false;
+async function refreshIdentity(epoch: number, signal?: AbortSignal): Promise<boolean> {
+  const resolved = await api.accountSession(signal);
+  if (signal?.aborted || epoch !== session) return false;
   const current = getState().accountSession;
   if (current?.visitor.id !== resolved.visitor.id || current.kind !== resolved.kind || current.expiresAt !== resolved.expiresAt) {
     await reconcileSession();
@@ -716,7 +717,7 @@ function dropUploads(): void {
 async function readAttachmentLimits(epoch: number): Promise<void> {
   try {
     const limits = await api.attachmentLimits();
-    if (epoch === session) setState({ attachmentLimits: { maxAttachments: limits.maxAttachments, maxFileBytes: limits.maxFileBytes } });
+    if (epoch === session) setState({ attachmentLimits: limits });
   } catch (error) {
     if (epoch === session) accessEnded(error);
     // The defaults match the server's; it refuses anything beyond them anyway.
@@ -753,7 +754,7 @@ async function upload(u: ComposerUpload, file: File): Promise<void> {
         last = sent;
         patchUpload(u.roomId, u.localId, { progress: sent });
       }
-    }, control.signal);
+    }, control.signal, getState().attachmentLimits.uploadTimeoutSeconds);
     if (epoch !== session) return;
     if (!(getState().uploads[u.roomId] ?? []).some((x) => x.localId === u.localId)) {
       // Removed while it was on its way: the server should not keep it.
@@ -958,7 +959,7 @@ export function updateSettings(patch: Partial<Settings>): void {
   if (patch.speakerId !== undefined) void voice.setSpeaker(patch.speakerId);
   if (patch.cameraId !== undefined) void voice.setCamera(patch.cameraId);
   if (patch.cameraResolution !== undefined) void voice.restartCamera();
-  if (patch.pushToTalk && !getState().voice.muted) void voice.toggleMute();
+  if (patch.pushToTalk) void voice.setMuted(true);
 }
 
 /** Turns message notifications on, asking the browser first; answers whether they are on. */

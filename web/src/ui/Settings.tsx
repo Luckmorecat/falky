@@ -11,6 +11,7 @@ import { canChooseSpeaker, enumerateDevices, watchDevices, refreshDevices, start
 import { canUseCamera } from '../voice/camera';
 import { canShareScreen, SHARE_BITRATE_MAX, SHARE_BITRATE_PRESETS, shareBitrate, supportedShareCodecs, type ShareCodec } from '../voice/share';
 import { Button } from './Button';
+import { callCameraInUse } from './callCameraInUse';
 import { Icon, type IconName } from './Icon';
 import { IconButton } from './IconButton';
 import { Orb } from './Orb';
@@ -149,10 +150,11 @@ function VoicePanel({ active }: { active: boolean }) {
 
 function VideoPanel({ active }: { active: boolean }) {
   const settings = useApp((s) => s.settings);
+  const inUse = useApp(callCameraInUse);
   const cameras = useDevices('videoinput', active);
   return (
     <div className="set-stack">
-      <SettingsGroup title={t.camera} note={t.cameraPreviewHint}>
+      <SettingsGroup title={t.camera} note={inUse ? undefined : t.cameraPreviewHint}>
         <CameraPreview active={active} />
         <DeviceSelect label={t.camera} value={settings.cameraId} devices={cameras} onChange={(cameraId) => updateSettings({ cameraId })} />
         <Segmented label={t.cameraQuality} value={settings.cameraResolution} options={[['360', '360p'], ['720', '720p'], ['1080', '1080p']]} onChange={(cameraResolution) => updateSettings({ cameraResolution })} />

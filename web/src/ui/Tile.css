@@ -22,3 +22,4 @@
 .tile.mini { gap: 4px; }
 .tile.mini .t-orb { width: calc(100cqh - 22px); }
 .tile.mini .t-name { font-size: 13px; }
+.t-native-audio.ib { position: absolute; left: 3%; bottom: 3%; z-index: 3; width: 44px; height: 44px; }

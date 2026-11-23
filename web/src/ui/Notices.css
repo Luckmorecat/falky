@@ -20,3 +20,7 @@
 @supports not (corner-shape: superellipse(2)) {
   .banner { border-radius: calc((.5lh + 10px) * var(--corner)); }
 }
+.audio-blocked { --audio-button-radius: calc(24px * var(--corner)); --audio-button-inset: 12px;
+  align-items: center; padding: var(--audio-button-inset) var(--audio-button-inset) var(--audio-button-inset) 20px;
+  border-radius: calc(var(--audio-button-radius) + var(--audio-button-inset)); }
+.audio-blocked .btn2 { flex: none; height: 44px; border-radius: var(--audio-button-radius); }

@@ -40,6 +40,7 @@ voice.level = (id) => fakeLevel(id, performance.now() / 1000);
 const patchVoice = (patch: Partial<VoiceSnapshot>) => setState({ voice: { ...getState().voice, ...patch } });
 const inVoice = (people: VoicePerson[], roomId: string): VoiceSnapshot => ({ ...idleVoice, status: 'connected', roomId, joinedAt: performance.now() - 754_000, people, quality: 'good' });
 
+voice.setMuted = async (muted) => patchVoice({ muted });
 voice.toggleMute = async () => patchVoice({ muted: !getState().voice.muted });
 voice.toggleDeafen = async () => patchVoice({ deafened: !getState().voice.deafened });
 voice.toggleShare = async () => patchVoice({ sharing: !getState().voice.sharing });
