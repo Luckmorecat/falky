@@ -58,6 +58,7 @@ class IsolationTests(unittest.TestCase):
             self.assertFalse((services["livekit"].get("networks", {}).get("default") or {}).get("aliases"))
             self.assertEqual(services["falky"]["environment"]["FALKY_SIGNALLING_ADDR"], ":7880")
             self.assertEqual(services["falky"]["environment"]["FALKY_LIVEKIT_API_URL"], "http://livekit:7880")
+            self.assertEqual(services["falky"]["environment"]["FALKY_GEOIP_URL"], "http://geoip:8080")
             for name, service in services.items():
                 if name != "falky":
                     self.assertNotIn(config["name"] + "-voice", (service.get("networks", {}).get("default") or {}).get("aliases", []))

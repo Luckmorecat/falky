@@ -1,3 +1,6 @@
 .device-request-details { min-width: 0; flex: 1; overflow-wrap: anywhere; }
 .device-request-details strong { display: block; font-size: 14px; font-weight: 500; }
-.device-request-details small { display: block; color: var(--text-2); font-size: 13px; margin-top: 4px; }
+.device-request-location, .device-request-details .device-request-ip { display: block; color: var(--text-2); margin-top: 4px; }
+.device-request-location { font-size: 13px; }
+.device-request-location .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.device-request-details .device-request-ip { font-size: 11px; }

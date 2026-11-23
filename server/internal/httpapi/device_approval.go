@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/kisshot/falky/server/internal/api"
@@ -109,6 +110,13 @@ func signInLinkBody(v identity.SignInLinkView) api.SignInLink {
 	return api.SignInLink{Id: v.ID, State: api.SignInLinkState(v.State), Version: v.Version, CreatedAt: v.CreatedAt, ExpiresAt: v.ExpiresAt, ApprovalGrantsRecentProof: v.ApprovalGrantsRecentProof, Requests: requests}
 }
 
+func (s *server) addSignInLocation(ctx context.Context, request *api.SignInRequest) {
+	location := s.geoIP.Lookup(ctx, request.RequesterIp)
+	if location.City != "" || location.CountryCode != "" {
+		request.RequesterLocation = &api.SignInLocation{City: location.City, CountryCode: location.CountryCode}
+	}
+}
+
 func signInBeginBody(v identity.SignInBeginResult) api.SignInBegin {
 	return api.SignInBegin{Request: signInRequestBody(v.Request), Code: v.Code, Token: v.QRToken, Url: v.URL}
 }
@@ -128,7 +136,18 @@ func (s *server) GetSignInLink(ctx context.Context, req api.GetSignInLinkRequest
 	if s.signInError(ctx, err) {
 		return nil, nil
 	}
-	return api.GetSignInLink200JSONResponse(signInLinkBody(result)), nil
+	body := signInLinkBody(result)
+	if s.geoIP != nil {
+		var lookups sync.WaitGroup
+		for i := range body.Requests {
+			request := &body.Requests[i]
+			if request.State == api.SignInRequestStatePending {
+				lookups.Go(func() { s.addSignInLocation(ctx, request) })
+			}
+		}
+		lookups.Wait()
+	}
+	return api.GetSignInLink200JSONResponse(body), nil
 }
 
 func (s *server) RevokeSignInLink(ctx context.Context, req api.RevokeSignInLinkRequestObject) (api.RevokeSignInLinkResponseObject, error) {
@@ -201,7 +220,9 @@ func (s *server) PreviewQRSignIn(ctx context.Context, req api.PreviewQRSignInReq
 	if s.signInError(ctx, err) {
 		return nil, nil
 	}
-	return api.PreviewQRSignIn200JSONResponse{Request: signInRequestBody(result.Request), ApprovalGrantsRecentProof: result.ApprovalGrantsRecentProof}, nil
+	body := signInRequestBody(result.Request)
+	s.addSignInLocation(ctx, &body)
+	return api.PreviewQRSignIn200JSONResponse{Request: body, ApprovalGrantsRecentProof: result.ApprovalGrantsRecentProof}, nil
 }
 
 func (s *server) ApproveQRSignIn(ctx context.Context, req api.ApproveQRSignInRequestObject) (api.ApproveQRSignInResponseObject, error) {

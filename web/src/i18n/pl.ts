@@ -84,6 +84,7 @@ export const pl: Strings = {
     androidDevice: 'Urządzenie z Androidem',
     windowsPC: 'Komputer z Windows',
     linuxPC: 'Komputer z Linuksem',
+    approximateLocation: 'Przybliżona lokalizacja',
     ipUnavailable: 'Adres IP niedostępny',
     resend: 'Pobierz kod ponownie',
   },
