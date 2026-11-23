@@ -12,7 +12,7 @@ function deferred() {
 
 let download: ReturnType<typeof deferred>;
 let host: VoiceHost;
-const rooms: { disconnect: ReturnType<typeof vi.fn>; canPlaybackAudio: boolean; localParticipant: { isMicrophoneEnabled: boolean } }[] = [];
+const rooms: { disconnect: ReturnType<typeof vi.fn>; canPlaybackAudio: boolean; state: string; localParticipant: { isMicrophoneEnabled: boolean } }[] = [];
 const resume = vi.fn(async () => {});
 const startAudio = vi.fn(async () => {});
 const connect = vi.fn(async () => {});
@@ -93,6 +93,7 @@ beforeEach(() => {
         remoteParticipants = remotes;
         activeSpeakers = speakers;
         connect = connect;
+        state = 'connected';
         startAudio = startAudio;
         canPlaybackAudio = false;
         switchActiveDevice = switchActiveDevice;
@@ -423,6 +424,70 @@ it('keeps the iOS room usable while the first native playback request is pending
   }
 });
 
+it('keeps the first iOS join pending until the microphone is ready', async () => {
+  vi.stubGlobal('navigator', { userAgent: 'iPhone Mobile/1' });
+  vi.useFakeTimers();
+  const permission = deferred();
+  const playback = deferred();
+  acquireMic.mockImplementationOnce(async () => { await permission.promise; return [localMic()]; });
+  startAudio.mockImplementationOnce(() => playback.promise);
+  const { VoiceSession } = await import('./session');
+  const session = new VoiceSession(host);
+  host.joinMuted = () => false;
+  try {
+    const joining = session.join('lounge');
+    download.resolve();
+    await vi.waitFor(() => expect(acquireMic).toHaveBeenCalledOnce());
+    const incoming = addIncomingAudio(document.createElement('audio'), 'mic');
+    listeners.get('ParticipantConnected')!();
+    await vi.advanceTimersByTimeAsync(25_000);
+    expect(session.snapshot).toMatchObject({ status: 'joining', roomId: null, people: [] });
+    expect(incoming.attachedElements).toHaveLength(0);
+    expect(startAudio).not.toHaveBeenCalled();
+    expect(host.onSound).not.toHaveBeenCalled();
+    expect(host.onProblem).not.toHaveBeenCalled();
+
+    permission.resolve();
+    await joining;
+    expect(startAudio).toHaveBeenCalledOnce();
+    expect(incoming.attachedElements).toHaveLength(1);
+    const changes = vi.mocked(host.onChange).mock.calls.map(([snapshot]) => snapshot);
+    expect(changes.filter((snapshot) => snapshot.status === 'connected')).toEqual([
+      expect.objectContaining({ roomId: 'lounge', muted: false, listenOnly: false,
+        people: expect.arrayContaining([expect.objectContaining({ local: true, muted: false })]) }),
+    ]);
+    expect(host.onSound).toHaveBeenCalledExactlyOnceWith('join');
+  } finally {
+    permission.resolve();
+    playback.resolve();
+    session.end();
+    vi.useRealTimers();
+  }
+});
+
+it('finishes the first join as reconnecting if signaling drops during mic permission', async () => {
+  const permission = deferred();
+  const track = localMic();
+  acquireMic.mockImplementationOnce(async () => { await permission.promise; return [track]; });
+  host.joinMuted = () => false;
+  const { VoiceSession } = await import('./session');
+  const session = new VoiceSession(host);
+  const joining = session.join('lounge');
+  download.resolve();
+  await vi.waitFor(() => expect(acquireMic).toHaveBeenCalledOnce());
+  rooms[0]!.state = 'signalReconnecting';
+  listeners.get('SignalReconnecting')!();
+  permission.resolve();
+  await joining;
+  expect(track.stop).toHaveBeenCalledOnce();
+  expect(publishMic).not.toHaveBeenCalled();
+  expect(session.snapshot).toMatchObject({ status: 'reconnecting', roomId: 'lounge', muted: true });
+  rooms[0]!.state = 'connected';
+  listeners.get('Reconnected')!();
+  expect(session.snapshot.status).toBe('connected');
+  session.end();
+});
+
 it('retries a desktop-mode iPad after a hidden reconnect and removes old room listeners', async () => {
   vi.stubGlobal('navigator', { userAgent: 'Macintosh; Intel Mac OS X', platform: 'MacIntel', maxTouchPoints: 5 });
   const visibility = vi.spyOn(document, 'hidden', 'get');
@@ -574,7 +639,7 @@ it('discards an abandoned late Join after access ends', async () => {
   expect(session.snapshot).toEqual(idleVoice);
 });
 
-it('stops microphone media that becomes available after explicit Leave', async () => {
+it.each(['cancel', 'disconnect'])('stops a late microphone after first join %s', async (reason) => {
   const micReady = deferred();
   const track = localMic();
   acquireMic.mockImplementationOnce(async () => { await micReady.promise; return [track]; });
@@ -583,12 +648,17 @@ it('stops microphone media that becomes available after explicit Leave', async (
   const session = new VoiceSession(host);
   const joining = session.join('lounge'); download.resolve();
   await vi.waitFor(() => expect(acquireMic).toHaveBeenCalledOnce());
-  await session.leave();
-  micReady.resolve();
+  if (reason === 'cancel') session.cancelJoin();
+  else listeners.get('Disconnected')!();
+  expect(session.snapshot).toEqual(idleVoice);
   await joining;
-  expect(track.stop).toHaveBeenCalledOnce();
+  micReady.resolve();
+  await vi.waitFor(() => expect(track.stop).toHaveBeenCalledOnce());
   expect(publishMic).not.toHaveBeenCalled();
-  expect(session.snapshot.status).toBe('idle');
+  expect(session.snapshot).toEqual(idleVoice);
+  expect(host.onSound).not.toHaveBeenCalled();
+  if (reason === 'cancel') expect(host.onProblem).not.toHaveBeenCalled();
+  else expect(host.onProblem).toHaveBeenCalledExactlyOnceWith('media_failed');
 });
 
 it('ignores a canceled microphone failure after a replacement Join', async () => {
@@ -1144,7 +1214,9 @@ it.each([
   try {
     const joining = session.join('lounge'); download.resolve(); await joining;
     expect(session.snapshot).toMatchObject({ status: 'connected', muted: true, listenOnly: true });
-    expect(host.onProblem).toHaveBeenCalledWith(problem);
+    const firstConnected = vi.mocked(host.onChange).mock.calls.find(([snapshot]) => snapshot.status === 'connected')?.[0];
+    expect(firstConnected).toMatchObject({ muted: true, listenOnly: true });
+    expect(host.onProblem).toHaveBeenCalledExactlyOnceWith(problem);
     expect(publishMic).not.toHaveBeenCalled();
   } finally {
     session.end();

@@ -77,9 +77,10 @@ export class VoiceSession implements VoiceClient {
       this.generation = generation;
       const startMuted = this.host.pushToTalk() || (previous.status === 'idle' ? this.host.joinMuted() : this.snap.muted && !this.snap.listenOnly);
       const deafened = this.snap.deafened;
-      this.set({ status: 'connected', roomId, joiningRoomId: null, joinedAt: performance.now(), muted: startMuted || deafened, listenOnly: false, sharing: false });
-      if (!startMuted && !deafened) this.enableMic();
+      const micDenied = !startMuted && !deafened && state.faults.micDenied;
+      this.set({ status: 'connected', roomId, joiningRoomId: null, joinedAt: performance.now(), muted: startMuted || deafened || micDenied, listenOnly: micDenied, sharing: false });
       this.host.onSound('join');
+      if (micDenied) this.host.onProblem('mic_denied');
       this.refresh();
     } catch (error) {
       if (issuedGrant) await this.release(generation, issuedGrant);
@@ -111,7 +112,7 @@ export class VoiceSession implements VoiceClient {
   }
 
   async leave(): Promise<void> {
-    if (this.snap.status !== 'idle') this.host.onSound('leave');
+    if (this.snap.roomId !== null) this.host.onSound('leave');
     await this.close();
   }
   end(): void { void this.close(); }

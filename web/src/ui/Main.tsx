@@ -54,7 +54,10 @@ export function Main() {
 
   const inThisRoom = !!room && voiceState.roomId === room.id && voiceState.status !== 'idle';
   const inVoiceElsewhere = !!voiceRoomName && voiceState.status !== 'idle' && !inThisRoom;
-  const banner = live === 'reconnecting' ? t.reconnecting : voiceState.status === 'reconnecting' ? t.voiceReconnecting : null;
+  const joining = voiceState.status === 'joining' && voiceState.roomId === null;
+  const banner = joining ? t.joining
+    : live === 'reconnecting' ? t.reconnecting
+    : voiceState.status === 'reconnecting' ? t.voiceReconnecting : null;
 
   return (
     <div className="screen room-screen">

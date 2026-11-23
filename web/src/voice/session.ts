@@ -29,6 +29,11 @@ interface Meter {
   buf: Float32Array<ArrayBuffer>;
 }
 
+interface JoiningMic {
+  attempt: JoinAttempt;
+  problem?: 'mic_missing' | 'mic_denied';
+}
+
 interface MicIntent {
   room: Room;
   enabled: boolean;
@@ -39,6 +44,7 @@ interface MicIntent {
   deviceConstraint?: ConstrainDOMString;
   selectedDeviceId?: string;
   replace?: boolean;
+  joining?: JoiningMic;
 }
 
 let sdk: Pick<typeof import('livekit-client'), 'ConnectionQuality' | 'DisconnectReason' | 'LocalTrack' | 'RemoteAudioTrack' | 'Room' | 'RoomEvent' | 'Track' | 'TrackEvent'>;
@@ -97,25 +103,40 @@ export class VoiceSession implements VoiceClient {
     const attempt = new JoinAttempt();
     this.pendingJoin = attempt;
     const previous = this.snap;
+    const firstJoin = previous.roomId === null;
     this.moveFrom = previous.status === 'connected' || previous.status === 'reconnecting' ? previous.status : null;
     try {
       this.set({ status: 'joining', joiningRoomId: roomId });
       const connected = await attempt.waitFor(this.connect(attempt, roomId));
       if (!connected || this.pendingJoin !== attempt) return;
       const { room, startMuted, keepCamera } = connected;
-      this.pendingJoin = null;
-
+      let joiningMic: JoiningMic | undefined;
+      if (firstJoin && !this.snap.deafened && !startMuted && !this.host.pushToTalk()) {
+        joiningMic = { attempt };
+        // The connection deadline does not include the browser permission prompt.
+        await attempt.waitFor(this.requestMic(room, true, joiningMic));
+        if (this.pendingJoin !== attempt || this.room !== room) return;
+      }
       const deafened = this.snap.deafened;
       this.knownShares.clear();
-      this.set({
-        status: 'connected', roomId, joiningRoomId: null, joinedAt: performance.now(),
-        muted: !room.localParticipant.isMicrophoneEnabled, listenOnly: false,
-      });
+      const reconnecting = room.state === 'reconnecting' || room.state === 'signalReconnecting';
+      const micProblem = joiningMic?.problem;
+      const joined = {
+        status: reconnecting ? 'reconnecting' : 'connected', roomId, joiningRoomId: null, joinedAt: performance.now(),
+        muted: !room.localParticipant.isMicrophoneEnabled, listenOnly: micProblem !== undefined,
+      } as const;
+      if (firstJoin) this.refresh(joined);
+      else this.set(joined);
+      if (this.pendingJoin !== attempt) return;
+      this.pendingJoin = null;
+      if (deafened || (firstJoin && this.nativePlayback)) this.applyVolumes();
+      if (firstJoin && !deafened) this.playback?.start();
       this.host.onSound('join');
+      if (micProblem) this.host.onProblem(micProblem);
       if (deafened) {
-        this.applyVolumes();
         void room.localParticipant.setAttributes({ deafened: 'true' }).catch(() => {});
       }
+      if (firstJoin) return;
       if (!deafened && !startMuted && !this.host.pushToTalk()) await this.requestMic(room, true);
       if (this.room !== room) return;
       // A first join never starts the camera.
@@ -162,7 +183,7 @@ export class VoiceSession implements VoiceClient {
       if (this.room === room) {
         // A native element may leave play() pending until it receives media or a tap.
         if (this.nativePlayback) {
-          if (!this.snap.deafened) this.playback?.start();
+          if (this.snap.roomId !== null && !this.snap.deafened) this.playback?.start();
         } else {
           await room.startAudio().catch(() => {});
         }
@@ -195,7 +216,7 @@ export class VoiceSession implements VoiceClient {
 
   async leave(): Promise<void> {
     if (this.snap.status === 'idle') return;
-    this.host.onSound('leave');
+    if (this.snap.roomId !== null) this.host.onSound('leave');
     this.close();
   }
 
@@ -373,9 +394,10 @@ export class VoiceSession implements VoiceClient {
     return this.queueMic(intent);
   }
 
-  private requestMic(room: Room, enabled: boolean): Promise<void> {
-    if (this.room !== room || (enabled && (this.snap.status !== 'connected' || this.snap.deafened))) return Promise.resolve();
+  private requestMic(room: Room, enabled: boolean, joining?: JoiningMic): Promise<void> {
+    if (this.room !== room || (enabled && !this.canEnableMic(room, joining))) return Promise.resolve();
     const intent = this.micIntent(room);
+    if (joining) intent.joining = joining;
     if (intent.enabled !== enabled) {
       intent.enabled = enabled;
       intent.revision++;
@@ -393,7 +415,12 @@ export class VoiceSession implements VoiceClient {
 
   private canStartMic(intent: MicIntent, revision: number): boolean {
     return this.room === intent.room && intent.enabled && intent.revision === revision
-      && this.snap.status === 'connected' && !this.snap.deafened;
+      && this.canEnableMic(intent.room, intent.joining);
+  }
+
+  private canEnableMic(room: Room, joining?: JoiningMic): boolean {
+    return !this.snap.deafened && (this.snap.status === 'connected'
+      || (joining?.attempt === this.pendingJoin && room.state === 'connected'));
   }
 
   private stopStartingMic(intent: MicIntent): void {
@@ -476,14 +503,19 @@ export class VoiceSession implements VoiceClient {
           if (this.room !== room) { this.stopTracks(room); return; }
           if (enabled && this.canStartMic(intent, revision)) {
             intent.enabled = false;
-            this.set({ listenOnly: true });
-            this.host.onProblem((err as Error).name === 'NotFoundError' ? 'mic_missing' : 'mic_denied');
+            const problem = (err as Error | undefined)?.name === 'NotFoundError' ? 'mic_missing' : 'mic_denied';
+            if (intent.joining) intent.joining.problem = problem;
+            else {
+              this.set({ listenOnly: true });
+              this.host.onProblem(problem);
+            }
           }
         }
         if (revision === intent.revision) break;
       }
     } finally {
       intent.pending = undefined;
+      intent.joining = undefined;
     }
     if (this.room === room) this.refresh();
   }
@@ -532,11 +564,11 @@ export class VoiceSession implements VoiceClient {
         if (room === this.room) this.playback?.sdkStatus(playing);
       })
       .on(sdk.RoomEvent.ParticipantConnected, () => {
-        this.host.onSound('join');
+        if (this.snap.roomId !== null) this.host.onSound('join');
         refresh();
       })
       .on(sdk.RoomEvent.ParticipantDisconnected, () => {
-        this.host.onSound('leave');
+        if (this.snap.roomId !== null) this.host.onSound('leave');
         refresh();
       })
       .on(sdk.RoomEvent.TrackPublished, refresh)
@@ -592,7 +624,8 @@ export class VoiceSession implements VoiceClient {
         // iOS ignores element volume. LiveKit's foreground recovery can also unmute
         // attached elements, so detach them altogether at zero/deafened.
         if (v === 0) this.detachAudio(track);
-        else if (!track.attachedElements.length) {
+        // First-join capture can interrupt Safari's audio output while routing switches.
+        else if (this.snap.roomId !== null && !track.attachedElements.length) {
           const element = track.attach();
           const playback = this.playback;
           playback?.watch(element, (retry) => {
@@ -647,9 +680,9 @@ export class VoiceSession implements VoiceClient {
     });
   }
 
-  private refresh(): void {
+  private refresh(joined?: Partial<VoiceSnapshot>): void {
     const room = this.room;
-    if (!room || this.snap.status === 'idle') return;
+    if (!room || (this.snap.roomId === null && !joined)) return;
     const local = room.localParticipant;
     const everyone: LkParticipant[] = [local, ...room.remoteParticipants.values()];
     const people = everyone
@@ -668,7 +701,11 @@ export class VoiceSession implements VoiceClient {
       }));
 
     const shares = new Set(people.filter((p) => p.sharing && !p.local).map((p) => p.id));
-    for (const id of shares) if (!this.knownShares.has(id)) this.host.onSound('share');
+    if (!joined) {
+      for (const id of shares) {
+        if (!this.knownShares.has(id)) this.host.onSound('share');
+      }
+    }
     this.knownShares = shares;
 
     this.syncMeters(everyone);
@@ -681,6 +718,7 @@ export class VoiceSession implements VoiceClient {
       camera: local.isCameraEnabled,
       cameraStarting: this.cameraStarts > 0,
       quality: q === sdk.ConnectionQuality.Excellent || q === sdk.ConnectionQuality.Good ? 'good' : q === sdk.ConnectionQuality.Poor ? 'poor' : q === sdk.ConnectionQuality.Lost ? 'lost' : 'unknown',
+      ...joined,
     });
   }
 
