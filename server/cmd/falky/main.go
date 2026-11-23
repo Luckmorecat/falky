@@ -423,6 +423,7 @@ func serveOn(ctx context.Context, logger *slog.Logger, cfg platform.Config, db *
 			chat.WithReactLimit(platform.NewLimiter(reactBurst, reactInterval, time.Now))),
 		Voice:         vs,
 		LiveKitAPIURL: cfg.LiveKitAPIURL,
+		GeoIPURL:      cfg.GeoIPURL,
 		EnterLimit:    platform.NewLimiter(enterBurst, enterInterval, time.Now),
 		Live:          hub,
 		PublicOrigin:  cfg.PublicOrigin,

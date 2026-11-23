@@ -91,6 +91,9 @@ test('QR detection only previews; explicit approval delivers the candidate cooki
     await page.getByRole('button', { name: 'Use camera', exact: true }).click();
     await page.evaluate(url => dispatchEvent(new CustomEvent('falky:mock-qr', { detail: url })), qr.url);
     await expect(page.getByRole('button', { name: 'Approve sign-in', exact: true })).toBeVisible();
+    const details = page.locator('.device-request-details');
+    await expect(details.getByText('Kyiv, Ukraine', { exact: true })).toBeVisible();
+    await expect(details.getByText('203.0.113.42')).toHaveCSS('font-size', '11px');
     await expect(receiver.getByText('Waiting for approval', { exact: false })).toBeVisible();
     expect((await session(receiver, app.url)).kind).not.toBe('account');
     await page.getByRole('button', { name: 'Approve sign-in', exact: true }).click();
@@ -130,6 +133,9 @@ test('link requests recover after issuer reload without copy authority; leading-
     for (const candidate of candidates) codes.push(await receiveLink(candidate, link));
     expect(codes[0]).toBe('0000'); expect(new Set(codes).size).toBe(3);
     await expect(page.locator('.device-pending')).toHaveCount(3);
+    const details = page.locator('.device-pending .device-request-details').first();
+    await expect(details.getByText('Kyiv, Ukraine', { exact: true })).toHaveCSS('font-size', '13px');
+    await expect(details.getByText('203.0.113.42')).toHaveCSS('font-size', '11px');
     await page.getByRole('textbox', { name: 'Four-digit code', exact: true }).fill('9999');
     await page.getByRole('button', { name: 'Approve sign-in', exact: true }).click();
     await expect(page.getByRole('alert')).toContainText('That code was not accepted');

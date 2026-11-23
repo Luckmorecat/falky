@@ -8,6 +8,10 @@ type Link = { view: Schema['SignInLink']; issuer: string; token: string; attempt
 const secret = () => randomBytes(32).toString('base64url');
 const fail = (code = 'invalid_proof', status = 403): never => { throw new FixtureError(status, code); };
 
+function reviewRequest(view: Request['view']): Request['view'] {
+  return view.state === 'pending' ? { ...view, requesterLocation: { countryCode: 'UA', city: 'Kyiv' } } : view;
+}
+
 /** Contract simulator, not a model of backend cryptography or transactional security. */
 export class DeviceFixture {
   private requests = new Map<string, Request>();
@@ -80,7 +84,7 @@ export class DeviceFixture {
   }
   private create(type: 'qr' | 'link', binding: string, req: IncomingMessage, link?: Link): Request {
     const createdAt = new Date().toISOString();
-    const request: Request = { binding, view: { id: this.hooks.id(), type, state: 'pending', version: 1, requesterIp: req.socket.remoteAddress?.replace(/^::ffff:/, '') ?? '', requesterUserAgent: [...(req.headers['user-agent'] ?? 'Browser')].slice(0, 256).join(''), createdAt, expiresAt: link?.view.expiresAt ?? new Date(Date.now() + 300_000).toISOString(), ...(link ? { linkId: link.view.id } : {}) } };
+    const request: Request = { binding, view: { id: this.hooks.id(), type, state: 'pending', version: 1, requesterIp: '203.0.113.42', requesterUserAgent: [...(req.headers['user-agent'] ?? 'Browser')].slice(0, 256).join(''), createdAt, expiresAt: link?.view.expiresAt ?? new Date(Date.now() + 300_000).toISOString(), ...(link ? { linkId: link.view.id } : {}) } };
     if (link) {
       for (let number = 0; number < 10000; number++) {
         const code = String(number).padStart(4, '0');
@@ -111,7 +115,10 @@ export class DeviceFixture {
     const linkPath = /^\/api\/accounts\/signin-links\/([^/]+)(?:\/(approve|requests\/([^/]+)\/deny))?$/.exec(path);
     if (linkPath) {
       const link = this.issuer(req, linkPath[1]!);
-      if (req.method === 'GET' && !linkPath[2]) return ok(this.linkView(link));
+      if (req.method === 'GET' && !linkPath[2]) {
+        const view = this.linkView(link);
+        return ok({ ...view, requests: view.requests.map(reviewRequest) });
+      }
       if (req.method === 'DELETE' && !linkPath[2]) { this.revoke(link); return ok(); }
       if (req.method === 'POST' && linkPath[2] === 'approve') {
         if (typeof input.code !== 'string' || !/^[0-9]{4}$/.test(input.code)) return fail('invalid_request', 400);
@@ -165,7 +172,7 @@ export class DeviceFixture {
       this.account(req);
       const request = [...this.requests.values()].find(request => request.qr === bearer());
       if (!request || request.view.state !== 'pending') return fail(); this.live(request.view);
-      if (qrAction[1] === 'preview') return ok({ request: request.view, approvalGrantsRecentProof: false } satisfies Schema['SignInPreview']);
+      if (qrAction[1] === 'preview') return ok({ request: reviewRequest(request.view), approvalGrantsRecentProof: false } satisfies Schema['SignInPreview']);
       if (qrAction[1] === 'approve') { request.approver = this.hooks.token(req); this.change(request, 'approved'); return ok(request.view); }
       this.change(request, 'denied'); return ok();
     }

@@ -1041,6 +1041,14 @@ export interface components {
              */
             requesterIp?: string;
             /**
+             * @description Approximate location derived from the candidate's IP, when available to the approver reviewing a pending request.
+             * @example {
+             *       "countryCode": "UA",
+             *       "city": "Kyiv"
+             *     }
+             */
+            requesterLocation?: components["schemas"]["SignInLocation"];
+            /**
              * @description Untrusted display text, at most 256 Unicode code points.
              * @example Browser
              */
@@ -1069,6 +1077,25 @@ export interface components {
              * @example 2026-11-10T12:05:00Z
              */
             consumedAt?: string | null;
+        };
+        /**
+         * @description Approximate IP location. Either field can be absent.
+         * @example {
+         *       "countryCode": "UA",
+         *       "city": "Kyiv"
+         *     }
+         */
+        SignInLocation: {
+            /**
+             * @description Two-letter country code.
+             * @example UA
+             */
+            countryCode?: string;
+            /**
+             * @description English city name from the GeoIP dataset.
+             * @example Kyiv
+             */
+            city?: string;
         };
         /** @description Link state visible only to its exact issuing session. */
         SignInLink: {

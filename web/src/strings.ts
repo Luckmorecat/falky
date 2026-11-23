@@ -101,6 +101,7 @@ const uk = {
     "androidDevice": "Пристрій Android",
     "windowsPC": "Комп’ютер Windows",
     "linuxPC": "Комп’ютер Linux",
+    "approximateLocation": "Приблизне місцезнаходження",
     "ipUnavailable": "IP-адреса недоступна",
     "resend": "Отримати код знову"
 },
@@ -539,6 +540,7 @@ const en: Strings = {
     "androidDevice": "Android device",
     "windowsPC": "Windows PC",
     "linuxPC": "Linux PC",
+    "approximateLocation": "Approximate location",
     "ipUnavailable": "IP address unavailable",
     "resend": "Get code again"
 },

@@ -38,6 +38,8 @@ type Config struct {
 	PublicOrigin string
 	// LogLevel is the minimum level written to the log.
 	LogLevel slog.Level
+	// GeoIPURL is the private GeoIP service origin. An empty value disables lookups.
+	GeoIPURL string
 	// LiveKitURL is where clients reach LiveKit, as ws://host or
 	// wss://host[:port]; it is handed to them with each voice token.
 	LiveKitURL string
@@ -63,6 +65,7 @@ const (
 	EnvAdminSocket           = "FALKY_ADMIN_SOCKET"
 	EnvPublicOrigin          = "FALKY_PUBLIC_ORIGIN"
 	EnvLogLevel              = "FALKY_LOG_LEVEL"
+	EnvGeoIPURL              = "FALKY_GEOIP_URL"
 
 	EnvLiveKitURL       = "FALKY_LIVEKIT_URL"
 	EnvLiveKitAPIURL    = "FALKY_LIVEKIT_API_URL"
@@ -113,6 +116,12 @@ func LoadConfig(getenv func(string) string) (Config, error) {
 		return Config{}, fmt.Errorf("%s: %w", EnvPublicOrigin, err)
 	}
 	cfg.PublicOrigin = origin
+	if v := getenv(EnvGeoIPURL); v != "" {
+		cfg.GeoIPURL, err = parseRootURL(v, "https", "http", true)
+		if err != nil {
+			return Config{}, fmt.Errorf("%s: %w", EnvGeoIPURL, err)
+		}
+	}
 	// The origin's scheme is https or http, so this is wss or ws.
 	cfg.LiveKitURL, err = parseRootURL(valueOr(getenv(EnvLiveKitURL), "ws"+strings.TrimPrefix(origin, "http")), "wss", "ws", false)
 	if err != nil {

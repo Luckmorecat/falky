@@ -2489,6 +2489,12 @@ components:
           description: Full client IP reported by the trusted reverse proxy. Empty for older requests or when unavailable.
           example: '203.0.113.42'
           maxLength: 45
+        requesterLocation:
+          x-go-type-skip-optional-pointer: false
+          allOf:
+          - $ref: '#/components/schemas/SignInLocation'
+          description: Approximate location derived from the candidate's IP, when available to the approver reviewing a pending request.
+          example: {countryCode: UA, city: Kyiv}
         requesterUserAgent:
           type: string
           description: Untrusted display text, at most 256 Unicode code points.
@@ -2518,6 +2524,21 @@ components:
           description: Single session creation time, when consumed.
           example: '2026-11-10T12:05:00Z'
           format: date-time
+    SignInLocation:
+      type: object
+      description: Approximate IP location. Either field can be absent.
+      example: {countryCode: UA, city: Kyiv}
+      properties:
+        countryCode:
+          type: string
+          description: Two-letter country code.
+          pattern: '^[A-Z]{2}$'
+          example: UA
+        city:
+          type: string
+          description: English city name from the GeoIP dataset.
+          maxLength: 128
+          example: Kyiv
     SignInLink:
       type: object
       description: Link state visible only to its exact issuing session.
