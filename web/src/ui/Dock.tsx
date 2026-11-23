@@ -71,10 +71,7 @@ function Controls({ room, unreadRef, holdToTalk, onSettings }: { room: Room | nu
       <div className="dock">
         <div className="dock-bg" />
         {joining ? (
-          <>
-            <span className="dock-joining" role="status">{t.joining}</span>
-            <Button className="dock-cancel" onClick={() => voice.cancelJoin()}>{t.leaveCancel}</Button>
-          </>
+          <Button className="dock-cancel" onClick={() => voice.cancelJoin()}>{t.leaveCancel}</Button>
         ) : room && (
           <Button variant="join" data-cue="none" onClick={() => void voice.join(room.id)}>
             <Icon name="mic" />

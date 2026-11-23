@@ -2,6 +2,7 @@
 .dock { position: absolute; left: 50%; bottom: var(--edge); translate: -50% 0; z-index: 6; display: flex; align-items: center; gap: 8px; padding: 10px; border-radius: calc(38px * var(--corner)); isolation: isolate; }
 .dock-bg { position: absolute; inset: 0; border-radius: inherit; z-index: -1; background: var(--raised); }
 .dock .ib { width: 56px; height: 56px; background: var(--fill); }
+.dock .dock-cancel { height: 48px; }
 .dock .ib[aria-pressed="true"], .dock .ib[aria-expanded="true"] { background: var(--invert); color: var(--on-invert); }
 .dock .ib.off { background: var(--fill); color: var(--text-2); }
 @media (hover:hover) and (pointer:fine) { .dock .ib:not([aria-pressed="true"]):not([aria-expanded="true"]):hover, .dock .ib.off:hover { background: var(--fill-2); } }
@@ -56,6 +57,7 @@
 @media (max-width: 420px) {
   .dock { gap: 4px; }
   .dock .ib, .dock .mic-wrap { width: 44px; height: 44px; }
+  .dock .dock-cancel { height: 44px; }
   .leave { height: 44px; }
   .leave i { width: 36px; height: 36px; }
 }
@@ -65,12 +67,6 @@
   .hide-phone { display: none; }
 }
 
-.dock-joining { color: var(--text-2); padding-left: 10px; font-size: 14px; }
-.dock .dock-cancel { height: 48px; }
-@media (max-width: 420px) {
-  .dock-joining { padding-left: 6px; }
-  .dock .dock-cancel { height: 44px; padding-inline: 10px; }
-}
 .dock-talk { touch-action: none; -webkit-user-select: none; user-select: none; }
 .dock-talk-label { display: none; }
 @media (hover: none), (pointer: coarse) {
