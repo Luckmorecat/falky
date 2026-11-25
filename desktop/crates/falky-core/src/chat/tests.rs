@@ -228,6 +228,49 @@ fn attachment_expiry_dominates_stale_message_and_metadata_responses() {
 }
 
 #[test]
+fn unread_counts_only_held_rows_after_the_cursor() {
+    let mut timeline = Timeline::default();
+    let id = RoomId::from("room");
+    let own = VisitorId::from("me");
+    let absent = MessageId::from("03");
+    let exact = MessageId::from("04");
+    let latest = MessageId::from("06");
+    let future = MessageId::from("07");
+    assert_eq!(timeline.room_mut(id.clone()).unread(None, &own), 0);
+
+    let initial = timeline.request_stamp();
+    timeline.merge_http(
+        initial,
+        [
+            message("04"),
+            Message {
+                author_id: own.clone(),
+                ..message("05")
+            },
+            Message {
+                deleted: true,
+                ..message("06")
+            },
+        ],
+        true,
+    );
+    let older_page = timeline.request_stamp();
+    assert!(!timeline.live("event1".into(), message("02"), false));
+    let room = timeline.room(&id).unwrap();
+    assert_eq!(room.unread(None, &own), 2);
+    assert_eq!(room.unread(Some(&absent), &own), 2);
+    assert_eq!(room.unread(Some(&exact), &own), 1);
+    assert_eq!(room.unread(Some(&latest), &own), 0);
+    assert_eq!(room.unread(Some(&future), &own), 0);
+
+    timeline.merge_http(older_page, [message("01"), message("02")], true);
+    let room = timeline.room(&id).unwrap();
+    assert_eq!(room.unread(None, &own), 4);
+    assert_eq!(room.unread(Some(&"01".into()), &own), 3);
+    assert_eq!(room.unread(Some(&exact), &own), 1);
+}
+
+#[test]
 fn unread_excludes_own_messages_and_disk_record_checks_both_scope_parts() {
     let mut timeline = Timeline::default();
     let stamp = timeline.request_stamp();
@@ -260,7 +303,15 @@ fn unread_excludes_own_messages_and_disk_record_checks_both_scope_parts() {
     let server = Origin::parse("https://example.org").unwrap();
     let other = Origin::parse("https://not.example.org").unwrap();
     read.save(&path, &server, &identity).unwrap();
-    assert_eq!(ReadState::load(&path, &server, &identity).unwrap(), read);
+    let restored = ReadState::load(&path, &server, &identity).unwrap();
+    assert_eq!(restored, read);
+    assert_eq!(
+        timeline
+            .room(&id)
+            .unwrap()
+            .unread(restored.last_read[&id].as_ref(), &identity),
+        1
+    );
     assert_eq!(
         ReadState::load(&path, &server, &"someone-else".into()).unwrap(),
         ReadState::default()

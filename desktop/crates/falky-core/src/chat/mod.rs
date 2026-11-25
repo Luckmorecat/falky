@@ -4,7 +4,10 @@ mod storage;
 #[cfg(test)]
 mod tests;
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::{
+    collections::{BTreeMap, HashMap, HashSet},
+    ops::Bound::{Excluded, Unbounded},
+};
 
 use serde::{Deserialize, Serialize};
 
@@ -78,8 +81,9 @@ impl RoomTimeline {
     }
 
     pub fn unread(&self, after: Option<&MessageId>, own: &VisitorId) -> usize {
-        self.messages()
-            .filter(|m| m.author_id != *own && after.is_none_or(|id| m.id > *id))
+        self.entries
+            .range::<MessageId, _>((after.map_or(Unbounded, Excluded), Unbounded))
+            .filter(|(_, entry)| entry.held && entry.message.author_id != *own)
             .count()
     }
 
