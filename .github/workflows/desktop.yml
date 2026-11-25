@@ -1,0 +1,73 @@
+name: Desktop
+
+on:
+  pull_request:
+    paths:
+      - 'desktop/**'
+      - '.github/workflows/desktop.yml'
+  push:
+    branches: [master]
+    paths:
+      - 'desktop/**'
+      - '.github/workflows/desktop.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+defaults:
+  run:
+    working-directory: desktop
+
+jobs:
+  native:
+    name: Native (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Linux native dependencies
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          curl --fail --silent --show-error --retry 3 https://apt.llvm.org/llvm-snapshot.gpg.key |
+            sudo gpg --dearmor --yes --output /usr/share/keyrings/falky-ci-llvm.gpg
+          echo 'deb [signed-by=/usr/share/keyrings/falky-ci-llvm.gpg] https://apt.llvm.org/noble/ llvm-toolchain-noble-21 main' |
+            sudo tee /etc/apt/sources.list.d/falky-ci-llvm.list
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y clang-21 pkg-config libglib2.0-dev \
+            libasound2-dev libdbus-1-dev libwayland-dev libx11-dev libxcb1-dev \
+            libxkbcommon-dev libxkbcommon-x11-dev
+          echo 'CC=clang-21' >> "$GITHUB_ENV"
+          echo 'CXX=clang++-21' >> "$GITHUB_ENV"
+
+      - name: Install stable Rust
+        run: rustup toolchain install stable --profile minimal --component clippy,rustfmt --no-self-update
+
+      - name: Check formatting
+        if: runner.os == 'Linux'
+        run: cargo +stable fmt --all -- --check
+
+      - name: Check the workspace
+        run: cargo +stable check --locked --workspace --all-targets
+
+      - name: Link the native application
+        run: cargo +stable build --locked --workspace
+
+      - name: Run desktop workspace tests
+        run: cargo +stable test --locked --workspace
+
+      - name: Lint the workspace
+        if: runner.os == 'Linux'
+        run: cargo +stable clippy --locked --workspace --all-targets -- -D warnings
