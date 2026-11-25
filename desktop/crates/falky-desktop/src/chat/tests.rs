@@ -198,9 +198,24 @@ fn with_posted_image() -> (Chat, LiveScope, ChatMessage, Attachment) {
     (chat, live, message, attachment)
 }
 
+fn with_two_posted_images() -> (Chat, RoomId, Key, Key) {
+    let (mut chat, live, message, attachment) = with_posted_image();
+    let first = Key(attachment.id.clone(), Size::Viewer);
+    let mut update = incoming(&live, "02", "me");
+    let LivePayload::MessageCreated(other) = &mut update.event.payload else {
+        unreachable!()
+    };
+    let mut attachment = attachment;
+    attachment.id = "other-image".into();
+    let second = Key(attachment.id.clone(), Size::Viewer);
+    other.attachments.push(attachment);
+    let _ = chat.on_live(&update);
+    (chat, message.room_id, first, second)
+}
+
 #[test]
 fn reconnect_denial_evicts_and_tombstones_images_across_stale_work() {
-    let (mut chat, live, _, attachment) = with_posted_image();
+    let (mut chat, live, message, attachment) = with_posted_image();
     let id = attachment.id.clone();
     let thumbnail = Key(id.clone(), Size::Thumbnail);
     let viewer = Key(id.clone(), Size::Viewer);
@@ -221,7 +236,8 @@ fn reconnect_denial_evicts_and_tombstones_images_across_stale_work() {
     let _ = chat.update(Message::Finished(0, scope.clone(), Box::new(stale)));
     assert!(!chat.timeline.is_expired(&id));
 
-    chat.fetching.insert(viewer.clone(), Some(102));
+    let _ = chat.open_image(&message.room_id, id.clone());
+    let generation = chat.fetching[&viewer].unwrap();
     let not_found = ApiError::Http {
         status: reqwest::StatusCode::NOT_FOUND,
         code: None,
@@ -237,7 +253,7 @@ fn reconnect_denial_evicts_and_tombstones_images_across_stale_work() {
         Ok(Fetched::Image(images::test_image())),
     ));
     let _ = chat.finish(Work::Image(
-        102,
+        generation,
         viewer.clone(),
         Ok(Fetched::Image(images::test_image())),
     ));
@@ -253,7 +269,8 @@ fn message_tombstones_evict_prior_images_from_live_mutation_and_sync() {
         let (mut chat, live, original, attachment) = with_posted_image();
         let key = Key(attachment.id.clone(), Size::Viewer);
         chat.cache.insert(key.clone(), images::test_image());
-        chat.fetching.insert(key.clone(), Some(101));
+        let _ = chat.open_image(&original.room_id, attachment.id.clone());
+        let generation = chat.fetching[&key].unwrap();
         let mut deleted = original.clone();
         deleted.deleted = true;
         deleted.attachments.clear();
@@ -288,7 +305,7 @@ fn message_tombstones_evict_prior_images_from_live_mutation_and_sync() {
             _ => unreachable!(),
         }
         let _ = chat.finish(Work::Image(
-            101,
+            generation,
             key.clone(),
             Ok(Fetched::Image(images::test_image())),
         ));
@@ -305,7 +322,7 @@ fn reopening_image_requires_a_new_viewer_fetch() {
     let key = Key(id.clone(), Size::Viewer);
     let _ = chat.open_image(&room, id.clone());
     let old = chat.fetching[&key].unwrap();
-    let _ = chat.close_modal();
+    let _ = chat.update(Message::CloseModal);
     let _ = chat.open_image(&room, id);
     assert_eq!(chat.fetching[&key], None);
     let _ = chat.finish(Work::Image(
@@ -322,6 +339,110 @@ fn reopening_image_requires_a_new_viewer_fetch() {
         Ok(Fetched::Image(images::test_image())),
     ));
     assert!(chat.validated.contains(&key));
+}
+
+#[test]
+fn switching_viewers_retires_the_superseded_request() {
+    for late in [false, true] {
+        let (mut chat, room, first, second) = with_two_posted_images();
+        let thumbnail = Key(first.0.clone(), Size::Thumbnail);
+        chat.cache.insert(thumbnail.clone(), images::test_image());
+        chat.cache.insert(first.clone(), images::test_image());
+        let _ = chat.open_image(&room, first.0.clone());
+        let previous = chat.fetching[&first].unwrap();
+        let _ = chat.open_image(&room, second.0.clone());
+        let current = chat.fetching[&second].unwrap();
+        assert!(!chat.visible.contains(&first));
+        assert_eq!(chat.fetching[&first], None);
+        assert!(chat.cache.peek(&first).is_some());
+
+        let superseded = (previous, first.clone());
+        let replacement = (current, second.clone());
+        let results = if late {
+            [replacement, superseded]
+        } else {
+            [superseded, replacement]
+        };
+        for (generation, key) in results {
+            let _ = chat.finish_image(generation, key, Ok(Fetched::Image(images::test_image())));
+        }
+        assert!(chat.cache.peek(&first).is_none());
+        assert!(!chat.validated.contains(&first));
+        assert!(chat.cache.peek(&second).is_some());
+        assert!(chat.validated.contains(&second));
+        assert!(chat.cache.peek(&thumbnail).is_some());
+        assert!(chat.fetching.is_empty());
+    }
+}
+
+#[test]
+fn a_viewer_304_requires_cached_pixels_and_does_not_replace_another_viewer() {
+    let (mut chat, room, first, second) = with_two_posted_images();
+    chat.cache.insert(first.clone(), images::test_image());
+    let _ = chat.open_image(&room, first.0.clone());
+    assert!(!chat.validated.contains(&first));
+    let generation = chat.fetching[&first].unwrap();
+    let _ = chat.finish_image(generation, first.clone(), Ok(Fetched::Unchanged));
+    assert!(chat.validated.contains(&first));
+
+    let _ = chat.open_image(&room, second.0.clone());
+    let generation = chat.fetching[&second].unwrap();
+    let _ = chat.finish_image(generation, second.clone(), Ok(Fetched::Unchanged));
+    assert!(!chat.validated.contains(&first));
+    assert!(!chat.validated.contains(&second));
+    assert!(chat.cache.peek(&first).is_some());
+    assert!(chat.cache.peek(&second).is_none());
+    assert_ne!(chat.fetching[&second], Some(generation));
+    assert!(chat.fetching[&second].is_some());
+}
+
+#[test]
+fn failed_and_expired_viewer_replacements_preserve_the_warm_viewer() {
+    let (mut chat, room, first, second) = with_two_posted_images();
+    chat.cache.insert(first.clone(), images::test_image());
+    let _ = chat.open_image(&room, second.0.clone());
+    let generation = chat.fetching[&second].unwrap();
+    let _ = chat.finish_image(generation, second.clone(), Err(ApiError::InvalidResponse));
+    assert!(chat.image_errors.contains(&second));
+    assert!(!chat.fetching.contains_key(&second));
+    assert!(chat.cache.peek(&first).is_some());
+
+    let _ = chat.update(Message::RetryImage(second.0.clone()));
+    let generation = chat.fetching[&second].unwrap();
+    let _ = chat.finish_image(generation, second.clone(), Ok(Fetched::Expired));
+    assert!(chat.timeline.is_expired(&second.0));
+    assert!(!chat.validated.contains(&second));
+    assert!(!chat.fetching.contains_key(&second));
+    assert!(chat.cache.peek(&first).is_some());
+}
+
+#[test]
+fn retired_room_and_session_results_leave_the_warm_viewer_in_place() {
+    let (mut chat, room, first, second) = with_two_posted_images();
+    chat.cache.insert(first.clone(), images::test_image());
+    let _ = chat.open_image(&room, second.0.clone());
+    let generation = chat.fetching[&second].unwrap();
+    let previous = SessionScope {
+        generation: SessionGeneration(2),
+        ..chat.scope.clone()
+    };
+    let result = || {
+        Work::Image(
+            generation,
+            second.clone(),
+            Ok(Fetched::Image(images::test_image())),
+        )
+    };
+    let _ = chat.update(Message::Finished(0, previous, Box::new(result())));
+    assert!(chat.cache.peek(&first).is_some());
+    assert!(chat.cache.peek(&second).is_none());
+    assert_eq!(chat.fetching[&second], Some(generation));
+
+    let _ = chat.select_room(Some("another-room".into()));
+    let _ = chat.update(Message::Finished(0, chat.scope.clone(), Box::new(result())));
+    assert!(chat.cache.peek(&first).is_some());
+    assert!(chat.cache.peek(&second).is_none());
+    assert!(!chat.fetching.contains_key(&second));
 }
 
 #[test]

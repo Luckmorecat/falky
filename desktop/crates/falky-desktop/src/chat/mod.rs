@@ -548,7 +548,10 @@ impl Chat {
                 update.close = true;
                 Task::none()
             }
-            Message::CloseModal => self.close_modal(),
+            Message::CloseModal => {
+                self.set_modal(None);
+                Task::none()
+            }
             Message::OpenLink(url) => {
                 if url::Url::parse(&url)
                     .is_ok_and(|u| matches!(u.scheme(), "http" | "https") && u.host().is_some())
@@ -632,11 +635,11 @@ impl Chat {
                 self.measure()
             }
             Message::Actions(id) => {
-                self.modal = Some(Modal::Actions(id));
+                self.set_modal(Some(Modal::Actions(id)));
                 Task::none()
             }
             Message::Reply(id) => {
-                self.modal = None;
+                self.set_modal(None);
                 let original = self.timeline.room(&room).and_then(|r| r.get(&id));
                 if let Some(message) = original.filter(|m| !m.deleted) {
                     let reply = reply_of(message);
@@ -657,22 +660,22 @@ impl Chat {
                     .room(&room)
                     .and_then(|r| r.get(&id))
                     .map(|m| m.body.clone());
-                self.modal = None;
+                self.set_modal(None);
                 body.map_or_else(Task::none, iced::clipboard::write)
             }
             Message::AskDelete(id) => {
-                self.modal = Some(Modal::Delete(id));
+                self.set_modal(Some(Modal::Delete(id)));
                 Task::none()
             }
             Message::ConfirmDelete(id) => {
                 if matches!(&self.modal, Some(Modal::Delete(target)) if target == &id) {
-                    self.modal = None;
+                    self.set_modal(None);
                     return self.change(room, id, Change::Delete);
                 }
                 Task::none()
             }
             Message::React(id, reaction) => {
-                self.modal = None;
+                self.set_modal(None);
                 let message = self.timeline.room(&room).and_then(|r| r.get(&id));
                 if let Some(message) = message {
                     let active = message.reactions.iter().any(|group| {
@@ -900,7 +903,7 @@ impl Chat {
         self.scroll_epoch += 1;
         self.new_after = None;
         self.ticker.clear();
-        self.modal = None;
+        self.set_modal(None);
         self.dropping = false;
         self.visible.clear();
         self.invalidate_image_revalidation();
@@ -1007,7 +1010,7 @@ impl Chat {
         composer
             .content
             .perform(text_editor::Action::Move(text_editor::Motion::DocumentEnd));
-        self.modal = None;
+        self.set_modal(None);
         self.focus()
     }
 
@@ -1291,7 +1294,7 @@ impl Chat {
 
     fn open_image(&mut self, room: &RoomId, id: AttachmentId) -> Task<Message> {
         if self.attachment(room, &id).is_some_and(is_available) {
-            self.modal = Some(Modal::Image(id.clone()));
+            self.set_modal(Some(Modal::Image(id.clone())));
             let key = Key(id, Size::Viewer);
             self.visible.insert(key.clone());
             self.invalidate_image(&key);
@@ -1300,13 +1303,12 @@ impl Chat {
         Task::none()
     }
 
-    fn close_modal(&mut self) -> Task<Message> {
-        if let Some(Modal::Image(id)) = self.modal.take() {
+    fn set_modal(&mut self, modal: Option<Modal>) {
+        if let Some(Modal::Image(id)) = std::mem::replace(&mut self.modal, modal) {
             let key = Key(id, Size::Viewer);
             self.visible.remove(&key);
             self.invalidate_image(&key);
         }
-        Task::none()
     }
 
     fn measured(&mut self, room: &RoomId, measured: view::Measured) -> Task<Message> {
@@ -1386,7 +1388,10 @@ impl Chat {
         {
             return Task::none();
         }
-        if self.fetching.remove(&key) == Some(Some(generation)) && !self.timeline.is_expired(&key.0)
+        if self.fetching.remove(&key) == Some(Some(generation))
+            && !self.timeline.is_expired(&key.0)
+            && (key.1 != Size::Viewer
+                || matches!(&self.modal, Some(Modal::Image(id)) if id == &key.0))
         {
             match result {
                 Ok(Fetched::Expired) => self.expire(vec![key.0]),

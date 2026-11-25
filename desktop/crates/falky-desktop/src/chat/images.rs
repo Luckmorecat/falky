@@ -281,6 +281,14 @@ impl Cache {
         if image.decoded.bytes > MEMORY_LIMIT {
             return;
         }
+        if key.1 == Size::Viewer
+            && let Some(previous) = self
+                .entries
+                .iter()
+                .find_map(|(existing, _)| (existing.1 == Size::Viewer).then(|| existing.clone()))
+        {
+            self.remove(&previous);
+        }
         while self.entries.len() == CACHE_ENTRIES || self.bytes + image.decoded.bytes > MEMORY_LIMIT
         {
             if let Some((_, removed)) = self.entries.pop_lru() {
@@ -367,7 +375,7 @@ mod tests {
             },
             etag: Some(HeaderValue::from_static("fixture")),
         };
-        let key = |id: &str| Key(id.into(), Size::Viewer);
+        let key = |id: &str| Key(id.into(), Size::Thumbnail);
         cache.insert(key("first"), picture.clone());
         cache.insert(key("second"), picture.clone());
         assert!(cache.etag(&key("first")).is_some());
@@ -376,6 +384,40 @@ mod tests {
         assert!(cache.peek(&key("first")).is_some());
         assert!(cache.peek(&key("third")).is_some());
         assert_eq!(cache.bytes, MEMORY_LIMIT);
+    }
+
+    #[test]
+    fn decoded_cache_keeps_one_viewer_and_preserves_thumbnail_validation() {
+        let mut cache = Cache::default();
+        let thumbnail = Key("first".into(), Size::Thumbnail);
+        let first = Key("first".into(), Size::Viewer);
+        let second = Key("second".into(), Size::Viewer);
+        let thumbnail_tag = HeaderValue::from_static("thumbnail");
+        let viewer_tag = HeaderValue::from_static("viewer");
+        let mut picture = test_image();
+        picture.etag = Some(thumbnail_tag.clone());
+        cache.insert(thumbnail.clone(), picture.clone());
+        picture.decoded.bytes = MEMORY_LIMIT - 4;
+        cache.insert(first.clone(), picture.clone());
+
+        picture.decoded.bytes = MEMORY_LIMIT + 1;
+        cache.insert(second.clone(), picture.clone());
+        assert!(cache.peek(&first).is_some());
+        assert!(cache.peek(&second).is_none());
+
+        picture.decoded.bytes = MEMORY_LIMIT - 4;
+        picture.etag = Some(viewer_tag.clone());
+        cache.insert(second.clone(), picture);
+
+        assert!(cache.peek(&first).is_none());
+        assert_eq!(cache.etag(&thumbnail), Some(thumbnail_tag));
+        assert_eq!(cache.etag(&second), Some(viewer_tag));
+        assert_eq!(cache.bytes, MEMORY_LIMIT);
+
+        cache.insert(second.clone(), test_image());
+        assert_eq!(cache.entries.len(), 2);
+        assert_eq!(cache.bytes, 8);
+        assert!(cache.etag(&second).is_none());
     }
 
     #[test]
