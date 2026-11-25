@@ -16,6 +16,8 @@ Run these commands from the repository root. Select the installed Clang compiler
     cargo +stable build --locked --workspace
     cargo +stable run --locked -p falky-desktop
 
+For normal use or when measuring memory footprint, run the optimized build from `desktop/` with `cargo +stable run --release --locked -p falky-desktop`. Record the Cargo profile when comparing measurements.
+
 When global push-to-talk is available, use Ctrl+Shift+F9 or the binding reported by the Wayland compositor. The editable in-app binding is Space by default. The dock mic button can also be held while push-to-talk is enabled. While in voice, closing the window hides it if the tray is available. Use the tray to restore the window or quit.
 
 Use `/` or Enter to open and focus chat and the left and right arrow keys to navigate rooms. These shortcuts apply when an editor or dialog does not hold keyboard focus.
