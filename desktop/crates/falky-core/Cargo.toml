@@ -6,12 +6,12 @@ rust-version.workspace = true
 publish.workspace = true
 
 [features]
-native-audio = ["dep:cpal", "dep:livekit", "dep:livekit-net"]
+native-audio = ["dep:cpal", "dep:livekit", "dep:livekit-net", "dep:sha2"]
 
 [dependencies]
 bytes.workspace = true
 chrono.workspace = true
-cpal = { version = "0.16", optional = true }
+cpal = { workspace = true, optional = true }
 directories = "6"
 futures-util.workspace = true
 livekit = { version = "0.12.1", features = ["rustls-tls-native-roots"], optional = true }
@@ -28,6 +28,7 @@ uuid.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 keyring = { version = "3.6", features = ["sync-secret-service", "crypto-rust"] }
+sha2 = { version = "0.10", optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 keyring = { version = "3.6", features = ["apple-native"] }

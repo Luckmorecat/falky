@@ -55,6 +55,19 @@ impl ApiClient {
         true
     }
 
+    pub(crate) fn has_signin_cookie(&self) -> bool {
+        self.jar.cookies(&self.session_url()).is_some_and(|header| {
+            header.to_str().is_ok_and(|cookies| {
+                cookies.split(';').any(|field| {
+                    field
+                        .trim()
+                        .split_once('=')
+                        .is_some_and(|(name, value)| name == SIGN_IN_COOKIE && !value.is_empty())
+                })
+            })
+        })
+    }
+
     pub(crate) fn clear_session_cookie(&self) {
         self.clear_cookie(SESSION_COOKIE, "/api");
     }
