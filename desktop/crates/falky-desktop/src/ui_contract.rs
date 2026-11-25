@@ -159,6 +159,7 @@ pub enum TrayAction {
     Hide,
     ToggleMute,
     ToggleDeafen,
+    StopSharing,
     LeaveVoice,
     Quit,
 }

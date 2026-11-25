@@ -1,0 +1,255 @@
+use std::time::{Duration, Instant};
+
+use super::CaptureOptions;
+
+pub(super) const BYTES_PER_PIXEL: usize = 4;
+
+#[derive(Clone, Copy)]
+pub(super) struct Rect {
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+}
+
+pub(super) struct Frame<'a> {
+    bytes: &'a [u8],
+    stride: usize,
+    flipped: bool,
+    source_height: u32,
+    crop: Rect,
+}
+
+impl<'a> Frame<'a> {
+    pub fn new(
+        bytes: &'a [u8],
+        offset: u32,
+        len: u32,
+        stride: i32,
+        width: u32,
+        height: u32,
+        crop: Option<Rect>,
+    ) -> Option<Self> {
+        let row_bytes = (width as usize).checked_mul(BYTES_PER_PIXEL)?;
+        let flipped = stride < 0;
+        let stride = if stride == 0 {
+            row_bytes
+        } else {
+            stride.unsigned_abs() as usize
+        };
+        if width == 0 || height == 0 || stride < row_bytes || bytes.is_empty() {
+            return None;
+        }
+
+        let offset = offset as usize % bytes.len();
+        let end = offset.checked_add((len as usize).min(bytes.len()))?;
+        let bytes = bytes.get(offset..end)?;
+        let required = ((height - 1) as usize)
+            .checked_mul(stride)?
+            .checked_add(row_bytes)?;
+        let bytes = bytes.get(..required)?;
+        let crop = crop.unwrap_or(Rect {
+            x: 0,
+            y: 0,
+            width,
+            height,
+        });
+        if crop.width == 0
+            || crop.height == 0
+            || crop.x.checked_add(crop.width)? > width
+            || crop.y.checked_add(crop.height)? > height
+        {
+            return None;
+        }
+        Some(Self {
+            bytes,
+            stride,
+            source_height: height,
+            flipped,
+            crop,
+        })
+    }
+
+    pub fn pixels<'b>(
+        &'b self,
+        options: CaptureOptions,
+        scratch: &'b mut Vec<u8>,
+    ) -> (u32, u32, usize, &'b [u8]) {
+        let crop = self.crop;
+        let (width, height) = fit(crop.width, crop.height, options);
+        let row_len = width as usize * BYTES_PER_PIXEL;
+        if width == crop.width && height == crop.height && !self.flipped {
+            let offset = self.row_start(0);
+            let end = offset + (height - 1) as usize * self.stride + row_len;
+            return (width, height, self.stride, &self.bytes[offset..end]);
+        }
+
+        scratch.resize(row_len * height as usize, 0);
+        for (y, row) in scratch.chunks_exact_mut(row_len).enumerate() {
+            let source_y = sample(y, crop.height, height);
+            let offset = self.row_start(source_y);
+            let row_bytes = &self.bytes[offset..offset + crop.width as usize * BYTES_PER_PIXEL];
+            if width == crop.width {
+                row.copy_from_slice(row_bytes);
+            } else {
+                for (x, pixel) in row
+                    .as_chunks_mut::<BYTES_PER_PIXEL>()
+                    .0
+                    .iter_mut()
+                    .enumerate()
+                {
+                    let source_x = sample(x, crop.width, width) as usize * BYTES_PER_PIXEL;
+                    pixel.copy_from_slice(&row_bytes[source_x..source_x + BYTES_PER_PIXEL]);
+                }
+            }
+        }
+        (width, height, row_len, scratch)
+    }
+
+    fn row_start(&self, y: u32) -> usize {
+        let y = self.crop.y + y;
+        let row = if self.flipped {
+            self.source_height - 1 - y
+        } else {
+            y
+        };
+        row as usize * self.stride + self.crop.x as usize * BYTES_PER_PIXEL
+    }
+}
+
+fn sample(position: usize, source: u32, output: u32) -> u32 {
+    ((position as u64 * u64::from(source) + u64::from(source / 2)) / u64::from(output)) as u32
+}
+
+fn fit(width: u32, height: u32, options: CaptureOptions) -> (u32, u32) {
+    let (width, height) = (u64::from(width), u64::from(height));
+    let (max_width, max_height) = if width < height {
+        (options.max_height, options.max_width)
+    } else {
+        (options.max_width, options.max_height)
+    };
+    let (max_width, max_height) = (u64::from(max_width), u64::from(max_height));
+    if width <= max_width && height <= max_height {
+        (width as u32, height as u32)
+    } else if width * max_height > height * max_width {
+        (max_width as u32, (height * max_width / width).max(1) as u32)
+    } else {
+        (
+            (width * max_height / height).max(1) as u32,
+            max_height as u32,
+        )
+    }
+}
+
+pub(super) struct Pacing {
+    interval: Duration,
+    next: Option<Instant>,
+}
+
+impl Pacing {
+    pub fn new(fps: u32) -> Self {
+        Self {
+            interval: Duration::from_secs(1) / fps,
+            next: None,
+        }
+    }
+
+    pub fn due(&self, now: Instant) -> bool {
+        self.next.is_none_or(|next| now >= next)
+    }
+
+    pub fn sent(&mut self, now: Instant) {
+        // Keep a regular schedule for a source whose frames straddle the deadline.
+        let next = self.next.unwrap_or(now) + self.interval;
+        self.next = Some(if next > now {
+            next
+        } else {
+            now + self.interval
+        });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn options(width: u32, height: u32) -> CaptureOptions {
+        CaptureOptions {
+            max_width: width,
+            max_height: height,
+            fps: 30,
+            with_audio: false,
+        }
+    }
+
+    #[test]
+    fn pitched_rows_and_chunk_offset() {
+        let bytes = [0; 45];
+        let frame = Frame::new(&bytes, 48, 36, 12, 2, 3, None).unwrap();
+        let mut scratch = Vec::new();
+        let (width, height, stride, pixels) = frame.pixels(options(16, 9), &mut scratch);
+        assert_eq!((width, height, stride), (2, 3, 12));
+        assert_eq!(pixels.as_ptr(), bytes[3..].as_ptr());
+        assert_eq!(pixels.len(), 32);
+
+        assert!(Frame::new(&bytes, 3, 31, 12, 2, 3, None).is_none());
+        assert!(Frame::new(&bytes, 3, 36, 7, 2, 3, None).is_none());
+        assert!(Frame::new(&bytes, 30, 35, 12, 2, 3, None).is_none());
+    }
+
+    #[test]
+    fn video_crop_and_bottom_up_rows() {
+        let bytes = [
+            1, 1, 1, 1, 2, 2, 2, 2, 99, 99, 99, 99, 3, 3, 3, 3, 4, 4, 4, 4,
+        ];
+        let crop = Rect {
+            x: 1,
+            y: 0,
+            width: 1,
+            height: 2,
+        };
+        let frame = Frame::new(&bytes, 0, 20, -12, 2, 2, Some(crop)).unwrap();
+        let mut scratch = Vec::new();
+        let (width, height, stride, pixels) = frame.pixels(options(16, 9), &mut scratch);
+        assert_eq!((width, height, stride), (1, 2, 4));
+        assert_eq!(pixels, &[4, 4, 4, 4, 2, 2, 2, 2]);
+
+        assert!(Frame::new(&bytes, 0, 20, 12, 2, 2, Some(Rect { x: 2, ..crop })).is_none());
+    }
+
+    #[test]
+    fn aspect_ratio_and_portrait_size_cap() {
+        let options = options(1920, 1080);
+        assert_eq!(fit(3840, 2160, options), (1920, 1080));
+        assert_eq!(fit(2160, 3840, options), (1080, 1920));
+        assert_eq!(fit(3840, 1080, options), (1920, 540));
+        assert_eq!(fit(720, 1280, options), (720, 1280));
+    }
+
+    #[test]
+    fn resizes_the_active_region_into_packed_rows() {
+        let pixels: Vec<u8> = (0..32).collect();
+        let frame = Frame::new(&pixels, 0, 32, 16, 4, 2, None).unwrap();
+        let mut scratch = Vec::new();
+        let (width, height, stride, pixels) = frame.pixels(options(2, 1), &mut scratch);
+        assert_eq!((width, height, stride), (2, 1, 8));
+        assert_eq!(pixels, &[20, 21, 22, 23, 28, 29, 30, 31]);
+    }
+
+    #[test]
+    fn pacing_drops_early_frames_and_recovers_from_gaps() {
+        let mut pacing = Pacing::new(25);
+        let now = Instant::now();
+        assert!(pacing.due(now));
+        pacing.sent(now);
+        assert!(!pacing.due(now + Duration::from_millis(39)));
+        let later = now + Duration::from_millis(50);
+        assert!(pacing.due(later));
+        pacing.sent(later);
+        assert!(pacing.due(now + Duration::from_millis(80)));
+        let resumed = now + Duration::from_secs(2);
+        assert!(pacing.due(resumed));
+        pacing.sent(resumed);
+        assert!(!pacing.due(resumed + Duration::from_millis(39)));
+    }
+}

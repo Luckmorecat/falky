@@ -82,6 +82,20 @@ pub fn minutes(language: Language, minutes: u64) -> String {
     }
 }
 
+pub fn screen_of(language: Language, name: &str) -> String {
+    match language {
+        Language::En => format!("{name}'s screen"),
+        Language::Uk => format!("Екран {name}"),
+    }
+}
+
+pub fn share_bitrate(language: Language, mbps: impl std::fmt::Display) -> String {
+    match language {
+        Language::En => format!("{mbps} Mbps"),
+        Language::Uk => format!("{} Мбіт/с", mbps.to_string().replace('.', ",")),
+    }
+}
+
 pub fn away_muted_body(language: Language, minutes: u64) -> String {
     match language {
         Language::En => format!("Nobody heard you for {minutes} minutes."),

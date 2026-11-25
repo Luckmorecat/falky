@@ -7,10 +7,14 @@ pub mod icon;
 pub mod layout;
 mod orb;
 mod rooms;
+mod share;
+mod share_video;
 mod stage;
 pub mod style;
 mod ticker;
 
+pub use share::{ShareAction, ShareCaptureStatus, ShareView};
+pub use share_video::{PlanarFrame, Plane};
 pub use style::theme;
 
 use crate::ui_contract::{ShellAction, ShellInput};
@@ -18,7 +22,7 @@ use falky_core::model::{ConnectionId, PaletteName, RoomId};
 use iced::font::Weight;
 use iced::time::{self, Instant};
 use iced::widget::{Canvas, Stack, container, text};
-use iced::{Color, Element, Fill, Font, Rectangle, Subscription};
+use iced::{Color, Element, Event, Fill, Font, Rectangle, Subscription, event, mouse};
 use std::time::Duration;
 
 use self::copy::CopyText;
@@ -87,6 +91,7 @@ impl Default for Details<'_> {
 #[derive(Clone, Debug)]
 pub enum Action {
     Intent(ShellAction),
+    Share(ShareAction),
     RoomsHovered(bool),
     ToggleRooms,
     CloseRooms,
@@ -110,6 +115,8 @@ pub struct State {
     rooms_open: bool,
     close_rooms_at: Option<Instant>,
     modal: Option<Modal>,
+    share_fullscreen: bool,
+    share_controls_until: Instant,
 }
 
 impl Default for State {
@@ -121,6 +128,8 @@ impl Default for State {
             rooms_open: false,
             close_rooms_at: None,
             modal: None,
+            share_fullscreen: false,
+            share_controls_until: now,
         }
     }
 }
@@ -129,6 +138,14 @@ impl State {
     pub fn update(&mut self, action: Action) {
         match action {
             Action::Intent(_) => {}
+            Action::Share(action) => match action {
+                ShareAction::ToggleFullscreen => {
+                    self.share_fullscreen = !self.share_fullscreen;
+                    self.show_share_controls();
+                }
+                ShareAction::PointerMoved => self.show_share_controls(),
+                _ => {}
+            },
             Action::RoomsHovered(true) => {
                 self.close_rooms_at = None;
                 self.rooms_open = true;
@@ -165,6 +182,22 @@ impl State {
         self.modal.is_some()
     }
 
+    pub fn share_fullscreen(&self) -> bool {
+        self.share_fullscreen
+    }
+
+    pub fn exit_share_fullscreen(&mut self) -> bool {
+        std::mem::take(&mut self.share_fullscreen)
+    }
+
+    fn show_share_controls(&mut self) {
+        self.share_controls_until = Instant::now().max(self.now) + Duration::from_secs(3);
+    }
+
+    fn share_controls_visible(&self) -> bool {
+        !self.share_fullscreen || self.now < self.share_controls_until
+    }
+
     pub fn reconcile(
         &mut self,
         viewed: Option<&RoomId>,
@@ -190,12 +223,21 @@ impl State {
         input: ShellInput<'_>,
         motion: bool,
     ) -> Subscription<Action> {
+        self.subscription_with_share(input, motion, false)
+    }
+
+    pub fn subscription_with_share(
+        &self,
+        input: ShellInput<'_>,
+        motion: bool,
+        watching: bool,
+    ) -> Subscription<Action> {
         let microphone_active = input.voice.room.is_some()
             && !input.voice.muted
             && !input.voice.deafened
             && input.voice.mic_level > 0.03;
         let lively = input.stage.iter().any(stage::active) || microphone_active;
-        let interval = if lively {
+        let interval = if lively || watching {
             Some(Duration::from_millis(17))
         } else if self.close_rooms_at.is_some() || (motion && !input.stage.is_empty()) {
             Some(Duration::from_millis(67))
@@ -204,9 +246,20 @@ impl State {
         } else {
             None
         };
-        interval.map_or_else(Subscription::none, |interval| {
+        let frame = interval.map_or_else(Subscription::none, |interval| {
             time::every(interval).map(Action::Frame)
-        })
+        });
+        if self.share_fullscreen && watching {
+            Subscription::batch([
+                frame,
+                event::listen_with(|event, _, _| {
+                    matches!(event, Event::Mouse(mouse::Event::CursorMoved { .. }))
+                        .then_some(Action::Share(ShareAction::PointerMoved))
+                }),
+            ])
+        } else {
+            frame
+        }
     }
 
     fn seconds(&self) -> f32 {
@@ -218,6 +271,7 @@ struct View<'a, 'm, Message> {
     state: &'a State,
     input: ShellInput<'a>,
     details: Details<'a>,
+    share: ShareView<'a>,
     layout: Layout,
     color: Colors,
     copy: CopyText,
@@ -241,16 +295,34 @@ pub fn view<'a, Message: Clone + 'a>(
     chat: Option<Element<'a, Message>>,
     on_action: impl Fn(Action) -> Message + Clone + 'a,
 ) -> Element<'a, Message> {
+    view_with_share(state, input, details, ShareView::default(), chat, on_action)
+}
+
+pub fn view_with_share<'a, Message: Clone + 'a>(
+    state: &State,
+    input: ShellInput<'_>,
+    details: Details<'_>,
+    share: ShareView<'_>,
+    chat: Option<Element<'a, Message>>,
+    on_action: impl Fn(Action) -> Message + Clone + 'a,
+) -> Element<'a, Message> {
     let context = View {
         state,
         input,
         details,
+        share,
         layout: Layout::new(input.viewport, state.rooms_open),
         color: Colors::new(input.theme),
         copy: CopyText::new(input.language),
         emit: &on_action,
     };
     let layout = context.layout;
+    let watched = stage::watched(&context);
+    if state.share_fullscreen()
+        && let Some(person) = watched
+    {
+        return share::fullscreen(&context, person, on_action.clone());
+    }
     let mut layers = Stack::new()
         .push(
             Canvas::new(DotGrid {
@@ -260,7 +332,7 @@ pub fn view<'a, Message: Clone + 'a>(
             .width(Fill)
             .height(Fill),
         )
-        .push(stage::view(&context))
+        .push(stage::view(&context, watched, on_action.clone()))
         .push(rooms::view(&context));
     let dock = controls::view(&context);
     let dock_left = ((layout.size.width - dock.width) / 2.0).max(0.0);
@@ -351,5 +423,28 @@ mod tests {
         assert!(state.modal_open());
         state.reconcile(Some(&other), None, |_| false);
         assert!(!state.modal_open());
+    }
+
+    #[test]
+    fn fullscreen_share_controls_hide_and_return_without_dismissing_the_share() {
+        let mut state = State::default();
+        state.update(Action::Share(ShareAction::ToggleFullscreen));
+        assert!(state.share_fullscreen());
+        assert!(state.share_controls_visible());
+
+        state.update(Action::Frame(state.share_controls_until));
+        assert!(!state.share_controls_visible());
+
+        state.update(Action::Share(ShareAction::PointerMoved));
+        assert!(state.share_controls_visible());
+        assert!(state.exit_share_fullscreen());
+        assert!(state.share_controls_visible());
+        assert!(!state.exit_share_fullscreen());
+
+        state.update(Action::Share(ShareAction::ToggleFullscreen));
+        state.update(Action::Share(ShareAction::StopWatching));
+        assert!(state.share_fullscreen());
+        assert!(state.exit_share_fullscreen());
+        assert!(!state.share_fullscreen());
     }
 }

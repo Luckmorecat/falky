@@ -1,8 +1,13 @@
 mod prefs;
+mod share;
 mod view;
 
 pub use prefs::Preferences;
-pub use view::{Props, view};
+pub use share::{
+    ShareAudioAvailability, ShareCodec, ShareFocus, ShareFps, SharePreset, ShareResolution,
+    ShareSettings, ShareStatus, ShareVolume,
+};
+pub use view::{Props, view, view_with_share};
 
 use falky_core::{
     model::{PaletteName, Visitor},
@@ -21,16 +26,18 @@ pub enum Tab {
     General,
     Voice,
     Sound,
+    Share,
     Profile,
     Account,
     Shortcuts,
 }
 
 impl Tab {
-    const ALL: [Self; 6] = [
+    const ALL: [Self; 7] = [
         Self::General,
         Self::Voice,
         Self::Sound,
+        Self::Share,
         Self::Profile,
         Self::Account,
         Self::Shortcuts,
@@ -125,6 +132,14 @@ pub enum Message {
     AwayMinutes(AwayMinutes),
     Chimes(bool),
     Notifications(bool),
+    SharePreset(SharePreset),
+    ShareSound(bool),
+    ShareDetails,
+    ShareResolution(ShareResolution),
+    ShareFps(ShareFps),
+    ShareFocus(ShareFocus),
+    ShareCodec(ShareCodec),
+    ShareBitrate(u8),
     MicTest,
     SpeakerTest,
     NameEdited(String),
@@ -172,6 +187,7 @@ pub struct State {
     capturing: Option<Shortcut>,
     binding_error: Option<(Shortcut, BindingError)>,
     copied_id: bool,
+    share_details: Option<bool>,
 }
 
 impl State {
@@ -298,6 +314,20 @@ impl State {
             Message::AwayMinutes(value) => prefs.voice.away_minutes = value,
             Message::Chimes(on) => prefs.chimes = on,
             Message::Notifications(on) => prefs.notifications = on,
+            Message::ShareDetails => {
+                let expanded = self.share_details.unwrap_or(prefs.share.preset().is_none());
+                self.share_details = Some(!expanded);
+                return None;
+            }
+            Message::SharePreset(value) => prefs.share.apply_preset(value),
+            Message::ShareSound(value) => prefs.share.with_sound = value,
+            Message::ShareResolution(value) => prefs.share.resolution = value,
+            Message::ShareFps(value) => prefs.share.fps = value,
+            Message::ShareFocus(value) => prefs.share.focus = value,
+            Message::ShareCodec(value) => prefs.share.codec = value,
+            Message::ShareBitrate(value) => {
+                prefs.share.bitrate_mbps = value.min(share::MAX_BITRATE_MBPS);
+            }
             _ => return None,
         }
         Some(Action::PreferencesChanged)

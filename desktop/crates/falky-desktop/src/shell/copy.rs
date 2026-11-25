@@ -67,7 +67,6 @@ copy! {
     deafened: "can't hear", "не чує";
     locally_muted: "Muted for you", "Звук вимкнено для тебе";
     camera: "Camera on", "Камеру увімкнено";
-    screen_share: "Sharing screen", "Показує екран";
     volume: "Volume", "Гучність";
     reconnecting: "Reconnecting", "Відновлюємо зв'язок";
     reconnecting_voice: "Reconnecting voice", "Відновлюємо голос";

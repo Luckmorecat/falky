@@ -82,6 +82,10 @@ async fn voice_watcher_delivers_terminal_unauthorized_after_snapshot_close() {
         input_unavailable: false,
         output_unavailable: false,
         gains: BTreeMap::new(),
+        watched_share: None,
+        sharing: false,
+        publishing_share: false,
+        share_gain: 100,
     };
     let (snapshots_sender, snapshots) = watch::channel(snapshot);
     let (notices_sender, notices) = broadcast::channel(4);

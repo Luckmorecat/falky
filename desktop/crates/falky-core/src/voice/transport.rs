@@ -5,6 +5,8 @@ use futures_util::{
     stream::{SplitSink, SplitStream},
 };
 use livekit_net::{Header, TransportError, WsClient, WsConnectResult, WsConnection};
+use livekit_protocol::{AudioTrackFeature, SignalRequest, TrackSource, TrackType, signal_request};
+use prost::Message as _;
 use std::{
     sync::{Arc, OnceLock},
     time::Duration,
@@ -95,6 +97,61 @@ fn map_ws(error: WsError) -> TransportError {
     }
 }
 
+struct StereoSocket(Arc<dyn WsConnection>);
+
+impl WsConnection for StereoSocket {
+    fn send<'a, 'f>(&'a self, mut frame: Vec<u8>) -> BoxFuture<'f, Result<(), TransportError>>
+    where
+        'a: 'f,
+        Self: 'f,
+    {
+        if let Some(stereo) = advertise_share_stereo(&frame) {
+            frame = stereo;
+        }
+        self.0.send(frame)
+    }
+
+    fn recv<'a, 'f>(&'a self) -> BoxFuture<'f, Result<Option<Vec<u8>>, TransportError>>
+    where
+        'a: 'f,
+        Self: 'f,
+    {
+        self.0.recv()
+    }
+
+    fn close<'a, 'f>(&'a self) -> BoxFuture<'f, ()>
+    where
+        'a: 'f,
+        Self: 'f,
+    {
+        self.0.close()
+    }
+}
+
+fn advertise_share_stereo(frame: &[u8]) -> Option<Vec<u8>> {
+    let mut request = SignalRequest::decode(frame).ok()?;
+    let Some(signal_request::Message::AddTrack(track)) = &mut request.message else {
+        return None;
+    };
+    if track.source != TrackSource::ScreenShareAudio as i32
+        || track.r#type != TrackType::Audio as i32
+    {
+        return None;
+    }
+
+    // The pinned SDK lacks a stereo publish option. LiveKit uses the legacy
+    // flag as well as the feature to negotiate stereo on each side of the SFU.
+    #[allow(deprecated)]
+    {
+        track.stereo = true;
+    }
+    let stereo = AudioTrackFeature::TfStereo as i32;
+    if !track.audio_features.contains(&stereo) {
+        track.audio_features.push(stereo);
+    }
+    Some(request.encode_to_vec())
+}
+
 struct SelectiveWs(Arc<dyn WsClient>);
 
 impl WsClient for SelectiveWs {
@@ -109,12 +166,12 @@ impl WsClient for SelectiveWs {
         Self: 'f,
     {
         Box::pin(async move {
-            let Ok(parsed) = Url::parse(&url) else {
-                return self.0.connect(url, headers, timeout_ms).await;
+            let parsed = Url::parse(&url).ok().filter(local_socket);
+            let Some(parsed) = parsed else {
+                let mut upstream = self.0.connect(url, headers, timeout_ms).await?;
+                upstream.connection = Arc::new(StereoSocket(upstream.connection));
+                return Ok(upstream);
             };
-            if !local_socket(&parsed) {
-                return self.0.connect(url, headers, timeout_ms).await;
-            }
 
             let mut request = parsed.into_client_request().map_err(map_ws)?;
             for header in headers {
@@ -130,10 +187,10 @@ impl WsClient for SelectiveWs {
                 .map_err(map_ws)?;
             let (send, recv) = socket.split();
             Ok(WsConnectResult {
-                connection: Arc::new(DirectSocket {
+                connection: Arc::new(StereoSocket(Arc::new(DirectSocket {
                     send: Mutex::new(send),
                     recv: Mutex::new(recv),
-                }),
+                }))),
             })
         })
     }
@@ -159,6 +216,55 @@ pub(super) fn register() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[allow(deprecated)]
+    fn only_screen_audio_advertises_the_stereo_publish_feature() {
+        use livekit_protocol::AddTrackRequest;
+
+        let packet = |source, kind| SignalRequest {
+            message: Some(signal_request::Message::AddTrack(AddTrackRequest {
+                cid: "capture".into(),
+                r#type: kind as i32,
+                source: source as i32,
+                audio_features: vec![AudioTrackFeature::TfPreconnectBuffer as i32],
+                ..AddTrackRequest::default()
+            })),
+        };
+        for (source, kind) in [
+            (TrackSource::Microphone, TrackType::Audio),
+            (TrackSource::ScreenShare, TrackType::Video),
+            (TrackSource::ScreenShareAudio, TrackType::Video),
+        ] {
+            assert!(advertise_share_stereo(&packet(source, kind).encode_to_vec()).is_none());
+        }
+        assert!(advertise_share_stereo(&[255]).is_none());
+        let unknown = SignalRequest {
+            message: Some(signal_request::Message::AddTrack(AddTrackRequest {
+                r#type: i32::MAX,
+                source: TrackSource::ScreenShareAudio as i32,
+                ..AddTrackRequest::default()
+            })),
+        };
+        assert!(advertise_share_stereo(&unknown.encode_to_vec()).is_none());
+
+        let original = packet(TrackSource::ScreenShareAudio, TrackType::Audio);
+        let encoded = advertise_share_stereo(&original.encode_to_vec()).unwrap();
+        assert_eq!(advertise_share_stereo(&encoded).unwrap(), encoded);
+        let actual = SignalRequest::decode(encoded.as_slice()).unwrap();
+        let Some(signal_request::Message::AddTrack(track)) = actual.message else {
+            panic!("expected screen audio publication");
+        };
+        assert_eq!(track.cid, "capture");
+        assert!(track.stereo);
+        assert_eq!(
+            track.audio_features,
+            [
+                AudioTrackFeature::TfPreconnectBuffer as i32,
+                AudioTrackFeature::TfStereo as i32
+            ]
+        );
+    }
 
     #[test]
     fn bypass_is_limited_to_the_two_approved_loopback_hosts() {

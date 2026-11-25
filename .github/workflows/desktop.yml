@@ -46,11 +46,12 @@ jobs:
           echo 'deb [signed-by=/usr/share/keyrings/falky-ci-llvm.gpg] https://apt.llvm.org/noble/ llvm-toolchain-noble-21 main' |
             sudo tee /etc/apt/sources.list.d/falky-ci-llvm.list
           sudo apt-get update
-          sudo apt-get install --no-install-recommends -y clang-21 pkg-config libglib2.0-dev \
+          sudo apt-get install --no-install-recommends -y clang-21 libclang-21-dev pkg-config libglib2.0-dev \
             libasound2-dev libdbus-1-dev libwayland-dev libx11-dev libxcb1-dev \
-            libxkbcommon-dev libxkbcommon-x11-dev
+            libxkbcommon-dev libxkbcommon-x11-dev libpipewire-0.3-dev
           echo 'CC=clang-21' >> "$GITHUB_ENV"
           echo 'CXX=clang++-21' >> "$GITHUB_ENV"
+          echo 'LIBCLANG_PATH=/usr/lib/llvm-21/lib' >> "$GITHUB_ENV"
 
       - name: Install stable Rust
         run: rustup toolchain install stable --profile minimal --component clippy,rustfmt --no-self-update

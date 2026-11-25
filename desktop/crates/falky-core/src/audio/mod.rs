@@ -6,6 +6,8 @@ pub(crate) use device::{AudioIo, DeviceConfig};
 pub(crate) const RATE: u32 = 48_000;
 pub(crate) const BLOCK_LEN: usize = RATE as usize / 100;
 pub(crate) type Block = [i16; BLOCK_LEN];
+pub(crate) type StereoBlock = [i16; BLOCK_LEN * 2];
+pub(crate) const STEREO_SILENCE: StereoBlock = [0; BLOCK_LEN * 2];
 pub(crate) const SILENCE: Block = [0; BLOCK_LEN];
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -56,13 +58,13 @@ fn quantize(sample: f32) -> i16 {
 
 pub(crate) struct Mix {
     // Apply the knee after summing all tracks and cues.
-    samples: [f32; BLOCK_LEN],
+    samples: [f32; BLOCK_LEN * 2],
 }
 
 impl Default for Mix {
     fn default() -> Self {
         Self {
-            samples: [0.0; BLOCK_LEN],
+            samples: [0.0; BLOCK_LEN * 2],
         }
     }
 }
@@ -70,12 +72,21 @@ impl Default for Mix {
 impl Mix {
     pub fn add(&mut self, samples: &Block, gain: u16) {
         let gain = f32::from(gain) / 100.0;
+        for (pair, sample) in self.samples.as_chunks_mut::<2>().0.iter_mut().zip(samples) {
+            let voice = normalize(*sample) * gain;
+            pair[0] += voice;
+            pair[1] += voice;
+        }
+    }
+
+    pub fn add_stereo(&mut self, samples: &StereoBlock, gain: u16) {
+        let gain = f32::from(gain) / 100.0;
         for (sum, sample) in self.samples.iter_mut().zip(samples) {
             *sum += normalize(*sample) * gain;
         }
     }
 
-    pub fn finish(self) -> Block {
+    pub fn finish(self) -> StereoBlock {
         self.samples.map(|sample| quantize(soft_clip(sample)))
     }
 }
@@ -84,6 +95,7 @@ impl Mix {
 pub(crate) enum Cue {
     Join,
     Leave,
+    Share,
     Test,
 }
 
@@ -101,6 +113,7 @@ impl Chime {
         let (count, low, high, gap, decay, peak) = match self.cue {
             Cue::Join => (6, 380.0_f32, 1250.0, 0.055, 0.09, 0.55),
             Cue::Leave => (5, 1050.0, 340.0, 0.06, 0.09, 0.5),
+            Cue::Share => (4, 640.0, 820.0, 0.08, 0.09, 0.5),
             Cue::Test => (7, 420.0, 1100.0, 0.07, 0.1, 0.55),
         };
         let attack = 0.003;
@@ -172,12 +185,25 @@ mod tests {
         mix.add(&[16384; BLOCK_LEN], 150);
         mix.add(&[16384; BLOCK_LEN], 50);
         mix.add(&[i16::MAX; BLOCK_LEN], 0);
-        assert_eq!(mix.finish(), [quantize(soft_clip(1.0)); BLOCK_LEN]);
+        assert_eq!(mix.finish(), [quantize(soft_clip(1.0)); BLOCK_LEN * 2]);
+    }
+
+    #[test]
+    fn stereo_share_is_independent_of_mono_voice_gain_and_uses_the_same_knee() {
+        let stereo = std::array::from_fn(|index| if index % 2 == 0 { 16384 } else { -8192 });
+        let mut mix = Mix::default();
+        mix.add(&[i16::MAX; BLOCK_LEN], 0);
+        mix.add_stereo(&stereo, 100);
+        assert_eq!(mix.finish(), stereo);
+        let mut mix = Mix::default();
+        mix.add(&[8192; BLOCK_LEN], 100);
+        mix.add_stereo(&stereo, 200);
+        assert_eq!(mix.finish()[..2], [quantize(soft_clip(1.25)), -8192]);
     }
 
     #[test]
     fn synthesized_cues_have_bounded_playback_and_audible_energy() {
-        for cue in [Cue::Join, Cue::Leave, Cue::Test] {
+        for cue in [Cue::Join, Cue::Leave, Cue::Share, Cue::Test] {
             let mut chime = Chime::new(cue);
             let blocks: Vec<_> = std::iter::from_fn(|| chime.next()).collect();
             assert!((30..60).contains(&blocks.len()));

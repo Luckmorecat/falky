@@ -1,4 +1,8 @@
-use super::{VoiceParticipant, VoiceSettings};
+use super::{
+    VoiceParticipant, VoiceSettings,
+    share_publish::SharePublisher,
+    share_receive::{ShareReceiver, screen_source},
+};
 use crate::{
     audio::{BLOCK_LEN, Block, Mix, RATE, pcm_loudness},
     model::{ConnectionId, VisitorId},
@@ -6,9 +10,9 @@ use crate::{
 use futures_util::{FutureExt, StreamExt, future::BoxFuture};
 use livekit::{
     prelude::{
-        LocalAudioTrack, LocalParticipant, LocalTrack, LocalTrackPublication, RemoteTrack,
-        RemoteTrackPublication, Room, RoomEvent, RoomResult, TrackKind, TrackPublication,
-        TrackPublishOptions, TrackSid, TrackSource,
+        ConnectionState, LocalAudioTrack, LocalParticipant, LocalTrack, LocalTrackPublication,
+        RemoteTrack, RemoteTrackPublication, Room, RoomEvent, RoomResult, TrackKind,
+        TrackPublication, TrackPublishOptions, TrackSid, TrackSource,
     },
     rtc_engine::lk_runtime::LkRuntime,
     webrtc::{
@@ -104,6 +108,8 @@ struct RemoteMic {
 pub(super) struct MediaRoom {
     pub room: Arc<Room>,
     pub events: mpsc::UnboundedReceiver<RoomEvent>,
+    pub publisher: SharePublisher,
+    pub watcher: ShareReceiver,
     tracks: HashMap<TrackSid, RemoteMic>,
     pending_mic: Option<Mic>,
     microphone: Option<ReadyMic>,
@@ -119,6 +125,8 @@ impl MediaRoom {
         let media = Self {
             room,
             events,
+            publisher: SharePublisher::default(),
+            watcher: ShareReceiver::default(),
             tracks: HashMap::new(),
             pending_mic: None,
             microphone: None,
@@ -134,8 +142,16 @@ impl MediaRoom {
 
     pub fn close(mut self) {
         self.set_muted(true);
+        self.publisher.stop();
         self.tracks.clear();
         tokio::spawn(async move {
+            // Room::close also unpublishes tracks. Let the SDK complete a
+            // reconnect and finish using its snapshot of publications first.
+            while self.room.connection_state() == ConnectionState::Reconnecting {
+                if self.events.recv().await.is_none() {
+                    break;
+                }
+            }
             let _ = self.room.close().await;
         });
     }
@@ -263,6 +279,7 @@ impl MediaRoom {
                 self.microphone = None;
             }
         }
+        self.publisher.resume(&self.room.local_participant());
         self.subscribe_existing();
     }
 
@@ -304,7 +321,7 @@ impl MediaRoom {
                             },
                         );
                     }
-                } else {
+                } else if !screen_source(publication.source(), publication.kind()) {
                     publication.set_subscribed(false);
                 }
             }
@@ -314,22 +331,30 @@ impl MediaRoom {
             }
             RoomEvent::LocalTrackPublished {
                 publication,
-                track: LocalTrack::Audio(track),
-                ..
+                track,
+                participant,
             }
             | RoomEvent::LocalTrackRepublished {
                 publication,
-                track: LocalTrack::Audio(track),
+                track,
+                participant,
                 ..
             } => {
-                if let Some(mic) = &mut self.microphone
+                if screen_source(publication.source(), publication.kind()) {
+                    self.publisher.published(&participant, publication, track);
+                } else if let Some(mic) = &mut self.microphone
                     && mic.track.rtc_track().id() == track.rtc_track().id()
                 {
                     mic.publication = publication;
                 }
             }
-            RoomEvent::LocalTrackUnpublished { publication, .. } if !reconnecting => {
-                if self
+            RoomEvent::LocalTrackUnpublished {
+                publication,
+                participant,
+            } if !reconnecting => {
+                if screen_source(publication.source(), publication.kind()) {
+                    self.publisher.unpublished(&participant, &publication.sid());
+                } else if self
                     .microphone
                     .as_ref()
                     .is_some_and(|mic| mic.publication.sid() == publication.sid())
@@ -395,7 +420,7 @@ impl MediaRoom {
             muted,
             deafened,
             camera: false,
-            screen: false,
+            screen: self.publisher.sharing(),
             speaking: !muted && (local.is_speaking() || mic_level > 0.22),
             level: if muted { 0.0 } else { mic_level },
         }];
@@ -428,7 +453,11 @@ impl MediaRoom {
                     .get("deafened")
                     .is_some_and(|value| value == "true"),
                 camera: has_active(TrackSource::Camera),
-                screen: has_active(TrackSource::Screenshare),
+                screen: publications.values().any(|publication| {
+                    publication.source() == TrackSource::Screenshare
+                        && publication.kind() == TrackKind::Video
+                        && !publication.is_muted()
+                }),
                 speaking: !muted && (remote.is_speaking() || level > 0.22),
                 level: if muted { 0.0 } else { level },
             });

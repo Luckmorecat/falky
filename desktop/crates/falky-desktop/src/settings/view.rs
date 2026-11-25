@@ -15,8 +15,11 @@ use crate::ui_contract::{
 };
 
 use super::{
-    AudioStatus, BindingError, Message, Preferences, ProfileError, Shortcut, State, Tab, VoiceFlag,
+    AudioStatus, BindingError, Message, Preferences, ProfileError, ShareStatus, Shortcut, State,
+    Tab, VoiceFlag,
 };
+
+mod share;
 
 pub struct Props<'a> {
     pub prefs: &'a Preferences,
@@ -41,6 +44,14 @@ const CARD_RADIUS: f32 = INNER_RADIUS + PAD;
 const DIALOG_RADIUS: f32 = CARD_RADIUS + 4.0;
 
 pub fn view<'a>(state: &'a State, props: Props<'a>) -> Content<'a> {
+    view_with_share(state, props, ShareStatus::default())
+}
+
+pub fn view_with_share<'a>(
+    state: &'a State,
+    props: Props<'a>,
+    sharing: ShareStatus<'_>,
+) -> Content<'a> {
     let Some(tab) = state.tab() else {
         return space().into();
     };
@@ -60,6 +71,7 @@ pub fn view<'a>(state: &'a State, props: Props<'a>) -> Content<'a> {
         Tab::General => general(&props, colors),
         Tab::Voice => voice(&props, colors),
         Tab::Sound => sound(&props, colors),
+        Tab::Share => share::view(state, &props, sharing, colors),
         Tab::Profile => profile(state, &props, colors),
         Tab::Account => account(state, &props, colors),
         Tab::Shortcuts => shortcuts(state, &props, colors),
@@ -672,6 +684,7 @@ fn tab_key(tab: Tab) -> Key {
         Tab::General => Key::TabGeneral,
         Tab::Voice => Key::SectionVoice,
         Tab::Sound => Key::TabSound,
+        Tab::Share => Key::TabShare,
         Tab::Profile => Key::SectionProfile,
         Tab::Account => Key::Account,
         Tab::Shortcuts => Key::TabKeys,

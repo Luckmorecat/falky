@@ -2,7 +2,14 @@
 
 mod media;
 mod policy;
+mod screen_capture;
+mod share_policy;
+mod share_publish;
+mod share_receive;
 mod transport;
+
+pub use screen_capture::{ScreenCapture, ScreenCaptureSink, ShareFrame, screen_capture};
+pub use share_publish::{ShareCodec, ShareFocus, SharePublishSettings, supported_share_codecs};
 
 use crate::{
     audio::{
@@ -11,9 +18,10 @@ use crate::{
     model::{ConnectionId, RoomId, SessionScope, VisitorId, VoiceCredentials},
     transport::{ApiClient, ApiError, Method},
 };
-use livekit::prelude::{Room, RoomEvent, RoomOptions};
+use livekit::prelude::{ConnectionState, Room, RoomEvent, RoomOptions};
 use media::{MediaRoom, Processor, smooth};
 use policy::MicPolicy;
+use share_receive::ShareFrames;
 use std::{collections::BTreeMap, future::pending, sync::Arc, time::Duration};
 use tokio::{
     sync::{broadcast, mpsc, oneshot, watch},
@@ -95,6 +103,18 @@ pub enum VoiceCommand {
     MicTest(bool),
     SpeakerTest,
     Gain(ConnectionId, u16),
+    WatchShare {
+        call: ConnectionId,
+        expected: Option<ConnectionId>,
+        target: ConnectionId,
+    },
+    DismissShare {
+        call: ConnectionId,
+        expected: Option<ConnectionId>,
+    },
+    ShareVideoVisible(bool),
+    ShareGain(u16),
+    StopSharing,
     Shutdown,
 }
 
@@ -113,6 +133,9 @@ pub enum VoiceNotice {
     JoinFailed { room: RoomId, error: VoiceJoinError },
     AwayMuted { minutes: u16 },
     Disconnected,
+    ShareSourceLost,
+    SharePublishFailed,
+    ShareAudioUnavailable,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -147,6 +170,10 @@ pub struct VoiceSnapshot {
     pub input_unavailable: bool,
     pub output_unavailable: bool,
     pub gains: BTreeMap<ConnectionId, u16>,
+    pub watched_share: Option<ConnectionId>,
+    pub sharing: bool,
+    pub publishing_share: bool,
+    pub share_gain: u16,
 }
 
 impl VoiceSnapshot {
@@ -171,6 +198,10 @@ impl VoiceSnapshot {
             input_unavailable: false,
             output_unavailable: false,
             gains,
+            watched_share: None,
+            sharing: false,
+            publishing_share: false,
+            share_gain: 100,
         }
     }
 }
@@ -178,9 +209,10 @@ impl VoiceSnapshot {
 /// A voice actor for one authenticated session generation. Start it on a Tokio runtime.
 #[derive(Clone)]
 pub struct Voice {
-    commands: mpsc::UnboundedSender<VoiceCommand>,
+    commands: mpsc::UnboundedSender<Request>,
     snapshots: watch::Receiver<VoiceSnapshot>,
     notices: broadcast::Sender<VoiceNotice>,
+    share_frames: ShareFrames,
 }
 
 impl Voice {
@@ -202,16 +234,43 @@ impl Voice {
             notices.clone(),
             AudioIo::new(),
         );
+        let share_frames = actor.share_frames.clone();
         tokio::spawn(actor.run(receiver));
         Self {
             commands,
             snapshots,
             notices,
+            share_frames,
         }
     }
 
     pub fn command(&self, command: VoiceCommand) -> bool {
-        self.commands.send(command).is_ok()
+        self.commands.send(Request::Command(command)).is_ok()
+    }
+
+    /// Queue handoff of the native capture guard for this connection.
+    /// The guard is dropped when the connection is obsolete or the share stops.
+    pub fn start_share(
+        &self,
+        connection: ConnectionId,
+        capture: ScreenCapture,
+        session: Box<dyn Send>,
+        settings: SharePublishSettings,
+        with_audio: bool,
+    ) -> bool {
+        self.commands
+            .send(Request::Capture {
+                connection,
+                capture,
+                session,
+                settings,
+                with_audio,
+            })
+            .is_ok()
+    }
+
+    pub fn latest_share_frame(&self, connection: &ConnectionId) -> Option<Arc<ShareFrame>> {
+        self.share_frames.get(connection)
     }
 
     pub fn snapshots(&self) -> watch::Receiver<VoiceSnapshot> {
@@ -221,6 +280,17 @@ impl Voice {
     pub fn notices(&self) -> broadcast::Receiver<VoiceNotice> {
         self.notices.subscribe()
     }
+}
+
+enum Request {
+    Command(VoiceCommand),
+    Capture {
+        connection: ConnectionId,
+        capture: ScreenCapture,
+        session: Box<dyn Send>,
+        settings: SharePublishSettings,
+        with_audio: bool,
+    },
 }
 
 struct Joining {
@@ -257,6 +327,8 @@ struct Actor {
     speaker_test_failed: bool,
     mic_level: f32,
     last_capture: Option<Instant>,
+    share_frames: ShareFrames,
+    share_video_visible: bool,
 }
 
 impl Actor {
@@ -284,10 +356,12 @@ impl Actor {
             speaker_test_failed: false,
             mic_level: 0.0,
             last_capture: None,
+            share_frames: ShareFrames::default(),
+            share_video_visible: true,
         }
     }
 
-    async fn run(mut self, mut commands: mpsc::UnboundedReceiver<VoiceCommand>) {
+    async fn run(mut self, mut commands: mpsc::UnboundedReceiver<Request>) {
         let mut frames = interval(FRAME_TIME);
         frames.set_missed_tick_behavior(MissedTickBehavior::Skip);
         let mut ui = interval(UI_TICK);
@@ -297,8 +371,19 @@ impl Actor {
         loop {
             tokio::select! {
                 command = commands.recv() => {
-                    let Some(command) = command else { break };
-                    if !self.command(command) { break; }
+                    match command {
+                        Some(Request::Command(command)) => {
+                            if !self.command(command) { break; }
+                        }
+                        Some(Request::Capture { connection, capture, session, settings, with_audio }) => {
+                            if self.state.connection.as_ref() == Some(&connection)
+                                && let Some(call) = &mut self.active
+                            {
+                                call.media.publisher.start(capture, session, settings, with_audio, Instant::now());
+                            }
+                        }
+                        None => break,
+                    }
                     self.publish();
                 }
                 result = async {
@@ -395,6 +480,36 @@ impl Actor {
             }
             VoiceCommand::Gain(connection, value) => {
                 self.state.gains.insert(connection, gain_percent(value));
+            }
+            VoiceCommand::WatchShare {
+                call,
+                expected,
+                target,
+            } => {
+                self.update_share_watch(&call, expected.as_ref(), Some(target));
+            }
+            VoiceCommand::DismissShare { call, expected } => {
+                self.update_share_watch(&call, expected.as_ref(), None);
+            }
+            VoiceCommand::ShareVideoVisible(visible) => {
+                self.share_video_visible = visible;
+                if !visible {
+                    self.share_frames.clear();
+                }
+                self.reconcile_shares(true);
+            }
+            VoiceCommand::ShareGain(percent) => {
+                let gain = gain_percent(percent);
+                if self.state.share_gain != gain {
+                    self.state.share_gain = gain;
+                    self.audio.reset_output();
+                }
+            }
+            VoiceCommand::StopSharing => {
+                if let Some(call) = &mut self.active {
+                    call.media.publisher.stop();
+                }
+                self.reconcile_shares(true);
             }
             VoiceCommand::Shutdown => return false,
         }
@@ -502,6 +617,7 @@ impl Actor {
         };
         self.audio.reset_input();
         self.audio.reset_output();
+        self.share_frames.clear();
         self.processor = None;
         self.last_capture = None;
         self.mic_test = false;
@@ -537,6 +653,7 @@ impl Actor {
             }
             call.media.close();
         }
+        self.share_frames.clear();
         self.state.room = None;
         self.state.connection = None;
         self.state.reconnecting = false;
@@ -550,6 +667,7 @@ impl Actor {
                 self.state.reconnecting = true;
                 if let Some(call) = &mut self.active {
                     call.policy.release_all();
+                    call.media.watcher.suspend(&self.share_frames);
                 }
                 self.audio.reset_output();
                 self.sync_mute();
@@ -561,6 +679,7 @@ impl Actor {
                     call.media.resume();
                 }
                 self.state.reconnecting = false;
+                self.reconcile_shares(true);
                 self.sync_mute();
                 self.publish();
             }
@@ -578,10 +697,63 @@ impl Actor {
                         _ => {}
                     }
                 }
+                let announce = !matches!(event, RoomEvent::Connected { .. });
                 if let Some(call) = &mut self.active {
+                    let reconcile = call.media.watcher.event(&event);
                     call.media.event(event, self.state.reconnecting);
+                    if reconcile {
+                        self.reconcile_shares(announce);
+                        self.publish();
+                    }
                 }
             }
+        }
+    }
+
+    fn update_share_watch(
+        &mut self,
+        call: &ConnectionId,
+        expected: Option<&ConnectionId>,
+        target: Option<ConnectionId>,
+    ) {
+        if self.state.connection.as_ref() != Some(call) {
+            return;
+        }
+        if let Some(call) = &mut self.active
+            && call.media.watcher.change_target(expected, target)
+        {
+            self.audio.reset_output();
+            self.share_frames.clear();
+            self.reconcile_shares(true);
+        }
+    }
+
+    fn reconcile_shares(&mut self, announce: bool) {
+        let Some(call) = &mut self.active else { return };
+        let previous = call.media.watcher.target().cloned();
+        let local = self
+            .state
+            .connection
+            .clone()
+            .filter(|_| call.media.publisher.sharing());
+        if self.state.reconnecting {
+            call.media.watcher.update_local(local);
+            if previous.as_ref() != call.media.watcher.target() {
+                self.share_frames.clear();
+            }
+            return;
+        }
+        let started = call.media.watcher.reconcile(
+            &call.media.room,
+            &self.share_frames,
+            local,
+            self.share_video_visible,
+        );
+        if previous.as_ref() != call.media.watcher.target() {
+            self.audio.reset_output();
+        }
+        if started && announce {
+            self.chime_if_enabled(Cue::Share);
         }
     }
 
@@ -684,20 +856,26 @@ impl Actor {
                 call.media.capture(processed.as_ref().unwrap_or(&SILENCE));
             }
         }
+        self.share_frame(now);
 
         if devices.output_unavailable {
             self.speaker_test_failed |= self.chime.as_ref().is_some_and(Chime::is_test);
             self.chime = None;
             self.output_tail = None;
+            if let Some(call) = &mut self.active {
+                call.media.watcher.mix(&mut Mix::default(), true, 0);
+            }
         } else if devices.output_open {
             self.speaker_test_failed = false;
             let mut mix = Mix::default();
             if let Some(call) = &mut self.active {
-                call.media.mix(
-                    &mut mix,
-                    call.policy.deafened || self.state.reconnecting,
-                    |connection| self.state.gains.get(connection).copied().unwrap_or(100),
-                );
+                let silent = call.policy.deafened || self.state.reconnecting;
+                call.media.mix(&mut mix, silent, |connection| {
+                    self.state.gains.get(connection).copied().unwrap_or(100)
+                });
+                call.media
+                    .watcher
+                    .mix(&mut mix, silent, self.state.share_gain);
             }
             if let Some(chime) = &mut self.chime {
                 if let Some(block) = chime.next() {
@@ -711,6 +889,7 @@ impl Actor {
             self.audio.output(mix.finish());
         } else if let Some(call) = &mut self.active {
             call.media.mix(&mut Mix::default(), true, |_| 100);
+            call.media.watcher.mix(&mut Mix::default(), true, 0);
         }
 
         if self.output_tail.is_some_and(|end| now >= end) {
@@ -719,6 +898,34 @@ impl Actor {
         self.configure_devices();
         if (was_playing && self.chime.is_none()) || (was_draining && self.output_tail.is_none()) {
             self.publish();
+        }
+    }
+
+    fn share_frame(&mut self, now: Instant) {
+        let Some(call) = &mut self.active else { return };
+        let was_sharing = call.media.publisher.sharing();
+        let was_publishing = call.media.publisher.publishing();
+        let connected = !self.state.reconnecting
+            && call.media.room.connection_state() == ConnectionState::Connected;
+        if let Some(notice) = call
+            .media
+            .publisher
+            .service(&call.media.room, connected, now)
+        {
+            let _ = self.notices.send(notice);
+        }
+        if was_sharing != call.media.publisher.sharing()
+            || was_publishing != call.media.publisher.publishing()
+        {
+            self.reconcile_shares(true);
+            self.publish();
+        }
+        if let Some(call) = &mut self.active {
+            call.media.watcher.frame(
+                &self.share_frames,
+                call.media.publisher.preview(),
+                self.share_video_visible,
+            );
         }
     }
 
@@ -733,6 +940,9 @@ impl Actor {
 
         if let (Some(call), Some(connection)) = (&self.active, &self.state.connection) {
             self.state.deafened = call.policy.deafened;
+            self.state.watched_share = call.media.watcher.target().cloned();
+            self.state.sharing = call.media.publisher.sharing();
+            self.state.publishing_share = call.media.publisher.publishing();
             self.state.listen_only = status.input_unavailable || call.media.microphone_failed();
             self.state.muted = self.state.reconnecting
                 || !self.capture_available()
@@ -748,6 +958,9 @@ impl Actor {
             self.state.muted = true;
             self.state.deafened = false;
             self.state.listen_only = false;
+            self.state.watched_share = None;
+            self.state.sharing = false;
+            self.state.publishing_share = false;
             self.state.participants.clear();
         }
         self.updates.send_if_modified(|previous| {
@@ -890,12 +1103,18 @@ mod tests {
                 assert!(!initial.mic_test_active);
             }
 
-            commands.send(VoiceCommand::MicTest(true)).unwrap();
+            commands
+                .send(Request::Command(VoiceCommand::MicTest(true)))
+                .ok()
+                .unwrap();
             snapshots
                 .wait_for(|state| state.mic_test_active && state.input_unavailable)
                 .await
                 .unwrap();
-            commands.send(VoiceCommand::Shutdown).unwrap();
+            commands
+                .send(Request::Command(VoiceCommand::Shutdown))
+                .ok()
+                .unwrap();
             task.await.unwrap();
             assert!(!snapshots.borrow().mic_test_active);
         })
@@ -925,7 +1144,10 @@ mod tests {
                 .wait_for(|state| state.input_unavailable && state.devices.input.len() == 1)
                 .await
                 .unwrap();
-            commands.send(VoiceCommand::MicTest(true)).unwrap();
+            commands
+                .send(Request::Command(VoiceCommand::MicTest(true)))
+                .ok()
+                .unwrap();
             snapshots
                 .wait_for(|state| state.mic_test_active)
                 .await
@@ -936,6 +1158,40 @@ mod tests {
         })
         .await
         .unwrap();
+    }
+
+    #[tokio::test]
+    async fn actor_releases_capture_from_an_obsolete_connection() {
+        struct NativeGuard(Option<oneshot::Sender<()>>);
+
+        impl Drop for NativeGuard {
+            fn drop(&mut self) {
+                let _ = self.0.take().unwrap().send(());
+            }
+        }
+
+        let (actor, mut snapshots) = test_actor(AudioIo::test_failed_worker_start());
+        let (commands, receiver) = mpsc::unbounded_channel();
+        let task = tokio::spawn(actor.run(receiver));
+        let (released, done) = oneshot::channel();
+        let (_, capture) = screen_capture();
+        commands
+            .send(Request::Capture {
+                connection: ConnectionId::from("obsolete"),
+                capture,
+                session: Box::new(NativeGuard(Some(released))),
+                settings: SharePublishSettings::default(),
+                with_audio: true,
+            })
+            .ok()
+            .unwrap();
+        timeout(Duration::from_secs(2), done)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(!snapshots.borrow_and_update().publishing_share);
+        drop(commands);
+        task.await.unwrap();
     }
 
     #[test]

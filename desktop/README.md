@@ -6,7 +6,7 @@ Falky is a native Rust client for an existing Falky server. Enter the server ori
 
 Install the current stable Rust toolchain with Cargo. The locked workspace was verified with Rust 1.100.0 on Linux x86-64. The workspace and its Linux dependency metadata declare Rust 1.90 or later.
 
-- **Linux** needs Clang 21 or newer, pkg-config, and the GLib, ALSA, D-Bus, Wayland, X11, XCB, and XKB development libraries. Ubuntu 24.04 package names and the Clang setup appear in the [desktop workflow](../.github/workflows/desktop.yml). Enable a Secret Service provider such as GNOME Keyring to retain sign-in across restarts. A StatusNotifier host supplies the tray. A notification daemon and, on Wayland, a GlobalShortcuts portal supply the corresponding system features.
+- **Linux** needs Clang 21 or newer, the corresponding libclang, pkg-config, and the GLib, ALSA, D-Bus, Wayland, X11, XCB, XKB, and PipeWire development libraries. Ubuntu 24.04 package names and the Clang setup appear in the [desktop workflow](../.github/workflows/desktop.yml). Enable a Secret Service provider such as GNOME Keyring to retain sign-in across restarts. A StatusNotifier host supplies the tray. A notification daemon and, on Wayland, a GlobalShortcuts portal supply the corresponding system features.
 - **macOS** needs Xcode command line tools. Global push-to-talk needs the app's Accessibility permission.
 - **Windows** needs a Rust MSVC toolchain and the Visual Studio C++ Build Tools with a Windows SDK.
 
@@ -23,6 +23,16 @@ When global push-to-talk is available, use Ctrl+Shift+F9 or the binding reported
 Use `/` or Enter to open and focus chat and the left and right arrow keys to navigate rooms. These shortcuts apply when an editor or dialog does not hold keyboard focus.
 
 Falky remembers your selected microphone and speakers by device ID. If a selection becomes unavailable, reconnect the device, choose another one, or choose System default to use the device selected by the OS.
+
+## Screen sharing
+
+Use **Share screen** in the voice dock to choose a window or display in the system picker. Falky keeps sharing while you browse another room or hide to the tray. Use **Stop sharing** in the dock or tray to end the capture.
+
+- **Linux** needs PipeWire and an XDG Desktop Portal backend that supports ScreenCast for your desktop session and offers mappable shared-memory video buffers. Outgoing shares are video only.
+- **macOS** supports showing a screen and sharing sound on macOS 14 and later. Grant Falky Screen Recording permission when prompted.
+- **Windows** supports showing a screen on Windows 10 version 1903 and later. Sharing with sound requires build 20348 or later and includes audio from all other apps, even when sharing a single window.
+
+Watching screen shares with sound works on all three platforms. The video pauses when you hide Falky or view another room. Screen audio continues according to your share volume and deafen settings.
 
 ## Checks
 

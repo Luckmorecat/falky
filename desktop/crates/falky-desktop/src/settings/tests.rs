@@ -120,3 +120,34 @@ fn shortcut_capture_reserves_fixed_keys_and_prevents_duplicates() {
     assert_eq!(prefs.shortcuts.mute.code, "KeyQ");
     assert!(!state.is_capturing_shortcut());
 }
+
+#[test]
+fn share_settings_only_change_preferences_and_details_are_local_to_the_dialog() {
+    let mut state = State::default();
+    let mut prefs = Preferences::default();
+    let visitor = visitor();
+    let audio = AudioStatus {
+        in_voice: true,
+        ..AudioStatus::default()
+    };
+    state.open(&visitor);
+    state.update(Message::Tab(Tab::Share), &mut prefs, &visitor, &audio);
+    assert_eq!(
+        state.update(Message::ShareDetails, &mut prefs, &visitor, &audio),
+        None
+    );
+    assert_eq!(state.share_details, Some(true));
+    for message in [
+        Message::SharePreset(SharePreset::Docs),
+        Message::ShareSound(false),
+        Message::ShareBitrate(u8::MAX),
+    ] {
+        assert_eq!(
+            state.update(message, &mut prefs, &visitor, &audio),
+            Some(Action::PreferencesChanged)
+        );
+    }
+    assert_eq!(prefs.share.preset(), Some(SharePreset::Docs));
+    assert_eq!(prefs.share.bitrate_mbps, 20);
+    assert!(!prefs.share.with_sound);
+}

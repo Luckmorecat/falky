@@ -1,5 +1,8 @@
 use super::identity::{explicit_device, saved_id};
-use super::{AudioDevice, AudioDevices, BLOCK_LEN, Block, RATE, SILENCE, normalize, quantize};
+use super::{
+    AudioDevice, AudioDevices, BLOCK_LEN, Block, RATE, SILENCE, STEREO_SILENCE, StereoBlock,
+    normalize, quantize,
+};
 use cpal::{
     BufferSize, Device, FromSample, Host, Sample, SampleFormat, SizedSample, Stream, StreamConfig,
     StreamError, SupportedBufferSize, SupportedStreamConfig, SupportedStreamConfigRange,
@@ -55,7 +58,7 @@ impl<T> Queue<T> {
 
 struct Pipes {
     capture: Queue<(u64, Block)>,
-    playback: Queue<Block>,
+    playback: Queue<StereoBlock>,
     reference: Queue<Block>,
     capture_epoch: AtomicU64,
     render_epoch: AtomicU64,
@@ -247,7 +250,7 @@ impl AudioIo {
         self.pipes.pop_capture()
     }
 
-    pub fn output(&self, block: Block) {
+    pub fn output(&self, block: StereoBlock) {
         self.pipes.playback.push(block);
     }
 
@@ -362,7 +365,11 @@ impl Direction {
                 .flatten()
                 .collect(),
         };
-        choose_pcm_config(default, candidates)
+        choose_pcm_config(
+            default,
+            candidates,
+            if matches!(self, Self::Output) { 2 } else { 1 },
+        )
     }
 
     fn inventory(self, host: &Host) -> Vec<AudioDevice> {
@@ -396,6 +403,7 @@ fn pcm_format(format: SampleFormat) -> bool {
 fn choose_pcm_config(
     default: Option<SupportedStreamConfig>,
     candidates: impl IntoIterator<Item = SupportedStreamConfigRange>,
+    channels: u16,
 ) -> Option<SupportedStreamConfig> {
     let default = default.filter(|config| pcm_format(config.sample_format()));
     let preferred = candidates
@@ -406,8 +414,9 @@ fn choose_pcm_config(
         })
         .min_by_key(|config| {
             (
+                channels == 2 && config.channels() < 2,
                 config.sample_rate().abs_diff(RATE),
-                config.channels() != 1,
+                config.channels() != channels,
                 default
                     .as_ref()
                     .is_some_and(|native| config.channels() != native.channels()),
@@ -416,9 +425,14 @@ fn choose_pcm_config(
                     .is_some_and(|native| config.sample_format() != native.sample_format()),
             )
         });
-    // Preserve a device's native PCM configuration when it lacks 48 kHz PCM.
+    // Keep the native format when it needs resampling unless doing so loses stereo.
     preferred
-        .filter(|config| config.sample_rate() == RATE || default.is_none())
+        .filter(|config| {
+            config.sample_rate() == RATE
+                || default.as_ref().is_none_or(|native| {
+                    channels == 2 && native.channels() < 2 && config.channels() >= 2
+                })
+        })
         .or(default)
 }
 
@@ -751,9 +765,8 @@ where
                         epoch = current;
                     }
                     for frame in data.chunks_exact_mut(channels) {
-                        let sample = T::from_sample(renderer.next(&pipes.playback));
-                        frame.fill(sample);
-                        resample.push(sample.to_sample::<f32>(), |sample| {
+                        let rendered = render_pair(frame, renderer.next(&pipes.playback));
+                        resample.push(rendered, |sample| {
                             if let Some(complete) = reference.add(sample) {
                                 pipes.reference.push(complete);
                             }
@@ -767,44 +780,65 @@ where
         .ok()
 }
 
+fn render_pair<T>(frame: &mut [T], [left, right]: [f32; 2]) -> f32
+where
+    T: Sample + FromSample<f32>,
+    f32: FromSample<T>,
+{
+    if let [mono] = frame {
+        *mono = T::from_sample((left + right) * 0.5);
+        mono.to_sample::<f32>()
+    } else {
+        frame[0] = T::from_sample(left);
+        frame[1] = T::from_sample(right);
+        frame[2..].fill(T::EQUILIBRIUM);
+        (frame[0].to_sample::<f32>() + frame[1].to_sample::<f32>()) * 0.5
+    }
+}
+
 fn ms(duration: Option<Duration>) -> u32 {
     duration.map_or(0, |value| value.as_millis().min(500) as u32)
 }
 
 struct Renderer {
-    block: Block,
+    block: StereoBlock,
     offset: usize,
     phase: u64,
-    before: f32,
-    after: f32,
+    before: [f32; 2],
+    after: [f32; 2],
     rate: u64,
 }
 
 impl Renderer {
     fn new(rate: u32) -> Self {
         Self {
-            block: SILENCE,
-            offset: BLOCK_LEN,
+            block: STEREO_SILENCE,
+            offset: BLOCK_LEN * 2,
             phase: rate.into(),
-            before: 0.0,
-            after: 0.0,
+            before: [0.0; 2],
+            after: [0.0; 2],
             rate: rate.into(),
         }
     }
 
-    fn next(&mut self, queue: &Queue<Block>) -> f32 {
+    fn next(&mut self, queue: &Queue<StereoBlock>) -> [f32; 2] {
         while self.phase >= self.rate {
-            if self.offset == BLOCK_LEN {
-                self.block = queue.pop().unwrap_or(SILENCE);
+            if self.offset == self.block.len() {
+                self.block = queue.pop().unwrap_or(STEREO_SILENCE);
                 self.offset = 0;
             }
             self.before = self.after;
-            self.after = normalize(self.block[self.offset]);
-            self.offset += 1;
+            self.after = [
+                normalize(self.block[self.offset]),
+                normalize(self.block[self.offset + 1]),
+            ];
+            self.offset += 2;
             self.phase -= self.rate;
         }
-        let sample =
-            self.before + (self.after - self.before) * (self.phase as f32 / self.rate as f32);
+        let fraction = self.phase as f32 / self.rate as f32;
+        let sample = std::array::from_fn(|channel| {
+            self.before[channel] + (self.after[channel] - self.before[channel]) * fraction
+        });
         self.phase += RATE as u64;
         sample
     }
@@ -919,6 +953,27 @@ mod tests {
     }
 
     #[test]
+    fn playback_prefers_stereo_even_when_the_device_only_offers_it_at_44_1_khz() {
+        let config = |channels, rate| {
+            SupportedStreamConfigRange::new(
+                channels,
+                rate,
+                rate,
+                SupportedBufferSize::Unknown,
+                SampleFormat::I16,
+            )
+        };
+        let mono = config(1, RATE);
+        let stereo = config(2, 44_100);
+        let selected =
+            choose_pcm_config(Some(mono.with_sample_rate(RATE)), [mono, stereo], 2).unwrap();
+        assert_eq!((selected.channels(), selected.sample_rate()), (2, 44_100));
+        let selected =
+            choose_pcm_config(Some(mono.with_sample_rate(RATE)), [mono, stereo], 1).unwrap();
+        assert_eq!((selected.channels(), selected.sample_rate()), (1, RATE));
+    }
+
+    #[test]
     fn stream_configuration_prefers_only_viable_pcm() {
         let config = |rate, format| {
             SupportedStreamConfigRange::new(1, rate, rate, SupportedBufferSize::Unknown, format)
@@ -927,7 +982,7 @@ mod tests {
         let canonical = config(RATE, SampleFormat::U24);
         let fallback = config(44_100, SampleFormat::I16);
         let choose = |candidates| {
-            choose_pcm_config(Some(unsupported.with_sample_rate(RATE)), candidates).unwrap()
+            choose_pcm_config(Some(unsupported.with_sample_rate(RATE)), candidates, 1).unwrap()
         };
         assert_eq!(
             choose([unsupported, canonical]).sample_format(),
@@ -935,7 +990,7 @@ mod tests {
         );
         assert_eq!(choose([unsupported, fallback]).sample_rate(), 44_100);
         assert!(
-            choose_pcm_config(Some(unsupported.with_sample_rate(RATE)), [unsupported]).is_none()
+            choose_pcm_config(Some(unsupported.with_sample_rate(RATE)), [unsupported], 1).is_none()
         );
     }
 
@@ -1065,12 +1120,24 @@ mod tests {
     #[test]
     fn render_fills_underruns_with_silence() {
         let queue = Queue::new();
-        queue.push([8192; BLOCK_LEN]);
+        queue.push(std::array::from_fn(|index| {
+            if index % 2 == 0 { 8192 } else { -4096 }
+        }));
         let mut renderer = Renderer::new(48_000);
-        assert_eq!(renderer.next(&queue), 0.0);
+        assert_eq!(renderer.next(&queue), [0.0; 2]);
         for _ in 0..BLOCK_LEN {
-            assert_eq!(renderer.next(&queue), 0.25);
+            assert_eq!(renderer.next(&queue), [0.25, -0.125]);
         }
-        assert_eq!(renderer.next(&queue), 0.0);
+        assert_eq!(renderer.next(&queue), [0.0; 2]);
+    }
+
+    #[test]
+    fn apm_reference_downmixes_rendered_left_and_right() {
+        let mut stereo = [0i16; 2];
+        let mut mono = [0i16; 1];
+        assert_eq!(render_pair(&mut stereo, [0.5, -0.25]), 0.125);
+        assert_eq!(stereo, [16384, -8192]);
+        assert_eq!(render_pair(&mut mono, [0.5, -0.25]), 0.125);
+        assert_eq!(mono, [4096]);
     }
 }

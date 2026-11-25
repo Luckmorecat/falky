@@ -9,6 +9,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::ui_contract::{LanguagePreference, Shortcuts, ThemePreference, VoiceSettings};
 
+use super::share::{ShareSettings, ShareVolume};
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Preferences {
@@ -18,6 +20,8 @@ pub struct Preferences {
     pub chimes: bool,
     pub notifications: bool,
     pub shortcuts: Shortcuts,
+    pub share: ShareSettings,
+    pub share_volume: ShareVolume,
     gains: BTreeMap<String, BTreeMap<ConnectionId, u16>>,
 }
 
@@ -30,6 +34,8 @@ impl Default for Preferences {
             chimes: true,
             notifications: false,
             shortcuts: Shortcuts::default(),
+            share: ShareSettings::default(),
+            share_volume: ShareVolume::default(),
             gains: BTreeMap::new(),
         }
     }
@@ -76,7 +82,7 @@ impl Preferences {
     }
 }
 
-fn normalized_gain(percent: u16) -> u16 {
+pub(super) fn normalized_gain(percent: u16) -> u16 {
     ((percent.min(200) + 2) / 5) * 5
 }
 
@@ -113,7 +119,7 @@ mod tests {
         assert_eq!(restarted.gains(&other).count(), 0);
         let json: serde_json::Value =
             serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-        assert_eq!(json.as_object().unwrap().len(), 7);
+        assert_eq!(json.as_object().unwrap().len(), 9);
     }
 
     #[test]
@@ -126,5 +132,32 @@ mod tests {
                 ..Preferences::default()
             }
         );
+    }
+
+    #[test]
+    fn share_preferences_load_old_files_and_remember_gain_through_mute() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("preferences.json");
+        std::fs::write(&path, r#"{"theme":"light","notifications":true}"#).unwrap();
+        let mut prefs = Preferences::load_from(&path).unwrap();
+        assert_eq!(prefs.theme, ThemePreference::Light);
+        assert!(prefs.notifications);
+        assert_eq!(prefs.share, super::super::ShareSettings::default());
+        assert_eq!(prefs.share_volume.percent(), 100);
+
+        prefs.share.apply_preset(super::super::SharePreset::Games);
+        prefs.share.with_sound = false;
+        prefs.share.bitrate_mbps = 12;
+        prefs.share_volume.set_percent(178);
+        prefs.share_volume.set_percent(0);
+        prefs.save_to(&path).unwrap();
+        let mut restored = Preferences::load_from(&path).unwrap();
+        assert_eq!(restored.share, prefs.share);
+        assert_eq!(restored.share_volume.percent(), 0);
+        restored.share_volume.toggle_mute();
+        assert_eq!(restored.share_volume.percent(), 180);
+        restored.share_volume.toggle_mute();
+        restored.share_volume.set_percent(104);
+        assert_eq!(restored.share_volume.percent(), 105);
     }
 }

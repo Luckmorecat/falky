@@ -1,5 +1,8 @@
 use super::{Events, Input, Message, PlatformEvent};
-use crate::ui_contract::{Language, TrayAction};
+use crate::{
+    locale::{self, Key},
+    ui_contract::{Language, TrayAction},
+};
 use iced::Task;
 
 #[derive(Default)]
@@ -42,6 +45,7 @@ pub(super) struct Snapshot {
     in_voice: bool,
     muted: bool,
     deafened: bool,
+    sharing: bool,
     language: Language,
 }
 
@@ -53,11 +57,23 @@ impl Snapshot {
             in_voice,
             muted: in_voice && input.voice.muted,
             deafened: in_voice && input.voice.deafened,
+            sharing: in_voice && input.can_stop_sharing,
             language: input.language,
         }
     }
 
-    fn entries(self) -> [(TrayAction, &'static str, bool); 5] {
+    fn title(self) -> String {
+        if self.sharing {
+            format!(
+                "Falky · {}",
+                locale::text(self.language, Key::SharingScreen)
+            )
+        } else {
+            "Falky".into()
+        }
+    }
+
+    fn entries(self) -> [(TrayAction, &'static str, bool); 6] {
         let (visibility, visibility_label) = match (self.visible, self.language) {
             (true, Language::En) => (TrayAction::Hide, "Hide Falky"),
             (false, Language::En) => (TrayAction::Show, "Show Falky"),
@@ -98,6 +114,11 @@ impl Snapshot {
                 self.in_voice && !self.deafened,
             ),
             (TrayAction::ToggleDeafen, deafen, self.in_voice),
+            (
+                TrayAction::StopSharing,
+                locale::text(self.language, Key::StopSharing),
+                self.sharing,
+            ),
             (TrayAction::LeaveVoice, leave, self.in_voice),
             (TrayAction::Quit, quit, true),
         ]
@@ -265,7 +286,7 @@ mod os {
         }
 
         fn title(&self) -> String {
-            "Falky".into()
+            self.snapshot.title()
         }
 
         fn icon_pixmap(&self) -> Vec<ksni::Icon> {
@@ -322,17 +343,18 @@ mod os {
     use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
 
     const TRAY_ID: &str = "falky";
-    const ITEMS: [&str; 5] = [
+    const ITEMS: [&str; 6] = [
         "falky-visibility",
         "falky-mute",
         "falky-deafen",
+        "falky-stop-sharing",
         "falky-leave",
         "falky-quit",
     ];
 
     pub(super) struct Service {
-        _tray: TrayIcon,
-        items: [MenuItem; 5],
+        tray: TrayIcon,
+        items: [MenuItem; ITEMS.len()],
     }
 
     impl Service {
@@ -349,7 +371,7 @@ mod os {
             let mut builder = TrayIconBuilder::new()
                 .with_id(TRAY_ID)
                 .with_menu(Box::new(menu))
-                .with_tooltip("Falky")
+                .with_tooltip(snapshot.title())
                 .with_icon(Icon::from_rgba(icon_rgba(), ICON_SIZE, ICON_SIZE)?);
             if cfg!(target_os = "windows") {
                 builder = builder.with_menu_on_left_click(false);
@@ -379,16 +401,18 @@ mod os {
                     id if id == ITEMS[0] => PlatformEvent::TrayToggleVisibility,
                     id if id == ITEMS[1] => PlatformEvent::Tray(TrayAction::ToggleMute),
                     id if id == ITEMS[2] => PlatformEvent::Tray(TrayAction::ToggleDeafen),
-                    id if id == ITEMS[3] => PlatformEvent::Tray(TrayAction::LeaveVoice),
-                    id if id == ITEMS[4] => PlatformEvent::Tray(TrayAction::Quit),
+                    id if id == ITEMS[3] => PlatformEvent::Tray(TrayAction::StopSharing),
+                    id if id == ITEMS[4] => PlatformEvent::Tray(TrayAction::LeaveVoice),
+                    id if id == ITEMS[5] => PlatformEvent::Tray(TrayAction::Quit),
                     _ => return,
                 };
                 let _ = events.send(Message(action));
             }));
-            Ok(Self { _tray: tray, items })
+            Ok(Self { tray, items })
         }
 
         pub(super) fn sync(&self, snapshot: Snapshot) {
+            let _ = self.tray.set_tooltip(Some(snapshot.title()));
             for (item, (_, label, enabled)) in self.items.iter().zip(snapshot.entries()) {
                 item.set_text(label);
                 item.set_enabled(enabled);

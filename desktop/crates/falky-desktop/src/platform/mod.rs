@@ -1,3 +1,4 @@
+pub mod capture;
 mod notifications;
 mod shortcuts;
 mod tray;
@@ -15,6 +16,7 @@ use tokio::sync::mpsc;
 pub struct Input<'a> {
     pub voice: &'a VoiceStatus,
     pub shortcuts: &'a Shortcuts,
+    pub can_stop_sharing: bool,
     pub push_to_talk: bool,
     pub suppress_shortcuts: bool,
     pub language: Language,
@@ -33,6 +35,7 @@ impl Input<'_> {
 pub enum Action {
     Voice(VoiceAction),
     ConfirmVoiceLeave,
+    StopSharing,
     ReleaseLocalHolds,
     Quit,
     NotificationOpened { scope: SessionScope, room: RoomId },
@@ -71,6 +74,7 @@ pub struct Platform {
     window: Option<window::Id>,
     window_settings: window::Settings,
     hidden: bool,
+    share_fullscreen: bool,
     focused: bool,
     shutting_down: bool,
     backend: Option<shortcuts::Backend>,
@@ -97,6 +101,7 @@ impl Platform {
                 window: Some(window),
                 window_settings: settings,
                 hidden: false,
+                share_fullscreen: false,
                 focused: false,
                 shutting_down: false,
                 backend: None,
@@ -153,6 +158,7 @@ impl Platform {
             PlatformEvent::Closed(id) if self.window == Some(id) => {
                 self.window = None;
                 self.hidden = true;
+                self.share_fullscreen = false;
                 self.release_local(&mut result);
                 if !self.tray_available {
                     result.actions.push(Action::Quit);
@@ -167,7 +173,7 @@ impl Platform {
                 }
             }
             PlatformEvent::Resized(id, size) if self.window == Some(id) => {
-                if size.width > 0.0 && size.height > 0.0 {
+                if !self.share_fullscreen && size.width > 0.0 && size.height > 0.0 {
                     self.window_settings.size = size;
                 }
             }
@@ -205,6 +211,9 @@ impl Platform {
                     result
                         .actions
                         .push(Action::Voice(VoiceAction::ToggleDeafen));
+                }
+                TrayAction::StopSharing if input.can_stop_sharing => {
+                    result.actions.push(Action::StopSharing);
                 }
                 TrayAction::LeaveVoice if input.voice.room.is_some() => {
                     result.actions.push(Action::Voice(VoiceAction::Leave));
@@ -292,12 +301,34 @@ impl Platform {
         shortcuts::open_accessibility_settings();
     }
 
+    pub fn set_share_fullscreen(&mut self, fullscreen: bool) -> Task<Message> {
+        let Some(id) = self.window.filter(|_| self.visible()) else {
+            return Task::none();
+        };
+        if self.share_fullscreen == fullscreen {
+            return Task::none();
+        }
+        self.share_fullscreen = fullscreen;
+        let mode = if fullscreen {
+            window::Mode::Fullscreen
+        } else {
+            window::Mode::Windowed
+        };
+        window::set_mode(id, mode)
+    }
+
     pub fn show(&mut self) -> Task<Message> {
-        self.hidden = false;
+        let was_hidden = std::mem::take(&mut self.hidden);
         match self.window {
-            Some(id) => window::set_mode(id, window::Mode::Windowed)
-                .chain(window::minimize(id, false))
-                .chain(window::gain_focus(id)),
+            Some(id) => {
+                let show = if was_hidden {
+                    window::set_mode(id, window::Mode::Windowed)
+                } else {
+                    Task::none()
+                };
+                show.chain(window::minimize(id, false))
+                    .chain(window::gain_focus(id))
+            }
             None => {
                 let (id, open) = window::open(self.window_settings.clone());
                 self.window = Some(id);
@@ -332,6 +363,7 @@ impl Platform {
             return Task::none();
         };
         self.hidden = true;
+        self.share_fullscreen = false;
         self.focused = false;
         self.window_hold = None;
         actions.push(Action::ReleaseLocalHolds);
@@ -448,6 +480,7 @@ mod tests {
         let input = Input {
             voice: &voice,
             shortcuts: &shortcuts,
+            can_stop_sharing: false,
             push_to_talk: true,
             suppress_shortcuts: false,
             language: Language::En,
@@ -492,6 +525,7 @@ mod tests {
         let input = Input {
             voice: &joining,
             shortcuts: &shortcuts,
+            can_stop_sharing: false,
             push_to_talk: false,
             suppress_shortcuts: false,
             language: Language::En,
@@ -535,6 +569,7 @@ mod tests {
         let input = Input {
             voice: &voice,
             shortcuts: &shortcuts,
+            can_stop_sharing: false,
             push_to_talk: true,
             suppress_shortcuts: false,
             language: Language::En,
@@ -587,6 +622,7 @@ mod tests {
         let input = Input {
             voice: &voice,
             shortcuts: &shortcuts,
+            can_stop_sharing: false,
             push_to_talk: false,
             suppress_shortcuts: false,
             language: Language::En,
@@ -600,6 +636,11 @@ mod tests {
             [Action::ReleaseLocalHolds, Action::Quit]
         );
         platform.update(Message(PlatformEvent::TrayAvailability(true)), &input);
+        let _ = platform.set_share_fullscreen(true);
+        platform.update(
+            Message(PlatformEvent::Resized(id, iced::Size::new(1920.0, 1080.0))),
+            &input,
+        );
         assert_eq!(
             platform.update(close, &input).actions,
             [Action::ReleaseLocalHolds]
@@ -609,5 +650,46 @@ mod tests {
         platform.update(Message(PlatformEvent::TrayAvailability(false)), &input);
         assert!(platform.visible());
         assert_ne!(platform.window(), Some(id));
+        assert!(!platform.share_fullscreen);
+        assert_eq!(
+            platform.window_settings.size,
+            window::Settings::default().size
+        );
+    }
+
+    #[test]
+    fn tray_stop_sharing_leaves_the_call_open() {
+        let voice = VoiceStatus {
+            room: Some("room".into()),
+            ..VoiceStatus::default()
+        };
+        let shortcuts = Shortcuts::default();
+        let input = Input {
+            voice: &voice,
+            shortcuts: &shortcuts,
+            can_stop_sharing: true,
+            push_to_talk: false,
+            suppress_shortcuts: false,
+            language: Language::Uk,
+        };
+        let (mut platform, _) = Platform::boot(window::Settings::default());
+        let stop = Message(PlatformEvent::Tray(TrayAction::StopSharing));
+
+        assert_eq!(
+            platform.update(stop.clone(), &input).actions,
+            [Action::StopSharing]
+        );
+        assert!(
+            platform
+                .update(
+                    stop,
+                    &Input {
+                        can_stop_sharing: false,
+                        ..input
+                    }
+                )
+                .actions
+                .is_empty()
+        );
     }
 }

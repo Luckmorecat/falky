@@ -1,3 +1,7 @@
+mod share;
+
+pub(super) use share::{CaptureReady, ViewerScope};
+
 use std::{
     collections::{BTreeMap, BTreeSet, HashSet},
     path::Path,
@@ -48,6 +52,8 @@ pub(super) struct SignedIn {
     pub audio: settings::AudioStatus,
     pub gains: BTreeMap<ConnectionId, u16>,
     pub flash: Option<(Instant, Flash)>,
+    pub deferred_share_flash: Option<Flash>,
+    share: share::Share,
     read_checkpoint: ReadCheckpoint,
     colour_requests: ColourRequests,
     participants: Vec<falky_core::voice::VoiceParticipant>,
@@ -121,6 +127,7 @@ impl SignedIn {
             voice_settings(prefs),
             gains.clone(),
         );
+        voice.command(VoiceCommand::ShareGain(prefs.share_volume.percent()));
         let (relevant, watched) = watch::channel(vec![account.visitor.id.clone()]);
         let (live_task, live_handle) = live_task(auth, watched).abortable();
         let (voice_task, voice_handle) = watch_voice(&voice, scope.clone()).abortable();
@@ -144,6 +151,8 @@ impl SignedIn {
             gains,
             colour_requests: ColourRequests::default(),
             flash: None,
+            deferred_share_flash: None,
+            share: share::Share::default(),
             participants: Vec::new(),
             voice_connection: None,
             voice_reconnecting: false,
@@ -169,10 +178,11 @@ impl SignedIn {
     }
 
     pub fn uses_keyboard(&self) -> bool {
-        self.editor_focused
-            || self.settings.is_open()
-            || self.shell.modal_open()
-            || self.chat.modal_open()
+        !self.shell.share_fullscreen()
+            && (self.editor_focused
+                || self.settings.is_open()
+                || self.shell.modal_open()
+                || self.chat.modal_open())
     }
 
     pub fn adjacent_room(&self, forward: bool) -> Option<RoomId> {
@@ -340,6 +350,7 @@ impl SignedIn {
                 VoiceCommand::Join(room)
             }
             VoiceAction::Leave => {
+                self.share.cancel_picker();
                 self.release_holds();
                 VoiceCommand::Leave
             }
@@ -397,6 +408,7 @@ impl SignedIn {
             self.voice_joined = snapshot.connection.as_ref().map(|_| Instant::now());
             self.shell.update(shell::Action::Dismiss);
         }
+        self.share.snapshot(&snapshot, call_changed);
         if call_changed || snapshot.deafened || snapshot.listen_only || snapshot.reconnecting {
             self.holds.clear();
         }
@@ -429,6 +441,84 @@ impl SignedIn {
         self.participants = snapshot.participants;
         self.gains = snapshot.gains;
         self.reconcile_shell();
+    }
+
+    pub fn sync_share(&mut self, window_visible: bool) {
+        if !window_visible {
+            self.share.cancel_picker();
+        }
+        if let Some(command) = self.share.update_video_visibility(
+            window_visible,
+            self.chat.read_state().viewed_room.as_ref(),
+            self.voice_status.room.as_ref(),
+        ) {
+            self.voice.command(command);
+        }
+        if !self.share.video_visible() || self.share.watched.is_none() {
+            self.shell.exit_share_fullscreen();
+        }
+    }
+
+    pub fn viewing_call(&self) -> bool {
+        share::viewing_call(
+            self.chat.read_state().viewed_room.as_ref(),
+            self.voice_status.room.as_ref(),
+        )
+    }
+
+    fn viewer_scope(&self) -> Option<ViewerScope> {
+        Some(ViewerScope {
+            call: self.voice_connection.clone()?,
+            selected: self.share.watched.clone(),
+        })
+    }
+
+    pub fn accepts_viewer(&self, source: &ViewerScope) -> bool {
+        let snapshots = self.voice.snapshots();
+        let current = snapshots.borrow();
+        self.viewing_call()
+            && source.matches(self.voice_connection.as_ref(), self.share.watched.as_ref())
+            && source.matches(current.connection.as_ref(), current.watched_share.as_ref())
+    }
+
+    pub fn can_stop_sharing(&self) -> bool {
+        self.share.can_stop()
+    }
+
+    pub fn stop_sharing(&mut self) {
+        self.share.stop(&self.voice);
+    }
+
+    pub fn share_failed(&mut self) {
+        self.share.failed();
+    }
+
+    pub fn toggle_capture(
+        &mut self,
+        window: Option<iced::window::Id>,
+        preferences: settings::ShareSettings,
+    ) -> Task<Message> {
+        match self.share.status(self.voice_connection.is_some()) {
+            shell::ShareCaptureStatus::Idle => {
+                if let (Some(window), Some(connection)) = (window, self.voice_connection.clone()) {
+                    return self.share.start(
+                        window,
+                        self.live.scope.clone(),
+                        connection,
+                        preferences,
+                    );
+                }
+            }
+            shell::ShareCaptureStatus::Sharing => self.stop_sharing(),
+            _ => {}
+        }
+        Task::none()
+    }
+
+    pub fn finish_capture(&mut self, ready: CaptureReady) -> Option<Flash> {
+        self.share
+            .finish(&self.voice, self.voice_connection.as_ref(), ready)
+            .map(Flash::Notice)
     }
 
     fn rooms(&self) -> Vec<RoomIndicator> {
@@ -513,18 +603,22 @@ impl SignedIn {
     ) -> Subscription<Message> {
         let scope = self.live.scope.clone();
         self.shell
-            .subscription(ShellInput {
-                theme,
-                language,
-                rooms: &[],
-                stage: &self.stage(),
-                voice: &self.voice_status,
-                ticker: &[],
-                chat_open: self.chat_open,
-                viewport,
-            })
-            .with(scope)
-            .map(|(scope, action)| Message::Shell(scope, action))
+            .subscription_with_share(
+                ShellInput {
+                    theme,
+                    language,
+                    rooms: &[],
+                    stage: &self.stage(),
+                    voice: &self.voice_status,
+                    ticker: &[],
+                    chat_open: self.chat_open,
+                    viewport,
+                },
+                true,
+                self.viewing_call() && self.share.watched.is_some(),
+            )
+            .with((scope, self.viewer_scope()))
+            .map(|((scope, viewer), action)| share::shell_message(scope, viewer.as_ref(), action))
     }
 
     pub fn view<'a>(&'a self, context: ViewContext<'a>) -> Element<'a, Message> {
@@ -589,7 +683,12 @@ impl SignedIn {
         } else {
             None
         };
-        let shell = shell::view(
+        let selected = self.share.watched.as_ref().filter(|_| self.viewing_call());
+        let frame = selected
+            .and_then(|connection| self.voice.latest_share_frame(connection))
+            .map(|frame| frame as std::sync::Arc<dyn shell::PlanarFrame>);
+        let viewer = self.viewer_scope();
+        let shell = shell::view_with_share(
             &self.shell,
             ShellInput {
                 theme,
@@ -609,8 +708,14 @@ impl SignedIn {
                 ticker_senders: &ticker_senders,
                 ..shell::Details::default()
             },
+            shell::ShareView {
+                selected,
+                frame,
+                volume: preferences.share_volume.percent(),
+                capture: self.share.status(self.voice_connection.is_some()),
+            },
             chat,
-            move |action| Message::Shell(scope.clone(), action),
+            move |action| share::shell_message(scope.clone(), viewer.as_ref(), action),
         );
         let mut layers = Stack::new().push(shell);
         if storage_notice.is_some() || self.flash.is_some() {
@@ -634,7 +739,7 @@ impl SignedIn {
         }
         if self.settings.is_open() {
             layers = layers.push(
-                settings::view(
+                settings::view_with_share(
                     &self.settings,
                     settings::Props {
                         prefs: preferences,
@@ -649,6 +754,7 @@ impl SignedIn {
                         preferences_unavailable,
                         palette: shell::style::palette,
                     },
+                    share::settings_status(self.share.sharing),
                 )
                 .map(move |message| Message::Settings(scope.clone(), message)),
             );

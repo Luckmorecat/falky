@@ -2,7 +2,11 @@ use super::geometry::{Shape, blend, outer_radius, surface};
 use super::icon::{Icon, icon};
 use super::rooms::viewed;
 use super::style::alpha;
-use super::{ACTION_FONT, Action, HEADING_FONT, Modal, NUMBER_FONT, View, label, single_line};
+use super::{
+    ACTION_FONT, Action, HEADING_FONT, Modal, NUMBER_FONT, ShareAction, ShareCaptureStatus, View,
+    label, single_line,
+};
+use crate::locale::{self, Key};
 use crate::ui_contract::{EffectiveTheme, PttAction, PttSource, ShellAction, VoiceAction};
 use iced::widget::canvas::{self, Canvas, Geometry};
 use iced::widget::{
@@ -102,7 +106,15 @@ pub(super) fn view<'a, Message: Clone + 'a>(ctx: &View<'_, '_, Message>) -> Dock
     let m = ctx.layout;
     let voice = ctx.input.voice;
     let room = viewed(ctx.input.rooms);
-    let control = m.control_size;
+    let other_room =
+        room.is_some_and(|room| voice.room.as_ref().is_some_and(|call| call != &room.id));
+    let share_control = ctx.share.capture != ShareCaptureStatus::Hidden;
+    let control = if m.tiny && share_control && other_room {
+        let spaces = 6.0 * m.dock_gap + 2.0 * m.dock_pad;
+        m.control_size.min(((m.size.width - spaces) / 7.0).max(1.0))
+    } else {
+        m.control_size
+    };
     let face = blend(c.fill, c.raised);
     let interaction = c.fill_strong;
     let mut items = Controls::new(m.dock_gap);
@@ -226,6 +238,42 @@ pub(super) fn view<'a, Message: Clone + 'a>(ctx: &View<'_, '_, Message>) -> Dock
             control,
         );
         items.push(microphone(ctx, control, face), control);
+        if share_control {
+            let caption = match ctx.share.capture {
+                ShareCaptureStatus::Idle => Key::ShareScreen,
+                ShareCaptureStatus::Starting => Key::ShareStarting,
+                ShareCaptureStatus::Sharing => Key::StopSharing,
+                ShareCaptureStatus::Stopping => Key::ShareStopping,
+                ShareCaptureStatus::Hidden => unreachable!(),
+            };
+            let active = ctx.share.capture == ShareCaptureStatus::Sharing;
+            let ready = matches!(
+                ctx.share.capture,
+                ShareCaptureStatus::Idle | ShareCaptureStatus::Sharing
+            );
+            items.push(
+                icon_button(
+                    Icon::Screen,
+                    locale::text(ctx.input.language, caption),
+                    control,
+                    if active {
+                        c.on_invert
+                    } else if ready {
+                        c.text
+                    } else {
+                        c.muted
+                    },
+                    if active { c.invert } else { face },
+                    if active {
+                        Color::TRANSPARENT
+                    } else {
+                        interaction
+                    },
+                    ready.then(|| ctx.action(Action::Share(ShareAction::ToggleCapture))),
+                ),
+                control,
+            );
+        }
         if !m.compact {
             items.push(separator(c.fill_strong), 1.0);
         }
@@ -670,7 +718,7 @@ pub(super) fn modal<'a, Message: Clone + 'a>(
     )
 }
 
-fn settle_gain(raw: f32) -> u16 {
+pub(super) fn settle_gain(raw: f32) -> u16 {
     if (raw - 100.0).abs() < 6.0 {
         100
     } else {
@@ -707,6 +755,7 @@ mod tests {
                         push_to_talk: true,
                         ..Default::default()
                     },
+                    share: Default::default(),
                     layout: super::super::Layout::new(input.viewport, false),
                     color: super::super::Colors::new(input.theme),
                     copy: super::super::CopyText::new(input.language),

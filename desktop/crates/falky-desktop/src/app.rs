@@ -18,7 +18,7 @@ use crate::{
     ui_contract::{EffectiveTheme, Language, ShellAction, Viewport, VoiceAction, VoiceStatus},
 };
 
-use signed_in::{Flash, SignedIn, ViewContext};
+use signed_in::{CaptureReady, Flash, SignedIn, ViewContext, ViewerScope};
 
 const WINDOW_SIZE: Size = Size::new(1100.0, 720.0);
 
@@ -27,6 +27,7 @@ enum Message {
     Login(login::Message),
     Platform(platform::Message),
     Shell(SessionScope, shell::Action),
+    ShareViewer(SessionScope, Option<ViewerScope>, shell::ShareAction),
     Chat(SessionScope, chat::Message),
     Settings(SessionScope, settings::Message),
     Live(Box<live::Notice>),
@@ -40,6 +41,7 @@ enum Message {
     Recoloured(SessionScope, Result<VisitorColour, ApiError>),
     VoiceSnapshot(Box<VoiceSnapshot>),
     VoiceNotice(SessionScope, VoiceNotice),
+    CaptureReady(SessionScope, CaptureReady),
     ClearFlash(SessionScope, iced::time::Instant),
     ProbeEditor(window::Id),
     ComposerFocus(SessionScope, bool),
@@ -171,6 +173,16 @@ impl App {
             Message::Login(message) => self.update_login(message),
             Message::Platform(message) => self.update_platform(message),
             Message::Shell(scope, action) if self.is_current(&scope) => self.update_shell(action),
+            Message::ShareViewer(scope, Some(source), action)
+                if self.is_current(&scope)
+                    && self.platform.visible()
+                    && self
+                        .signed_in
+                        .as_ref()
+                        .is_some_and(|session| session.accepts_viewer(&source)) =>
+            {
+                self.update_share(action, Some(source))
+            }
             Message::Chat(scope, message) if self.is_current(&scope) => {
                 self.update_chat(&scope, message)
             }
@@ -198,6 +210,12 @@ impl App {
             }
             Message::VoiceNotice(scope, notice) if self.is_current(&scope) => {
                 self.update_voice_notice(&scope, notice)
+            }
+            Message::CaptureReady(scope, ready) if self.is_current(&scope) => {
+                let session = self.signed_in.as_mut().expect("current session");
+                session
+                    .finish_capture(ready)
+                    .map_or_else(Task::none, |flash| self.show_flash(&scope, flash))
             }
             Message::ClearFlash(scope, at) if self.is_current(&scope) => {
                 let session = self.signed_in.as_mut().expect("current session");
@@ -243,9 +261,29 @@ impl App {
         } else {
             Task::none()
         };
+        let visible = self.platform.visible();
+        let fullscreen = self.signed_in.as_mut().is_some_and(|session| {
+            session.sync_share(visible);
+            session.shell.share_fullscreen()
+        });
+        let window_mode = self
+            .platform
+            .set_share_fullscreen(fullscreen)
+            .map(Message::Platform);
+        let flash = self
+            .signed_in
+            .as_mut()
+            .filter(|_| visible)
+            .and_then(|session| {
+                session
+                    .deferred_share_flash
+                    .take()
+                    .map(|flash| (session.live.scope.clone(), flash))
+            })
+            .map_or_else(Task::none, |(scope, flash)| self.show_flash(&scope, flash));
         let input = platform_input(&self.signed_in, &self.preferences);
         let sync = self.platform.sync(&input).map(Message::Platform);
-        Task::batch([task, colours, sync])
+        Task::batch([task, colours, sync, window_mode, flash])
     }
 
     fn update_login(&mut self, message: login::Message) -> Task<Message> {
@@ -485,6 +523,9 @@ impl App {
         let session = self.signed_in.as_mut().expect("current session");
         let confirm_leave =
             matches!(action, shell::Action::ConfirmLeave) && session.shell.modal_open();
+        if let shell::Action::Share(action) = action {
+            return self.update_share(action, None);
+        }
         session.shell.update(action.clone());
         match action {
             shell::Action::Intent(ShellAction::ViewRoom(room)) => self.select_room(&room),
@@ -508,6 +549,48 @@ impl App {
         }
     }
 
+    fn update_share(
+        &mut self,
+        action: shell::ShareAction,
+        viewer: Option<ViewerScope>,
+    ) -> Task<Message> {
+        use shell::ShareAction;
+
+        let session = self.signed_in.as_mut().expect("current session");
+        if let Some(command) = viewer.and_then(|viewer| viewer.watch_command(&action)) {
+            session.voice.command(command);
+        }
+        session.shell.update(shell::Action::Share(action.clone()));
+        match action {
+            ShareAction::ToggleCapture => {
+                let window = self.platform.window().filter(|_| self.platform.visible());
+                return session.toggle_capture(window, self.preferences.share);
+            }
+            ShareAction::Watch(_) | ShareAction::StopWatching => {}
+            ShareAction::Volume(_) | ShareAction::ToggleVolumeMute => {
+                let volume = &mut self.preferences.share_volume;
+                let previous = *volume;
+                if let ShareAction::Volume(percent) = action {
+                    volume.set_percent(percent);
+                } else {
+                    volume.toggle_mute();
+                }
+                if *volume != previous {
+                    session
+                        .voice
+                        .command(VoiceCommand::ShareGain(volume.percent()));
+                    self.save_preferences();
+                }
+            }
+            ShareAction::ToggleFullscreen => {
+                session.release_dock_hold();
+                session.editor_focused = false;
+            }
+            ShareAction::PointerMoved => {}
+        }
+        Task::none()
+    }
+
     fn update_platform(&mut self, message: platform::Message) -> Task<Message> {
         let focused = self.platform.focused();
         let input = platform_input(&self.signed_in, &self.preferences);
@@ -529,8 +612,14 @@ impl App {
                         session.voice_action(action, self.preferences.voice.push_to_talk);
                     }
                 }
+                platform::Action::StopSharing => {
+                    if let Some(session) = &mut self.signed_in {
+                        session.stop_sharing();
+                    }
+                }
                 platform::Action::ConfirmVoiceLeave => {
                     if let Some(session) = &mut self.signed_in {
+                        session.shell.exit_share_fullscreen();
                         session.shell.update(shell::Action::RequestLeave);
                     }
                 }
@@ -672,6 +761,12 @@ impl App {
 
     fn update_voice_notice(&mut self, scope: &SessionScope, notice: VoiceNotice) -> Task<Message> {
         let session = self.signed_in.as_mut().expect("current session");
+        let share_notice = matches!(
+            notice,
+            VoiceNotice::ShareSourceLost
+                | VoiceNotice::SharePublishFailed
+                | VoiceNotice::ShareAudioUnavailable
+        );
         let flash = match notice {
             VoiceNotice::JoinFailed {
                 error: VoiceJoinError::Admission(error),
@@ -683,9 +778,27 @@ impl App {
                 session.release_holds();
                 Flash::ConnectionLost
             }
+            VoiceNotice::ShareSourceLost => {
+                session.share_failed();
+                Flash::Notice(locale::Key::ShareSourceLost)
+            }
+            VoiceNotice::SharePublishFailed => {
+                session.share_failed();
+                Flash::Notice(locale::Key::SharePublishFailed)
+            }
+            VoiceNotice::ShareAudioUnavailable => Flash::Notice(locale::Key::ShareAudioUnavailable),
         };
+        if share_notice && !self.platform.visible() {
+            session.deferred_share_flash = Some(flash);
+            Task::none()
+        } else {
+            self.show_flash(scope, flash)
+        }
+    }
+
+    fn show_flash(&mut self, scope: &SessionScope, flash: Flash) -> Task<Message> {
         let at = iced::time::Instant::now();
-        session.flash = Some((at, flash));
+        self.signed_in.as_mut().expect("current session").flash = Some((at, flash));
         let scope = scope.clone();
         Task::perform(tokio::time::sleep(Duration::from_secs(5)), move |()| {
             Message::ClearFlash(scope, at)
@@ -707,6 +820,10 @@ impl App {
         let Some(session) = &mut self.signed_in else {
             return Task::none();
         };
+        if event.key == keyboard::Key::Named(Named::Escape) && session.shell.exit_share_fullscreen()
+        {
+            return Task::none();
+        }
         if session.settings.is_capturing_shortcut() {
             return self.update_settings(settings::Message::Capture(event.physical));
         }
@@ -726,7 +843,7 @@ impl App {
         if event.key == keyboard::Key::Named(Named::Tab) {
             return self.probe_editor();
         }
-        if !self.platform.focused() || session.uses_keyboard() {
+        if !self.platform.focused() || session.uses_keyboard() || session.shell.share_fullscreen() {
             return Task::none();
         }
         match event.fixed_shortcut() {
@@ -848,6 +965,7 @@ fn platform_input<'a>(
             .as_ref()
             .map_or(&IDLE, |session| &session.voice_status),
         shortcuts: &preferences.shortcuts,
+        can_stop_sharing: signed_in.as_ref().is_some_and(SignedIn::can_stop_sharing),
         push_to_talk: signed_in.is_some() && preferences.voice.push_to_talk,
         suppress_shortcuts: signed_in.as_ref().is_none_or(SignedIn::uses_keyboard),
         language: locale::resolve_language(preferences.language),

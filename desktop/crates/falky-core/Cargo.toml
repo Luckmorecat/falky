@@ -6,7 +6,7 @@ rust-version.workspace = true
 publish.workspace = true
 
 [features]
-native-audio = ["dep:cpal", "dep:livekit", "dep:livekit-net", "dep:sha2"]
+native-audio = ["dep:cpal", "dep:livekit", "dep:livekit-net", "dep:livekit-protocol", "dep:prost", "dep:sha2"]
 
 [dependencies]
 bytes.workspace = true
@@ -16,7 +16,9 @@ directories = "6"
 futures-util.workspace = true
 livekit = { version = "0.12.1", features = ["rustls-tls-native-roots"], optional = true }
 livekit-net = { version = "=0.2.0", optional = true }
+livekit-protocol = { version = "0.9", optional = true }
 log = { version = "0.4", features = ["max_level_info"] }
+prost = { version = "0.14", optional = true }
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
