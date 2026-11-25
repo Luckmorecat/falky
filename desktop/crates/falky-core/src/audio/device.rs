@@ -7,6 +7,7 @@ use cpal::{
 };
 use std::{
     collections::{HashSet, VecDeque},
+    future::pending,
     sync::{
         Arc, Mutex,
         atomic::{
@@ -18,6 +19,7 @@ use std::{
     thread,
     time::Duration,
 };
+use tokio::sync::watch;
 
 const DEVICE_RETRY: Duration = Duration::from_secs(2);
 const QUEUE_BLOCKS: usize = 6;
@@ -101,7 +103,7 @@ pub(crate) struct DeviceConfig {
     pub output: Option<String>,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Default, PartialEq, Eq)]
 pub(crate) struct DeviceStatus {
     pub devices: Arc<AudioDevices>,
     pub input_open: bool,
@@ -109,6 +111,8 @@ pub(crate) struct DeviceStatus {
     pub input_unavailable: bool,
     pub output_unavailable: bool,
 }
+
+type DeviceReport = (u64, DeviceStatus);
 
 #[derive(Default)]
 struct Request {
@@ -120,7 +124,7 @@ struct Request {
 pub(crate) struct AudioIo {
     pipes: Arc<Pipes>,
     request: Arc<Mutex<Request>>,
-    status: Arc<Mutex<(u64, DeviceStatus)>>,
+    status: watch::Receiver<DeviceReport>,
     notify: SyncSender<()>,
     generation: u64,
     running: bool,
@@ -128,53 +132,63 @@ pub(crate) struct AudioIo {
 
 impl AudioIo {
     pub fn new() -> Self {
-        let pipes = Arc::new(Pipes::new());
-        let request = Arc::new(Mutex::new(Request::default()));
-        let status = Arc::new(Mutex::new((0, DeviceStatus::default())));
-        let (notify, receiver) = mpsc::sync_channel(1);
-        let running = {
-            let pipes = pipes.clone();
-            let request = request.clone();
-            let status = status.clone();
-            thread::Builder::new()
-                .name("falky-audio-devices".into())
-                .spawn(move || {
-                    let mut devices = Devices::new(pipes);
-                    loop {
-                        let (config, generation, refresh) = {
-                            let mut request = request.lock().expect("audio request lock");
-                            (
-                                request.config.clone(),
-                                request.generation,
-                                std::mem::take(&mut request.refresh),
-                            )
-                        };
-                        let report = match &mut devices {
-                            Some(devices) => devices.apply(config, refresh),
-                            None => DeviceStatus {
-                                input_unavailable: config.input.is_some(),
-                                output_unavailable: config.output.is_some(),
-                                ..DeviceStatus::default()
-                            },
-                        };
-                        *status.lock().expect("audio status lock") = (generation, report);
-                        if receiver.recv_timeout(DEVICE_RETRY)
-                            == Err(RecvTimeoutError::Disconnected)
-                        {
-                            break;
+        let (mut audio, receiver, status) = Self::channel();
+        let pipes = audio.pipes.clone();
+        let request = audio.request.clone();
+        audio.running = thread::Builder::new()
+            .name("falky-audio-devices".into())
+            .spawn(move || {
+                let mut devices = Devices::new(pipes);
+                if let Some(devices) = &devices {
+                    publish_inventory(&status, &devices.inventory);
+                }
+                run_requests(&request, receiver, DEVICE_RETRY, |request| {
+                    let Request {
+                        config,
+                        generation,
+                        refresh,
+                    } = request;
+                    let report = match &mut devices {
+                        Some(devices) => {
+                            if refresh {
+                                devices.inventory = Arc::new(Devices::inventory(&devices.host));
+                                publish_inventory(&status, &devices.inventory);
+                            }
+                            devices.apply(config)
                         }
-                    }
-                })
-                .is_ok()
-        };
-        Self {
-            pipes,
-            request,
+                        None => DeviceStatus {
+                            input_unavailable: config.input.is_some(),
+                            output_unavailable: config.output.is_some(),
+                            ..DeviceStatus::default()
+                        },
+                    };
+                    publish_status(&status, generation, report);
+                });
+            })
+            .is_ok();
+        audio
+    }
+
+    fn channel() -> (Self, mpsc::Receiver<()>, watch::Sender<DeviceReport>) {
+        let (status, incoming) = watch::channel((0, DeviceStatus::default()));
+        let (notify, receiver) = mpsc::sync_channel(1);
+        (
+            Self {
+                pipes: Arc::new(Pipes::new()),
+                request: Arc::new(Mutex::new(Request::default())),
+                status: incoming,
+                notify,
+                generation: 0,
+                running: true,
+            },
+            receiver,
             status,
-            notify,
-            generation: 0,
-            running,
-        }
+        )
+    }
+
+    #[cfg(test)]
+    pub fn test_channel() -> (Self, mpsc::Receiver<()>, watch::Sender<DeviceReport>) {
+        Self::channel()
     }
 
     pub fn configure(&mut self, config: DeviceConfig) {
@@ -194,24 +208,36 @@ impl AudioIo {
     }
 
     pub fn refresh(&self) {
-        self.request.lock().expect("audio request lock").refresh = true;
+        let mut request = self.request.lock().expect("audio request lock");
+        request.refresh = true;
         let _ = self.notify.try_send(());
     }
 
+    pub async fn status_changed(&mut self) {
+        if !self.running {
+            return pending().await;
+        }
+        // Drain the last unseen report before marking a closed worker unavailable.
+        if self.status.changed().await.is_err() {
+            self.running = false;
+        }
+    }
+
     pub fn status(&self) -> DeviceStatus {
+        let (generation, status) = &*self.status.borrow();
         if !self.running {
             return DeviceStatus {
+                devices: status.devices.clone(),
                 input_unavailable: true,
                 output_unavailable: true,
                 ..DeviceStatus::default()
             };
         }
-        let status = self.status.lock().expect("audio status lock");
-        if status.0 == self.generation {
-            status.1.clone()
+        if *generation == self.generation {
+            status.clone()
         } else {
             DeviceStatus {
-                devices: status.1.devices.clone(),
+                devices: status.devices.clone(),
                 ..DeviceStatus::default()
             }
         }
@@ -243,6 +269,60 @@ impl AudioIo {
         let queued = (self.pipes.capture.len() + self.pipes.reference.len()) as u32 * 10;
         (device + queued).clamp(0, 500) as i32
     }
+}
+
+fn run_requests(
+    request: &Mutex<Request>,
+    receiver: mpsc::Receiver<()>,
+    retry: Duration,
+    mut apply: impl FnMut(Request),
+) {
+    loop {
+        let next = {
+            let mut request = request.lock().expect("audio request lock");
+            // Anything already queued is covered by this snapshot. Later commands
+            // enqueue a new wake under the same lock.
+            if receiver.try_recv() == Err(mpsc::TryRecvError::Disconnected) {
+                break;
+            }
+            Request {
+                config: request.config.clone(),
+                generation: request.generation,
+                refresh: std::mem::take(&mut request.refresh),
+            }
+        };
+        let requested = next.config.input.is_some() || next.config.output.is_some();
+        apply(next);
+        let disconnected = if requested {
+            receiver.recv_timeout(retry) == Err(RecvTimeoutError::Disconnected)
+        } else {
+            receiver.recv().is_err()
+        };
+        if disconnected {
+            break;
+        }
+    }
+}
+
+fn publish_inventory(status: &watch::Sender<DeviceReport>, inventory: &Arc<AudioDevices>) {
+    status.send_if_modified(|(_, report)| {
+        if report.devices == *inventory {
+            return false;
+        }
+        report.devices = inventory.clone();
+        true
+    });
+}
+
+fn publish_status(status: &watch::Sender<DeviceReport>, generation: u64, report: DeviceStatus) {
+    let next = (generation, report);
+    status.send_if_modified(|previous| {
+        if *previous == next {
+            return false;
+        }
+        *previous = next;
+        true
+    });
 }
 
 #[derive(Clone, Copy)]
@@ -408,10 +488,7 @@ impl Devices {
         }
     }
 
-    fn apply(&mut self, config: DeviceConfig, refresh: bool) -> DeviceStatus {
-        if refresh {
-            self.inventory = Arc::new(Self::inventory(&self.host));
-        }
+    fn apply(&mut self, config: DeviceConfig) -> DeviceStatus {
         if self.config.input != config.input || stream_failed(&self.input) {
             self.input = None;
             self.pipes.flush_capture();
@@ -734,8 +811,112 @@ impl Renderer {
 }
 
 #[cfg(test)]
+impl AudioIo {
+    pub fn test_failed_worker_start() -> Self {
+        let (mut audio, _, _) = Self::channel();
+        audio.running = false;
+        audio
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn status_keeps_inventory_and_reports_the_current_generation_before_closure() {
+        let (mut audio, _commands, status) = AudioIo::channel();
+        let devices = Arc::new(AudioDevices {
+            input: vec![AudioDevice {
+                id: "mic".into(),
+                name: "Microphone".into(),
+            }],
+            output: Vec::new(),
+        });
+        let opened = DeviceStatus {
+            devices: devices.clone(),
+            input_open: true,
+            ..DeviceStatus::default()
+        };
+
+        audio.configure(DeviceConfig {
+            input: Some("mic".into()),
+            output: None,
+        });
+        status.send_replace((1, opened.clone()));
+        assert!(audio.status().input_open);
+        audio.status_changed().await;
+
+        audio.configure(DeviceConfig {
+            input: Some("other".into()),
+            output: None,
+        });
+        let pending = audio.status();
+        assert_eq!(pending.devices, devices);
+        assert!(!pending.input_open && !pending.input_unavailable);
+
+        publish_status(&status, 2, opened.clone());
+        publish_status(&status, 2, opened);
+        drop(status);
+        audio.status_changed().await;
+        assert!(audio.status().input_open);
+        audio.status_changed().await;
+        let stopped = audio.status();
+        assert_eq!(stopped.devices, devices);
+        assert!(!stopped.input_open && stopped.input_unavailable);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(10), audio.status_changed())
+                .await
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn device_requests_coalesce_and_only_requested_routes_retry() {
+        let (mut audio, commands, _status) = AudioIo::channel();
+        let request = audio.request.clone();
+        let (report, applied) = mpsc::channel();
+        let (resume, paused) = mpsc::sync_channel(0);
+        let worker = thread::spawn(move || {
+            run_requests(&request, commands, Duration::from_millis(10), |request| {
+                report.send(request).unwrap();
+                paused.recv().unwrap();
+            });
+        });
+        let applied_request = || applied.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert_eq!(applied_request().generation, 0);
+
+        let config = |id: &str| DeviceConfig {
+            input: Some(id.into()),
+            output: None,
+        };
+        audio.configure(config("first"));
+        audio.refresh();
+        audio.configure(config("second"));
+        audio.refresh();
+        resume.send(()).unwrap();
+        let latest = applied_request();
+        assert_eq!(latest.generation, 2);
+        assert_eq!(latest.config, config("second"));
+        assert!(latest.refresh);
+
+        resume.send(()).unwrap();
+        let retry = applied_request();
+        assert_eq!(retry.config, latest.config);
+        assert!(!retry.refresh);
+
+        audio.configure(DeviceConfig::default());
+        resume.send(()).unwrap();
+        assert_eq!(applied_request().config, DeviceConfig::default());
+        resume.send(()).unwrap();
+        assert!(matches!(
+            applied.recv_timeout(Duration::from_millis(50)),
+            Err(RecvTimeoutError::Timeout)
+        ));
+
+        drop(audio);
+        worker.join().unwrap();
+    }
 
     #[test]
     fn stream_configuration_prefers_only_viable_pcm() {

@@ -194,7 +194,14 @@ impl Voice {
         let state = VoiceSnapshot::new(scope, gains);
         let (updates, snapshots) = watch::channel(state.clone());
         let (notices, _) = broadcast::channel(16);
-        let actor = Actor::new(api, settings, state, updates, notices.clone());
+        let actor = Actor::new(
+            api,
+            settings,
+            state,
+            updates,
+            notices.clone(),
+            AudioIo::new(),
+        );
         tokio::spawn(actor.run(receiver));
         Self {
             commands,
@@ -259,6 +266,7 @@ impl Actor {
         state: VoiceSnapshot,
         updates: watch::Sender<VoiceSnapshot>,
         notices: broadcast::Sender<VoiceNotice>,
+        audio: AudioIo,
     ) -> Self {
         Self {
             api,
@@ -266,7 +274,7 @@ impl Actor {
             state,
             updates,
             notices,
-            audio: AudioIo::new(),
+            audio,
             processor: None,
             active: None,
             joining: None,
@@ -284,6 +292,7 @@ impl Actor {
         frames.set_missed_tick_behavior(MissedTickBehavior::Skip);
         let mut ui = interval(UI_TICK);
         ui.set_missed_tick_behavior(MissedTickBehavior::Skip);
+        self.publish();
 
         loop {
             tokio::select! {
@@ -310,8 +319,12 @@ impl Actor {
                         None => pending().await,
                     }
                 } => self.event(event),
+                () = self.audio.status_changed() => {
+                    self.sync_mute();
+                    self.publish();
+                }
                 _ = frames.tick(), if self.active.is_some() || self.mic_test || self.chime.is_some() || self.output_tail.is_some() => self.frame(Instant::now()),
-                _ = ui.tick() => self.publish(),
+                _ = ui.tick(), if self.active.is_some() || self.mic_test => self.publish(),
             }
         }
 
@@ -619,6 +632,8 @@ impl Actor {
     }
 
     fn frame(&mut self, now: Instant) {
+        let was_playing = self.chime.is_some();
+        let was_draining = self.output_tail.is_some();
         let devices = self.audio.status();
         let capture = if devices.input_open {
             self.audio.capture()
@@ -702,6 +717,9 @@ impl Actor {
             self.output_tail = None;
         }
         self.configure_devices();
+        if (was_playing && self.chime.is_none()) || (was_draining && self.output_tail.is_none()) {
+            self.publish();
+        }
     }
 
     fn publish(&mut self) {
@@ -834,7 +852,135 @@ fn guarded_origin(api: &ApiClient, value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Origin;
+    use crate::{Origin, audio::AudioDevice, model::SessionGeneration};
+
+    fn test_actor(audio: AudioIo) -> (Actor, watch::Receiver<VoiceSnapshot>) {
+        let origin = Origin::parse("http://localhost:8080").unwrap();
+        let state = VoiceSnapshot::new(
+            SessionScope {
+                origin: origin.clone(),
+                generation: SessionGeneration(1),
+            },
+            BTreeMap::new(),
+        );
+        let (updates, snapshots) = watch::channel(state.clone());
+        let (notices, _) = broadcast::channel(1);
+        let actor = Actor::new(
+            ApiClient::new(origin).unwrap(),
+            VoiceSettings::default(),
+            state,
+            updates,
+            notices,
+            audio,
+        );
+        (actor, snapshots)
+    }
+
+    #[tokio::test]
+    async fn actor_publishes_unavailable_on_failed_worker_start_and_accepts_commands() {
+        let (actor, mut snapshots) = test_actor(AudioIo::test_failed_worker_start());
+        let (commands, receiver) = mpsc::unbounded_channel();
+        let task = tokio::spawn(actor.run(receiver));
+
+        timeout(Duration::from_secs(2), async {
+            snapshots.changed().await.unwrap();
+            {
+                let initial = snapshots.borrow_and_update();
+                assert!(initial.input_unavailable && initial.output_unavailable);
+                assert!(!initial.mic_test_active);
+            }
+
+            commands.send(VoiceCommand::MicTest(true)).unwrap();
+            snapshots
+                .wait_for(|state| state.mic_test_active && state.input_unavailable)
+                .await
+                .unwrap();
+            commands.send(VoiceCommand::Shutdown).unwrap();
+            task.await.unwrap();
+            assert!(!snapshots.borrow().mic_test_active);
+        })
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn idle_actor_reads_initial_devices_and_shuts_down_after_worker_closure() {
+        let (audio, _requests, status) = AudioIo::test_channel();
+        let (actor, mut snapshots) = test_actor(audio);
+        let (commands, receiver) = mpsc::unbounded_channel();
+        status.send_modify(|(_, report)| {
+            Arc::make_mut(&mut report.devices).input.push(AudioDevice {
+                id: "mic".into(),
+                name: "Microphone".into(),
+            });
+        });
+        let task = tokio::spawn(actor.run(receiver));
+        timeout(Duration::from_secs(2), async {
+            snapshots
+                .wait_for(|state| state.devices.input.len() == 1)
+                .await
+                .unwrap();
+            drop(status);
+            snapshots
+                .wait_for(|state| state.input_unavailable && state.devices.input.len() == 1)
+                .await
+                .unwrap();
+            commands.send(VoiceCommand::MicTest(true)).unwrap();
+            snapshots
+                .wait_for(|state| state.mic_test_active)
+                .await
+                .unwrap();
+            drop(commands);
+            task.await.unwrap();
+            assert!(!snapshots.borrow().mic_test_active);
+        })
+        .await
+        .unwrap();
+    }
+
+    #[test]
+    fn speaker_test_publishes_completion_and_failure_and_releases_its_route() {
+        let (audio, requests, status) = AudioIo::test_channel();
+        let (mut actor, snapshots) = test_actor(audio);
+        assert!(actor.command(VoiceCommand::SpeakerTest));
+        actor.publish();
+        assert!(snapshots.borrow().speaker_test_active);
+        requests.try_recv().unwrap();
+        status.send_modify(|(generation, report)| {
+            *generation = 1;
+            report.output_open = true;
+        });
+
+        let now = Instant::now();
+        for index in 0..100 {
+            actor.frame(now + FRAME_TIME * index);
+            if actor.chime.is_none() {
+                break;
+            }
+        }
+        assert!(!snapshots.borrow().speaker_test_active);
+        assert!(!snapshots.borrow().output_unavailable);
+        let tail = actor.output_tail.unwrap();
+        assert!(requests.try_recv().is_err());
+        actor.frame(tail);
+        assert!(actor.output_tail.is_none());
+        requests.try_recv().unwrap();
+
+        assert!(actor.command(VoiceCommand::SpeakerTest));
+        actor.publish();
+        assert!(snapshots.borrow().speaker_test_active);
+        requests.try_recv().unwrap();
+        status.send_modify(|(generation, report)| {
+            *generation = 3;
+            report.output_open = false;
+            report.output_unavailable = true;
+        });
+        actor.frame(tail + FRAME_TIME);
+        assert!(!snapshots.borrow().speaker_test_active);
+        assert!(snapshots.borrow().output_unavailable);
+        assert!(actor.output_tail.is_none());
+        requests.try_recv().unwrap();
+    }
 
     #[test]
     fn grant_uses_the_session_origin_and_transport_security() {
