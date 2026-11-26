@@ -1,5 +1,5 @@
 use iced::widget::Stack;
-use iced::widget::canvas::{self, Canvas, Frame, Geometry, Path};
+use iced::widget::canvas::{self, Canvas, Geometry, Path};
 use iced::{Color, Element, Fill, Point, Rectangle, Renderer, Size, Theme, mouse};
 use std::cell::Cell;
 use std::f32::consts::FRAC_PI_2;
@@ -54,20 +54,29 @@ pub(super) struct Shape {
     pub radius: f32,
 }
 
+#[derive(Default)]
+pub(super) struct ShapeCache {
+    shape: Cell<Option<Shape>>,
+    mesh: canvas::Cache,
+}
+
 impl<Message> canvas::Program<Message> for Shape {
-    type State = ();
+    type State = ShapeCache;
 
     fn draw(
         &self,
-        _: &(),
+        state: &Self::State,
         renderer: &Renderer,
         _: &Theme,
         bounds: Rectangle,
         _: mouse::Cursor,
     ) -> Vec<Geometry> {
-        let mut frame = Frame::new(renderer, bounds.size());
-        frame.fill(&outline(bounds.size(), self.radius), self.fill);
-        vec![frame.into_geometry()]
+        if state.shape.replace(Some(*self)) != Some(*self) {
+            state.mesh.clear();
+        }
+        vec![state.mesh.draw(renderer, bounds.size(), |frame| {
+            frame.fill(&outline(bounds.size(), self.radius), self.fill);
+        })]
     }
 }
 
@@ -136,6 +145,73 @@ pub(super) fn blend(front: Color, background: Color) -> Color {
 mod tests {
     use super::*;
     use std::f32::consts::FRAC_PI_4;
+
+    #[tokio::test]
+    async fn squircle_cache_matches_fresh_mesh_after_style_and_size_changes() {
+        use iced::advanced::{
+            layout::{Layout, Limits},
+            renderer::{self, Headless, Renderer as _},
+            widget::Tree,
+        };
+        use iced::{Font, Pixels};
+
+        fn snapshot(
+            renderer: &mut Renderer,
+            tree: &mut Tree,
+            shape: Shape,
+            size: Size<u32>,
+        ) -> Vec<u8> {
+            let logical = Size::new(size.width as f32, size.height as f32);
+            let bounds = Rectangle::with_size(logical);
+            let mut canvas: Element<'_, ()> = Canvas::new(shape).width(Fill).height(Fill).into();
+            tree.diff(canvas.as_widget());
+            let node =
+                canvas
+                    .as_widget_mut()
+                    .layout(tree, renderer, &Limits::new(Size::ZERO, logical));
+            renderer.reset(bounds);
+            canvas.as_widget().draw(
+                tree,
+                renderer,
+                &Theme::Dark,
+                &renderer::Style::default(),
+                Layout::new(&node),
+                mouse::Cursor::Unavailable,
+                &bounds,
+            );
+            renderer.screenshot(size, 1.0, Color::BLACK)
+        }
+
+        let mut renderer = Renderer::new(Font::DEFAULT, Pixels(16.0), Some("tiny-skia"))
+            .await
+            .unwrap();
+        let mut retained = Tree::empty();
+        let first = Shape {
+            fill: Color::from_rgb8(120, 30, 80),
+            radius: 10.0,
+        };
+        let hover = Shape {
+            fill: Color::from_rgb8(210, 200, 60),
+            ..first
+        };
+        let rounded = Shape {
+            radius: 23.0,
+            ..hover
+        };
+        let size = Size::new(144, 52);
+        for (shape, viewport) in [
+            (first, size),
+            (first, size),
+            (hover, size),
+            (rounded, size),
+            (rounded, Size::new(55, 35)),
+            (first, size),
+        ] {
+            let cached = snapshot(&mut renderer, &mut retained, shape, viewport);
+            let fresh = snapshot(&mut renderer, &mut Tree::empty(), shape, viewport);
+            assert_eq!(cached, fresh, "{shape:?}, {viewport:?}");
+        }
+    }
 
     #[test]
     fn reaches_each_edge_and_corners_live_between_circle_and_square() {
