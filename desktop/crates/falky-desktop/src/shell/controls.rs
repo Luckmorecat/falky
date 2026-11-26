@@ -626,7 +626,7 @@ pub(super) fn modal<'a, Message: Clone + 'a>(
                 .input
                 .stage
                 .iter()
-                .find(|p| &p.connection_id == id && !p.local)?;
+                .find(|p| p.connection_id == id && !p.local)?;
             let active = viewed(ctx.input.rooms)
                 .is_some_and(|room| Some(&room.id) == ctx.input.voice.room.as_ref());
             if !active {

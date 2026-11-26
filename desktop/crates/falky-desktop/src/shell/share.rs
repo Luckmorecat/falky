@@ -69,7 +69,7 @@ impl Default for ShareView<'_> {
 
 pub(super) fn inline<'a, Message: Clone + 'a>(
     ctx: &View<'_, '_, Message>,
-    person: &StageParticipant,
+    person: &StageParticipant<'_>,
     size: Size,
     emit: impl Fn(Action) -> Message + 'a,
 ) -> Element<'a, Message> {
@@ -91,7 +91,7 @@ pub(super) fn inline<'a, Message: Clone + 'a>(
 
 pub(super) fn fullscreen<'a, Message: Clone + 'a>(
     ctx: &View<'_, '_, Message>,
-    person: &StageParticipant,
+    person: &StageParticipant<'_>,
     emit: impl Fn(Action) -> Message + 'a,
 ) -> Element<'a, Message> {
     let size = ctx.layout.size;
@@ -144,7 +144,7 @@ fn picture<'a, Message: Clone + 'a>(
 
 fn bar<'a, Message: Clone + 'a>(
     ctx: &View<'_, '_, Message>,
-    person: &StageParticipant,
+    person: &StageParticipant<'_>,
     width: f32,
     emit: impl Fn(Action) -> Message + 'a,
 ) -> Element<'a, Message> {
@@ -198,7 +198,7 @@ fn bar<'a, Message: Clone + 'a>(
         let name = if sharer.local {
             t(Key::YourScreen).to_owned()
         } else {
-            locale::screen_of(language, &sharer.name)
+            locale::screen_of(language, sharer.name)
         };
         let selected = person.connection_id == sharer.connection_id;
         let (ink, fill, hover) = if selected {

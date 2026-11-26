@@ -176,10 +176,10 @@ pub struct VoiceStatus {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct StageParticipant {
-    pub connection_id: ConnectionId,
-    pub visitor_id: VisitorId,
-    pub name: String,
+pub struct StageParticipant<'a> {
+    pub connection_id: &'a ConnectionId,
+    pub visitor_id: &'a VisitorId,
+    pub name: &'a str,
     pub palette: PaletteName,
     pub local: bool,
     pub muted: bool,
@@ -218,7 +218,7 @@ pub struct ShellInput<'a> {
     pub theme: EffectiveTheme,
     pub language: Language,
     pub rooms: &'a [RoomIndicator],
-    pub stage: &'a [StageParticipant],
+    pub stage: &'a [StageParticipant<'a>],
     pub voice: &'a VoiceStatus,
     pub ticker: &'a [TickerItem],
     pub chat_open: bool,

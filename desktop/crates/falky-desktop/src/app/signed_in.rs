@@ -540,7 +540,7 @@ impl SignedIn {
             .collect()
     }
 
-    fn stage(&self) -> Vec<StageParticipant> {
+    fn stage(&self) -> Vec<StageParticipant<'_>> {
         let Some(room) = self.viewed_room() else {
             return Vec::new();
         };
@@ -552,8 +552,8 @@ impl SignedIn {
                 .participants
                 .iter()
                 .map(|person| StageParticipant {
-                    connection_id: person.connection_id.clone(),
-                    visitor_id: person.visitor_id.clone(),
+                    connection_id: &person.connection_id,
+                    visitor_id: &person.visitor_id,
                     name: if person.local {
                         local_name
                     } else {
@@ -561,8 +561,7 @@ impl SignedIn {
                             .iter()
                             .find(|occupant| occupant.visitor_id == person.visitor_id)
                             .map_or(&person.name, |occupant| &occupant.name)
-                    }
-                    .clone(),
+                    },
                     palette: palette(&person.visitor_id),
                     local: person.local,
                     muted: person.muted,
@@ -583,9 +582,9 @@ impl SignedIn {
         room.occupancy
             .iter()
             .map(|person| StageParticipant {
-                connection_id: person.connection_id.clone(),
-                visitor_id: person.visitor_id.clone(),
-                name: person.name.clone(),
+                connection_id: &person.connection_id,
+                visitor_id: &person.visitor_id,
+                name: &person.name,
                 palette: palette(&person.visitor_id),
                 local: &person.visitor_id == local_id,
                 muted: false,

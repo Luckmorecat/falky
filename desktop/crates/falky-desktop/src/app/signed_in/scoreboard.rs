@@ -255,6 +255,45 @@ fn save_screenshot(name: &str, pixels: &[u8]) {
     }
 }
 
+#[tokio::test]
+async fn stage_projection_follows_viewed_room_and_active_voice_participants() {
+    let mut session = fixture(Scene::Stage, &settings::Preferences::default());
+    session.live.account.visitor.name = "Current profile".into();
+    session.live.rooms[0].occupancy[1].name = "Current occupancy".into();
+    session.live.rooms[0].occupancy.truncate(2);
+    let other = RoomId::from("other");
+    session.live.rooms.push(Room {
+        id: other.clone(),
+        name: "Other".into(),
+        occupancy: vec![Participant {
+            connection_id: "other-connection".into(),
+            visitor_id: "other-visitor".into(),
+            name: "Other participant".into(),
+        }],
+    });
+    let changed_connection = ConnectionId::from("reconnected");
+    session.participants[1].connection_id = changed_connection.clone();
+    session.gains.insert(changed_connection.clone(), 65);
+
+    let stage = session.stage();
+    assert_eq!(stage[0].name, "Current profile");
+    assert_eq!(stage[1].name, "Current occupancy");
+    assert_eq!(stage[1].connection_id, &changed_connection);
+    assert_eq!(stage[1].gain_percent, 65);
+    assert_eq!(stage[2].name, "Member 3");
+
+    drop(session.chat.select_room(Some(other)));
+    let stage = session.stage();
+    assert_eq!(stage.len(), 1);
+    assert_eq!(stage[0].name, "Other participant");
+    assert_eq!(
+        stage[0].connection_id,
+        &ConnectionId::from("other-connection")
+    );
+    assert_eq!(stage[0].gain_percent, 100);
+    assert!(!stage[0].speaking);
+}
+
 fn fixture(scene: Scene, preferences: &settings::Preferences) -> SignedIn {
     let room = RoomId::from("studio");
     let scope = SessionScope {

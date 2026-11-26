@@ -12,7 +12,7 @@ use iced::widget::{
 };
 use iced::{Center, Color, Element, Fill, Rectangle};
 
-fn heard_level(person: &StageParticipant) -> f32 {
+fn heard_level(person: &StageParticipant<'_>) -> f32 {
     if person.muted || person.deafened || person.gain_percent == 0 {
         0.0
     } else {
@@ -20,18 +20,20 @@ fn heard_level(person: &StageParticipant) -> f32 {
     }
 }
 
-pub(super) fn active(person: &StageParticipant) -> bool {
+pub(super) fn active(person: &StageParticipant<'_>) -> bool {
     !person.muted
         && !person.deafened
         && person.gain_percent > 0
         && (person.speaking || heard_level(person) > 0.03)
 }
 
-fn speaking(person: &StageParticipant) -> bool {
+fn speaking(person: &StageParticipant<'_>) -> bool {
     active(person) && (person.speaking || heard_level(person) > 0.22)
 }
 
-pub(super) fn watched<'a, Message>(ctx: &View<'a, '_, Message>) -> Option<&'a StageParticipant> {
+pub(super) fn watched<'a, Message>(
+    ctx: &View<'a, '_, Message>,
+) -> Option<&'a StageParticipant<'a>> {
     let selected = ctx.share.selected?;
     let viewed_room = viewed(ctx.input.rooms)?;
     if Some(&viewed_room.id) != ctx.input.voice.room.as_ref() {
@@ -40,12 +42,12 @@ pub(super) fn watched<'a, Message>(ctx: &View<'a, '_, Message>) -> Option<&'a St
     ctx.input
         .stage
         .iter()
-        .find(|person| person.screen_share && &person.connection_id == selected)
+        .find(|person| person.screen_share && person.connection_id == selected)
 }
 
 pub(super) fn view<'a, Message: Clone + 'a>(
     ctx: &View<'_, '_, Message>,
-    watching: Option<&StageParticipant>,
+    watching: Option<&StageParticipant<'_>>,
     emit: impl Fn(Action) -> Message + 'a,
 ) -> Element<'a, Message> {
     let stage = ctx.input.stage;
@@ -98,7 +100,7 @@ pub(super) fn view<'a, Message: Clone + 'a>(
 
 fn with_share<'a, Message: Clone + 'a>(
     ctx: &View<'_, '_, Message>,
-    person: &StageParticipant,
+    person: &StageParticipant<'_>,
     size: iced::Size,
     emit: impl Fn(Action) -> Message + 'a,
 ) -> Element<'a, Message> {
@@ -148,7 +150,7 @@ fn tile<'a, Message: Clone + 'a>(
     ctx: &View<'_, '_, Message>,
     size: f32,
     index: usize,
-    person: &StageParticipant,
+    person: &StageParticipant<'_>,
     spotlight: bool,
     adjustable: bool,
     miniature: bool,
@@ -299,7 +301,7 @@ fn tile<'a, Message: Clone + 'a>(
         );
     }
     let name = label(
-        person.name.clone(),
+        person.name.to_owned(),
         name_size,
         blend(
             alpha(c.text, opacity * if dimmed { 0.6 } else { 1.0 }),
