@@ -9,7 +9,7 @@ use falky_core::{
 
 use super::*;
 
-fn setup() -> (Chat, SessionScope, LiveScope) {
+pub(super) fn setup() -> (Chat, SessionScope, LiveScope) {
     let origin = Origin::parse("http://127.0.0.1:8000").unwrap();
     let scope = SessionScope {
         origin: origin.clone(),

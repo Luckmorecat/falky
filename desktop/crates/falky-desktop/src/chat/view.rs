@@ -394,6 +394,9 @@ impl Chat {
         language: Language,
         palette: Colors,
     ) -> Element<'a, Message> {
+        if attachments.is_empty() {
+            return space().into();
+        }
         let images = attachments
             .iter()
             .filter(|a| is_image(&a.content_type))
@@ -1446,6 +1449,47 @@ impl Operation<Measured> for Measure {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn empty_gallery_preserves_message_column_spacing() {
+        use iced::advanced::layout::Limits;
+        use iced::advanced::renderer::Headless;
+        use iced::advanced::widget::Tree;
+        use iced::{Font, Pixels, Renderer, Size};
+
+        let (chat, _, _) = super::super::tests::setup();
+        let renderer = Renderer::new(Font::DEFAULT, Pixels(16.0), Some("tiny-skia"))
+            .await
+            .unwrap();
+        let palette = Colors::new(EffectiveTheme::Dark);
+        let gallery = chat.gallery(&[], 222.0, Language::En, palette);
+        let reference = iced::widget::column![container(space().height(0)).clip(true)].spacing(4);
+        let positions = |gallery: Element<'_, Message>| {
+            let mut content: Element<'_, Message> = iced::widget::column![
+                space().width(20).height(12),
+                gallery,
+                space().width(20).height(24)
+            ]
+            .spacing(3)
+            .into();
+            let mut tree = Tree::new(content.as_widget());
+            let node = content.as_widget_mut().layout(
+                &mut tree,
+                &renderer,
+                &Limits::new(Size::ZERO, Size::new(222.0, 200.0)),
+            );
+            (
+                node.bounds(),
+                node.children()
+                    .iter()
+                    .map(|child| child.bounds())
+                    .collect::<Vec<_>>(),
+            )
+        };
+        let actual = positions(gallery);
+        assert_eq!(actual, positions(reference.into()));
+        assert_eq!(actual.1.len(), 3);
+    }
 
     #[test]
     fn bottom_anchored_feed_restores_the_row_when_history_or_new_rows_move() {
