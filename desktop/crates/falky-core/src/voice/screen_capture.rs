@@ -104,6 +104,11 @@ fn rotate(buffer: &I420Buffer, rotation: VideoRotation) -> Option<I420Buffer> {
     };
 
     let mut rotated = I420Buffer::new(out_width, out_height);
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    if rotate_libyuv(buffer, &mut rotated, rotation) {
+        return Some(rotated);
+    }
+
     let (y, u, v) = buffer.data();
     let (out_y, out_u, out_v) = rotated.data_mut();
     let (sy, su, sv) = buffer.strides();
@@ -130,6 +135,86 @@ fn rotate(buffer: &I420Buffer, rotation: VideoRotation) -> Option<I420Buffer> {
         }
     }
     Some(rotated)
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+fn rotate_libyuv(source: &I420Buffer, target: &mut I420Buffer, rotation: VideoRotation) -> bool {
+    unsafe extern "C" {
+        #[link_name = "I420Rotate"]
+        fn i420_rotate(
+            source_y: *const u8,
+            source_stride_y: i32,
+            source_u: *const u8,
+            source_stride_u: i32,
+            source_v: *const u8,
+            source_stride_v: i32,
+            target_y: *mut u8,
+            target_stride_y: i32,
+            target_u: *mut u8,
+            target_stride_u: i32,
+            target_v: *mut u8,
+            target_stride_v: i32,
+            width: i32,
+            height: i32,
+            rotation: i32,
+        ) -> i32;
+    }
+
+    let (width, height) = (source.width(), source.height());
+    // libyuv's 180-degree path allocates scratch rows without reporting allocation failure.
+    if !matches!(
+        rotation,
+        VideoRotation::VideoRotation90 | VideoRotation::VideoRotation270
+    ) || !valid_size(width, height)
+        || (target.width(), target.height()) != (height, width)
+    {
+        return false;
+    }
+    let (sy, su, sv) = source.strides();
+    let (y, u, v) = source.data();
+    let chroma_width = width.div_ceil(2);
+    let chroma_height = height.div_ceil(2);
+    if ![
+        (y, sy, width, height),
+        (u, su, chroma_width, chroma_height),
+        (v, sv, chroma_width, chroma_height),
+    ]
+    .into_iter()
+    .all(|(plane, stride, width, height)| {
+        stride >= width
+            && stride <= i32::MAX as u32 / height
+            && plane.len() >= (stride * height) as usize
+    }) {
+        return false;
+    }
+
+    let (dy, du, dv) = target.strides();
+    if (dy, du, dv) != (height, chroma_height, chroma_height) {
+        return false;
+    }
+    let (out_y, out_u, out_v) = target.data_mut();
+    // SAFETY: The source planes cover every row at their strides. The target is
+    // a separate, tightly packed I420 buffer of the verified rotated dimensions.
+    // The synchronous quarter-turn routine writes into those output planes.
+    unsafe {
+        i420_rotate(
+            y.as_ptr(),
+            sy as i32,
+            u.as_ptr(),
+            su as i32,
+            v.as_ptr(),
+            sv as i32,
+            out_y.as_mut_ptr(),
+            dy as i32,
+            out_u.as_mut_ptr(),
+            du as i32,
+            out_v.as_mut_ptr(),
+            dv as i32,
+            width as i32,
+            height as i32,
+            rotation as i32,
+        ) == 0
+    }
 }
 
 #[derive(Default)]
@@ -299,6 +384,78 @@ impl Drop for ScreenCapture {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rotated_i420_preserves_visible_samples_with_odd_dimensions_and_distinct_strides() {
+        use VideoRotation::*;
+
+        for (width, height) in [
+            (1_u32, 1_u32),
+            (1, 9),
+            (8, 1),
+            (4, 2),
+            (5, 3),
+            (31, 16),
+            (66, 39),
+        ] {
+            let cw = width.div_ceil(2);
+            let ch = height.div_ceil(2);
+            let mut input = I420Buffer::with_strides(width, height, width + 5, cw + 3, cw + 11);
+            let (sy, su, sv) = input.strides();
+            let (y, u, v) = input.data_mut();
+            for (index, (bytes, stride, size)) in [
+                (y, sy, (width, height)),
+                (u, su, (cw, ch)),
+                (v, sv, (cw, ch)),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                bytes.fill(239);
+                for row in 0..size.1 {
+                    for col in 0..size.0 {
+                        bytes[(row * stride + col) as usize] =
+                            (row as usize * 131 + col as usize * 13 + index * 83) as u8;
+                    }
+                }
+            }
+
+            assert!(rotate(&input, VideoRotation0).is_none());
+            for rotation in [VideoRotation90, VideoRotation180, VideoRotation270] {
+                let result = rotate(&input, rotation).unwrap();
+                let (dy, du, dv) = result.strides();
+                let (y, u, v) = input.data();
+                let (out_y, out_u, out_v) = result.data();
+                for (source, target, src_stride, dst_stride, w, h) in [
+                    (y, out_y, sy, dy, width, height),
+                    (u, out_u, su, du, cw, ch),
+                    (v, out_v, sv, dv, cw, ch),
+                ] {
+                    let (dst_w, dst_h) = if rotation == VideoRotation180 {
+                        (w, h)
+                    } else {
+                        (h, w)
+                    };
+                    assert_eq!(target.len(), (dst_stride * dst_h) as usize);
+                    for row in 0..dst_h {
+                        for col in 0..dst_w {
+                            let (x, y) = match rotation {
+                                VideoRotation90 => (row, h - 1 - col),
+                                VideoRotation180 => (w - 1 - col, h - 1 - row),
+                                VideoRotation270 => (w - 1 - row, col),
+                                VideoRotation0 => unreachable!(),
+                            };
+                            assert_eq!(
+                                target[(row * dst_stride + col) as usize],
+                                source[(y * src_stride + x) as usize],
+                                "{width}x{height}, {rotation:?}, ({col}, {row})"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn latest_capture_converts_both_formats_and_partial_final_stride() {
