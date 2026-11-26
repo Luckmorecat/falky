@@ -7,7 +7,6 @@ use livekit::webrtc::{
     video_frame::{BoxVideoFrame, I420Buffer, VideoBuffer, VideoRotation},
 };
 use std::{
-    borrow::Cow,
     collections::VecDeque,
     sync::{
         Arc, Mutex,
@@ -133,8 +132,14 @@ fn rotate(buffer: &I420Buffer, rotation: VideoRotation) -> Option<I420Buffer> {
     Some(rotated)
 }
 
+#[derive(Default)]
+struct CaptureVideo {
+    latest: Option<ShareFrame>,
+    tail_rows: Vec<u8>,
+}
+
 struct CaptureState {
-    video: Mutex<Option<ShareFrame>>,
+    video: Mutex<CaptureVideo>,
     audio: Mutex<VecDeque<i16>>,
     closed: AtomicBool,
     lost: AtomicBool,
@@ -148,7 +153,7 @@ pub struct ScreenCapture(Arc<CaptureState>);
 
 pub fn screen_capture() -> (ScreenCaptureSink, ScreenCapture) {
     let state = Arc::new(CaptureState {
-        video: Mutex::new(None),
+        video: Mutex::new(CaptureVideo::default()),
         audio: Mutex::new(VecDeque::with_capacity(AUDIO_CAPACITY)),
         closed: AtomicBool::new(false),
         lost: AtomicBool::new(false),
@@ -178,41 +183,61 @@ impl ScreenCaptureSink {
         if pixels.len() < stride * (rows - 1) + row {
             return;
         }
-        let Ok(mut latest) = self.0.video.try_lock() else {
+        let Ok(mut video) = self.0.video.try_lock() else {
             return;
-        };
-        // libyuv's wrapper requires a full final stride. Some adapters can only
-        // expose the pixel bytes of the final row.
-        let (pixels, stride) = if pixels.len() < stride * rows {
-            let packed = (0..rows)
-                .flat_map(|index| &pixels[index * stride..index * stride + row])
-                .copied()
-                .collect();
-            (Cow::Owned(packed), row as u32)
-        } else {
-            (Cow::Borrowed(pixels), stride as u32)
         };
         let mut buffer = I420Buffer::new(width, height);
         let (stride_y, stride_u, stride_v) = buffer.strides();
         let (y, u, v) = buffer.data_mut();
         // libyuv names packed formats by the little-endian word, not byte order.
-        let convert = if rgba { abgr_to_i420 } else { argb_to_i420 };
-        convert(
-            &pixels,
-            stride,
-            y,
-            stride_y,
-            u,
-            stride_u,
-            v,
-            stride_v,
-            width as i32,
-            height as i32,
-        );
+        let to_i420 = if rgba { abgr_to_i420 } else { argb_to_i420 };
+        let convert = |pixels: &[u8],
+                       stride: usize,
+                       rows: usize,
+                       (y, u, v): (&mut [u8], &mut [u8], &mut [u8])| {
+            to_i420(
+                pixels,
+                stride as u32,
+                y,
+                stride_y,
+                u,
+                stride_u,
+                v,
+                stride_v,
+                width as i32,
+                rows as i32,
+            );
+        };
+        if pixels.len() >= stride * rows {
+            convert(pixels, stride, rows, (y, u, v));
+        } else {
+            // The wrapper requires the last row's padding. Split between chroma pairs
+            // so that only the last one or two rows need a packed stride.
+            let tail_rows = 2 - rows % 2;
+            let prefix_rows = rows - tail_rows;
+            let (prefix, tail) = pixels.split_at(prefix_rows * stride);
+            let (y_prefix, y_tail) = y.split_at_mut(prefix_rows * stride_y as usize);
+            let (u_prefix, u_tail) = u.split_at_mut(prefix_rows / 2 * stride_u as usize);
+            let (v_prefix, v_tail) = v.split_at_mut(prefix_rows / 2 * stride_v as usize);
+            if prefix_rows != 0 {
+                convert(prefix, stride, prefix_rows, (y_prefix, u_prefix, v_prefix));
+            }
+            let tail = if tail_rows == 2 {
+                let scratch = &mut video.tail_rows;
+                scratch.clear();
+                scratch.reserve_exact(2 * row);
+                scratch.extend_from_slice(&tail[..row]);
+                scratch.extend_from_slice(&tail[stride..stride + row]);
+                scratch.as_slice()
+            } else {
+                &tail[..row]
+            };
+            convert(tail, row, tail_rows, (y_tail, u_tail, v_tail));
+        }
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_or(0, |time| time.as_micros() as i64);
-        *latest = Some(ShareFrame::new(buffer, timestamp));
+        video.latest = Some(ShareFrame::new(buffer, timestamp));
     }
 
     pub fn stereo(&self, pcm: &[i16]) {
@@ -243,7 +268,7 @@ impl ScreenCaptureSink {
 
 impl ScreenCapture {
     pub(super) fn video(&self) -> Option<ShareFrame> {
-        self.0.video.try_lock().ok()?.take()
+        self.0.video.try_lock().ok()?.latest.take()
     }
 
     pub(super) fn stereo(&self) -> Option<StereoBlock> {
@@ -289,6 +314,32 @@ mod tests {
         assert_eq!(latest.planes().1, first.planes().1);
         assert_eq!(latest.planes().2, first.planes().2);
         assert!(capture.video().is_none());
+    }
+
+    #[test]
+    fn short_final_rows_match_full_stride_for_both_pixel_orders() {
+        let (sink, capture) = screen_capture();
+        let formats = [ScreenCaptureSink::bgra, ScreenCaptureSink::rgba];
+        for (width, height) in [(1, 1), (1, 2), (7, 3), (16, 4), (33, 5), (64, 6)] {
+            let row = width as usize * 4;
+            let stride = row + 13;
+            let full = stride * height as usize;
+            let visible = full - (stride - row);
+            let pixels: Vec<_> = (0..full)
+                .map(|index| (index * 31 + index / stride * 83) as u8)
+                .collect();
+            for send in formats {
+                send(&sink, width, height, stride, &pixels);
+                let expected = capture.video().unwrap();
+                for end in [visible, visible + 3] {
+                    send(&sink, width, height, stride, &pixels[..end]);
+                    let short = capture.video().unwrap();
+                    assert_eq!(short.planes(), expected.planes(), "{width}x{height}, {end}");
+                }
+                send(&sink, width, height, stride, &pixels[..visible - 1]);
+                assert!(capture.video().is_none());
+            }
+        }
     }
 
     #[test]
