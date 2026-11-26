@@ -2,7 +2,7 @@
 mod scoreboard;
 
 use std::{
-    io::Cursor,
+    io::{self, Cursor, Write},
     num::NonZeroUsize,
     path::{Path, PathBuf},
 };
@@ -14,7 +14,10 @@ use falky_core::{
     model::{Attachment, AttachmentId},
 };
 use iced::widget::image::Handle;
-use image::{DynamicImage, ImageFormat, ImageReader, Limits as DecodeLimits, RgbaImage};
+use image::{
+    DynamicImage, ImageFormat, ImageReader, Limits as DecodeLimits, RgbaImage,
+    codecs::png::PngEncoder,
+};
 use lru::LruCache;
 use reqwest::header::HeaderValue;
 
@@ -125,11 +128,11 @@ fn encode_clipboard_image(data: arboard::ImageData<'_>, limit: usize) -> Result<
     pixels.truncate(data.width * data.height * 4);
     let image = RgbaImage::from_raw(data.width as u32, data.height as u32, pixels)
         .ok_or(InputError::Invalid)?;
-    let mut output = Cursor::new(Vec::new());
+    let mut output = PngOutput(Vec::new());
     image
-        .write_to(&mut output, ImageFormat::Png)
+        .write_with_encoder(PngEncoder::new(&mut output))
         .map_err(|_| InputError::Invalid)?;
-    let bytes = output.into_inner();
+    let bytes = output.0;
     if bytes.len() > limit {
         return Err(InputError::TooLarge);
     }
@@ -139,6 +142,37 @@ fn encode_clipboard_image(data: arboard::ImageData<'_>, limit: usize) -> Result<
         bytes: Bytes::from(bytes),
         preview,
     })
+}
+
+struct PngOutput(Vec<u8>);
+
+impl Write for PngOutput {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.write_all(bytes)?;
+        Ok(bytes.len())
+    }
+
+    fn write_all(&mut self, bytes: &[u8]) -> io::Result<()> {
+        if bytes.len() > self.0.capacity() - self.0.len() {
+            // The first write is the signature. For a later bulk write, leave room
+            // for the IDAT CRC and IEND so the trailer does not grow the buffer.
+            let capacity = if self.0.is_empty() {
+                bytes.len().max(64)
+            } else {
+                bytes.len() + 16
+            };
+            self.0
+                .try_reserve(capacity)
+                .or_else(|_| self.0.try_reserve(bytes.len()))
+                .map_err(|_| io::ErrorKind::OutOfMemory)?;
+        }
+        self.0.extend_from_slice(bytes);
+        Ok(())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -437,7 +471,8 @@ mod tests {
 
     #[test]
     fn clipboard_png_and_preview_match_the_encoded_input_path() {
-        for (width, height, trailing_bytes) in [(5, 3, 5), (320, 240, 0), (1, 16_384, 3)] {
+        for (width, height, trailing_bytes) in [(1, 1, 0), (5, 3, 5), (320, 240, 0), (1, 16_384, 3)]
+        {
             let image = RgbaImage::from_fn(width, height, |x, y| {
                 image::Rgba([x as u8, y as u8, (x ^ y) as u8, (x + y) as u8])
             });
