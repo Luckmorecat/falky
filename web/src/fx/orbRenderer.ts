@@ -206,6 +206,7 @@ interface Painter {
   canvas: HTMLCanvasElement;
   /** Built when first needed; null once a look turned out not to build here. */
   programs: Partial<Record<OrbLook, Program | null>>;
+  boundProgram: WebGLProgram | null;
 }
 
 let painter: Painter | null = null;
@@ -238,7 +239,7 @@ function programFor(p: Painter, wanted: OrbLook): Program | null {
 }
 
 function setUp(canvas: HTMLCanvasElement, gl: WebGLRenderingContext): Painter | null {
-  const p: Painter = { gl, canvas, programs: {} };
+  const p: Painter = { gl, canvas, programs: {}, boundProgram: null };
   if (!programFor(p, 'flat')) return null;
   gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
   gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
@@ -317,9 +318,13 @@ interface LiveOrb extends OrbOptions {
 const orbs = new Set<LiveOrb>();
 let stopTicking: (() => void) | null = null;
 
-function draw(orb: LiveOrb, p: Painter, { uniforms: u }: Program, pad: number, time: number): void {
-  const { gl } = p;
+function draw(orb: LiveOrb, p: Painter, { program, uniforms: u }: Program, pad: number, time: number): void {
   if (!orb.ctx || !orb.size) return;
+  const { gl } = p;
+  if (p.boundProgram !== program) {
+    gl.useProgram(program);
+    p.boundProgram = program;
+  }
   gl.viewport(0, 0, orb.size, orb.size);
   const rgb = pageLight ? orb.rgbLight : orb.rgb;
   gl.uniform3fv(u.uBase!, rgb[0]!);
@@ -353,7 +358,6 @@ function tick(time: number, dt: number): void {
   const shown = shownLook();
   const program = p && programFor(p, shown);
   const pad = shown === 'volume' ? VOLUME_PAD : 1;
-  if (p && program) p.gl.useProgram(program.program);
   for (const orb of orbs) {
     const target = orb.level ? orb.level() : 0;
     orb.lvl += (target - orb.lvl) * (1 - Math.exp(-dt * (target > orb.lvl ? 26 : 4.5)));
@@ -409,10 +413,7 @@ export function addOrb(options: OrbOptions): () => void {
     const p = painter ?? getPainter();
     const shown = shownLook();
     const program = p && programFor(p, shown);
-    if (p && program) {
-      p.gl.useProgram(program.program);
-      draw(orb, p, program, shown === 'volume' ? VOLUME_PAD : 1, performance.now() / 1000);
-    }
+    if (p && program) draw(orb, p, program, shown === 'volume' ? VOLUME_PAD : 1, performance.now() / 1000);
   });
   resized.observe(options.canvas);
   orbs.add(orb);
