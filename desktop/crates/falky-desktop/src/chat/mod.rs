@@ -1,5 +1,7 @@
 mod images;
 #[cfg(test)]
+pub(crate) mod scoreboard;
+#[cfg(test)]
 mod tests;
 mod view;
 

@@ -43,3 +43,25 @@ Watching screen shares with sound works on all three platforms. The video pauses
     cargo +stable clippy --workspace --all-targets --locked -- -D warnings
 
 See [Phase 1 verification](docs/phase1-verification.md) for runtime evidence and platform limits.
+
+## Release scoreboard
+
+From `desktop/`, run the ignored scoreboard tests on a host with a headless wgpu adapter.
+
+    cargo +stable test --release --workspace --locked scoreboard_ -- --ignored --test-threads=1 --nocapture
+
+Set `FALKY_PERF_GOLDENS` to an existing directory to save scene screenshots. The
+tests print the renderer name, screenshot and hot-path hashes, and metric values.
+Scene timers cover view construction, widget tree reconciliation and layout, and
+draw recording. The total sums these three phases. Allocation counts cover
+Rust allocations and reallocations on the measured thread. GPU counts cover
+Falky's render passes, queue submissions, and texture uploads per rendered frame.
+
+Use the runner to save release binaries and collect five adjacent A/B pairs. Point
+both inputs at the same directory for an A/A noise-floor run.
+
+    python3 scoreboard/run.py build .perf/bin/A
+    python3 scoreboard/run.py run .perf/bin/A .perf/bin/A .perf/noise
+
+On Linux, add `--process` to measure sign-in with Xvfb, xwininfo, ImageMagick
+and procfs. Use the same options for both sides of a comparison.

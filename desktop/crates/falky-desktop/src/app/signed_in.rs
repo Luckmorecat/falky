@@ -1,3 +1,5 @@
+#[cfg(test)]
+mod scoreboard;
 mod share;
 
 pub(super) use share::{CaptureReady, ViewerScope};
@@ -106,6 +108,8 @@ pub(super) struct ViewContext<'a> {
     pub language: Language,
     pub viewport: Viewport,
     pub storage_notice: Option<&'static str>,
+    #[cfg(test)]
+    pub share_frame: Option<&'a std::sync::Arc<dyn shell::PlanarFrame>>,
 }
 
 impl SignedIn {
@@ -630,6 +634,8 @@ impl SignedIn {
             language,
             viewport,
             storage_notice,
+            #[cfg(test)]
+            share_frame,
         } = context;
         let scope = &self.live.scope;
         let rooms = self.rooms();
@@ -687,6 +693,8 @@ impl SignedIn {
         let frame = selected
             .and_then(|connection| self.voice.latest_share_frame(connection))
             .map(|frame| frame as std::sync::Arc<dyn shell::PlanarFrame>);
+        #[cfg(test)]
+        let frame = frame.or_else(|| selected.and(share_frame).cloned());
         let viewer = self.viewer_scope();
         let shell = shell::view_with_share(
             &self.shell,

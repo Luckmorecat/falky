@@ -881,6 +881,8 @@ impl App {
             language,
             viewport: self.viewport,
             storage_notice: self.login.storage_notice(language),
+            #[cfg(test)]
+            share_frame: None,
         })
     }
 

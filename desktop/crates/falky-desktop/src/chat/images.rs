@@ -1,3 +1,6 @@
+#[cfg(test)]
+mod scoreboard;
+
 use std::{
     io::Cursor,
     num::NonZeroUsize,

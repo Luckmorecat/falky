@@ -214,6 +214,8 @@ impl Primitive for OrbDraw {
                     label: Some("Falky orb texture cache"),
                 })
             });
+        #[cfg(test)]
+        crate::perf_fixture::gpu_event(|work| work.passes += 1);
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("Falky paint orb"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -236,6 +238,8 @@ impl Primitive for OrbDraw {
         // Iced prepares all primitives before drawing any of them. Submit the texture updates
         // as one batch before the enclosing compositor pass is submitted.
         if let Some(encoder) = pipeline.painting.lock().expect("orb paint mutex").take() {
+            #[cfg(test)]
+            crate::perf_fixture::gpu_event(|work| work.submissions += 1);
             pipeline.queue.submit([encoder.finish()]);
         }
         let tile = &pipeline.tiles[&self.slot];

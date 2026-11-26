@@ -1,5 +1,7 @@
 mod device;
 mod identity;
+#[cfg(test)]
+mod scoreboard;
 
 pub(crate) use device::{AudioIo, DeviceConfig};
 

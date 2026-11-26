@@ -265,6 +265,11 @@ impl State {
     fn seconds(&self) -> f32 {
         self.now.duration_since(self.began).as_secs_f32()
     }
+
+    #[cfg(test)]
+    pub(crate) fn set_scoreboard_time(&mut self, elapsed: Duration) {
+        self.now = self.began + elapsed;
+    }
 }
 
 struct View<'a, 'm, Message> {

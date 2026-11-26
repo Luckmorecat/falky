@@ -1,3 +1,6 @@
+#[cfg(test)]
+mod scoreboard;
+
 use std::{cell::RefCell, fmt::Debug, sync::Arc};
 
 use iced::advanced::{Layout, Widget, image, layout, renderer, widget::Tree, widget::tree};
@@ -227,6 +230,8 @@ impl Primitive for Video {
             .zip(&textures.planes)
             .zip(plane_sizes(size))
         {
+            #[cfg(test)]
+            crate::perf_fixture::gpu_event(|work| work.uploads += 1);
             queue.write_texture(
                 texture.as_image_copy(),
                 plane.bytes,

@@ -1,3 +1,6 @@
+#[cfg(test)]
+mod scoreboard;
+
 use crate::audio::StereoBlock;
 use livekit::webrtc::{
     native::yuv_helper::{abgr_to_i420, argb_to_i420},
