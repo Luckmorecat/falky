@@ -79,7 +79,7 @@ test('settings add restarts on proof expiry at finish; remove, last-key race, re
   await openChat(page);
   await page.getByRole('textbox', { name: 'Message', exact: true }).fill('keep this draft');
   await page.getByRole('button', { name: 'Join', exact: true }).click();
-  await expect(page.getByRole('toolbar')).toBeVisible();
+  await expect(page.getByRole('toolbar', { name: 'Lounge', exact: true })).toBeVisible();
   await accountSettings(page);
   await page.request.post(app.url + '/__mock/action', { data: { type: 'account-fault', fault: 'finish-expired' } });
   const spare = await virtualAuthenticator(page, 'usb', original.client);
@@ -113,7 +113,7 @@ test('settings add restarts on proof expiry at finish; remove, last-key race, re
   expect(reauths).toBe(2);
   await page.keyboard.press('Escape');
   await expect(page.getByRole('textbox', { name: 'Message', exact: true })).toHaveValue('keep this draft');
-  await expect(page.getByRole('toolbar')).toBeVisible();
+  await expect(page.getByRole('toolbar', { name: 'Lounge', exact: true })).toBeVisible();
 });
 
 test('guest upgrades retain owner, ready attachment, colour, history and unsent text; another account clears draft and media', async ({ page }) => {
@@ -135,13 +135,13 @@ test('guest upgrades retain owner, ready attachment, colour, history and unsent 
   await expect(page.locator('.tray-item')).toHaveCount(1); await expect(page.getByText('Guest historical message', { exact: true })).toBeVisible();
   const account = await (await page.request.get(app.url + '/api/accounts/session')).json();
   expect(account.kind).toBe('account'); expect(account.visitor.colour).toEqual(initial.visitor!.colour);
-  await page.getByRole('button', { name: 'Join', exact: true }).click(); await expect(page.getByRole('toolbar')).toBeVisible();
+  await page.getByRole('button', { name: 'Join', exact: true }).click(); await expect(page.getByRole('toolbar', { name: 'Lounge', exact: true })).toBeVisible();
   await page.evaluate(() => { location.hash = 'invite=mock-invitation-second'; });
   await page.getByRole('textbox', { name: 'Name', exact: true }).fill('Other account');
   await page.getByRole('button', { name: 'Create your passkey', exact: true }).click(); await expect(kit).toBeVisible();
   expect(await kit.locator('dd').innerText()).not.toBe(initial.visitor!.id); await acknowledgeKit(page);
   await expect(page.locator('.composer textarea')).toHaveValue('');
-  await expect(page.locator('.tray-item')).toHaveCount(0); await expect(page.getByRole('toolbar')).toHaveCount(0);
+  await expect(page.locator('.tray-item')).toHaveCount(0); await expect(page.getByRole('toolbar', { name: 'Lounge', exact: true })).toHaveCount(0);
   expect((await (await page.request.get(app.url + '/__mock/state')).json()).voiceConnections).toEqual({});
 });
 
