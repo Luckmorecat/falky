@@ -15,6 +15,25 @@ test.beforeEach(async ({ page }) => {
     localStorage.setItem(prefix + 'theme', 'dark');
     localStorage.setItem(prefix + 'liveBackground', 'on');
   }, fixture);
+  await page.addInitScript(() => {
+    const locations = new WeakSet<WebGLUniformLocation>();
+    const gl = WebGLRenderingContext.prototype;
+    const locate = gl.getUniformLocation;
+    const set = gl.uniform4f;
+    gl.getUniformLocation = function (program, name) {
+      const location = locate.call(this, program, name);
+      if (location && name === 'uBeacon' && this.canvas instanceof HTMLCanvasElement && this.canvas.matches('.live-background')) {
+        locations.add(location);
+      }
+      return location;
+    };
+    gl.uniform4f = function (location, x, y, phase, strength) {
+      set.call(this, location, x, y, phase, strength);
+      if (location && locations.has(location) && this.canvas instanceof HTMLCanvasElement) {
+        this.canvas.dataset.beaconFrame = [phase, strength].join(',');
+      }
+    };
+  });
 });
 
 for (const viewport of [{ width: 390, height: 844 }, { width: 1440, height: 1000 }]) {
@@ -37,12 +56,10 @@ for (const viewport of [{ width: 390, height: 844 }, { width: 1440, height: 1000
     await page.waitForTimeout(350);
     expect((await page.screenshot({ clip })).equals(first)).toBe(false);
     await page.emulateMedia({ reducedMotion: 'reduce' });
-    await page.waitForTimeout(400);
-    const still = await page.screenshot({ clip });
-    await page.waitForTimeout(350);
-    expect((await page.screenshot({ clip })).equals(still)).toBe(true);
+    await expect(background).toHaveAttribute('data-beacon-frame', '-1,0.32');
     await page.keyboard.press('Slash');
     await expect(background).not.toHaveAttribute('data-beacon');
+    await expect(background).toHaveAttribute('data-beacon-frame', '0,0');
     await expect(page.locator('.dock-chat')).toHaveAttribute('aria-expanded', 'true');
     if (viewport.width < 1180) await page.getByRole('button', { name: 'Close chat', exact: true }).click();
     else {
