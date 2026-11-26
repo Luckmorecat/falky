@@ -1,3 +1,5 @@
+use std::sync::OnceLock;
+
 use crate::ui_contract::EffectiveTheme;
 use falky_core::model::PaletteName;
 use iced::{Color, Theme, theme};
@@ -93,25 +95,59 @@ pub(super) fn alpha(color: Color, opacity: f32) -> Color {
 
 /// The four FBM stops, in body, cloud, shadow and cloud-heart order.
 pub fn palette(name: PaletteName, theme: EffectiveTheme) -> [Color; 4] {
-    stops(name, theme).map(Oklch::srgb)
+    *palette_colors(name, theme)
+        .orb
+        .get_or_init(|| stops(name, theme).map(Oklch::srgb))
 }
 
 /// High-contrast web name tint for an identity on this theme.
 pub fn identity_name(name: PaletteName, theme: EffectiveTheme) -> Color {
-    let Oklch(_, c, h) = stops(name, theme)[0];
-    match theme {
-        EffectiveTheme::Dark => Oklch(0.82, c.clamp(0.05, 0.14), h),
-        EffectiveTheme::Light => Oklch(0.47, c.clamp(0.07, 0.17), h),
-    }
-    .srgb()
+    *palette_colors(name, theme).name.get_or_init(|| {
+        let Oklch(_, c, h) = stops(name, theme)[0];
+        match theme {
+            EffectiveTheme::Dark => Oklch(0.82, c.clamp(0.05, 0.14), h),
+            EffectiveTheme::Light => Oklch(0.47, c.clamp(0.07, 0.17), h),
+        }
+        .srgb()
+    })
 }
 
 pub fn identity_wash(name: PaletteName, theme: EffectiveTheme) -> Color {
-    let base = stops(name, theme)[0];
-    match theme {
-        EffectiveTheme::Dark => alpha(base.srgb(), 0.16),
-        EffectiveTheme::Light => Oklch(0.95, base.1 * 0.35, base.2).srgb(),
+    *palette_colors(name, theme).wash.get_or_init(|| {
+        let base = stops(name, theme)[0];
+        match theme {
+            EffectiveTheme::Dark => alpha(base.srgb(), 0.16),
+            EffectiveTheme::Light => Oklch(0.95, base.1 * 0.35, base.2).srgb(),
+        }
+    })
+}
+
+struct PaletteColors {
+    orb: OnceLock<[Color; 4]>,
+    name: OnceLock<Color>,
+    wash: OnceLock<Color>,
+}
+
+impl PaletteColors {
+    const fn new() -> Self {
+        Self {
+            orb: OnceLock::new(),
+            name: OnceLock::new(),
+            wash: OnceLock::new(),
+        }
     }
+}
+
+fn palette_colors(name: PaletteName, theme: EffectiveTheme) -> &'static PaletteColors {
+    const COUNT: usize = PaletteName::ALL.len();
+    static DARK: [PaletteColors; COUNT] = [const { PaletteColors::new() }; COUNT];
+    static LIGHT: [PaletteColors; COUNT] = [const { PaletteColors::new() }; COUNT];
+
+    let palettes = match theme {
+        EffectiveTheme::Dark => &DARK,
+        EffectiveTheme::Light => &LIGHT,
+    };
+    &palettes[name as usize]
 }
 
 pub fn room_palette(index: usize) -> PaletteName {
@@ -278,6 +314,36 @@ fn stops(name: PaletteName, theme: EffectiveTheme) -> [Oklch; 4] {
 mod tests {
     use super::*;
     use std::collections::HashSet;
+
+    #[test]
+    fn cached_palettes_match_each_uncached_role_across_theme_switches() {
+        let bits = |color: Color| [color.r, color.g, color.b, color.a].map(f32::to_bits);
+        for theme in [
+            EffectiveTheme::Dark,
+            EffectiveTheme::Light,
+            EffectiveTheme::Dark,
+        ] {
+            for name in PaletteName::ALL {
+                let reference = stops(name, theme);
+                let Oklch(_, c, h) = reference[0];
+                let name_color = match theme {
+                    EffectiveTheme::Dark => Oklch(0.82, c.clamp(0.05, 0.14), h),
+                    EffectiveTheme::Light => Oklch(0.47, c.clamp(0.07, 0.17), h),
+                }
+                .srgb();
+                let wash = match theme {
+                    EffectiveTheme::Dark => alpha(reference[0].srgb(), 0.16),
+                    EffectiveTheme::Light => Oklch(0.95, c * 0.35, h).srgb(),
+                };
+                assert_eq!(
+                    palette(name, theme).map(bits),
+                    reference.map(Oklch::srgb).map(bits)
+                );
+                assert_eq!(bits(identity_name(name, theme)), bits(name_color));
+                assert_eq!(bits(identity_wash(name, theme)), bits(wash));
+            }
+        }
+    }
 
     #[test]
     fn room_palette_cycles_in_web_order() {
