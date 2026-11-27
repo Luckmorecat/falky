@@ -26,7 +26,7 @@ use tokio::sync::oneshot;
 
 use super::{
     CaptureError, CaptureOptions, CaptureSink,
-    frame::{Frame, Pacing, Rect},
+    frame::{Frame, Pacing, Rect, Scratch},
 };
 
 pub(super) struct Capture {
@@ -150,7 +150,7 @@ fn run(
             signal_ready: Some(signal_ready),
             format: None,
             pacing: Pacing::new(options.fps),
-            scratch: Vec::new(),
+            scratch: Scratch::default(),
         })
         .state_changed({
             let loop_ = loop_.clone();
@@ -211,7 +211,7 @@ struct Frames {
     signal_ready: Option<oneshot::Sender<()>>,
     format: Option<VideoInfoRaw>,
     pacing: Pacing,
-    scratch: Vec<u8>,
+    scratch: Scratch,
 }
 
 impl Frames {

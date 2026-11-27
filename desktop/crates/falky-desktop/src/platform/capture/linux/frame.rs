@@ -16,8 +16,14 @@ pub(super) struct Frame<'a> {
     bytes: &'a [u8],
     stride: usize,
     flipped: bool,
-    source_height: u32,
+    source_size: (u32, u32),
     crop: Rect,
+}
+
+#[derive(Default)]
+pub(super) struct Scratch {
+    pixels: Vec<u8>,
+    source_size: (u32, u32),
 }
 
 impl<'a> Frame<'a> {
@@ -64,7 +70,7 @@ impl<'a> Frame<'a> {
         Some(Self {
             bytes,
             stride,
-            source_height: height,
+            source_size: (width, height),
             flipped,
             crop,
         })
@@ -73,19 +79,28 @@ impl<'a> Frame<'a> {
     pub fn pixels<'b>(
         &'b self,
         options: CaptureOptions,
-        scratch: &'b mut Vec<u8>,
+        scratch: &'b mut Scratch,
     ) -> (u32, u32, usize, &'b [u8]) {
         let crop = self.crop;
         let (width, height) = fit(crop.width, crop.height, options);
         let row_len = width as usize * BYTES_PER_PIXEL;
         if width == crop.width && height == crop.height && !self.flipped {
+            let (source_width, source_height) = self.source_size;
+            let (cached_width, cached_height) = scratch.source_size;
+            if source_width <= cached_width
+                && source_height <= cached_height
+                && self.source_size != scratch.source_size
+            {
+                *scratch = Scratch::default();
+            }
             let offset = self.row_start(0);
             let end = offset + (height - 1) as usize * self.stride + row_len;
             return (width, height, self.stride, &self.bytes[offset..end]);
         }
 
-        scratch.resize(row_len * height as usize, 0);
-        for (y, row) in scratch.chunks_exact_mut(row_len).enumerate() {
+        scratch.source_size = self.source_size;
+        scratch.pixels.resize(row_len * height as usize, 0);
+        for (y, row) in scratch.pixels.chunks_exact_mut(row_len).enumerate() {
             let source_y = sample(y, crop.height, height);
             let offset = self.row_start(source_y);
             let row_bytes = &self.bytes[offset..offset + crop.width as usize * BYTES_PER_PIXEL];
@@ -103,13 +118,13 @@ impl<'a> Frame<'a> {
                 }
             }
         }
-        (width, height, row_len, scratch)
+        (width, height, row_len, &scratch.pixels)
     }
 
     fn row_start(&self, y: u32) -> usize {
         let y = self.crop.y + y;
         let row = if self.flipped {
-            self.source_height - 1 - y
+            self.source_size.1 - 1 - y
         } else {
             y
         };
@@ -195,7 +210,7 @@ mod tests {
         let low = perf::packed_pixels(1920, 1080, 1920 * 4);
         let (high, low) = (frame(&high, 3840, 2160), frame(&low, 1920, 1080));
         let start = perf::live_bytes();
-        let mut scratch = Vec::new();
+        let mut scratch = Scratch::default();
         let (_, _, _, first) = high.pixels(options(2560, 1440), &mut scratch);
         perf::golden("capture.linux.downsize.high", &[first]);
         let (_, _, _, second) = low.pixels(options(2560, 1440), &mut scratch);
@@ -218,7 +233,7 @@ mod tests {
     fn pitched_rows_and_chunk_offset() {
         let bytes = [0; 45];
         let frame = Frame::new(&bytes, 48, 36, 12, 2, 3, None).unwrap();
-        let mut scratch = Vec::new();
+        let mut scratch = Scratch::default();
         let (width, height, stride, pixels) = frame.pixels(options(16, 9), &mut scratch);
         assert_eq!((width, height, stride), (2, 3, 12));
         assert_eq!(pixels.as_ptr(), bytes[3..].as_ptr());
@@ -241,7 +256,7 @@ mod tests {
             height: 2,
         };
         let frame = Frame::new(&bytes, 0, 20, -12, 2, 2, Some(crop)).unwrap();
-        let mut scratch = Vec::new();
+        let mut scratch = Scratch::default();
         let (width, height, stride, pixels) = frame.pixels(options(16, 9), &mut scratch);
         assert_eq!((width, height, stride), (1, 2, 4));
         assert_eq!(pixels, &[4, 4, 4, 4, 2, 2, 2, 2]);
@@ -262,10 +277,48 @@ mod tests {
     fn resizes_the_active_region_into_packed_rows() {
         let pixels: Vec<u8> = (0..32).collect();
         let frame = Frame::new(&pixels, 0, 32, 16, 4, 2, None).unwrap();
-        let mut scratch = Vec::new();
+        let mut scratch = Scratch::default();
         let (width, height, stride, pixels) = frame.pixels(options(2, 1), &mut scratch);
         assert_eq!((width, height, stride), (2, 1, 8));
         assert_eq!(pixels, &[20, 21, 22, 23, 28, 29, 30, 31]);
+    }
+
+    #[test]
+    fn releases_resize_scratch_on_a_smaller_borrowed_source() {
+        let bytes: Vec<u8> = (0..32).collect();
+        let large = Frame::new(&bytes, 0, 32, 16, 4, 2, None).unwrap();
+        let cropped = Frame::new(
+            &bytes,
+            0,
+            32,
+            16,
+            4,
+            2,
+            Some(Rect {
+                x: 0,
+                y: 0,
+                width: 2,
+                height: 1,
+            }),
+        )
+        .unwrap();
+        let small = Frame::new(&bytes, 0, 8, 8, 2, 1, None).unwrap();
+        let fit = options(2, 1);
+        let mut scratch = Scratch::default();
+        let (_, _, _, first) = large.pixels(fit, &mut scratch);
+        let expected = first.to_vec();
+        let capacity = scratch.pixels.capacity();
+
+        let (_, _, _, direct) = cropped.pixels(fit, &mut scratch);
+        assert_eq!(direct.as_ptr(), bytes.as_ptr());
+        assert_eq!(scratch.pixels.capacity(), capacity);
+        let (_, _, _, direct) = small.pixels(fit, &mut scratch);
+        assert_eq!(direct, &bytes[..8]);
+        assert_eq!(direct.as_ptr(), bytes.as_ptr());
+        assert_eq!(scratch.pixels.capacity(), 0);
+
+        let (_, _, _, restarted) = large.pixels(fit, &mut scratch);
+        assert_eq!(restarted, expected);
     }
 
     #[test]
