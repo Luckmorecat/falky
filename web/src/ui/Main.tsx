@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { answerKnock, dismissKnock, voice } from '../app/controller';
-import { useApp } from '../app/store';
+import { type AppState, useApp } from '../app/store';
 import { t } from '../strings';
 import { Button } from './Button';
 import { Chat } from './Chat';
@@ -15,6 +15,19 @@ import { useTalk } from './useTalk';
 import { LiveBackground, type LiveBackgroundHandle } from './LiveBackground';
 import { Toast, TopNoticeSlot } from './Toast';
 import './Main.css';
+
+type MainVoice = Pick<AppState['voice'], 'roomId' | 'status' | 'joinedAt' | 'audioBlocked'>;
+
+function createVoiceSelector() {
+  let previous: MainVoice | undefined;
+  return ({ voice }: AppState): MainVoice => {
+    const { roomId, status, joinedAt, audioBlocked } = voice;
+    if (previous && previous.roomId === roomId && previous.status === status
+      && previous.joinedAt === joinedAt && previous.audioBlocked === audioBlocked) return previous;
+    previous = { roomId, status, joinedAt, audioBlocked };
+    return previous;
+  };
+}
 
 function Clock({ joinedAt }: { joinedAt: number }) {
   const [now, setNow] = useState(() => performance.now());
@@ -36,8 +49,8 @@ export function Main() {
   const background = useRef<LiveBackgroundHandle>(null);
   const unreadCounter = useRef<HTMLSpanElement>(null);
   const room = useApp((s) => s.rooms.find((r) => r.id === s.viewedRoomId) ?? null);
-  const voiceState = useApp((s) => s.voice);
-  const voiceRoomName = useApp((s) => s.rooms.find((r) => r.id === s.voice.roomId)?.name);
+  const selectVoice = useMemo(createVoiceSelector, []);
+  const { roomId: voiceRoomId, status: voiceStatus, joinedAt, audioBlocked } = useApp(selectVoice);
   const chatOpen = useApp((s) => s.chatOpen);
   const roomsOpen = useApp((s) => s.roomsOpen);
   const live = useApp((s) => s.live);
@@ -50,12 +63,13 @@ export function Main() {
     document.body.classList.toggle('rooms-open', roomsOpen);
   }, [chatOpen, roomsOpen]);
 
-  const inThisRoom = !!room && voiceState.roomId === room.id && voiceState.status !== 'idle';
-  const inVoiceElsewhere = !!voiceRoomName && voiceState.status !== 'idle' && !inThisRoom;
-  const joining = voiceState.status === 'joining' && voiceState.roomId === null;
+  const voiceRoomName = rooms.find((r) => r.id === voiceRoomId)?.name;
+  const inThisRoom = !!room && voiceRoomId === room.id && voiceStatus !== 'idle';
+  const inVoiceElsewhere = !!voiceRoomName && voiceStatus !== 'idle' && !inThisRoom;
+  const joining = voiceStatus === 'joining' && voiceRoomId === null;
   const banner = joining ? t.joining
     : live === 'reconnecting' ? t.reconnecting
-    : voiceState.status === 'reconnecting' ? t.voiceReconnecting : null;
+    : voiceStatus === 'reconnecting' ? t.voiceReconnecting : null;
 
   return (
     <div className="screen room-screen">
@@ -66,7 +80,7 @@ export function Main() {
         <Rooms
           room={room}
           status={!room ? <span>{t.noRoomsBody}</span>
-            : inThisRoom && voiceState.joinedAt ? <Clock joinedAt={voiceState.joinedAt} />
+            : inThisRoom && joinedAt ? <Clock joinedAt={joinedAt} />
               : inVoiceElsewhere ? <span>{t.inOtherRoom(voiceRoomName)}</span>
                 : <span>{room.occupancy.length ? t.notInVoice : t.nobodyInVoice}</span>}
         />
@@ -82,7 +96,7 @@ export function Main() {
         {banner && <div className="banner"><span className="pulse" />{banner}</div>}
       </TopNoticeSlot>
       <Toast
-        open={voiceState.audioBlocked && !!voiceState.roomId && voiceState.status !== 'reconnecting'}
+        open={audioBlocked && !!voiceRoomId && voiceStatus !== 'reconnecting'}
         position="before"
         className="audio-blocked"
         title={t.audioPlaybackBlocked}

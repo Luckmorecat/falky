@@ -71,9 +71,13 @@ test('playback volume changes only one connection and a new connection starts at
 test('room switching disconnects the local captured connection while same-person remote connections stay', async ({ page }) => {
   const oldGrant = await join(page);
   const games = fixture.rooms[1]!;
+  const clock = page.locator('.rooms .clock');
+  await expect(clock).toHaveText(/^In voice \d{2}:\d{2}$/);
   await page.getByRole('button', { name: 'Rooms: Lounge', exact: true }).hover();
   await page.locator('.room-list .room', { hasText: 'Games' }).click();
+  await expect(clock).toHaveText("You're in voice in Lounge");
   const newGrant = await join(page, 'Move here');
+  await expect(clock).toHaveText(/^In voice \d{2}:\d{2}$/);
   expect(newGrant).not.toBe(oldGrant);
   await expect.poll(async () => (await state(page)).voiceConnections).toEqual({ [newGrant]: games.id });
   expect((await state(page)).rooms[0]!.occupancy.map((p) => p.connectionId)).toEqual(fixture.peers[fixture.rooms[0]!.id]!.map((p) => p.connectionId));
