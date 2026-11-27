@@ -147,10 +147,15 @@ test('settings, simulated voice errors and animated local/remote sharing avoid h
   await settings.getByLabel('Message notifications', { exact: true }).check();
   await page.keyboard.press('Escape');
   await page.getByRole('button', { name: 'Join', exact: true }).click();
+  const ring = page.locator('.dock .mic-ring');
+  const ringStyles = () => ring.evaluate((el: HTMLElement) => [el.style.opacity, el.style.transform]);
   await expect(page.getByRole('button', { name: 'Unmute microphone', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await expect.poll(ringStyles).toEqual(['0', 'scale(0.94)']);
   await page.getByRole('button', { name: 'Unmute microphone', exact: true }).click();
+  await expect.poll(async () => Number((await ringStyles())[0])).toBeGreaterThan(0.3);
   await page.getByRole('button', { name: 'Turn sound off', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Unmute microphone', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await expect.poll(ringStyles).toEqual(['0', 'scale(0.94)']);
   await page.getByRole('button', { name: 'Turn sound on', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Mute microphone', exact: true })).toHaveAttribute('aria-pressed', 'false');
   await movingVideo(page, "Sam's screen");
@@ -190,6 +195,7 @@ test('settings, simulated voice errors and animated local/remote sharing avoid h
   await expect(page.getByText('Reconnecting voice', { exact: true })).toHaveCount(0);
   await page.getByRole('button', { name: 'Leave voice', exact: true }).click();
   await page.getByRole('dialog').getByRole('button', { name: 'Leave', exact: true }).click();
+  await expect(ring).toHaveCount(0);
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
   await settingsTab(page, 'Voice');
   await page.getByLabel('Join with microphone off', { exact: true }).uncheck();
@@ -199,6 +205,7 @@ test('settings, simulated voice errors and animated local/remote sharing avoid h
   await expect(page.getByRole('status')).toContainText('No access to the microphone');
   await expect(page.getByRole('toolbar', { name: 'Games' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Unmute microphone', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await expect.poll(ringStyles).toEqual(['0', 'scale(0.94)']);
   await page.getByRole('button', { name: 'Leave voice', exact: true }).click();
   await page.getByRole('dialog').getByRole('button', { name: 'Leave', exact: true }).click();
   await page.getByRole('button', { name: 'Settings', exact: true }).click();

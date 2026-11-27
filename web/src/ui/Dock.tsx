@@ -56,12 +56,17 @@ function Controls({ room, unreadRef, holdToTalk, onSettings }: { room: Room | nu
 
   useEffect(() => {
     if (!inVoice || !selfId) return;
+    let previousRing: HTMLSpanElement | null = null;
+    let previousLevel: number | undefined;
     return onTick(() => {
       const el = ring.current;
       if (!el) return;
       const l = voice.level(selfId);
+      if (el === previousRing && l === previousLevel) return;
       el.style.opacity = (l > 0.03 ? 0.3 + l * 0.7 : 0).toFixed(3);
       el.style.transform = `scale(${(0.94 + l * 0.24).toFixed(3)})`;
+      previousRing = el;
+      previousLevel = l;
     });
   }, [inVoice, selfId]);
 
