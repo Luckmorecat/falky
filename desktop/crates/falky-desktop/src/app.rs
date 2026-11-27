@@ -108,6 +108,7 @@ pub fn run() -> iced::Result {
     iced::daemon(App::boot, App::update, App::view)
         .title("Falky")
         .theme(App::theme)
+        .antialiasing(false)
         .font(shell::ONEST)
         .font(shell::ONEST_NATIVE)
         .font(shell::REACTIONS)
