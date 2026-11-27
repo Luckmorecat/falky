@@ -21,16 +21,20 @@ export type OccupancyChange = Schemas['OccupancyChange'];
 export type AccessRevoked = Schemas['AccessRevoked'];
 export type Attachment = Schemas['Attachment'];
 export type AttachmentsExpired = Schemas['AttachmentsExpired'];
+export type Knock = Schemas['Knock'];
+export type MessageReply = Schemas['MessageReply'];
+export type MessageReaction = Schemas['MessageReaction'];
 
 /** A live update, narrowed by its type. Unknown types are ignored by callers. */
 export type LiveEvent = { eventId: string; timestamp: string; roomId?: string } & (
   | { type: 'account.signin.requested' | 'account.signin.state_changed'; payload: SignInRequest }
-  | { type: 'message.created'; payload: Message }
+  | { type: 'message.created' | 'message.updated'; payload: Message }
   | { type: 'attachments.expired'; payload: AttachmentsExpired }
   | { type: 'room.changed'; payload: RoomChange }
   | { type: 'occupancy.changed'; payload: OccupancyChange }
   | { type: 'access.revoked'; payload: AccessRevoked }
   | { type: 'visitor.colour.changed'; payload: VisitorColour }
+  | { type: 'knock'; payload: Knock }
 );
 
 /** A refused or failed request. `code` is the contract's error code, or `network`. */
@@ -91,13 +95,16 @@ async function failure(status: number, statusText: string, text: string): Promis
  * Sends one file as a private draft. XHR rather than fetch, because only XHR
  * tells how much of the body has gone; `onProgress` gets 0..1.
  */
-function uploadAttachment(roomId: string, file: File, onProgress: (sent: number) => void, signal?: AbortSignal): Promise<Attachment> {
+function uploadAttachment(roomId: string, file: File, onProgress: (sent: number) => void, signal?: AbortSignal, serverTimeoutSeconds = 60): Promise<Attachment> {
   return new Promise((resolve, reject) => {
+    if (signal?.aborted) { reject(new ApiError(0, 'aborted', 'Upload cancelled')); return; }
     const xhr = new XMLHttpRequest();
     const form = new FormData();
     form.append('file', file, file.name);
     xhr.open('POST', `/api/rooms/${encodeURIComponent(roomId)}/attachments`);
     xhr.responseType = 'text';
+    // Allow the server to deliver its own timeout response after its upload deadline.
+    xhr.timeout = (serverTimeoutSeconds + 10) * 1000;
     xhr.upload.onprogress = (e) => { if (e.lengthComputable) onProgress(e.loaded / e.total); };
     xhr.onload = () => {
       if (xhr.status >= 200 && xhr.status < 300) {
@@ -107,8 +114,14 @@ function uploadAttachment(roomId: string, file: File, onProgress: (sent: number)
     xhr.onerror = () => reject(new ApiError(0, 'network', 'the server cannot be reached'));
     xhr.ontimeout = () => reject(new ApiError(408, 'upload_timeout', 'Upload took too long'));
     xhr.onabort = () => reject(new ApiError(0, 'aborted', 'Upload cancelled'));
-    signal?.addEventListener('abort', () => xhr.abort(), { once: true });
-    xhr.send(form);
+    const abort = () => xhr.abort();
+    xhr.onloadend = () => signal?.removeEventListener('abort', abort);
+    signal?.addEventListener('abort', abort, { once: true });
+    try { xhr.send(form); }
+    catch (err) {
+      signal?.removeEventListener('abort', abort);
+      reject(err);
+    }
   });
 }
 
@@ -158,11 +171,18 @@ export const api = {
     const qs = params.size ? `?${params}` : '';
     return call<Schemas['MessageList']>('GET', `/api/rooms/${encodeURIComponent(roomId)}/messages${qs}`).then((r) => r.messages);
   },
-  post: (roomId: string, requestKey: string, body: string, attachmentIds: string[] = []) =>
-    call<Message>('POST', `/api/rooms/${encodeURIComponent(roomId)}/messages`, { requestKey, body, ...(attachmentIds.length ? { attachmentIds } : {}) }),
+  post: (roomId: string, requestKey: string, body: string, attachmentIds: string[] = [], replyTo?: string) =>
+    call<Message>('POST', `/api/rooms/${encodeURIComponent(roomId)}/messages`, { requestKey, body, ...(attachmentIds.length ? { attachmentIds } : {}), ...(replyTo ? { replyTo } : {}) }),
+  editMessage: (roomId: string, messageId: string, body: string) =>
+    call<Message>('PATCH', `/api/rooms/${encodeURIComponent(roomId)}/messages/${encodeURIComponent(messageId)}`, { body }),
+  deleteMessage: (roomId: string, messageId: string) =>
+    call<Message>('DELETE', `/api/rooms/${encodeURIComponent(roomId)}/messages/${encodeURIComponent(messageId)}`),
+  react: (roomId: string, messageId: string, reaction: MessageReaction, on: boolean) =>
+    call<Message>(on ? 'PUT' : 'DELETE', `/api/rooms/${encodeURIComponent(roomId)}/messages/${encodeURIComponent(messageId)}/reactions/${reaction}`),
   attachmentLimits: () => call<Schemas['AttachmentLimits']>('GET', '/api/attachments/limits'),
   attachment: (id: string) => call<Attachment>('GET', `/api/attachments/${encodeURIComponent(id)}`),
   cancelAttachment: (id: string) => call<void>('DELETE', `/api/attachments/${encodeURIComponent(id)}`),
   upload: uploadAttachment,
-  joinVoice: (roomId: string) => call<VoiceCredentials>('POST', `/api/rooms/${encodeURIComponent(roomId)}/voice`),
+  joinVoice: (roomId: string, signal?: AbortSignal) => call<VoiceCredentials>('POST', `/api/rooms/${encodeURIComponent(roomId)}/voice`, undefined, signal),
+  knock: (roomId: string, visitorId: string) => call<void>('POST', `/api/rooms/${encodeURIComponent(roomId)}/knock`, { visitorId }),
 };

@@ -1,5 +1,6 @@
 import { test, expect, type Page } from '@playwright/test';
 import type { MockAction, MockState } from '../mock/protocol';
+import { PALETTES } from '../src/fx/palette';
 import { launchMock } from './launcher';
 
 let app: Awaited<ReturnType<typeof launchMock>>;
@@ -44,7 +45,7 @@ test('one confirmed swatch waits for acceptance, retains selection on failed sav
   await swatch(page, 'Rose').click();
   await expect(page.getByRole('status')).toHaveText('Saving colour…');
   await expect(swatch(page, 'Sky')).toBeChecked();
-  expect(await base(page, '.profile-card .orb')).toBe('#4f98ee');
+  expect(await base(page, '.profile-card .orb')).toBe(PALETTES.sky[0]);
   release();
   await expect(swatch(page, 'Rose')).toBeChecked();
   await expect(page.getByRole('status')).toHaveCount(0);
@@ -52,7 +53,7 @@ test('one confirmed swatch waits for acceptance, retains selection on failed sav
   await swatch(page, 'Moss').click();
   await expect(page.getByRole('alert')).toHaveText('Could not save your colour. Try again.');
   await expect(swatch(page, 'Rose')).toBeChecked();
-  expect(await base(page, '.profile-card .orb')).toBe('#f08ca8');
+  expect(await base(page, '.profile-card .orb')).toBe(PALETTES.rose[0]);
   await page.getByRole('button', { name: 'Retry', exact: true }).click();
   await expect(swatch(page, 'Moss')).toBeChecked();
   await expect(page.getByRole('alert')).toHaveCount(0);
@@ -66,7 +67,7 @@ test('tabs with different loaded history agree on duplicate colours, live recolo
   try {
     await other.goto(app.url);
     await page.bringToFront();
-    await page.keyboard.press('Slash');
+    await page.locator('.dock-chat').click();
     await expect(page.getByText('Welcome back! Try sending a message or joining voice.', { exact: true })).toBeVisible();
     const older = page.waitForResponse((response) => response.url().includes('/messages?before='), { timeout: 10_000 });
     await page.locator('.feed').evaluate((el) => { el.scrollTop = 0; }); await older;
@@ -78,9 +79,9 @@ test('tabs with different loaded history agree on duplicate colours, live recolo
     await control(page, { type: 'colour', visitorId: sam.visitorId, palette: 'ruby' });
     await control(page, { type: 'colour', visitorId: robin.visitorId, palette: 'ruby' });
     for (const tab of [page, other]) {
-      await authorColour(tab, 'Sam', '#d42a55'); await authorColour(tab, 'Robin', '#d42a55');
-      await expect.poll(() => base(tab, `[data-tile="${sam.connectionId}"]`)).toBe('#d42a55');
-      await expect.poll(() => base(tab, `[data-tile="${robin.connectionId}"]`)).toBe('#d42a55');
+      await authorColour(tab, 'Sam', PALETTES.ruby[0]); await authorColour(tab, 'Robin', PALETTES.ruby[0]);
+      await expect.poll(() => base(tab, `[data-tile="${sam.connectionId}"]`)).toBe(PALETTES.ruby[0]);
+      await expect.poll(() => base(tab, `[data-tile="${robin.connectionId}"]`)).toBe(PALETTES.ruby[0]);
     }
     await control(page, { type: 'participants', roomId: fixture.rooms[0]!.id, participants: [] });
     await expect(page.locator('[data-tile]')).toHaveCount(0);
@@ -89,10 +90,10 @@ test('tabs with different loaded history agree on duplicate colours, live recolo
     await expect(other.getByText('Reconnecting', { exact: true })).toBeVisible();
     await control(page, { type: 'colour', visitorId: sam.visitorId, palette: 'moss' });
     await control(page, { type: 'colour', visitorId: robin.visitorId, palette: 'moss' });
-    await authorColour(page, 'Sam', '#d42a55');
+    await authorColour(page, 'Sam', PALETTES.ruby[0]);
     await control(page, { type: 'faults', faults: { liveDisconnected: false } });
-    for (const tab of [page, other]) { await authorColour(tab, 'Sam', '#9dc65a'); await authorColour(tab, 'Robin', '#9dc65a'); }
-    await other.reload(); await authorColour(other, 'Sam', '#9dc65a');
+    for (const tab of [page, other]) { await authorColour(tab, 'Sam', PALETTES.moss[0]); await authorColour(tab, 'Robin', PALETTES.moss[0]); }
+    await other.reload(); await authorColour(other, 'Sam', PALETTES.moss[0]);
   } finally { await other.close(); }
 });
 
@@ -114,7 +115,7 @@ test('two tabs converge on the last accepted edit while an earlier response is d
     for (const tab of [page, other]) await expect(swatch(tab, 'Moss')).toBeChecked();
     release();
     await expect(page.getByRole('status')).toHaveCount(0);
-    for (const tab of [page, other]) { await expect(swatch(tab, 'Moss')).toBeChecked(); expect(await base(tab, '.profile-card .orb')).toBe('#9dc65a'); }
+    for (const tab of [page, other]) { await expect(swatch(tab, 'Moss')).toBeChecked(); expect(await base(tab, '.profile-card .orb')).toBe(PALETTES.moss[0]); }
     await page.reload(); await profile(page); await expect(swatch(page, 'Moss')).toBeChecked();
   } finally { release(); await other.close(); }
 });

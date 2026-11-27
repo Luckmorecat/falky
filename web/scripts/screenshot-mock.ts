@@ -148,8 +148,9 @@ Existing browser: PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/path/to/chromium`);
             await virtualAuthenticator(page, 'usb', authenticator!.client);
             await authenticator!.client.send('WebAuthn.setAutomaticPresenceSimulation', { authenticatorId: authenticator!.authenticatorId, enabled: false });
             const label = values.lang === 'uk' ? 'Ноутбук · запасний ключ для подорожей і щоденного доступу' : 'Laptop · backup passkey for travel and everyday access';
-            await page.getByRole('textbox', { name: t.account.keyLabel, exact: true }).fill(label);
             await page.getByRole('button', { name: t.account.addKey, exact: true }).click();
+            await page.getByRole('textbox', { name: t.account.keyLabel, exact: true }).fill(label);
+            await page.getByRole('button', { name: t.account.createKey, exact: true }).click();
             await expect(page.getByRole('button', { name: `${t.account.removeKey}: ${label}`, exact: true })).toBeVisible();
             }
           }
@@ -174,7 +175,7 @@ Existing browser: PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/path/to/chromium`);
       if (preset === 'chat') {
         // The chat button is hidden on wide screens; the app's shortcut works in both layouts.
         await page.keyboard.press('Slash');
-        await expect(page.locator('.chat-btn')).toHaveAttribute('aria-expanded', 'true');
+        await expect(page.locator('.dock-chat')).toHaveAttribute('aria-expanded', 'true');
       }
       if (preset === 'voice' || preset === 'screen-share') {
         await page.getByRole('button', { name: t.join, exact: true }).click();

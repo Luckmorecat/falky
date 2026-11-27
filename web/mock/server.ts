@@ -15,6 +15,13 @@ function encodeId(value: bigint) {
   for (let i = 0; i < 26; i++) { text = alphabet[Number(value & 31n)] + text; value >>= 5n; }
   return text;
 }
+const messageReactions: Schema['MessageReaction'][] = ['up', 'heart', 'laugh', 'wow', 'fire', 'clap'];
+
+function replyOf(m: Schema['Message']): Schema['MessageReply'] {
+  const line = m.body.split(/\s+/).filter(Boolean).join(' ');
+  return { id: m.id, authorName: m.authorName, deleted: m.deleted, excerpt: m.deleted ? '' : [...line].length > 120 ? [...line].slice(0, 119).join('') + '…' : line };
+}
+
 class Refused extends Error {
   constructor(readonly status: number, readonly code: string, message: string) { super(message); }
 }
@@ -114,6 +121,7 @@ export async function startMockServer(options: { port?: number; scenario?: strin
   let conflictName: string | null = null;
   let accessSecret = 'mock-access-link';
   const requests = new Map<string, Schema['Message']>();
+  const knocks = new Map<string, number>();
   const sockets = new WebSocketServer({ noServer: true, maxPayload: 32 * 1024 });
   const privateSockets = new Map<WebSocket, string>();
   function publish(type: Schema['EventType'], payload: Schema['Event']['payload'], roomId?: string) {
@@ -178,7 +186,7 @@ export async function startMockServer(options: { port?: number; scenario?: strin
   const historyAuthors = state.peers[roomIds[0]!]!;
   for (let i = 1; i <= 125; i++) {
     const author = historyAuthors[i % 2]!;
-    messages.get(roomIds[0]!)!.push({ id: id(), roomId: roomIds[0]!, authorId: author.visitorId, authorName: author.name,
+    messages.get(roomIds[0]!)!.push({ id: id(), roomId: roomIds[0]!, authorId: author.visitorId, authorName: author.name, deleted: false, reactions: [],
       body: i === 125 ? 'Welcome back! Try sending a message or joining voice.' : `Lounge history ${i}`,
       attachments: i === 118 ? fixtureAttachments(roomIds[0]!, author.visitorId, 1, 1)
         : i === 121 ? fixtureAttachments(roomIds[0]!, author.visitorId, 2, 3)
@@ -290,7 +298,7 @@ export async function startMockServer(options: { port?: number; scenario?: strin
     }
     if (url.pathname === '/__mock' && req.method === 'GET') return json(res, 200, {
       scenarios, endpoints: { bootstrap: 'POST /__mock/bootstrap {scenario?}', state: 'GET /__mock/state', reset: 'POST /__mock/reset {scenario?}', action: 'POST /__mock/action' },
-      actions: ['colour', 'message', 'participants', 'faults', 'name-conflict', 'revoke', 'voice-disconnect', 'expire-attachments', 'account-fault', 'expire-proof', 'device-fault', 'device-expire'],
+      actions: ['colour', 'message', 'participants', 'faults', 'name-conflict', 'revoke', 'voice-disconnect', 'expire-attachments', 'account-fault', 'expire-proof', 'device-fault', 'device-expire', 'knock'],
       faults: state.faults,
       lifecycle: 'Same-scenario bootstrap preserves state. Reset advances generation; poll state independently of /api/live. Mock media disconnect releases exact connected presence in the current generation; it does not model durable authorization.',
     });
@@ -309,6 +317,12 @@ export async function startMockServer(options: { port?: number; scenario?: strin
         if (!['none', 'finish-expired', 'finish-lost', 'regenerate-lost', 'last-passkey', 'invalid-proof'].includes(String(input.fault))) throw new Refused(400, 'invalid_request', 'Invalid account fault');
         accounts.fault = input.fault as typeof accounts.fault;
       } else if (input.type === 'expire-proof') accounts.expireProof();
+      else if (input.type === 'knock') {
+        const room = state.rooms.find((r) => r.id === input.roomId);
+        if (!room) throw new Refused(404, 'room_not_found', 'No such room');
+        if (typeof input.name !== 'string' || !input.name.trim()) throw new Refused(400, 'invalid_request', 'Expected a name');
+        publish('knock', { roomId: room.id, from: { visitorId: id(), name: input.name.trim() } }, room.id);
+      }
       else if (input.type === 'faults') {
         const faults = input.faults;
         if (!faults || typeof faults !== 'object' || Array.isArray(faults)) throw new Refused(400, 'invalid_request', 'Expected faults object');
@@ -319,8 +333,8 @@ export async function startMockServer(options: { port?: number; scenario?: strin
           else if (key === 'roomFull' && (value === null || state.rooms.some((room) => room.id === value))) state.faults.roomFull = value as string | null;
           else if (key === 'scannerError' && ['', 'NotAllowedError', 'NotFoundError', 'NotReadableError', 'DecodeError'].includes(String(value))) state.faults.scannerError = value as typeof state.faults.scannerError;
           else if (key === 'scannerDelayMs' && typeof value === 'number' && value >= 0 && value <= 30000) state.faults.scannerDelayMs = value;
-          else if (['liveDisconnected', 'micDenied', 'shareFailure', 'voiceReconnecting'].includes(key) && typeof value === 'boolean') {
-            state.faults[key as 'micDenied' | 'shareFailure' | 'voiceReconnecting' | 'liveDisconnected'] = value;
+          else if (['liveDisconnected', 'micDenied', 'shareFailure', 'voiceReconnecting', 'audioBlocked'].includes(key) && typeof value === 'boolean') {
+            state.faults[key as 'micDenied' | 'shareFailure' | 'voiceReconnecting' | 'liveDisconnected' | 'audioBlocked'] = value;
           } else throw new Refused(400, 'invalid_request', 'Invalid fault value');
         }
         if (state.faults.liveDisconnected) for (const socket of sockets.clients) socket.close(4000, 'Scripted disconnect');
@@ -383,7 +397,7 @@ export async function startMockServer(options: { port?: number; scenario?: strin
         const authorName = typeof input.authorName === 'string' ? input.authorName : 'Sam';
         const author = Object.values(state.peers).flat().find((peer) => peer.name === authorName);
         const authorId = author?.visitorId ?? id();
-        const message: Schema['Message'] = { id: id(), roomId: input.roomId as string, authorId, authorName, body: text,
+        const message: Schema['Message'] = { id: id(), roomId: input.roomId as string, authorId, authorName, body: text, deleted: false, reactions: [],
           attachments: fixtureAttachments(input.roomId as string, authorId, images, randomInt(1000)), createdAt: new Date().toISOString() };
         assignColour(message.authorId);
         history.push(message);
@@ -471,6 +485,7 @@ export async function startMockServer(options: { port?: number; scenario?: strin
     if (url.pathname === '/api/rooms' && req.method === 'GET') return json(res, 200, { rooms: state.rooms } satisfies Schema['RoomList']);
     const voice = /^\/api\/rooms\/([^/]+)\/voice$/.exec(url.pathname);
     if (voice && req.method === 'POST') {
+      if (res.destroyed) return;
       const roomId = voice[1]!;
       if (!state.rooms.some((room) => room.id === roomId)) throw new Refused(404, 'room_not_found', 'No such room');
       if (state.visitor.nameTaken) throw new Refused(409, 'name_taken', 'Rename before joining voice');
@@ -482,6 +497,22 @@ export async function startMockServer(options: { port?: number; scenario?: strin
       // Syntactically JWT-shaped; consumed only by the dev-only voice adapter.
       const jwt = (value: unknown) => Buffer.from(JSON.stringify(value)).toString('base64url');
       return json(res, 200, { grantId: grantId, url: publicOrigin.replace('http', 'ws') + '/rtc', token: `${jwt({ alg: 'none', typ: 'JWT' })}.${jwt({ sub: grantId, room: roomId, mock: true })}.mock` } satisfies Schema['VoiceCredentials']);
+    }
+    const knock = /^\/api\/rooms\/([^/]+)\/knock$/.exec(url.pathname);
+    if (knock && req.method === 'POST') {
+      const roomId = knock[1]!;
+      if (!state.rooms.some((room) => room.id === roomId)) throw new Refused(404, 'room_not_found', 'No such room');
+      if (typeof input.visitorId !== 'string' || !input.visitorId || input.visitorId === state.visitor.id) throw new Refused(400, 'invalid_request', 'Name someone else to knock');
+      if (!Object.values(state.voiceConnections).includes(roomId)) throw new Refused(409, 'not_in_voice', 'Join this room\'s voice before knocking');
+      const pair = `${state.visitor.id} ${input.visitorId}`;
+      const last = knocks.get(pair) ?? 0;
+      if (Date.now() - last < 30_000) {
+        res.setHeader('Retry-After', String(Math.ceil((30_000 - (Date.now() - last)) / 1000)));
+        throw new Refused(429, 'knock_too_soon', 'Knocked too often; try again later');
+      }
+      knocks.set(pair, Date.now());
+      res.writeHead(204).end();
+      return;
     }
     if (url.pathname === '/api/attachments/limits' && req.method === 'GET') return json(res, 200, attachmentLimits);
     const upload = /^\/api\/rooms\/([^/]+)\/attachments$/.exec(url.pathname);
@@ -529,6 +560,56 @@ export async function startMockServer(options: { port?: number; scenario?: strin
         return;
       }
     }
+    const change = /^\/api\/rooms\/([^/]+)\/messages\/([^/]+)(?:\/reactions\/([^/]+))?$/.exec(url.pathname);
+    if (change && ['PATCH', 'DELETE', 'PUT'].includes(req.method ?? '')) {
+      const [, roomId, messageId, reaction] = change;
+      const history = messages.get(roomId!);
+      if (!history) throw new Refused(404, 'room_not_found', 'No such room');
+      const message = history.find((m) => m.id === messageId);
+      if (!message) throw new Refused(404, 'message_not_found', 'No such message in this room');
+      let changed = false;
+      if (reaction !== undefined) {
+        if (!messageReactions.includes(reaction as Schema['MessageReaction'])) throw new Refused(400, 'invalid_request', 'Unknown reaction');
+        if (req.method === 'PATCH') throw new Refused(405, 'invalid_request', 'Use PUT or DELETE');
+        const on = req.method === 'PUT';
+        if (on && message.deleted) throw new Refused(409, 'message_deleted', 'The message was deleted');
+        const group = message.reactions.find((g) => g.reaction === reaction);
+        const has = !!group?.visitorIds.includes(state.visitor.id);
+        if (on && !has) {
+          if (group) group.visitorIds.push(state.visitor.id);
+          else message.reactions.push({ reaction: reaction as Schema['MessageReaction'], visitorIds: [state.visitor.id] });
+          message.reactions.sort((a, b) => messageReactions.indexOf(a.reaction) - messageReactions.indexOf(b.reaction));
+          changed = true;
+        } else if (!on && has) {
+          group!.visitorIds = group!.visitorIds.filter((v) => v !== state.visitor!.id);
+          message.reactions = message.reactions.filter((g) => g.visitorIds.length);
+          changed = true;
+        }
+      } else {
+        if (message.authorId !== state.visitor.id) throw new Refused(403, 'not_author', 'Only the author can change this message');
+        if (req.method === 'PATCH') {
+          if (message.deleted) throw new Refused(409, 'message_deleted', 'The message was deleted');
+          const text = input.body;
+          if (typeof text !== 'string') throw new Refused(400, 'invalid_request', 'A body is required');
+          if ((!text.trim() && !message.attachments.length) || [...text].length > 4000) throw new Refused(400, 'invalid_message', 'Message must have text or attachments, and at most 4000 characters');
+          if (text !== message.body) {
+            message.body = text;
+            message.editedAt = new Date().toISOString();
+            changed = true;
+          }
+        } else if (req.method === 'DELETE' && !message.deleted) {
+          Object.assign(message, { deleted: true, body: '', attachments: [], reactions: [] });
+          delete message.replyTo;
+          changed = true;
+        } else if (req.method === 'PUT') throw new Refused(405, 'invalid_request', 'Use PATCH or DELETE');
+        if (changed) for (const m of history) if (m.replyTo?.id === message.id) m.replyTo = replyOf(message);
+      }
+      if (changed) {
+        publish('message.updated', message, message.roomId);
+        state.revision++;
+      }
+      return json(res, 200, message);
+    }
     const match = /^\/api\/rooms\/([^/]+)\/messages$/.exec(url.pathname);
     if (match && req.method === 'POST') {
       const history = messages.get(match[1]!);
@@ -539,11 +620,15 @@ export async function startMockServer(options: { port?: number; scenario?: strin
       if (!Array.isArray(ids) || ids.length > attachmentLimits.maxAttachments || ids.some((x) => typeof x !== 'string') || new Set(ids).size !== ids.length) throw new Refused(400, 'invalid_attachments', 'Invalid attachment IDs');
       const text = input.body ?? '';
       if (typeof text !== 'string' || (!text.trim() && !ids.length) || [...text].length > 4000) throw new Refused(400, 'invalid_message', 'Message must have text or attachments, and at most 4000 characters');
+      if (input.replyTo !== undefined && (typeof input.replyTo !== 'string' || !input.replyTo)) throw new Refused(400, 'invalid_request', 'replyTo must be a message ID');
+      const replyTo = input.replyTo as string | undefined;
       const previous = requests.get(state.visitor.id + ':' + input.requestKey);
       if (previous) {
-        if (previous.roomId !== match[1] || previous.body !== text || previous.attachments.map((a) => a.id).join() !== ids.join()) throw new Refused(409, 'request_key_reused', 'Request key was used for another message');
+        if (previous.roomId !== match[1] || previous.body !== text || previous.replyTo?.id !== replyTo || previous.attachments.map((a) => a.id).join() !== ids.join()) throw new Refused(409, 'request_key_reused', 'Request key was used for another message');
         return json(res, 200, previous);
       }
+      const target = replyTo ? history.find((m) => m.id === replyTo) : undefined;
+      if (replyTo && (!target || target.deleted)) throw new Refused(400, 'invalid_reply', 'Can only reply to a message of this room that still exists');
       const sendFault = state.faults.send;
       state.faults.send = 'none';
       if (sendFault === 'fail') { state.revision++; throw new Refused(503, 'internal', 'Scripted send failure; retry the message'); }
@@ -553,7 +638,8 @@ export async function startMockServer(options: { port?: number; scenario?: strin
         d!.meta.availability = 'posted';
         delete d!.meta.expiresAt;
       }
-      const message: Schema['Message'] = { id: id(), roomId: match[1]!, authorId: state.visitor.id, authorName: state.visitor.name, body: text, attachments: drafts.map((d) => structuredClone(d!.meta)), createdAt: new Date().toISOString() };
+      const message: Schema['Message'] = { id: id(), roomId: match[1]!, authorId: state.visitor.id, authorName: state.visitor.name, body: text, attachments: drafts.map((d) => structuredClone(d!.meta)), createdAt: new Date().toISOString(),
+        deleted: false, reactions: [], ...(target ? { replyTo: replyOf(target) } : {}) };
       history.push(message);
       requests.set(state.visitor.id + ':' + input.requestKey, message);
       publish('message.created', message, message.roomId);

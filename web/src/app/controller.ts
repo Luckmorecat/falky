@@ -1,18 +1,20 @@
-import { api, ApiError, type AccountSession, type Attachment, type LiveEvent, type Message, type Room, type Visitor, type VisitorColour } from '../api/client';
+import { api, ApiError, type AccountSession, type Attachment, type LiveEvent, type Message, type MessageReaction, type Room, type Visitor, type VisitorColour } from '../api/client';
 import { LiveConnection } from '../api/live';
 import { followingLatest } from '../chat/place';
 import { isImage, onImageGone } from '../chat/images';
-import { countUnread, emptyChat, mergeMessages, type ComposerUpload, type PendingMessage, type RoomChat } from '../chat/timeline';
+import { countUnread, emptyChat, mergeMessages, replaceMessage, type ComposerUpload, type PendingMessage, type RoomChat } from '../chat/timeline';
 import { type PaletteName } from '../fx/palette';
 import { resolveLanguage, setLanguage, t } from '../strings';
 import { VoiceSession } from '@falky/voice';
 import type { VoiceClient } from '../voice/types';
+import { onReaction, popPitch, soundOf } from '../voice/reactions';
 import { playSound, notificationPermission, requestNotificationPermission, notificationsAvailable, notify } from '@falky/browser';
 import { applyAppearance } from './appearance';
 import { prefs, type Settings } from './prefs';
 import { getState, setState } from './store';
 import { clearSignInHints, retainSignInHint } from './signInHints';
 import { captureEntryLinks, clearEntryLinks, getEntryLinks } from './entryLinks';
+import { clearToasts, showToast } from './toasts';
 
 const PAGE = 100;
 // A response from a previous access/boot must never populate the next visitor's state.
@@ -50,15 +52,28 @@ function acceptVisitor(visitor: Visitor): void {
   mergeColours([visitor.colour]);
 }
 
+const chatAuthors = new WeakMap<readonly Message[], readonly string[]>();
+
+function loadedAuthorIds(messages: readonly Message[]): readonly string[] {
+  const cached = chatAuthors.get(messages);
+  if (cached) return cached;
+  const ids = [...new Set(messages.map((message) => message.authorId))];
+  chatAuthors.set(messages, ids);
+  return ids;
+}
+
 function knownVisitorIds(): string[] {
   const s = getState();
-  return [...new Set([
+  const ids = new Set([
     ...(s.visitor ? [s.visitor.id] : []),
     ...Object.keys(s.colours),
     ...s.rooms.flatMap((r) => r.occupancy.map((p) => p.visitorId)),
     ...s.voice.people.map((p) => p.visitorId),
-    ...Object.values(s.chats).flatMap((c) => c.messages.map((m) => m.authorId)),
-  ])];
+  ]);
+  for (const chat of Object.values(s.chats)) {
+    for (const authorId of loadedAuthorIds(chat.messages)) ids.add(authorId);
+  }
+  return [...ids];
 }
 
 /** Explicit-ID snapshots include offline authors; failed or omitted IDs remain retryable. */
@@ -93,16 +108,13 @@ async function refreshColours(all = false): Promise<void> {
   }
 }
 
-let noticeSeq = 0;
-let noticeTimer: ReturnType<typeof setTimeout> | null = null;
-
 const voiceSession: VoiceClient = new VoiceSession({
   onChange: (snapshot) => { setState({ voice: snapshot }); if (!sessionChanging) void refreshColours(); },
   onProblem(problem) {
     if (sessionChanging) return;
     if (problem === 'visitor_required') return endAccess();
     if (problem === 'name_taken') void refreshMe();
-    showNotice(t.voiceProblems[problem].title, t.voiceProblems[problem].body);
+    showToast(t.voiceProblems[problem]);
   },
   onSound(sound) {
     if (sessionChanging) return;
@@ -116,12 +128,20 @@ const voiceSession: VoiceClient = new VoiceSession({
     return { echoCancellation: s.echoCancellation, noiseSuppression: s.noiseSuppression, autoGainControl: s.autoGain };
   },
   joinMuted: () => getState().settings.joinMuted,
+  pushToTalk: () => getState().settings.pushToTalk,
   shareSettings: () => getState().settings,
   cameraSettings: () => getState().settings,
   volumeOf: (id) => prefs.volume(id),
 });
 
-const pausedVoiceActions = new Set<PropertyKey>(['join', 'toggleMute', 'toggleDeafen', 'toggleShare', 'toggleCamera', 'restartCamera', 'setCamera', 'setMic', 'setSpeaker', 'applyMicProcessing']);
+// Every reaction is heard by everyone who hears the sender, each press of it: not while deafened, nor if their volume is down to nothing.
+onReaction((from, id) => {
+  const s = getState();
+  if (sessionChanging || !s.settings.sounds || s.voice.deafened || prefs.volume(from) === 0) return;
+  playSound(soundOf(id) ?? 'pop', s.settings.speakerId, popPitch(id));
+});
+
+const pausedVoiceActions = new Set<PropertyKey>(['join', 'setMuted', 'toggleMute', 'toggleDeafen', 'toggleShare', 'toggleCamera', 'restartCamera', 'setCamera', 'setMic', 'setSpeaker', 'applyMicProcessing', 'retryAudio', 'react']);
 const voiceMethods = new Map<PropertyKey, unknown>();
 export const voice: VoiceClient = new Proxy(voiceSession, {
   get(target, key) {
@@ -143,15 +163,15 @@ function makeLive(epoch: number): LiveConnection { return new LiveConnection({
   },
   onDown: () => { if (epoch === session) setState({ live: 'reconnecting' }); },
   onRevoked: () => { if (epoch === session) endAccess(); },
-  async shouldRetry() {
-    if (epoch !== session) return false;
+  async shouldRetry(signal?: AbortSignal) {
+    if (signal?.aborted || epoch !== session) return false;
     try {
-      if (!await refreshIdentity(epoch)) return false;
+      if (!await refreshIdentity(epoch, signal) || signal?.aborted) return false;
       const me = getState().visitor;
       if (me?.nameTaken) setState({ live: 'off' });
       return !!me && !me.nameTaken;
     } catch (err) {
-      if (epoch !== session) return false;
+      if (signal?.aborted || epoch !== session) return false;
       if (err instanceof ApiError && err.status === 401) {
         endAccess();
         return false;
@@ -164,7 +184,8 @@ let live = makeLive(session);
 
 function clearOwner(clearPreferences = true): void {
   dropUploads();
-  dismissNotice();
+  clearToasts();
+  dismissKnock();
   if (clearPreferences) prefs.clearIdentity();
   setState({ visitor: null, accountSession: null, ownerRevision: getState().ownerRevision + 1, rooms: [], chats: {}, colours: {}, colourSave: null, viewedRoomId: null, newAfterId: null, chatOpen: false, roomsOpen: false });
 }
@@ -182,17 +203,6 @@ function accessEnded(err: unknown): boolean {
     return true;
   }
   return false;
-}
-
-export function showNotice(title: string, body?: string): void {
-  if (noticeTimer) clearTimeout(noticeTimer);
-  setState({ notice: { id: ++noticeSeq, title, body } });
-  noticeTimer = setTimeout(() => setState({ notice: null }), 7000);
-}
-
-export function dismissNotice(): void {
-  if (noticeTimer) clearTimeout(noticeTimer);
-  setState({ notice: null });
 }
 
 /* ---------- Entering ---------- */
@@ -323,9 +333,9 @@ export async function logout(): Promise<void> {
   setState({ phase: 'entry' });
 }
 
-async function refreshIdentity(epoch: number): Promise<boolean> {
-  const resolved = await api.accountSession();
-  if (epoch !== session) return false;
+async function refreshIdentity(epoch: number, signal?: AbortSignal): Promise<boolean> {
+  const resolved = await api.accountSession(signal);
+  if (signal?.aborted || epoch !== session) return false;
   const current = getState().accountSession;
   if (current?.visitor.id !== resolved.visitor.id || current.kind !== resolved.kind || current.expiresAt !== resolved.expiresAt) {
     await reconcileSession();
@@ -380,6 +390,9 @@ function handleEvent(event: LiveEvent): void {
       addMessages(event.payload.roomId, [event.payload]);
       notifyOfMessage(event.payload);
       break;
+    case 'message.updated':
+      applyMessage(event.payload);
+      break;
     case 'room.changed': {
       const { id, name } = event.payload;
       const exists = s.rooms.some((r) => r.id === id);
@@ -399,6 +412,64 @@ function handleEvent(event: LiveEvent): void {
     case 'access.revoked':
       endAccess();
       break;
+    case 'knock':
+      receiveKnock(event.payload.roomId, event.payload.from.name);
+      break;
+  }
+}
+
+/* ---------- Knocking ---------- */
+
+let knockSeq = 0;
+let knockTimer: ReturnType<typeof setTimeout> | null = null;
+
+function receiveKnock(roomId: string, fromName: string): void {
+  const s = getState();
+  const room = s.rooms.find((r) => r.id === roomId);
+  if (!room || (s.voice.roomId === roomId && s.voice.status !== 'idle')) return;
+  if (knockTimer) clearTimeout(knockTimer);
+  const id = ++knockSeq;
+  setState({ knock: { id, roomId, fromName } });
+  knockTimer = setTimeout(() => dismissKnock(id), 30_000);
+  if (!s.settings.knockAlerts) return;
+  if (s.settings.sounds && !s.voice.deafened) playSound('knock', s.settings.speakerId);
+  if (s.settings.notifications && document.visibilityState !== 'visible') {
+    const epoch = session;
+    notify(t.knockFrom(fromName, room.name), { tag: `knock-${roomId}` }, () => {
+      if (epoch !== session) return;
+      window.focus();
+      answerKnock();
+    });
+  }
+}
+
+/** Goes to the room that knocked and joins its voice. */
+export function answerKnock(id?: number): void {
+  const k = getState().knock;
+  if (id !== undefined && k?.id !== id) return;
+  dismissKnock();
+  if (!k || sessionChanging) return;
+  viewRoom(k.roomId);
+  void voice.join(k.roomId);
+}
+
+export function dismissKnock(id?: number): void {
+  if (id !== undefined && getState().knock?.id !== id) return;
+  if (knockTimer) clearTimeout(knockTimer);
+  knockTimer = null;
+  setState({ knock: null });
+}
+
+/** Calls someone into the voice of the room this person is in. */
+export async function knock(roomId: string, visitorId: string, name: string): Promise<void> {
+  const epoch = session;
+  try {
+    await api.knock(roomId, visitorId);
+    if (epoch === session) showToast({ title: t.knockSent(name), body: t.knockSentBody });
+  } catch (err) {
+    if (epoch !== session) return;
+    if (err instanceof ApiError && err.code === 'knock_too_soon') showToast({ title: t.knockTooSoon, body: t.knockTooSoonBody });
+    else showToast({ title: t.knockFailed, body: err instanceof ApiError ? err.message : undefined });
   }
 }
 
@@ -518,9 +589,16 @@ export async function loadOlder(roomId: string): Promise<void> {
 
 export function postMessage(roomId: string, body: string): void {
   if (sessionChanging) return;
+  const composing = getState().composing;
+  if (composing?.roomId === roomId && composing.kind === 'edit') {
+    void editMessage(composing.message, body);
+    return;
+  }
+  const replyTo = composing?.roomId === roomId && composing.kind === 'reply' ? replyOf(composing.message) : undefined;
+  if (replyTo) setState({ composing: null });
   const ready = (getState().uploads[roomId] ?? []).filter((u) => u.status === 'ready' && u.attachment);
   const attachments = ready.map((u) => ({ ...u.attachment!, contentUrl: u.previewUrl }));
-  const pending: PendingMessage = { requestKey: crypto.randomUUID(), roomId, body, attachments, failed: false, reason: '' };
+  const pending: PendingMessage = { requestKey: crypto.randomUUID(), roomId, body, attachments, replyTo, failed: false, reason: '' };
   // The previews now belong to the pending message; failed pictures stay for the person to see why.
   setUploads(roomId, (list) => list.filter((u) => !ready.includes(u)));
   ready.forEach((u) => files.delete(u.localId));
@@ -548,7 +626,7 @@ async function send(p: PendingMessage): Promise<void> {
   if (sessionChanging) return;
   const epoch = session;
   try {
-    const message = await api.post(p.roomId, p.requestKey, p.body, p.attachments.map((a) => a.id));
+    const message = await api.post(p.roomId, p.requestKey, p.body, p.attachments.map((a) => a.id), p.replyTo?.id);
     if (epoch !== session) return;
     patchChat(p.roomId, (c) => ({ pending: c.pending.filter((x) => x.requestKey !== p.requestKey), messages: mergeMessages(c.messages, [message]) }));
     p.attachments.forEach((a) => URL.revokeObjectURL(a.contentUrl));
@@ -559,9 +637,66 @@ async function send(p: PendingMessage): Promise<void> {
     const reason = code === 'rate_limited' ? t.errors.postRateLimited
       : code === 'network' ? t.errors.postNetwork
         : code === 'invalid_attachments' ? t.errors.postAttachmentsGone
-          : t.errors.postOther;
+          : code === 'invalid_reply' ? t.errors.postReplyGone
+            : t.errors.postOther;
     patchChat(p.roomId, (c) => ({ pending: c.pending.map((x) => (x.requestKey === p.requestKey ? { ...x, failed: true, reason } : x)) }));
   }
+}
+
+/* ---------- Changing messages ---------- */
+
+function replyOf(m: Message): NonNullable<PendingMessage['replyTo']> {
+  const line = m.body.split(/\s+/).filter(Boolean).join(' ');
+  return { id: m.id, authorName: m.authorName, deleted: m.deleted, excerpt: [...line].length > 120 ? [...line].slice(0, 119).join('') + '…' : line };
+}
+
+/** Takes in a message as it now reads, wherever it is held. */
+function applyMessage(m: Message): void {
+  patchChat(m.roomId, (c) => ({ messages: replaceMessage(c.messages, m) }));
+  const composing = getState().composing;
+  if (composing?.message.id === m.id && m.deleted) setState({ composing: null });
+}
+
+/** Points the composer of the message's room at answering it, or at changing its text. */
+export function compose(kind: 'reply' | 'edit', message: Message): void {
+  setState({ composing: { roomId: message.roomId, kind, message } });
+}
+
+export function stopComposing(): void {
+  setState({ composing: null });
+}
+
+async function changeMessage(change: () => Promise<Message>, failed: string): Promise<boolean> {
+  const epoch = session;
+  try {
+    const m = await change();
+    if (epoch === session) applyMessage(m);
+    return true;
+  } catch (err) {
+    if (epoch !== session || accessEnded(err)) return false;
+    showToast({ title: failed, body: err instanceof ApiError && err.code !== 'network' ? err.message : t.errors.postNetwork });
+    return false;
+  }
+}
+
+export async function editMessage(m: Message, body: string): Promise<void> {
+  if (sessionChanging) return;
+  setState({ composing: null });
+  if (body === m.body) return;
+  await changeMessage(() => api.editMessage(m.roomId, m.id, body), t.editFailed);
+}
+
+export async function deleteMessage(m: Message): Promise<void> {
+  if (sessionChanging) return;
+  await changeMessage(() => api.deleteMessage(m.roomId, m.id), t.deleteFailed);
+}
+
+/** Gives the reaction, or takes it back when this person already gave it. */
+export async function toggleReaction(m: Message, reaction: MessageReaction): Promise<void> {
+  const self = getState().visitor?.id;
+  if (sessionChanging || !self) return;
+  const on = !m.reactions.some((g) => g.reaction === reaction && g.visitorIds.includes(self));
+  await changeMessage(() => api.react(m.roomId, m.id, reaction, on), t.reactFailed);
 }
 
 /* ---------- Attachments ---------- */
@@ -589,7 +724,7 @@ function dropUploads(): void {
 async function readAttachmentLimits(epoch: number): Promise<void> {
   try {
     const limits = await api.attachmentLimits();
-    if (epoch === session) setState({ attachmentLimits: { maxAttachments: limits.maxAttachments, maxFileBytes: limits.maxFileBytes } });
+    if (epoch === session) setState({ attachmentLimits: limits });
   } catch (error) {
     if (epoch === session) accessEnded(error);
     // The defaults match the server's; it refuses anything beyond them anyway.
@@ -626,7 +761,7 @@ async function upload(u: ComposerUpload, file: File): Promise<void> {
         last = sent;
         patchUpload(u.roomId, u.localId, { progress: sent });
       }
-    }, control.signal);
+    }, control.signal, getState().attachmentLimits.uploadTimeoutSeconds);
     if (epoch !== session) return;
     if (!(getState().uploads[u.roomId] ?? []).some((x) => x.localId === u.localId)) {
       // Removed while it was on its way: the server should not keep it.
@@ -656,8 +791,8 @@ export function addFiles(roomId: string, picked: Iterable<File>): void {
   const images = list.filter((f) => f.type.startsWith('image/'));
   const room = limits.maxAttachments - (uploads[roomId]?.length ?? 0);
   const taken = images.slice(0, Math.max(0, room));
-  if (images.length < list.length) showNotice(t.onlyImages);
-  else if (taken.length < images.length) showNotice(t.tooManyImages(limits.maxAttachments));
+  if (images.length < list.length) showToast({ title: t.onlyImages });
+  else if (taken.length < images.length) showToast({ title: t.tooManyImages(limits.maxAttachments) });
   for (const file of taken) {
     const u: ComposerUpload = {
       localId: crypto.randomUUID(), roomId, name: file.name || 'image', size: file.size,
@@ -831,6 +966,7 @@ export function updateSettings(patch: Partial<Settings>): void {
   if (patch.speakerId !== undefined) void voice.setSpeaker(patch.speakerId);
   if (patch.cameraId !== undefined) void voice.setCamera(patch.cameraId);
   if (patch.cameraResolution !== undefined) void voice.restartCamera();
+  if (patch.pushToTalk) void voice.setMuted(true);
 }
 
 /** Turns message notifications on, asking the browser first; answers whether they are on. */

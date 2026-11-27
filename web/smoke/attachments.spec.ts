@@ -20,7 +20,7 @@ async function openChat(page: Page) {
   await page.goto(app.url);
   await page.locator('.feed .msg').first().waitFor({ state: 'attached' });
   await page.keyboard.press('Slash');
-  await expect(page.locator('.chat-btn')).toHaveAttribute('aria-expanded', 'true');
+  await expect(page.locator('.dock-chat')).toHaveAttribute('aria-expanded', 'true');
 }
 
 async function loaded(image: Locator) {
@@ -46,17 +46,55 @@ test('direct images revalidate on reload and work in the gallery and lightbox', 
   await page.reload();
   await page.locator('.feed .msg').first().waitFor({ state: 'attached' });
   await page.keyboard.press('Slash');
-  await expect(page.locator('.chat-btn')).toHaveAttribute('aria-expanded', 'true');
+  await expect(page.locator('.dock-chat')).toHaveAttribute('aria-expanded', 'true');
   await loaded(page.locator('.feed button.att-tile').last().locator('img'));
   await expect.poll(() => [...validated].filter((id) => contentRequests.has(id)).length).toBeGreaterThan(0);
   await page.locator('.feed button.att-tile').last().click();
-  await loaded(page.locator('.viewer-img'));
+  const viewer = page.locator('.viewer');
+  const viewed = viewer.locator('.viewer-img');
+  await loaded(viewed);
+  const original = (await viewed.getAttribute('src'))!;
   await page.keyboard.press('ArrowLeft');
-  await loaded(page.locator('.viewer-img'));
-  await page.keyboard.press('Escape');
-  await expect(page.locator('.viewer')).toHaveCount(0);
+  await expect(viewed).not.toHaveAttribute('src', original);
+  await loaded(viewed);
+  await page.keyboard.press('ArrowRight');
+  await expect(viewed).toHaveAttribute('src', original);
+  await loaded(viewed);
+
+  const { x, y, width, height } = (await viewer.locator('.viewer-stage').boundingBox())!;
+  const transform = () => viewed.evaluate((image: HTMLImageElement) => image.style.transform);
+  const resting = await transform();
+  await page.mouse.move(x + width / 2, y + height / 2);
+  await page.mouse.wheel(0, -340);
+  await expect(viewer).toHaveClass(/\bzoomed\b/);
+  const zoomed = await transform();
+  await page.mouse.wheel(24, 20);
+  await expect.poll(transform).not.toBe(zoomed);
+  await page.keyboard.press('0');
+  await expect.poll(transform).toBe(resting);
+
   const state = await (await page.request.get(`${app.url}/__mock/state`)).json();
-  await page.request.post(`${app.url}/__mock/action`, { data: { type: 'expire-attachments', roomId: state.rooms[0].id } });
+  const roomId = state.rooms[0].id;
+  const next = viewer.locator('.viewer-nav.next');
+  await expect(next).toBeDisabled();
+  const incoming = await page.request.post(`${app.url}/__mock/action`, {
+    data: { type: 'message', roomId, body: 'New picture while viewing', authorName: 'Morgan', images: 1 },
+  });
+  expect(incoming.ok()).toBe(true);
+  await expect(next).toBeEnabled();
+  await page.keyboard.press('ArrowRight');
+  await expect(viewer.locator('.viewer-author')).toHaveText('Morgan');
+  await loaded(viewed);
+  await page.keyboard.press('Escape');
+  await expect(viewer).toHaveCount(0);
+
+  await page.locator('.feed .msg').filter({ hasText: 'New picture while viewing' }).locator('button.att-tile').click();
+  await loaded(viewed);
+  const expired = await page.request.post(`${app.url}/__mock/action`, { data: { type: 'expire-attachments', roomId } });
+  expect(expired.ok()).toBe(true);
+  await expect(viewer.locator('.viewer-gone')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(viewer).toHaveCount(0);
   await expect(page.locator('.feed .att-tile img')).toHaveCount(0);
   await expect(page.locator('.feed .att-gone').first()).toBeVisible();
   await cdp.detach();
@@ -84,7 +122,7 @@ test('a busy direct image retries, and metadata recovers missed expiry events', 
   await page.reload();
   await page.locator('.feed .msg').first().waitFor({ state: 'attached' });
   await page.keyboard.press('Slash');
-  await expect(page.locator('.chat-btn')).toHaveAttribute('aria-expanded', 'true');
+  await expect(page.locator('.dock-chat')).toHaveAttribute('aria-expanded', 'true');
   await expect(page.locator('.feed .att-gone').last()).toBeVisible();
 });
 

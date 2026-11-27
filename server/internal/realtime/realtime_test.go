@@ -199,6 +199,24 @@ func TestEventsAboutARoomReachOnlyConnectionsThatMayReceiveThem(t *testing.T) {
 	}
 }
 
+func TestAnEventForOneVisitorReachesOnlyTheirConnections(t *testing.T) {
+	h := startHub(t)
+	bobTab1 := h.dial(t, "bob")
+	bobTab2 := h.dial(t, "bob")
+	alice := h.dial(t, "alice")
+
+	h.hub.Publish(realtime.Event{VisitorID: "bob", Data: []byte("for bob")})
+	h.hub.Publish(realtime.Event{Data: []byte("everyone")})
+	for name, ws := range map[string]*websocket.Conn{"bob tab 1": bobTab1, "bob tab 2": bobTab2} {
+		if got := []string{read(t, ws), read(t, ws)}; !slices.Equal(got, []string{"for bob", "everyone"}) {
+			t.Errorf("%s got %q, want bob's event and then everyone's", name, got)
+		}
+	}
+	if got := read(t, alice); got != "everyone" {
+		t.Errorf("alice got %q first, want only everyone's event", got)
+	}
+}
+
 func TestMessagesFromTheClientAreIgnored(t *testing.T) {
 	h := startHub(t)
 	ws := h.dial(t, "bob")

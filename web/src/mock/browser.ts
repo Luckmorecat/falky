@@ -32,8 +32,35 @@ let permission: NotificationPermission = 'default';
 export const notificationPermission = (): NotificationPermission => permission;
 export async function requestNotificationPermission(): Promise<NotificationPermission> { return permission = 'granted'; }
 export function notify(_title: string, _options: NotificationOptions, _onClick: () => void): void {}
+/** A drawn picture in place of a camera: a slow gradient with a head and shoulders. */
+export async function startCamera(_constraints: MediaTrackConstraints): Promise<MediaStream> {
+  const canvas = Object.assign(document.createElement('canvas'), { width: 640, height: 360 });
+  const ctx = canvas.getContext('2d')!;
+  let frame = 0;
+  const draw = () => {
+    const t = performance.now() / 1000;
+    const sky = ctx.createLinearGradient(0, 0, 640, 360);
+    sky.addColorStop(0, `hsl(${210 + Math.sin(t / 3) * 20} 35% 32%)`);
+    sky.addColorStop(1, 'hsl(260 25% 18%)');
+    ctx.fillStyle = sky; ctx.fillRect(0, 0, 640, 360);
+    ctx.fillStyle = 'hsl(28 30% 62%)';
+    ctx.beginPath(); ctx.arc(250 + Math.sin(t) * 6, 150, 58, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.ellipse(250 + Math.sin(t) * 6, 360, 130, 110, 0, Math.PI, 0); ctx.fill();
+    frame = requestAnimationFrame(draw);
+  };
+  draw();
+  const stream = canvas.captureStream(30);
+  const [track] = stream.getVideoTracks();
+  const stop = track!.stop.bind(track);
+  track!.stop = () => { cancelAnimationFrame(frame); stop(); };
+  return stream;
+}
 
-export function startQRScanner(video: HTMLVideoElement, onResult: (value: string) => void, onError: (error: unknown) => void): import('../runtime/qrScanner').QRScanner {
+export function startQRScanner(video: HTMLVideoElement, onResult: (value: string) => void, onError: (error: unknown) => void, canUseCamera = () => true): import('../runtime/qrScanner').QRScanner {
+  if (!canUseCamera()) {
+    onError(new DOMException('Camera already in use', 'NotReadableError'));
+    return { stop() {} };
+  }
   let stopped = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
   const stop = () => { stopped = true; clearTimeout(timer); unsubscribe(); removeEventListener('falky:mock-qr', detect); video.srcObject = null; };

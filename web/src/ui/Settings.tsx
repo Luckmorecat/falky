@@ -1,7 +1,7 @@
-import { type KeyboardEvent as ReactKeyboardEvent, type ReactNode, useEffect, useRef, useState } from 'react';
+import { type KeyboardEvent as ReactKeyboardEvent, type ReactNode, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { enableNotifications, rename, setVisitorColour, updateSettings, voice } from '../app/controller';
 import type { Settings as SettingsValues } from '../app/prefs';
-import { shortcuts } from '../app/shortcuts';
+import { shortcuts, shortcutsRevision, subscribeShortcuts } from '../app/shortcuts';
 import { useApp } from '../app/store';
 import { PALETTE_NAMES, paletteStyle, type PaletteName } from '../fx/palette';
 import { onTick } from '../fx/ticker';
@@ -11,7 +11,8 @@ import { canChooseSpeaker, enumerateDevices, watchDevices, refreshDevices, start
 import { canUseCamera } from '../voice/camera';
 import { canShareScreen, SHARE_BITRATE_MAX, SHARE_BITRATE_PRESETS, shareBitrate, supportedShareCodecs, type ShareCodec } from '../voice/share';
 import { Button } from './Button';
-import { Icon } from './Icon';
+import { callCameraInUse } from './callCameraInUse';
+import { Icon, type IconName } from './Icon';
 import { IconButton } from './IconButton';
 import { Orb } from './Orb';
 import { Segmented } from './Segmented';
@@ -19,6 +20,7 @@ import { Toggle } from './Toggle';
 import { AccountPanel } from './AccountPanel';
 import { useAccountUI } from './AccountFlow';
 import { useMediaQuery } from './useMediaQuery';
+import { AvatarStage, CameraPreview, KeyBinding, MotionStage, PlaySample, SettingsGroup, ThemePicker } from './SettingsParts';
 import './Range.css';
 import './Forms.css';
 import './Settings.css';
@@ -36,9 +38,12 @@ function useDevices(kind: MediaDeviceKind, active: boolean): MediaDeviceInfo[] {
 
 const codecLabels: Record<ShareCodec, string> = { vp8: 'VP8', h264: 'H.264', h265: 'H.265' };
 
+/** Each language by its own name, so a person finds theirs whatever the interface is in now. */
+const LANGUAGES: readonly (readonly [SettingsValues['language'], () => string])[] = [['system', () => t.languageSystem], ['uk', () => 'Українська'], ['en', () => 'English'], ['pl', () => 'Polski'], ['de', () => 'Deutsch'], ['es', () => 'Español'], ['fr', () => 'Français']];
+
 type Flag = { [K in keyof SettingsValues]: SettingsValues[K] extends boolean ? K : never }[keyof SettingsValues];
 
-function SettingToggle({ flag, label }: { flag: Flag; label: string }) {
+function SettingToggle({ flag, label }: { flag: Flag; label: ReactNode }) {
   const on = useApp((s) => s.settings[flag]);
   return <Toggle label={label} checked={on} data-cue-always={flag === 'uiSounds' ? '' : undefined} onChange={(checked) => updateSettings({ [flag]: checked })} />;
 }
@@ -96,7 +101,7 @@ function MicLevel({ open }: { open: boolean }) {
   }, [open, inVoice, muted, selfId]);
 
   return (
-    <div className="setrow">
+    <div className="setrow mic-level">
       <span>{t.micLevel}</span>
       <div className="meter" aria-hidden="true"><div ref={fill} /></div>
       {inVoice ? muted && <span className="set-note">{t.micMutedHint}</span> : (
@@ -110,7 +115,7 @@ function MicLevel({ open }: { open: boolean }) {
 function DeviceSelect({ label, value, devices, onChange }: { label: string; value: string; devices: MediaDeviceInfo[]; onChange(id: string): void }) {
   return (
     <label className="setrow">
-      {label}
+      <span className="visually-hidden">{label}</span>
       <select value={value} onChange={(e) => onChange(e.target.value)}>
         <option value="">{t.systemDefault}</option>
         {devices.map((d, i) => <option key={d.deviceId} value={d.deviceId}>{d.label || `${label} ${i + 1}`}</option>)}
@@ -119,66 +124,81 @@ function DeviceSelect({ label, value, devices, onChange }: { label: string; valu
   );
 }
 
-function AudioVideoPanel({ active }: { active: boolean }) {
-  const settings = useApp((s) => s.settings);
+function VoicePanel({ active }: { active: boolean }) {
+  const { micId, awayMute, awayMinutes } = useApp((s) => s.settings);
   const mics = useDevices('audioinput', active);
-  const cameras = useDevices('videoinput', active && canUseCamera);
-  const speakers = useDevices('audiooutput', active && canChooseSpeaker);
   return (
-    <div className="set-columns">
-      <div>
-        <section>
-          <h3>{t.sectionVoice}</h3>
-          <DeviceSelect label={t.mic} value={settings.micId} devices={mics} onChange={(micId) => updateSettings({ micId })} />
-          <MicLevel open={active} />
-          <SettingToggle flag="noiseSuppression" label={t.noiseSuppression} />
-          <SettingToggle flag="echoCancellation" label={t.echoCancellation} />
-          <SettingToggle flag="autoGain" label={t.autoGain} />
-          <SettingToggle flag="joinMuted" label={t.joinMuted} />
-        </section>
-      </div>
-      <div>
-        <section>
-          <h3>{t.sectionAudio}</h3>
-          {canChooseSpeaker && <DeviceSelect label={t.speakers} value={settings.speakerId} devices={speakers} onChange={(speakerId) => updateSettings({ speakerId })} />}
-          <div className="setrow">
-            <Button data-cue="none" onClick={() => playSound('test', settings.speakerId)}>{t.testSound}</Button>
-          </div>
-        </section>
-        {canUseCamera && (
-          <section>
-            <h3>{t.sectionVideo}</h3>
-            <DeviceSelect label={t.camera} value={settings.cameraId} devices={cameras} onChange={(cameraId) => updateSettings({ cameraId })} />
-            <Segmented label={t.cameraQuality} value={settings.cameraResolution} options={[['360', '360p'], ['720', '720p'], ['1080', '1080p']]} onChange={(cameraResolution) => updateSettings({ cameraResolution })} />
-            <SettingToggle flag="cameraMirror" label={t.cameraMirror} />
-          </section>
-        )}
-      </div>
+    <div className="set-stack">
+      <SettingsGroup title={t.mic}>
+        <DeviceSelect label={t.mic} value={micId} devices={mics} onChange={(micId) => updateSettings({ micId })} />
+        <MicLevel open={active} />
+      </SettingsGroup>
+      <SettingsGroup title={t.groupProcessing} note={t.processingNote}>
+        <SettingToggle flag="noiseSuppression" label={t.noiseSuppression} />
+        <SettingToggle flag="echoCancellation" label={t.echoCancellation} />
+        <SettingToggle flag="autoGain" label={t.autoGain} />
+      </SettingsGroup>
+      <SettingsGroup title={t.groupBehaviour}>
+        <SettingToggle flag="pushToTalk" label={t.pushToTalk(shortcuts.pushToTalk.label)} />
+        <SettingToggle flag="joinMuted" label={t.joinMuted} />
+        <SettingToggle flag="awayMute" label={t.awayMute} />
+        {awayMute && <Segmented label={t.awayAfter} value={awayMinutes} options={(['5', '10', '30'] as const).map((m) => [m, t.minutes(Number(m))] as const)} onChange={(awayMinutes) => updateSettings({ awayMinutes })} />}
+      </SettingsGroup>
     </div>
   );
 }
+
+function VideoPanel({ active }: { active: boolean }) {
+  const settings = useApp((s) => s.settings);
+  const inUse = useApp(callCameraInUse);
+  const cameras = useDevices('videoinput', active);
+  return (
+    <div className="set-stack">
+      <SettingsGroup title={t.camera} note={inUse ? undefined : t.cameraPreviewHint}>
+        <CameraPreview active={active} />
+        <DeviceSelect label={t.camera} value={settings.cameraId} devices={cameras} onChange={(cameraId) => updateSettings({ cameraId })} />
+        <Segmented label={t.cameraQuality} value={settings.cameraResolution} options={[['360', '360p'], ['720', '720p'], ['1080', '1080p']]} onChange={(cameraResolution) => updateSettings({ cameraResolution })} />
+        <SettingToggle flag="cameraMirror" label={t.cameraMirror} />
+      </SettingsGroup>
+    </div>
+  );
+}
+
+type SharePreset = 'docs' | 'games' | 'video';
+const SHARE_PRESETS: Record<SharePreset, Pick<SettingsValues, 'shareResolution' | 'shareFps' | 'shareFocus'>> = {
+  docs: { shareResolution: '1440', shareFps: '15', shareFocus: 'detail' },
+  games: { shareResolution: '1080', shareFps: '60', shareFocus: 'motion' },
+  video: { shareResolution: '1080', shareFps: '30', shareFocus: 'motion' },
+};
+const presetOf = (s: SettingsValues): SharePreset | undefined =>
+  (Object.keys(SHARE_PRESETS) as SharePreset[]).find((p) => Object.entries(SHARE_PRESETS[p]).every(([k, v]) => s[k as keyof SettingsValues] === v));
 
 function SharePanel() {
   const settings = useApp((s) => s.settings);
   const sharing = useApp((s) => s.voice.sharing);
   const shareCodecs = supportedShareCodecs();
   const shareCodec = shareCodecs.includes(settings.shareCodec) ? settings.shareCodec : 'vp8';
+  const preset = presetOf(settings);
   return (
-    <div className="set-columns">
-      <div>
-        <section>
-          {sharing && <p className="set-note set-now">{t.shareNextTime}</p>}
-          <Segmented label={t.shareCodec} value={shareCodec} options={shareCodecs.map((codec) => [codec, codecLabels[codec]])} onChange={(shareCodec) => updateSettings({ shareCodec })} />
-          {shareCodec === 'h265' && <p className="set-note set-hint">{t.shareCodecFallback}</p>}
+    <div className="set-stack">
+      <SettingsGroup title={t.sharePreset} note={sharing ? t.shareNextTime : t.sharePresetHint[preset ?? 'custom']}>
+        <div className="setrow">
+          <span className="visually-hidden">{t.sharePreset}</span>
+          <div className="seg" role="group" aria-label={t.sharePreset}>
+            {(Object.keys(SHARE_PRESETS) as SharePreset[]).map((p) => (
+              <button key={p} type="button" aria-pressed={preset === p} onClick={() => updateSettings(SHARE_PRESETS[p])}>{t.sharePresets[p]}</button>
+            ))}
+          </div>
+        </div>
+        <SettingToggle flag="shareAudio" label={t.shareAudio} />
+      </SettingsGroup>
+      <details className="set-group set-more" open={!preset || undefined}>
+        <summary><h3>{t.shareMore}</h3><Icon name="chevron" /></summary>
+        <div className="set-card">
           <Segmented label={t.shareResolution} value={settings.shareResolution} options={[['720', '720p'], ['1080', '1080p'], ['1440', '1440p']]} onChange={(shareResolution) => updateSettings({ shareResolution })} />
           <Segmented label={t.shareFps} value={settings.shareFps} options={[['15', '15'], ['30', '30'], ['60', '60']]} onChange={(shareFps) => updateSettings({ shareFps })} />
-          <SettingToggle flag="shareAudio" label={t.shareAudio} />
-        </section>
-      </div>
-      <div>
-        <section>
           <Segmented label={t.shareFocus} value={settings.shareFocus} options={[['motion', t.shareFocusMotion], ['detail', t.shareFocusDetail]]} onChange={(shareFocus) => updateSettings({ shareFocus })} />
-          <p className="set-note set-hint">{t.shareFocusHint[settings.shareFocus]}</p>
+          <Segmented label={t.shareCodec} value={shareCodec} options={shareCodecs.map((codec) => [codec, codecLabels[codec]])} onChange={(shareCodec) => updateSettings({ shareCodec })} />
           <div className="setrow">
             <span className="set-head">
               {t.shareBitrate}
@@ -189,8 +209,9 @@ function SharePanel() {
             </div>
             <input type="range" style={{ '--at': `${(Number(settings.shareMbps) / SHARE_BITRATE_MAX) * 100}%` } as React.CSSProperties} aria-label={t.shareBitrate} min="0" max={SHARE_BITRATE_MAX} step="1" value={settings.shareMbps} onChange={(e) => updateSettings({ shareMbps: e.target.value })} />
           </div>
-        </section>
-      </div>
+        </div>
+        <p className="set-foot">{shareCodec === 'h265' ? `${t.shareFocusHint[settings.shareFocus]} ${t.shareCodecFallback}` : t.shareFocusHint[settings.shareFocus]}</p>
+      </details>
     </div>
   );
 }
@@ -255,86 +276,106 @@ function ProfilePanel() {
 
 function Shortcut({ keys, label }: { keys: ReactNode; label: string }) {
   return (
-    <div>
-      <dt>{label}</dt>
-      <dd>{keys}</dd>
+    <div className="key-row">
+      <span>{label}</span>
+      <span className="key-edit">{keys}</span>
     </div>
   );
 }
 
 function KeysPanel() {
+  const pushToTalk = useApp((s) => s.settings.pushToTalk);
+  const names = { mute: t.keyMute, deafen: t.keyDeafen, camera: t.keyCamera, pushToTalk: t.keyPushToTalk, leave: t.keyLeave };
   return (
-    <div className="set-columns">
-      <div>
-        <section>
-          <h3>{t.keysInVoice}</h3>
-          <dl className="keys">
-            <Shortcut label={t.keyMute} keys={<kbd>{shortcuts.mute.label}</kbd>} />
-            <Shortcut label={t.keyDeafen} keys={<kbd>{shortcuts.deafen.label}</kbd>} />
-            {canUseCamera && <Shortcut label={t.keyCamera} keys={<kbd>{shortcuts.camera.label}</kbd>} />}
-          </dl>
-        </section>
-      </div>
-      <div>
-        <section>
-          <h3>{t.keysAnywhere}</h3>
-          <dl className="keys">
-            <Shortcut label={t.keyChat} keys={<><kbd>{shortcuts.chat.label}</kbd>{t.keyOr}<kbd>{shortcuts.chatEnter.label}</kbd></>} />
-            <Shortcut label={t.keyRooms} keys={<><kbd>{shortcuts.previousRoom.label}</kbd><kbd>{shortcuts.nextRoom.label}</kbd></>} />
-            <Shortcut label={t.keyClose} keys={<kbd>{shortcuts.closeRooms.label}</kbd>} />
-          </dl>
-        </section>
-      </div>
+    <div className="set-stack">
+      <SettingsGroup title={t.keysInVoice} note={t.keysHint}>
+        <KeyBinding name="mute" label={t.keyMute} names={names} />
+        <KeyBinding name="deafen" label={t.keyDeafen} names={names} />
+        {canUseCamera && <KeyBinding name="camera" label={t.keyCamera} names={names} />}
+        {pushToTalk && <KeyBinding name="pushToTalk" label={t.keyPushToTalk} names={names} />}
+        <KeyBinding name="leave" label={t.keyLeave} names={names} />
+        <Shortcut label={t.keyReact} keys={<kbd>{shortcuts.react.label}</kbd>} />
+      </SettingsGroup>
+      <SettingsGroup title={t.keysAnywhere}>
+        <Shortcut label={t.keyChat} keys={<><kbd>{shortcuts.chat.label}</kbd>{t.keyOr}<kbd>{shortcuts.chatEnter.label}</kbd></>} />
+        <Shortcut label={t.keyRooms} keys={<><kbd>{shortcuts.previousRoom.label}</kbd><kbd>{shortcuts.nextRoom.label}</kbd></>} />
+        <Shortcut label={t.keyClose} keys={<kbd>{shortcuts.closeRooms.label}</kbd>} />
+      </SettingsGroup>
     </div>
   );
 }
 
-function SystemPanel() {
+function GeneralPanel({ active }: { active: boolean }) {
   const settings = useApp((s) => s.settings);
+  return (
+    <div className="set-stack">
+      <SettingsGroup title={t.sectionLook} note={`${t.orbLookPreview} ${t.orbLookHint}`}>
+        <ThemePicker />
+        <label className="setrow">
+          {t.language}
+          <select value={settings.language} onChange={(e) => updateSettings({ language: e.target.value as SettingsValues['language'] })}>
+            {LANGUAGES.map(([value, name]) => <option key={value} value={value}>{name()}</option>)}
+          </select>
+        </label>
+        <div className="setrow">
+          <span>{t.orbLook}</span>
+          <AvatarStage />
+          <div className="seg" role="group" aria-label={t.orbLook}>
+            {([['flat', t.orbLookFlat], ['volume', t.orbLookVolume]] as const).map(([v, label]) => <button key={v} type="button" aria-pressed={settings.orbLight === v} onClick={() => updateSettings({ orbLight: v })}>{label}</button>)}
+          </div>
+        </div>
+      </SettingsGroup>
+      <SettingsGroup title={t.groupMotion} note={t.liveBackgroundHint}>
+        <MotionStage active={active} />
+        <SettingToggle flag="liveBackground" label={t.liveBackground} />
+        <SettingToggle flag="fewerEffects" label={t.fewerEffects} />
+      </SettingsGroup>
+    </div>
+  );
+}
+
+function SoundPanel({ active }: { active: boolean }) {
+  const settings = useApp((s) => s.settings);
+  const speakers = useDevices('audiooutput', active && canChooseSpeaker);
   const [notifError, setNotifError] = useState(false);
   return (
-    <div className="set-columns">
-      <div>
-        <section>
-          <h3>{t.sectionLook}</h3>
-          <Segmented label={t.theme} value={settings.theme} options={[['dark', t.themeDark], ['light', t.themeLight], ['system', t.themeSystem]]} onChange={(theme) => updateSettings({ theme })} />
-          <Segmented label={t.language} value={settings.language} options={[['system', t.languageSystem], ['uk', 'Українська'], ['en', 'English']]} onChange={(language) => updateSettings({ language })} />
-          <Segmented label={t.orbLook} value={settings.orbLight} options={[['flat', t.orbLookFlat], ['volume', t.orbLookVolume]]} onChange={(orbLight) => updateSettings({ orbLight })} />
-          <p className="set-note set-hint">{t.orbLookHint}</p>
-          <SettingToggle flag="liveBackground" label={t.liveBackground} />
-          <SettingToggle flag="fewerEffects" label={t.fewerEffects} />
-          <p className="set-note set-hint">{t.fewerEffectsHint}</p>
-        </section>
-      </div>
-      <div>
-        <section>
-          <h3>{t.sectionAlerts}</h3>
-          <SettingToggle flag="sounds" label={t.eventSounds} />
-          <SettingToggle flag="uiSounds" label={t.interfaceSounds} />
-          {notificationsAvailable && (
-            <Toggle
-              label={t.notifications}
-              checked={settings.notifications}
-              onChange={(checked) => {
-                setNotifError(false);
-                if (!checked) updateSettings({ notifications: false });
-                else void enableNotifications().then((on) => setNotifError(!on));
-              }}
-            />
-          )}
-          {notifError && <p className="field-err" role="alert">{t.notificationsBlocked}</p>}
-        </section>
-      </div>
+    <div className="set-stack">
+      <SettingsGroup title={t.speakers}>
+        <div className="device-action">
+          {canChooseSpeaker && <DeviceSelect label={t.speakers} value={settings.speakerId} devices={speakers} onChange={(speakerId) => updateSettings({ speakerId })} />}
+          <Button data-cue="none" onClick={() => playSound('test', settings.speakerId)}>{t.testSound}</Button>
+        </div>
+      </SettingsGroup>
+      <SettingsGroup title={t.groupSounds}>
+        <SettingToggle flag="sounds" label={<span className="toggle-label">{t.eventSounds}<PlaySample sound="join" label={t.eventSounds} /></span>} />
+        <SettingToggle flag="uiSounds" label={<span className="toggle-label">{t.interfaceSounds}<PlaySample sound="on" label={t.interfaceSounds} /></span>} />
+      </SettingsGroup>
+      <SettingsGroup title={t.sectionAlerts} note={notifError ? <span className="field-err" role="alert">{t.notificationsBlocked}</span> : undefined}>
+        {notificationsAvailable && (
+          <Toggle
+            label={t.notifications}
+            checked={settings.notifications}
+            onChange={(checked) => {
+              setNotifError(false);
+              if (!checked) updateSettings({ notifications: false });
+              else void enableNotifications().then((on) => setNotifError(!on));
+            }}
+          />
+        )}
+        <SettingToggle flag="knockAlerts" label={<span className="toggle-label">{t.knockAlerts}<PlaySample sound="knock" label={t.knockAlerts} /></span>} />
+      </SettingsGroup>
     </div>
   );
 }
 
-type Tab = 'media' | 'share' | 'profile' | 'account' | 'keys' | 'system';
+type Tab = 'general' | 'voice' | 'sound' | 'video' | 'share' | 'profile' | 'account' | 'keys';
 
-/** Everything a person can change, in one window with its parts along the top. */
+/** Everything a person can change, in one window with its parts down the side. */
 export function Settings({ open, onClose }: { open: boolean; onClose(): void }) {
   // Words are read when rendering, so a new language needs only this render.
   useApp((s) => s.settings.language);
+  // Labels name the keys, so moving one renders every part again.
+  useSyncExternalStore(subscribeShortcuts, shortcutsRevision);
   const accountUI = useAccountUI();
   const close = () => { if (!accountUI.locked) onClose(); };
   const dialog = useRef<HTMLDialogElement>(null);
@@ -342,17 +383,24 @@ export function Settings({ open, onClose }: { open: boolean; onClose(): void }) 
   // Too narrow for the screen-share button, its settings mean nothing without it; no keyboard, no shortcuts.
   const showShare = !useMediaQuery('(max-width: 560px)') && canShareScreen;
   const showKeys = !useMediaQuery('(hover: none)');
-  const tabs: readonly (readonly [Tab, string])[] = [
-    ['media', t.tabAudioVideo],
-    ...(showShare ? [['share', t.sectionShare] as const] : []),
-    ['profile', t.sectionProfile],
-    ['account', t.account.account],
-    ...(showKeys ? [['keys', t.tabKeys] as const] : []),
-    ['system', t.tabSystem],
+  const narrow = useMediaQuery('(max-width: 760px)');
+  const tabs: readonly (readonly [Tab, string, IconName])[] = [
+    ['general', t.tabGeneral, 'sliders'],
+    ['voice', t.sectionVoice, 'mic'],
+    ['sound', t.tabSound, 'speaker'],
+    ...(canUseCamera ? [['video', t.sectionVideo, 'camera'] as const] : []),
+    ...(showShare ? [['share', t.sectionShare, 'screen'] as const] : []),
+    ['profile', t.sectionProfile, 'person'],
+    ['account', t.account.account, 'key'],
+    ...(showKeys ? [['keys', t.tabKeys, 'keyboard'] as const] : []),
   ];
-  const [chosen, setChosen] = useState<Tab>('media');
+  const [{ chosen, mounted }, setTabState] = useState<{ chosen: Tab; mounted: ReadonlySet<Tab> }>(() => ({
+    chosen: 'general',
+    // Device sign-in approvals can open a drawer from the hidden Account panel.
+    mounted: new Set(['general', 'account']),
+  }));
   const [scanReturn, setScanReturn] = useState<'idle' | 'away' | 'pending'>('idle');
-  const tab = tabs.some(([id]) => id === chosen) ? chosen : 'media';
+  const tab = tabs.some(([id]) => id === chosen) ? chosen : 'general';
 
   const tabButton = (id: Tab) => tabList.current?.querySelector<HTMLButtonElement>(`#set-tab-${id}`);
 
@@ -373,19 +421,26 @@ export function Settings({ open, onClose }: { open: boolean; onClose(): void }) 
     tabButton(tab)?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   }, [tab]);
 
+  const chooseTab = (id: Tab) => {
+    setTabState((state) => state.chosen === id ? state : {
+      chosen: id,
+      mounted: state.mounted.has(id) ? state.mounted : new Set([...state.mounted, id]),
+    });
+  };
+
   const onTabKey = (e: ReactKeyboardEvent) => {
     const at = tabs.findIndex(([id]) => id === tab);
-    const next = { ArrowRight: at + 1, ArrowLeft: at - 1, Home: 0, End: tabs.length - 1 }[e.key];
+    const next = { ArrowDown: at + 1, ArrowUp: at - 1, ArrowRight: at + 1, ArrowLeft: at - 1, Home: 0, End: tabs.length - 1 }[e.key];
     if (next === undefined) return;
     e.preventDefault();
     const [id] = tabs[(next + tabs.length) % tabs.length]!;
-    setChosen(id);
+    chooseTab(id);
     tabButton(id)?.focus();
   };
 
   const panel = (id: Tab, body: ReactNode) => (
     <div key={id} id={`set-panel-${id}`} className="settings-panel" role="tabpanel" aria-labelledby={`set-tab-${id}`} tabIndex={0} hidden={tab !== id}>
-      {body}
+      {mounted.has(id) && body}
     </div>
   );
 
@@ -399,23 +454,31 @@ export function Settings({ open, onClose }: { open: boolean; onClose(): void }) 
       // Pressing on the dialog itself, not on anything in it, is pressing on what lies around it.
       onPointerDown={(e) => { if (e.target === e.currentTarget) close(); }}
     >
-      <header className="settings-head">
+      <nav className="settings-nav">
         <h2 id="set-title">{t.settings}</h2>
-        <IconButton aria-label={t.close} data-cue="close" disabled={accountUI.locked} onClick={close}><Icon name="x" /></IconButton>
-      </header>
-      <div ref={tabList} className="tabs" role="tablist" aria-label={t.settings} onKeyDown={onTabKey}>
-        {tabs.map(([id, label]) => (
-          <button key={id} id={`set-tab-${id}`} type="button" role="tab" aria-selected={tab === id} aria-controls={`set-panel-${id}`} tabIndex={tab === id ? 0 : -1} onClick={() => setChosen(id)}>
-            {label}
-          </button>
-        ))}
+        <div ref={tabList} className="tabs" role="tablist" aria-label={t.settings} aria-orientation={narrow ? 'horizontal' : 'vertical'} onKeyDown={onTabKey}>
+          {tabs.map(([id, label, icon]) => (
+            <button key={id} id={`set-tab-${id}`} type="button" role="tab" aria-selected={tab === id} aria-controls={`set-panel-${id}`} tabIndex={tab === id ? 0 : -1} onClick={() => chooseTab(id)}>
+              <Icon name={icon} />
+              <span className="tx">{label}</span>
+            </button>
+          ))}
+        </div>
+      </nav>
+      <div className="settings-main">
+        <header className="settings-head">
+          <p className="settings-title" aria-hidden="true">{tabs.find(([id]) => id === tab)?.[1]}</p>
+          <IconButton aria-label={t.close} data-cue="close" disabled={accountUI.locked} onClick={close}><Icon name="x" /></IconButton>
+        </header>
+        {panel('general', <GeneralPanel active={open && tab === 'general'} />)}
+        {panel('voice', <VoicePanel active={open && tab === 'voice'} />)}
+        {panel('sound', <SoundPanel active={open && tab === 'sound'} />)}
+        {canUseCamera && panel('video', <VideoPanel active={open && tab === 'video'} />)}
+        {showShare && panel('share', <SharePanel />)}
+        {panel('profile', <ProfilePanel />)}
+        {panel('account', <AccountPanel active={open && tab === 'account' && !accountUI.entryOpen} onScan={() => { setScanReturn('away'); accountUI.openScanner(); }} scanFocusRequested={scanReturn === 'pending' && open && !accountUI.deviceOpen && tab === 'account'} onScanFocused={() => setScanReturn('idle')} />)}
+        {showKeys && panel('keys', <KeysPanel />)}
       </div>
-      {panel('media', <AudioVideoPanel active={open && tab === 'media'} />)}
-      {showShare && panel('share', <SharePanel />)}
-      {panel('profile', <ProfilePanel />)}
-      {panel('account', <AccountPanel active={open && tab === 'account' && !accountUI.entryOpen} onScan={() => { setScanReturn('away'); accountUI.openScanner(); }} scanFocusRequested={scanReturn === 'pending' && open && !accountUI.deviceOpen && tab === 'account'} onScanFocused={() => setScanReturn('idle')} />)}
-      {showKeys && panel('keys', <KeysPanel />)}
-      {panel('system', <SystemPanel />)}
     </dialog>
   );
 }

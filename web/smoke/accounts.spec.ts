@@ -1,7 +1,8 @@
 import { readFile } from 'node:fs/promises';
-import { test, expect } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
 import { launchMock } from './launcher';
 import { virtualAuthenticator, authPreferences, registerFixture, acknowledgeKit, accountSettings } from './account-browser';
+import { showBrowserToast } from './toast-browser';
 
 let app: Awaited<ReturnType<typeof launchMock>>;
 test.beforeAll(async () => { app = await launchMock(); app.url = app.url.replace('127.0.0.1', 'localhost'); });
@@ -28,8 +29,11 @@ test('native registration, exact recovery kit exports and acknowledgement gate, 
   await acknowledgeKit(page);
   await accountSettings(page);
   await expect(page.getByRole('button', { name: 'Remove: Passkey', exact: true })).toBeDisabled();
+  await showBrowserToast(page, 'Before sign out', null);
+  await expect(page.locator('.float-top .toast')).toHaveText('Before sign out');
   await page.getByRole('button', { name: 'Sign out', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Come on in.', exact: true })).toBeVisible();
+  await expect(page.locator('.float-top .toast')).toHaveCount(0);
   await page.getByRole('button', { name: 'Sign in with a passkey', exact: true }).click();
   await accountSettings(page);
   await expect(page.locator('.account-panel')).toContainText(accountId);
@@ -72,9 +76,10 @@ test('manual recovery supports full and partial paste, keyboard navigation and n
 test('settings add restarts on proof expiry at finish; remove, last-key race, regenerate and close guards preserve chat and voice', async ({ page }) => {
   await authPreferences(page, app.url); const original = await virtualAuthenticator(page);
   await registerFixture(page, app.url); await acknowledgeKit(page);
+  await openChat(page);
   await page.getByRole('textbox', { name: 'Message', exact: true }).fill('keep this draft');
   await page.getByRole('button', { name: 'Join', exact: true }).click();
-  await expect(page.getByRole('toolbar')).toBeVisible();
+  await expect(page.getByRole('toolbar', { name: 'Lounge', exact: true })).toBeVisible();
   await accountSettings(page);
   await page.request.post(app.url + '/__mock/action', { data: { type: 'account-fault', fault: 'finish-expired' } });
   const spare = await virtualAuthenticator(page, 'usb', original.client);
@@ -90,8 +95,9 @@ test('settings add restarts on proof expiry at finish; remove, last-key race, re
     }
     await route.continue();
   });
-  await page.getByRole('textbox', { name: 'Passkey label (optional)', exact: true }).fill('Travel key with a long but useful label');
   await page.getByRole('button', { name: 'Add passkey', exact: true }).click();
+  await page.getByRole('textbox', { name: 'Passkey label (optional)', exact: true }).fill('Travel key with a long but useful label');
+  await page.getByRole('button', { name: 'Create passkey', exact: true }).click();
   const remove = page.getByRole('button', { name: 'Remove: Travel key with a long but useful label', exact: true });
   await expect(remove).toBeVisible(); expect(begins).toBe(2); expect(reauths).toBe(1);
   await page.request.post(app.url + '/__mock/action', { data: { type: 'account-fault', fault: 'last-passkey' } });
@@ -107,12 +113,13 @@ test('settings add restarts on proof expiry at finish; remove, last-key race, re
   expect(reauths).toBe(2);
   await page.keyboard.press('Escape');
   await expect(page.getByRole('textbox', { name: 'Message', exact: true })).toHaveValue('keep this draft');
-  await expect(page.getByRole('toolbar')).toBeVisible();
+  await expect(page.getByRole('toolbar', { name: 'Lounge', exact: true })).toBeVisible();
 });
 
 test('guest upgrades retain owner, ready attachment, colour, history and unsent text; another account clears draft and media', async ({ page }) => {
   const initial = await authPreferences(page, app.url, 'populated'); await virtualAuthenticator(page);
   await page.goto(app.url + '/?scenario=populated');
+  await openChat(page);
   await page.getByRole('textbox', { name: 'Message', exact: true }).fill('guest draft stays');
   const roomId = initial.rooms[0]!.id;
   await page.request.post(`${app.url}/api/rooms/${roomId}/messages`, { data: { requestKey: 'guest-history', body: 'Guest historical message' } });
@@ -128,13 +135,13 @@ test('guest upgrades retain owner, ready attachment, colour, history and unsent 
   await expect(page.locator('.tray-item')).toHaveCount(1); await expect(page.getByText('Guest historical message', { exact: true })).toBeVisible();
   const account = await (await page.request.get(app.url + '/api/accounts/session')).json();
   expect(account.kind).toBe('account'); expect(account.visitor.colour).toEqual(initial.visitor!.colour);
-  await page.getByRole('button', { name: 'Join', exact: true }).click(); await expect(page.getByRole('toolbar')).toBeVisible();
+  await page.getByRole('button', { name: 'Join', exact: true }).click(); await expect(page.getByRole('toolbar', { name: 'Lounge', exact: true })).toBeVisible();
   await page.evaluate(() => { location.hash = 'invite=mock-invitation-second'; });
   await page.getByRole('textbox', { name: 'Name', exact: true }).fill('Other account');
   await page.getByRole('button', { name: 'Create your passkey', exact: true }).click(); await expect(kit).toBeVisible();
   expect(await kit.locator('dd').innerText()).not.toBe(initial.visitor!.id); await acknowledgeKit(page);
-  await expect(page.getByRole('textbox', { name: 'Message', exact: true })).toHaveValue('');
-  await expect(page.locator('.tray-item')).toHaveCount(0); await expect(page.getByRole('toolbar')).toHaveCount(0);
+  await expect(page.locator('.composer textarea')).toHaveValue('');
+  await expect(page.locator('.tray-item')).toHaveCount(0); await expect(page.getByRole('toolbar', { name: 'Lounge', exact: true })).toHaveCount(0);
   expect((await (await page.request.get(app.url + '/__mock/state')).json()).voiceConnections).toEqual({});
 });
 
@@ -215,11 +222,22 @@ test('sensitive settings reconcile a shared-cookie account switch before regener
   const secondCookies = await context.cookies();
   await context.addCookies(firstCookies); await page.reload(); await accountSettings(page);
   await expect(page.locator('.account-panel')).toContainText(first.accountId);
+  await showBrowserToast(page, 'First account work', null, 'dismiss-first-account-toast');
+  await expect(page.locator('.float-top .toast')).toHaveText('First account work');
   await page.getByRole('button', { name: 'Regenerate recovery phrase', exact: true }).click();
   await context.addCookies(secondCookies);
   let mutations = 0; page.on('request', request => { if (request.url().endsWith('/accounts/recovery-codes')) mutations++; });
   await page.getByRole('button', { name: 'Create new recovery kit', exact: true }).click();
   await accountSettings(page);
   await expect(page.locator('.account-panel')).toContainText(secondId);
+  await expect(page.locator('.float-top .toast')).toHaveCount(0);
+  await showBrowserToast(page, 'Second account work', null);
+  await page.evaluate(() => window.dispatchEvent(new Event('dismiss-first-account-toast')));
+  await expect(page.locator('.float-top .toast')).toHaveText('Second account work');
   await expect(kit).not.toBeVisible(); expect(mutations).toBe(0);
 });
+
+async function openChat(page: Page) {
+  await page.locator('.dock-chat').click();
+  await expect(page.locator('body')).toHaveClass(/chat-open/);
+}

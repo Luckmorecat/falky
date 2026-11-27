@@ -124,6 +124,31 @@ func (e Events) MessageCreated(m chat.Message) {
 	})
 }
 
+// Knocked sends knock to the connections of the identity visitorID alone,
+// and only those allowed into the room roomID: from, in its voice, calls them
+// to join.
+func (e Events) Knocked(visitorID, roomID string, from identity.Visitor) {
+	data, err := encodeEvent(api.EventTypeKnock, roomID, func(p *api.Event_Payload) error {
+		k := api.Knock{RoomId: roomID}
+		k.From.VisitorId = from.ID
+		k.From.Name = from.Name
+		return p.FromKnock(k)
+	})
+	if err != nil {
+		e.Logger.Error("knock not encoded", "error", err)
+		return
+	}
+	e.Hub.Publish(realtime.Event{VisitorID: visitorID, RoomID: roomID, Data: data})
+}
+
+// MessageUpdated publishes message.updated for m, as it now reads, to the
+// visitors allowed into m's room.
+func (e Events) MessageUpdated(m chat.Message) {
+	e.publish(api.EventTypeMessageUpdated, m.RoomID, func(p *api.Event_Payload) error {
+		return p.FromMessage(messageBody(m))
+	})
+}
+
 // RoomChanged publishes room.changed for r, to every visitor.
 func (e Events) RoomChanged(r rooms.Room) {
 	e.publish(api.EventTypeRoomChanged, "", func(p *api.Event_Payload) error {

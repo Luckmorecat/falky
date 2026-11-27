@@ -51,9 +51,6 @@ function useWindowSize(): { w: number; h: number } {
   return size;
 }
 
-/** The width of --chat in styles.css. */
-const CHAT_WIDTH = 340;
-
 export function Stage({ room, background }: { room: Room; background?: RefObject<LiveBackgroundHandle | null> }) {
   const people = usePeople(room);
   const { w, h } = useWindowSize();
@@ -62,18 +59,14 @@ export function Stage({ room, background }: { room: Room; background?: RefObject
   const [picked, setPicked] = useState<string | null>(null);
   const shown = shares.find((p) => p.id === picked) ?? shares[0] ?? null;
 
-  // The chat comes in over a page that does not move, so nothing may stand where
-  // it lands: blocks stay centred with its width kept free on both sides, and a
-  // shared screen, which wants all the room it can get, stands left of it.
-  const width = narrow ? w - 24 : w - 2 * (CHAT_WIDTH + 24);
-  const shareRoom = narrow ? w - 24 : w - CHAT_WIDTH - 48;
+  const width = narrow ? w - 24 : w - 48;
   const height = h - (narrow ? 96 : 112) - (narrow ? 104 : 128) - 16;
   const gap = people.length > 4 ? 12 : 16;
   const miniSize = narrow ? 76 : 104;
   const fit = fitBlocks(people.length, width, height, gap, 460);
   const size = shown ? miniSize : fit.size;
   const gridWidth = shown ? undefined : fit.columns * size + (fit.columns - 1) * gap;
-  const shareWidth = Math.min(shareRoom, (height - miniSize - 18) * (16 / 9));
+  const shareWidth = Math.min(width, (height - miniSize - 18) * (16 / 9));
   const colours = useApp((s) => s.colours);
 
   const grid = useRef<HTMLDivElement>(null);
@@ -94,7 +87,7 @@ export function Stage({ room, background }: { room: Room; background?: RefObject
       const element = tiles.get(p.id)?.querySelector<HTMLElement>('.orb');
       return element && colours[p.visitorId] ? [{ element, palette: colours[p.visitorId]!.palette, level: () => {
         const person = getState().voice.people.find((person) => person.id === p.id);
-        return person && !person.muted && !person.deafened ? levelOf(p.id)() : 0;
+        return person && !person.muted && !person.deafened ? voice.level(p.id) : 0;
       } }] : [];
     });
     field.setSources(sources);
@@ -169,7 +162,7 @@ export function Stage({ room, background }: { room: Room; background?: RefObject
             deafened={p.deafened}
             mini={!!shown}
             adjustable={inThisRoom && p.live && !p.isSelf}
-            level={p.live ? levelOf(p.id) : undefined}
+            live={p.live}
             cameraTrackId={p.cameraTrackId}
           />
         ))}
@@ -178,29 +171,43 @@ export function Stage({ room, background }: { room: Room; background?: RefObject
   );
 }
 
-const levelFns = new Map<string, () => number>();
-/** One function per connection, so a block's animation is not rebuilt on each render. */
-function levelOf(id: string): () => number {
-  let fn = levelFns.get(id);
-  if (!fn) {
-    fn = () => voice.level(id);
-    levelFns.set(id, fn);
-  }
-  return fn;
+interface NativeFullscreenVideo extends HTMLVideoElement {
+  webkitEnterFullscreen?(): void;
+  webkitExitFullscreen?(): void;
+  webkitEnterFullScreen?(): void;
+  webkitExitFullScreen?(): void;
 }
+
+const canFullscreenFrame = (frame: HTMLElement) => document.fullscreenEnabled !== false
+  && typeof frame.requestFullscreen === 'function' && typeof document.exitFullscreen === 'function';
+const nativeEnterFullscreen = (player: NativeFullscreenVideo) => player.webkitEnterFullscreen ?? player.webkitEnterFullScreen;
+const nativeExitFullscreen = (player: NativeFullscreenVideo) => player.webkitExitFullscreen ?? player.webkitExitFullScreen;
 
 export function ShareView({ width, person, others, onPick }: { width: number; person: Person; others: Person[]; onPick(id: string): void }) {
   const frame = useRef<HTMLDivElement>(null);
-  const video = useRef<HTMLVideoElement>(null);
+  const video = useRef<NativeFullscreenVideo>(null);
   const trackId = useApp((s) => s.voice.people.find((p) => p.id === person.id)?.shareTrackId ?? '');
   // Esc and other browser exits never pass through the button, so the label follows the element.
-  const [fullscreen, setFullscreen] = useState(false);
+  const [fullscreen, setFullscreen] = useState<'frame' | 'video' | null>(null);
+  const [canFullscreen, setCanFullscreen] = useState(false);
 
   useEffect(() => {
-    const sync = () => setFullscreen(document.fullscreenElement === frame.current);
+    const el = frame.current;
+    const player = video.current;
+    if (!el || !player) return;
+    setCanFullscreen(canFullscreenFrame(el) || typeof nativeEnterFullscreen(player) === 'function');
+    const sync = () => setFullscreen((mode) => document.fullscreenElement === el ? 'frame' : mode === 'video' ? 'video' : null);
+    const begin = () => setFullscreen('video');
+    const end = () => setFullscreen(null);
     sync();
     document.addEventListener('fullscreenchange', sync);
-    return () => document.removeEventListener('fullscreenchange', sync);
+    player.addEventListener('webkitbeginfullscreen', begin);
+    player.addEventListener('webkitendfullscreen', end);
+    return () => {
+      document.removeEventListener('fullscreenchange', sync);
+      player.removeEventListener('webkitbeginfullscreen', begin);
+      player.removeEventListener('webkitendfullscreen', end);
+    };
   }, []);
 
   useEffect(() => {
@@ -213,11 +220,20 @@ export function ShareView({ width, person, others, onPick }: { width: number; pe
     };
   }, [person.id, trackId]);
 
-  const toggleFullscreen = () => {
+  const toggleFullscreen = async () => {
     const el = frame.current;
-    if (!el) return;
-    if (document.fullscreenElement === el) void document.exitFullscreen();
-    else void el.requestFullscreen();
+    const player = video.current;
+    if (!el || !player) return;
+    try {
+      if (document.fullscreenElement === el) await document.exitFullscreen?.();
+      else if (fullscreen === 'video') nativeExitFullscreen(player)?.call(player);
+      else if (canFullscreenFrame(el)) {
+        try { await el.requestFullscreen(); }
+        catch { if (video.current === player) nativeEnterFullscreen(player)?.call(player); }
+      } else nativeEnterFullscreen(player)?.call(player);
+    } catch {
+      // The player stays inline if the browser refuses fullscreen.
+    }
   };
 
   return (
@@ -234,9 +250,9 @@ export function ShareView({ width, person, others, onPick }: { width: number; pe
             </button>
           ))}
         </div>
-        <IconButton size="small" className="ghost" aria-label={fullscreen ? t.exitFullscreen : t.fullscreen} aria-pressed={fullscreen} onClick={toggleFullscreen}>
+        {canFullscreen && <IconButton size="small" className="ghost" aria-label={fullscreen ? t.exitFullscreen : t.fullscreen} aria-pressed={!!fullscreen} onClick={() => void toggleFullscreen()}>
           <Icon name={fullscreen ? 'collapse' : 'expand'} />
-        </IconButton>
+        </IconButton>}
       </div>
     </div>
   );

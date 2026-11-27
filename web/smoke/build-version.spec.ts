@@ -42,7 +42,7 @@ for (const width of [1440, 390]) {
     await expect(page.getByRole('dialog')).toBeVisible();
     await expect(label).toHaveCount(0);
     await expect(page.getByRole('dialog').locator('.build-version')).toHaveCount(0);
-    await page.getByRole('tab', { name: 'Система', exact: true }).click();
+    await page.getByRole('tab', { name: 'Загальне', exact: true }).click();
     await page.getByRole('button', { name: 'Світла', exact: true }).click();
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
     await expect(label).toHaveCount(0);
@@ -50,10 +50,10 @@ for (const width of [1440, 390]) {
     await expect(page.getByRole('dialog')).toBeHidden();
     await selectableVersion(label);
     if (width === 390) {
-      await page.locator('.chat-btn').click();
+      await page.locator('.dock-chat').click();
       await expect(page.locator('.chat')).toBeVisible();
       await expect(label).toHaveCount(0);
-      await page.locator('.chat-btn').click();
+      await page.locator('.dock-chat').click();
       await selectableVersion(label);
     }
     await page.request.post(`${app.url}/__mock/action`, { data: { type: 'revoke' } });

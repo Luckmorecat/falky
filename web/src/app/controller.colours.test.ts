@@ -85,6 +85,34 @@ it('recovers every loaded historical author on live open without new messages, b
   await app.rename('New name'); expect(getState().visitor).toMatchObject({ name: 'New name', colour: colour('moss', 6) });
 });
 
+it('reuses author reads across voice snapshots while retrying omitted colours and finding new authors', async () => {
+  const { idleVoice } = await import('../voice/types');
+  const readAuthor = vi.fn(() => 'offline');
+  const first = {
+    id: '1', roomId: 'room', authorName: 'Offline', body: 'History', createdAt: '2026-11-08T00:00:00Z',
+    attachments: [], deleted: false, reactions: [], get authorId() { return readAuthor(); },
+  };
+  seam.api.rooms.mockResolvedValue([{ id: 'room', name: 'Lounge', occupancy: [] }]);
+  seam.api.messages.mockResolvedValue([first]);
+  const app = await import('./controller');
+  await app.boot();
+  expect(seam.api.colours).toHaveBeenLastCalledWith(['offline']);
+  const readsAfterBoot = readAuthor.mock.calls.length;
+  const previousLookups = seam.api.colours.mock.calls.length;
+
+  seam.voiceChange!(idleVoice);
+  expect(seam.api.colours).toHaveBeenCalledTimes(previousLookups + 1);
+  expect(seam.api.colours).toHaveBeenLastCalledWith(['offline']);
+  expect(readAuthor).toHaveBeenCalledTimes(readsAfterBoot);
+  await Promise.resolve();
+
+  seam.live.onEvent!({
+    type: 'message.created', eventId: 'late-history', timestamp: '2026-11-08T00:01:00Z',
+    payload: { ...first, id: '2', authorId: 'late', authorName: 'Late' },
+  });
+  expect(seam.api.colours).toHaveBeenLastCalledWith(['offline', 'late']);
+});
+
 it('retries failed and missing snapshots on discovery, fetches SDK-only IDs, and ignores a previous session snapshot', async () => {
   const { idleVoice } = await import('../voice/types');
   seam.api.rooms.mockResolvedValue([{ id: 'room', name: 'Lounge', occupancy: [{ connectionId: 'peer.connection', visitorId: 'peer', name: 'Peer' }] }]);

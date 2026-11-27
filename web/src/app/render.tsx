@@ -9,12 +9,14 @@ import { useApp } from './store';
 import { Main } from '../ui/Main';
 import { Entry } from '../ui/Screens';
 import { AccountFlowProvider, useAccountUI } from '../ui/AccountFlow';
+import { ToastHost } from '../ui/Toast';
 
 function Screen() {
   const phase = useApp((s) => s.phase);
   const ownerRevision = useApp(s => s.ownerRevision);
   const paused = useApp(s => s.sessionPaused);
   const accountUI = useAccountUI();
+  const voiceWarmupPhase = phase === 'entry' && !accountUI.locked ? null : phase;
   // Words are read when rendering, so a new language needs only this render.
   useApp((s) => s.settings.language);
   const unread = useApp((s) => Object.values(s.chats).reduce((sum, c) => sum + c.unread, 0));
@@ -24,7 +26,7 @@ function Screen() {
   }, [unread]);
 
   useEffect(() => {
-    if (phase !== 'entry' && phase !== 'ready') return;
+    if (voiceWarmupPhase !== 'entry' && voiceWarmupPhase !== 'ready') return;
     let frame = 0;
     let observer: PerformanceObserver | undefined;
     function afterPaint() {
@@ -52,20 +54,13 @@ function Screen() {
       observer?.disconnect();
       cancelAnimationFrame(frame);
     };
-  }, [phase]);
+  }, [voiceWarmupPhase]);
 
-  switch (phase) {
-    case 'loading':
-      return <div className="screen" />;
-    case 'entry':
-      return <Entry />;
-    case 'noaccess':
-      return <Entry />;
-    case 'revoked':
-      return <Entry />;
-    case 'ready':
-      return <div inert={paused || accountUI.locked}><Main key={ownerRevision} /></div>;
-  }
+  return (
+    <ToastHost inert={phase === 'ready' && (paused || accountUI.locked)}>
+      {phase === 'loading' ? <div className="screen" /> : phase === 'ready' ? <Main key={ownerRevision} /> : <Entry />}
+    </ToastHost>
+  );
 }
 
 function App() {

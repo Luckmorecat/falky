@@ -1,4 +1,6 @@
 import { api, ApiError } from '../api/client';
+import { JoinAttempt } from '../voice/join';
+import { emitReaction, type ReactionId } from '../voice/reactions';
 import { idleVoice, type VoiceHost, type VoiceSnapshot, type VoiceClient, type ShareTrack } from '../voice/types';
 import { SyntheticShare } from './share';
 import { mockAction, mockState, refreshMockState, subscribeMockState } from './state';
@@ -14,6 +16,7 @@ export class VoiceSession implements VoiceClient {
   private snap: VoiceSnapshot = idleVoice;
   private mutedBeforeDeaf = false;
   private operation = 0;
+  private pendingJoin?: { attempt: JoinAttempt; previous: VoiceSnapshot['status']; previousGrant: string | null };
   private generation: number | null = null;
   private readonly unsubscribe: () => void;
   private readonly pagehide = () => this.end();
@@ -28,16 +31,33 @@ export class VoiceSession implements VoiceClient {
     if (this.snap.status === 'joining') return;
     const initial = mockState();
     if (!initial) { this.host.onProblem('join_failed'); return; }
+    const attempt = new JoinAttempt();
+    const pending = this.pendingJoin = { attempt, previous: this.snap.status, previousGrant: this.grantId };
+    const work = this.joinRoom(roomId, initial, attempt);
+    try {
+      await attempt.waitFor(work);
+    } catch {
+      if (this.pendingJoin === pending) {
+        this.cancelJoin();
+        this.host.onProblem('join_failed');
+      }
+    } finally {
+      if (this.pendingJoin === pending) this.pendingJoin = undefined;
+    }
+    // The mock also owns synthetic grants and releases them if HTTP wins the abort race.
+    await work;
+  }
+
+  private async joinRoom(roomId: string, initial: NonNullable<ReturnType<typeof mockState>>, attempt: JoinAttempt): Promise<void> {
     const operation = ++this.operation;
     const generation = initial.generation;
     const previous = this.snap;
-    const startMuted = previous.status === 'idle' ? this.host.joinMuted() : previous.muted && !previous.listenOnly;
     this.set({ status: 'joining', joiningRoomId: roomId });
     const previousGrant = this.grantId;
     const previousGeneration = this.generation;
     let issuedGrant: string | null = null;
     try {
-      const creds = await api.joinVoice(roomId);
+      const creds = await api.joinVoice(roomId, attempt.signal);
       issuedGrant = creds.grantId;
       if (operation === this.operation) {
         this.grantId = creds.grantId;
@@ -55,9 +75,12 @@ export class VoiceSession implements VoiceClient {
       }
       if (state.instanceId !== initial.instanceId || state.generation !== generation) { await this.release(generation, creds.grantId); await this.close(); return; }
       this.generation = generation;
-      this.set({ status: 'connected', roomId, joiningRoomId: null, joinedAt: performance.now(), muted: startMuted || previous.deafened, deafened: previous.deafened, listenOnly: false, sharing: false });
-      if (!startMuted && !previous.deafened) this.enableMic();
+      const startMuted = this.host.pushToTalk() || (previous.status === 'idle' ? this.host.joinMuted() : this.snap.muted && !this.snap.listenOnly);
+      const deafened = this.snap.deafened;
+      const micDenied = !startMuted && !deafened && state.faults.micDenied;
+      this.set({ status: 'connected', roomId, joiningRoomId: null, joinedAt: performance.now(), muted: startMuted || deafened || micDenied, listenOnly: micDenied, sharing: false, audioBlocked: state.faults.audioBlocked ?? false });
       this.host.onSound('join');
+      if (micDenied) this.host.onProblem('mic_denied');
       this.refresh();
     } catch (error) {
       if (issuedGrant) await this.release(generation, issuedGrant);
@@ -68,19 +91,39 @@ export class VoiceSession implements VoiceClient {
         return;
       }
       this.grantId = previousGrant;
-      this.snap = previous;
-      this.host.onChange(this.snap);
+      this.set({ status: previous.status, joiningRoomId: null });
       const code = error instanceof ApiError ? error.code : 'network';
       this.host.onProblem(code === 'room_full' || code === 'voice_unavailable' || code === 'name_taken' || code === 'visitor_required' ? code : 'join_failed');
     }
   }
 
+  cancelJoin(): void {
+    const pending = this.pendingJoin;
+    if (!pending || this.snap.status !== 'joining') return;
+    this.pendingJoin = undefined;
+    pending.attempt.cancel();
+    if (this.snap.roomId && this.grantId === pending.previousGrant) {
+      this.operation++;
+      this.set({ status: pending.previous, joiningRoomId: null });
+      this.refresh();
+    } else {
+      void this.close();
+    }
+  }
+
   async leave(): Promise<void> {
-    if (this.snap.status !== 'idle') this.host.onSound('leave');
+    if (this.snap.roomId !== null) this.host.onSound('leave');
     await this.close();
   }
   end(): void { void this.close(); }
   dispose(): void { this.end(); this.unsubscribe(); window.removeEventListener('pagehide', this.pagehide); }
+
+  async setMuted(muted: boolean): Promise<void> {
+    if (!this.snap.roomId || (!muted && (this.snap.status !== 'connected' || this.snap.deafened)) || muted === this.snap.muted) return;
+    if (muted) this.set({ muted });
+    else this.enableMic();
+    this.refresh();
+  }
 
   async toggleMute(): Promise<void> {
     if (!this.snap.roomId) return;
@@ -96,7 +139,7 @@ export class VoiceSession implements VoiceClient {
       this.set({ deafened: true, muted: true });
     } else {
       this.set({ deafened: false });
-      if (!this.mutedBeforeDeaf) this.enableMic();
+      if (!this.mutedBeforeDeaf && !this.host.pushToTalk()) this.enableMic();
     }
     this.refresh();
   }
@@ -115,10 +158,16 @@ export class VoiceSession implements VoiceClient {
   async restartCamera(): Promise<void> {}
   async setCamera(_deviceId: string): Promise<void> {}
   cameraTrack(connectionId: string): ShareTrack | null { return this.cameras.get(connectionId) ?? null; }
+  retryAudio(): void { if (this.snap.audioBlocked) this.set({ audioBlocked: false }); }
   applyVolumes(): void {}
   async setMic(_deviceId: string): Promise<void> {}
   async setSpeaker(_deviceId: string): Promise<void> {}
   async applyMicProcessing(): Promise<void> {}
+
+  react(id: ReactionId): void {
+    const self = this.snap.status === 'connected' && this.snap.people.find((p) => p.local);
+    if (self) emitReaction(self.id, id);
+  }
 
   level(visitorId: string): number {
     const person = this.snap.people.find((person) => person.id === visitorId);
@@ -170,6 +219,8 @@ export class VoiceSession implements VoiceClient {
   }
   private close(): Promise<void> {
     const pending = this.generation !== null && this.grantId ? this.release(this.generation, this.grantId) : Promise.resolve();
+    this.pendingJoin?.attempt.cancel();
+    this.pendingJoin = undefined;
     this.operation++;
     this.generation = null;
     this.grantId = null;

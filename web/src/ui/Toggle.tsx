@@ -10,7 +10,7 @@ type ToggleProps = Omit<ComponentProps<'input'>, 'type' | 'checked' | 'defaultCh
 export function Toggle({ label, checked, onChange, ...props }: ToggleProps) {
   return (
     <label className="toggle">
-      {label}
+      <span className="tx">{label}</span>
       <input {...props} type="checkbox" role="switch" checked={checked} onChange={(e) => onChange(e.target.checked)} />
     </label>
   );

@@ -12,6 +12,7 @@ import (
 	"github.com/kisshot/falky/server/internal/api"
 	"github.com/kisshot/falky/server/internal/attachments"
 	"github.com/kisshot/falky/server/internal/chat"
+	"github.com/kisshot/falky/server/internal/geoip"
 	"github.com/kisshot/falky/server/internal/identity"
 	"github.com/kisshot/falky/server/internal/platform"
 	"github.com/kisshot/falky/server/internal/realtime"
@@ -51,6 +52,7 @@ type Deps struct {
 	Shutdown      context.Context
 	Voice         *voice.Service
 	LiveKitAPIURL string
+	GeoIPURL      string
 	// EnterLimit limits entering per client IP. Posting is limited by Chat,
 	// which knows whether it only repeats a stored message.
 	EnterLimit *platform.Limiter
@@ -95,12 +97,14 @@ func New(deps Deps) Handlers {
 		logger:       deps.Logger,
 		health:       deps.Health,
 		identity:     deps.Identity,
+		geoIP:        geoip.New(deps.GeoIPURL),
 		rooms:        deps.Rooms,
 		chat:         deps.Chat,
 		voice:        deps.Voice,
 		enterLimit:   deps.EnterLimit,
 		publicOrigin: deps.PublicOrigin,
 		events:       Events{Hub: deps.Live, Logger: deps.Logger},
+		knocks:       newKnockLimits(time.Now),
 	}
 	errs := errorWriter{logger: deps.Logger}
 	resolve := visitorResolver{identity: deps.Identity, errs: errs}
@@ -154,10 +158,12 @@ type server struct {
 	logger       *slog.Logger
 	health       *platform.Health
 	identity     *identity.Service
+	geoIP        *geoip.Client
 	rooms        *rooms.Service
 	chat         *chat.Service
 	voice        *voice.Service
 	enterLimit   *platform.Limiter
+	knocks       knockLimits
 	publicOrigin string
 }
 

@@ -1813,7 +1813,8 @@ paths:
             Duplicate, foreign, expired, cancelled or consumed drafts are invalid_attachments. A missing body
             counts as empty. A request key
             that breaks its rules, or a body that is not JSON of the request's
-            shape, is `invalid_request`.
+            shape, is `invalid_request`. A replyTo that is not a message of this room, or
+            was deleted, is `invalid_reply`.
           content:
             application/json:
               schema:
@@ -1838,6 +1839,169 @@ paths:
                 $ref: "#/components/schemas/Error"
         "429":
           description: Too many messages from this visitor (`rate_limited`); try again later.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/rooms/{id}/messages/{messageId}:
+    parameters:
+      - $ref: "#/components/parameters/RoomId"
+      - $ref: "#/components/parameters/MessageId"
+    patch:
+      operationId: editMessage
+      tags: [rooms]
+      summary: Change the text of your message.
+      description: >-
+        Replaces the text under the message rules of posting and sets
+        editedAt. Only the author can edit; the same text changes nothing.
+      requestBody:
+        description: The new text.
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EditMessageRequest"
+      responses:
+        "200":
+          description: The message as it now reads; it was also sent as `message.updated` if anything changed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Message"
+        "400":
+          description: The text breaks the message rules (`invalid_message`), or the body is not of the request's shape (`invalid_request`).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Only the author can edit it (`not_author`).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: The message was deleted (`message_deleted`).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          $ref: "#/components/responses/VisitorRequired"
+        "404":
+          description: No such room, or no such message in it (`room_not_found`, `message_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        default:
+          $ref: "#/components/responses/Error"
+    delete:
+      operationId: deleteMessage
+      tags: [rooms]
+      summary: Delete your message.
+      description: >-
+        Clears its text and reactions and hides its attachments; the ID stays
+        so history and replies keep their place. Only the author can delete;
+        deleting again changes nothing.
+      responses:
+        "200":
+          description: The message as it now reads; it was also sent as `message.updated` if anything changed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Message"
+        "403":
+          description: Only the author can delete it (`not_author`).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          $ref: "#/components/responses/VisitorRequired"
+        "404":
+          description: No such room, or no such message in it (`room_not_found`, `message_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/rooms/{id}/messages/{messageId}/reactions/{reaction}:
+    parameters:
+      - $ref: "#/components/parameters/RoomId"
+      - $ref: "#/components/parameters/MessageId"
+      - $ref: "#/components/parameters/Reaction"
+    put:
+      operationId: addReaction
+      tags: [rooms]
+      summary: Give a reaction to a message.
+      description: Idempotent; giving one you already gave changes nothing. Changes are limited per identity.
+      responses:
+        "200":
+          description: The message as it now reads; it was also sent as `message.updated` if anything changed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Message"
+        "400":
+          description: Not a reaction from the list (`invalid_request`).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: The message was deleted (`message_deleted`).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "429":
+          description: Too many reaction changes lately (`rate_limited`).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          $ref: "#/components/responses/VisitorRequired"
+        "404":
+          description: No such room, or no such message in it (`room_not_found`, `message_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        default:
+          $ref: "#/components/responses/Error"
+    delete:
+      operationId: removeReaction
+      tags: [rooms]
+      summary: Take back your reaction.
+      description: Idempotent; taking back one you did not give changes nothing.
+      responses:
+        "200":
+          description: The message as it now reads; it was also sent as `message.updated` if anything changed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Message"
+        "400":
+          description: Not a reaction from the list (`invalid_request`).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "429":
+          description: Too many reaction changes lately (`rate_limited`).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          $ref: "#/components/responses/VisitorRequired"
+        "404":
+          description: No such room, or no such message in it (`room_not_found`, `message_not_found`).
           content:
             application/json:
               schema:
@@ -1942,6 +2106,61 @@ paths:
           description: >-
             The server cannot reach LiveKit (`voice_unavailable`); try again
             later. Existing connections are unchanged.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/rooms/{id}/knock:
+    parameters:
+      - $ref: "#/components/parameters/RoomId"
+    post:
+      operationId: knock
+      tags: [rooms]
+      summary: Call someone into this room's voice.
+      description: >-
+        Asks another identity to join the room's voice that the caller is in.
+        Every open live connection of that identity receives a private `knock`
+        event; no one else does. The answer is the same whether or not they are
+        connected, already in this voice, or known at all, so a knock reveals
+        neither connection status nor a roster. Nothing is stored.
+        A caller may knock the same identity once per 30 seconds and anyone
+        at most five times in a minute.
+      requestBody:
+        description: The identity to call.
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/KnockRequest"
+      responses:
+        "204":
+          description: Accepted; delivered to every open connection of that identity, if any.
+        "400":
+          description: A missing visitor ID, or the caller's own (invalid_request).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          $ref: "#/components/responses/VisitorRequired"
+        "404":
+          $ref: "#/components/responses/RoomNotFound"
+        "409":
+          description: The caller has no connection in this room's voice (not_in_voice).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "429":
+          description: Knocked this identity or anyone too often (knock_too_soon); try again after Retry-After seconds.
+          headers:
+            Retry-After:
+              description: Whole seconds until a knock is accepted again.
+              schema:
+                type: integer
+                minimum: 1
           content:
             application/json:
               schema:
@@ -2135,6 +2354,21 @@ components:
       schema:
         type: string
         example: 01JBX7A2K9D4F6H8M0P3R5T7VW
+    MessageId:
+      name: messageId
+      in: path
+      required: true
+      description: The message's ID.
+      schema:
+        type: string
+        example: 01JBX8C4N2F6H8K0P3R5T7W9YZ
+    Reaction:
+      name: reaction
+      in: path
+      required: true
+      description: The reaction to give or take back.
+      schema:
+        $ref: "#/components/schemas/MessageReaction"
   securitySchemes:
     signInBindingCookie:
       type: apiKey
@@ -2255,6 +2489,12 @@ components:
           description: Full client IP reported by the trusted reverse proxy. Empty for older requests or when unavailable.
           example: '203.0.113.42'
           maxLength: 45
+        requesterLocation:
+          x-go-type-skip-optional-pointer: false
+          allOf:
+          - $ref: '#/components/schemas/SignInLocation'
+          description: Approximate location derived from the candidate's IP, when available to the approver reviewing a pending request.
+          example: {countryCode: UA, city: Kyiv}
         requesterUserAgent:
           type: string
           description: Untrusted display text, at most 256 Unicode code points.
@@ -2284,6 +2524,21 @@ components:
           description: Single session creation time, when consumed.
           example: '2026-11-10T12:05:00Z'
           format: date-time
+    SignInLocation:
+      type: object
+      description: Approximate IP location. Either field can be absent.
+      example: {countryCode: UA, city: Kyiv}
+      properties:
+        countryCode:
+          type: string
+          description: Two-letter country code.
+          pattern: '^[A-Z]{2}$'
+          example: UA
+        city:
+          type: string
+          description: English city name from the GeoIP dataset.
+          maxLength: 128
+          example: Kyiv
     SignInLink:
       type: object
       description: Link state visible only to its exact issuing session.
@@ -3117,7 +3372,7 @@ components:
       description: >-
         Text, attachments, or both a visitor posted in a room's chat, under the name they
         had when posting.
-      required: [id, roomId, authorId, authorName, body, createdAt, attachments]
+      required: [id, roomId, authorId, authorName, body, createdAt, attachments, deleted, reactions]
       properties:
         id:
           type: string
@@ -3152,6 +3407,78 @@ components:
           items:
             $ref: "#/components/schemas/Attachment"
           example: []
+        replyTo:
+          x-go-type-skip-optional-pointer: false
+          allOf:
+            - $ref: "#/components/schemas/MessageReply"
+          example:
+            id: 01JBX8C4N2F6H8K0P3R5T7W9YZ
+            authorName: Bob
+            excerpt: Anyone up for a game?
+            deleted: false
+        editedAt:
+          x-go-type-skip-optional-pointer: false
+          type: string
+          format: date-time
+          description: When the author last changed the text, in UTC; absent when never.
+          example: "2026-11-04T18:31:10.004Z"
+        deleted:
+          type: boolean
+          description: >-
+            The author deleted the message. Its ID stays, but body is empty
+            and attachments, reactions and replyTo are not shown.
+          example: false
+        reactions:
+          type: array
+          description: Each reaction someone gave, in the order of `MessageReaction`, with who gave it; empty when none.
+          items:
+            $ref: "#/components/schemas/ReactionGroup"
+          example: []
+    MessageReply:
+      type: object
+      description: The earlier message of the room a message answers, as it reads now.
+      required: [id, authorName, excerpt, deleted]
+      properties:
+        id:
+          type: string
+          example: 01JBX8C4N2F6H8K0P3R5T7W9YZ
+        authorName:
+          type: string
+          example: Bob
+        excerpt:
+          type: string
+          description: The start of its text on one line, at most 120 characters; empty when deleted or attachments only.
+          example: Anyone up for a game?
+        deleted:
+          type: boolean
+          example: false
+    MessageReaction:
+      type: string
+      description: A reaction from the fixed list, the same as in a room's voice.
+      enum: [up, heart, laugh, wow, fire, clap]
+      example: fire
+    ReactionGroup:
+      type: object
+      description: One reaction on a message and the identities who gave it, earliest first.
+      required: [reaction, visitorIds]
+      properties:
+        reaction:
+          $ref: "#/components/schemas/MessageReaction"
+        visitorIds:
+          type: array
+          items:
+            type: string
+          example: [01JBX6Z8Q3M5W2K7R9T4V1C0DE]
+    EditMessageRequest:
+      type: object
+      additionalProperties: false
+      description: The new text of a message.
+      required: [body]
+      properties:
+        body:
+          type: string
+          description: At most 4000 characters, kept untrimmed; may be empty only when the message has attachments.
+          example: Anyone up for a game tonight?
     MessageList:
       type: object
       description: A page of a room's chat.
@@ -3170,6 +3497,8 @@ components:
               body: Anyone up for a game?
               createdAt: "2026-11-04T18:30:05.123Z"
               attachments: []
+              deleted: false
+              reactions: []
     PostMessageRequest:
       type: object
       description: A message to post and the key that makes retrying it safe.
@@ -3197,20 +3526,28 @@ components:
           items:
             type: string
           example: [0123456789abcdef0123456789abcdef]
+        replyTo:
+          type: string
+          minLength: 1
+          description: >-
+            The ID of an earlier message of this room that this one answers.
+            A retry must name the same one.
+          example: 01JBX8C4N2F6H8K0P3R5T7W9YZ
     Event:
       # Sent over the WebSocket, which no operation can reference.
       x-lint-ignore: oas3-unused-component
       type: object
       description: >-
         A live update, as sent over `GET /api/live`. `type` says what happened
-        and which schema `payload` has: `message.created` carries a `Message`,
+        and which schema `payload` has: `message.created` and `message.updated` carry a `Message`,
         `room.changed` a `RoomChange`, `occupancy.changed` an
         `OccupancyChange`, `visitor.colour.changed` a `VisitorColour`,
         `access.revoked` an `AccessRevoked`, `attachments.expired` an
         `AttachmentsExpired`. Private `account.signin.requested` reaches only the exact issuing
         session; `account.signin.state_changed` reaches only its bound candidate. Both carry
         a sanitized `SignInRequest` with durable version. Issuer reconnect snapshots repeat
-        its links requests in stable creation/identifier order. Clients ignore
+        its links requests in stable creation/identifier order. Private `knock` reaches only the
+        connections of the knocked identity and carries a `Knock`. Clients ignore
         event types they do not know.
       required: [v, type, eventId, payload, timestamp]
       properties:
@@ -3242,6 +3579,7 @@ components:
             - $ref: "#/components/schemas/VisitorColour"
             - $ref: "#/components/schemas/AttachmentsExpired"
             - $ref: "#/components/schemas/SignInRequest"
+            - $ref: "#/components/schemas/Knock"
         timestamp:
           type: string
           format: date-time
@@ -3260,12 +3598,15 @@ components:
           body: Anyone up for a game?
           createdAt: "2026-11-04T18:30:05.123Z"
           attachments: []
+          deleted: false
+          reactions: []
         timestamp: "2026-11-04T18:30:05.140Z"
     EventType:
       type: string
       description: >-
         What an event reports: `message.created`, a message was posted (its
-        payload is the `Message`); `room.changed`, a room was created or
+        payload is the `Message`); `message.updated`, a message was edited, deleted
+        or its reactions changed (its payload is the whole `Message` as it now reads); `room.changed`, a room was created or
         renamed (its payload is the `RoomChange`); `occupancy.changed`,
         someone joined or left a room's voice, or a participant's new name
         reached it (its payload is the `OccupancyChange`); `access.revoked`,
@@ -3274,9 +3615,42 @@ components:
         saved colour change (its payload is the `VisitorColour`) to all visitors;
         `attachments.expired`, posted files expired in this room (its payload is
         `AttachmentsExpired`); private `account.signin.requested` and
-        `account.signin.state_changed` carry `SignInRequest`. Private drafts are never broadcast.
-      enum: [message.created, room.changed, occupancy.changed, access.revoked, visitor.colour.changed, attachments.expired, account.signin.requested, account.signin.state_changed]
+        `account.signin.state_changed` carry `SignInRequest`. Private `knock` reaches only the
+        knocked identity's connections and carries a `Knock`. Private drafts are never broadcast.
+      enum: [message.created, room.changed, occupancy.changed, access.revoked, visitor.colour.changed, attachments.expired, account.signin.requested, account.signin.state_changed, knock, message.updated]
       example: message.created
+    KnockRequest:
+      type: object
+      additionalProperties: false
+      description: Whom to call into the room's voice.
+      required: [visitorId]
+      properties:
+        visitorId:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: The permanent identity ID to call, as messages and occupancy show it.
+          example: 01JBX6Z8Q3M5W2K7R9T4V1C0DE
+    Knock:
+      type: object
+      description: Someone in a room's voice calls this identity to join it.
+      required: [roomId, from]
+      properties:
+        roomId:
+          type: string
+          description: The room whose voice to join.
+          example: 01JBX7A2K9D4F6H8M0P3R5T7VW
+        from:
+          type: object
+          description: Who knocked, under their current name.
+          required: [visitorId, name]
+          properties:
+            visitorId:
+              type: string
+              example: 01JBX6Z8Q3M5W2K7R9T4V1C0DE
+            name:
+              type: string
+              example: Alex
     RoomChange:
       type: object
       description: A room as it is after being created or renamed.

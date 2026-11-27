@@ -20,7 +20,7 @@ export function supportedShareCodecs(): ShareCodec[] {
 }
 
 export const canChooseSpeaker = typeof AudioContext !== 'undefined' && 'setSinkId' in AudioContext.prototype;
-export const notificationsAvailable = typeof Notification !== 'undefined';
+export const notificationsAvailable = typeof Notification === 'function';
 export const enumerateDevices = (): Promise<MediaDeviceInfo[]> => navigator.mediaDevices?.enumerateDevices?.() ?? Promise.resolve([]);
 export function watchDevices(onChange: () => void): () => void {
   navigator.mediaDevices?.addEventListener('devicechange', onChange);
@@ -29,12 +29,24 @@ export function watchDevices(onChange: () => void): () => void {
 export function refreshDevices(): void {
   navigator.mediaDevices?.dispatchEvent(new Event('devicechange'));
 }
-export const notificationPermission = (): NotificationPermission => notificationsAvailable ? Notification.permission : 'denied';
-export const requestNotificationPermission = (): Promise<NotificationPermission> => notificationsAvailable ? Notification.requestPermission() : Promise.resolve('denied');
+export function notificationPermission(): NotificationPermission {
+  try { return notificationsAvailable ? Notification.permission ?? 'denied' : 'denied'; }
+  catch { return 'denied'; }
+}
+export async function requestNotificationPermission(): Promise<NotificationPermission> {
+  try { return notificationsAvailable ? await Notification.requestPermission?.() ?? 'denied' : 'denied'; }
+  catch { return 'denied'; }
+}
 export function notify(title: string, options: NotificationOptions, onClick: () => void): void {
   if (notificationPermission() !== 'granted') return;
-  const notification = new Notification(title, options);
-  notification.onclick = () => { onClick(); notification.close(); };
+  try {
+    const notification = new Notification(title, options);
+    notification.onclick = () => { onClick(); notification.close(); };
+  } catch {
+    // Some mobile browsers grant permission but reject page-created notifications.
+  }
 }
 
 export { startQRScanner } from './qrScanner';
+/** The camera alone, for a person to see themselves before anyone else does. */
+export const startCamera = async (video: MediaTrackConstraints): Promise<MediaStream> => navigator.mediaDevices.getUserMedia({ video, audio: false });

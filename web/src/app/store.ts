@@ -1,15 +1,9 @@
 import { useSyncExternalStore } from 'react';
-import type { AccountSession, Room, Visitor, VisitorColour } from '../api/client';
+import type { AccountSession, Message, Room, Visitor, VisitorColour } from '../api/client';
 import type { ComposerUpload, RoomChat } from '../chat/timeline';
 import type { PaletteName } from '../fx/palette';
 import { idleVoice, type VoiceSnapshot } from '../voice/types';
 import { prefs, type Settings } from './prefs';
-
-export interface Notice {
-  id: number;
-  title: string;
-  body?: string;
-}
 
 export interface AppState {
   phase: 'loading' | 'entry' | 'noaccess' | 'revoked' | 'ready';
@@ -27,13 +21,16 @@ export interface AppState {
   /** Pictures waiting in each room's composer. */
   uploads: Record<string, ComposerUpload[]>;
   /** What the server takes per message, from its limits; defaults until they are read. */
-  attachmentLimits: { maxAttachments: number; maxFileBytes: number };
+  attachmentLimits: { maxAttachments: number; maxFileBytes: number; uploadTimeoutSeconds: number };
   /** Where the viewed room's "new messages" line goes. */
   newAfterId: string | null;
   chatOpen: boolean;
   roomsOpen: boolean;
   voice: VoiceSnapshot;
-  notice: Notice | null;
+  /** Someone in a room's voice calling this person to join it, until answered or dismissed. */
+  knock: { id: number; roomId: string; fromName: string } | null;
+  /** The message the composer of a room answers or changes; one at a time. */
+  composing: { roomId: string; kind: 'reply' | 'edit'; message: Message } | null;
   settings: Settings;
   /** Only server-confirmed assignments; missing IDs render without a visitor colour. */
   colours: Record<string, VisitorColour>;
@@ -51,12 +48,13 @@ let state: AppState = {
   live: 'off',
   chats: {},
   uploads: {},
-  attachmentLimits: { maxAttachments: 4, maxFileBytes: 25 * 1024 * 1024 },
+  attachmentLimits: { maxAttachments: 4, maxFileBytes: 25 * 1024 * 1024, uploadTimeoutSeconds: 60 },
   newAfterId: null,
   chatOpen: false,
   roomsOpen: false,
   voice: idleVoice,
-  notice: null,
+  knock: null,
+  composing: null,
   settings: prefs.settings(),
   colours: {},
   colourSave: null,
@@ -71,7 +69,7 @@ export function setState(patch: Partial<AppState>): void {
   listeners.forEach((l) => l());
 }
 
-function subscribe(listener: () => void): () => void {
+export function subscribe(listener: () => void): () => void {
   listeners.add(listener);
   return () => listeners.delete(listener);
 }

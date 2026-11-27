@@ -1,6 +1,7 @@
 import type { OrbLook } from '../fx/orbRenderer';
 import { preferencePrefix } from '../runtime/preferences';
-import type { LanguageChoice } from '../strings';
+import { loadShortcuts } from './shortcuts';
+import { LANGUAGE_CODES, type LanguageChoice } from '../strings';
 import type { CameraSettings } from '../voice/camera';
 import { SHARE_BITRATE_MAX, type ShareSettings } from '../voice/share';
 
@@ -22,6 +23,7 @@ function write(key: string, value: string): void {
 }
 
 export type Theme = 'dark' | 'light' | 'system';
+export type AwayMinutes = '5' | '10' | '30';
 
 export interface Settings extends ShareSettings, CameraSettings {
   micId: string;
@@ -30,6 +32,13 @@ export interface Settings extends ShareSettings, CameraSettings {
   echoCancellation: boolean;
   autoGain: boolean;
   joinMuted: boolean;
+  pushToTalk: boolean;
+  /** Turns a long-silent live microphone off. */
+  awayMute: boolean;
+  /** Minutes of silence before that happens. */
+  awayMinutes: AwayMinutes;
+  /** Sound and a system notification when someone calls you into voice. */
+  knockAlerts: boolean;
   sounds: boolean;
   uiSounds: boolean;
   notifications: boolean;
@@ -49,6 +58,7 @@ export const prefs = {
   settings(): Settings {
     // Old browser-only favourites are intentionally not imported into shared identity.
     try { localStorage.removeItem(`${preferencePrefix}favoriteColors`); } catch { /* Private storage may be unavailable. */ }
+    loadShortcuts();
     return {
       micId: read('micId') ?? '',
       speakerId: read('speakerId') ?? '',
@@ -56,6 +66,10 @@ export const prefs = {
       echoCancellation: read('echoCancellation') !== 'off',
       autoGain: read('autoGain') !== 'off',
       joinMuted: read('joinMuted') === 'on',
+      pushToTalk: read('pushToTalk') === 'on',
+      awayMute: read('awayMute') !== 'off',
+      awayMinutes: oneOf('awayMinutes', ['5', '10', '30'], '10'),
+      knockAlerts: read('knockAlerts') !== 'off',
       shareResolution: oneOf('shareResolution', ['720', '1080', '1440'], '1080'),
       shareFps: oneOf('shareFps', ['15', '30', '60'], '30'),
       shareCodec: oneOf('shareCodec', ['vp8', 'h264', 'h265'], 'vp8'),
@@ -69,7 +83,7 @@ export const prefs = {
       orbLight: oneOf('orbLight', ['flat', 'volume'], 'flat'),
       theme: oneOf('theme', ['dark', 'light', 'system'], 'dark'),
       // A new key: the old one was saved with every setting, so it does not say anyone chose.
-      language: oneOf('language', ['system', 'uk', 'en'], 'system'),
+      language: oneOf('language', ['system', ...LANGUAGE_CODES], 'system'),
       sounds: read('sounds') !== 'off',
       uiSounds: read('uiSounds') !== 'off',
       notifications: read('notifications') === 'on',
@@ -95,5 +109,15 @@ export const prefs = {
     const v = Number(read(`connectionVolume.${connectionId}`));
     return read(`connectionVolume.${connectionId}`) === null || Number.isNaN(v) ? 1 : Math.max(0, Math.min(2, v));
   },
-  setVolume: (connectionId: string, v: number) => write(`connectionVolume.${connectionId}`, String(v)),
+  volumeBeforeMute(connectionId: string): number {
+    const saved = Number(read(`volumeBeforeMute.${connectionId}`));
+    return saved > 0 ? Math.min(2, saved) : 1;
+  },
+  setVolume(connectionId: string, v: number): void {
+    if (v === 0) {
+      const current = this.volume(connectionId);
+      if (current > 0) write(`volumeBeforeMute.${connectionId}`, String(current));
+    }
+    write(`connectionVolume.${connectionId}`, String(v));
+  },
 };

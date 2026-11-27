@@ -1,9 +1,12 @@
 /** Two passes on one canvas: a theme surface and a shared field of voice-reactive dots. */
-import { hexToRgb } from './orbRenderer';
-import { PALETTES } from './palette';
+import { oklchToRgb } from './orbRenderer';
+import { PALETTES, themedPalette } from './palette';
 import { UNREAD_BEACON_GLSL, type BeaconFrame } from './unreadBeacon';
 import { THEME_WAVE_GLSL, type ThemeFrame } from './themeWave';
 import { createVoiceField, HISTORY, SAMPLE_INTERVAL, type VoiceSource } from './voiceField';
+
+const DOT_INSET = 10;
+const DOT_SPACING = 20;
 
 function vertexSource(count: number): string {
   return `
@@ -63,18 +66,20 @@ void main() {
     vec2 delta = p - voice.xy;
     float distance = length(delta);
     vec2 outward = delta / max(distance, 1.);
-    // Source strength is anchored at the orb's edge, never at a wandering noise patch.
-    float fromEdge = max(0., distance - voice.w);
     float seed = float(i) * 17.31 + 3.7;
+    // A slow, direction-based wobble keeps the halo round but never a perfect circle.
+    float wobble = noise(outward * 1.4 + seed + uTime * .12) - .5;
+    // Source strength is anchored at the orb's edge, never at a wandering noise patch.
+    float fromEdge = max(0., distance - voice.w * (1. + wobble * .28));
     float delay = fromEdge / 220.;
     float level = arrivingLevel(i, delay);
     if (level < .001) continue;
-    float t = (uTime - delay) * .38 + seed;
+    float t = (uTime - delay) * .22 + seed;
     vec2 q = delta / 125. + seed;
     // Bend the noise domain so the moving patches never form concentric fronts.
     vec2 warp = vec2(noise(q * .57 + vec2(t * .29, -t * .21)),
                      noise(q * .57 + vec2(-t * .24, t * .33) + 19.7));
-    q += (warp - .5) * 3.8 + vec2(t * .22, -t * .17);
+    q += (warp - .5) * 1.4 + vec2(t * .22, -t * .17);
     // Analytic curl avoids four extra noise samples per point and voice.
     float x = q.x * 1.3 + t * .3, y = q.y * .9 - t * .4;
     float diagonal = q.x * .7 + q.y * 1.6 - t * .6;
@@ -83,9 +88,10 @@ void main() {
     float dy = -.9 * sin(x) * sin(y) + .8 * cos(diagonal) + .21 * sin(crosswise);
     float falloff = exp(-fromEdge / uSpread * 3.2);
     float patches = smoothstep(.18, .8, noise(q * .73 + 8.3));
-    float force = level * uStrength * falloff * (.32 + patches * .9);
-    // A small outward push makes the speaker readable through the stronger eddies.
-    offset += (vec2(dy, -dx) * .78 + outward * .42) * force * 70.;
+    // Mostly an even halo; the patches only add a little texture.
+    float force = level * uStrength * falloff * (.7 + patches * .3);
+    // Mostly a gentle outward breath; a little curl keeps it from looking mechanical.
+    offset += (vec2(dy, -dx) * .22 + outward * .6) * force * 34.;
     color += mix(uColorsDark[i], uColorsLight[i], light) * force;
     energy += force;
   }
@@ -96,7 +102,7 @@ void main() {
   float glow = clamp(energy, 0., 1.);
   vec3 ink = mix(mix(vec3(1.), vec3(0.), light), themeTint, activity * .75);
   float opacity = .09 + .03 * light + activity * .48;
-  vColor = vec4(mix(ink, color / max(energy, .001), min(1., glow * 2.)), mix(opacity, .8, glow));
+  vColor = vec4(mix(ink, color / max(energy, .001), min(1., glow * 2.)), mix(opacity, .85, glow));
   vec3 beaconInk = mix(vec3(.675, .906, .812), vec3(.094, .408, .337), light);
   vColor.rgb = mix(vColor.rgb, beaconInk, min(1., beaconGlow * 2.));
   vColor.a = max(vColor.a, beaconGlow * .85);
@@ -183,6 +189,8 @@ export function createBackground(canvas: HTMLCanvasElement, initialSources: Voic
   gl.clearColor(0, 0, 0, 0);
   let width = 0;
   let height = 0;
+  let dotColumns = -1;
+  let dotRows = -1;
   let points = 0;
   let geometryDirty = true;
   let measuredDpr = 0;
@@ -215,8 +223,8 @@ export function createBackground(canvas: HTMLCanvasElement, initialSources: Voic
       for (let i = 0; i < next.length; i++) {
         const source = next[i]!;
         resized.observe(source.element);
-        colorsDark.set(hexToRgb(PALETTES[source.palette][1]), i * 3);
-        colorsLight.set(hexToRgb(PALETTES[source.palette][0]), i * 3);
+        colorsDark.set(oklchToRgb(PALETTES[source.palette][1]), i * 3);
+        colorsLight.set(oklchToRgb(themedPalette(source.palette, true)[0]), i * 3);
       }
       field.clear();
       geometryDirty = true;
@@ -265,11 +273,19 @@ export function createBackground(canvas: HTMLCanvasElement, initialSources: Voic
         if (sizeChanged) {
           canvas.width = Math.round(width * dpr);
           canvas.height = Math.round(height * dpr);
-          const positions: number[] = [];
-          for (let y = 10; y < height; y += 20) for (let x = 10; x < width; x += 20) positions.push(x, y);
-          points = positions.length / 2;
-          gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
-          gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(positions), gl.STATIC_DRAW);
+          const columns = Math.max(0, Math.ceil((width - DOT_INSET) / DOT_SPACING));
+          const rows = Math.max(0, Math.ceil((height - DOT_INSET) / DOT_SPACING));
+          if (columns !== dotColumns || rows !== dotRows) {
+            const positions: number[] = [];
+            for (let y = DOT_INSET; y < height; y += DOT_SPACING) {
+              for (let x = DOT_INSET; x < width; x += DOT_SPACING) positions.push(x, y);
+            }
+            points = positions.length / 2;
+            gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+            gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(positions), gl.STATIC_DRAW);
+            dotColumns = columns;
+            dotRows = rows;
+          }
           gl.viewport(0, 0, canvas.width, canvas.height);
         }
         if (beaconTarget) {

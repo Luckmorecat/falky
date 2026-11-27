@@ -8,9 +8,9 @@ async function client(scenario = 'populated') {
   const server = await startMockServer({ scenario });
   running.push(server);
   let cookie = '';
-  const call = async (path: string, body?: unknown, method = body === undefined ? 'GET' : 'POST') => {
+  const call = async (path: string, body?: unknown, method = body === undefined ? 'GET' : 'POST', signal?: AbortSignal) => {
     const response = await fetch(server.url + path, {
-      method, headers: { cookie, 'Content-Type': 'application/json' },
+      method, signal, headers: { cookie, 'Content-Type': 'application/json' },
       body: body === undefined ? undefined : JSON.stringify(body),
     });
     const nextCookie = response.headers.get('set-cookie');
@@ -190,6 +190,45 @@ test('voice moves retain the old room on failure and scripted peers, rename, lea
   assert.equal((await call('/api/me')).status, 200);
 });
 
+test('knocking needs this room\'s voice, refuses yourself and a quick repeat with Retry-After', async () => {
+  const { call, bootstrap } = await client();
+  const [lounge] = bootstrap.rooms;
+  const robin = '01JBX6Z8Q3M5W2K7R9T4V1C0DE';
+  assert.equal((await call(`/api/rooms/${lounge.id}/knock`, { visitorId: robin })).status, 409);
+  await call(`/api/rooms/${lounge.id}/voice`, {});
+  assert.equal((await call(`/api/rooms/${lounge.id}/knock`, { visitorId: bootstrap.visitor.id })).status, 400);
+  assert.equal((await call(`/api/rooms/${lounge.id}/knock`, { visitorId: robin })).status, 204);
+  const again = await call(`/api/rooms/${lounge.id}/knock`, { visitorId: robin });
+  assert.equal(again.status, 429);
+  assert.equal((await again.json()).code, 'knock_too_soon');
+  assert.ok(Number(again.headers.get('retry-after')) >= 1);
+});
+
+test('replies, edits, deletes and reactions follow the server rules', async () => {
+  const { call, bootstrap } = await client();
+  const [lounge, games] = bootstrap.rooms;
+  const post = async (room: string, key: string, body: string, replyTo?: string) => call(`/api/rooms/${room}/messages`, { requestKey: key, body, ...(replyTo ? { replyTo } : {}) });
+  const question = await (await post(lounge.id, 'q', 'Anyone\nup?')).json();
+  const answer = await (await post(lounge.id, 'a', 'me', question.id)).json();
+  assert.deepEqual(answer.replyTo, { id: question.id, authorName: question.authorName, deleted: false, excerpt: 'Anyone up?' });
+  assert.equal((await post(games.id, 'g', 'x', question.id)).status, 400);
+  const edited = await (await call(`/api/rooms/${lounge.id}/messages/${question.id}`, { body: 'Anyone up tonight?' }, 'PATCH')).json();
+  assert.equal(edited.body, 'Anyone up tonight?');
+  assert.ok(edited.editedAt);
+  const reacted = await (await call(`/api/rooms/${lounge.id}/messages/${question.id}/reactions/fire`, undefined, 'PUT')).json();
+  assert.deepEqual(reacted.reactions, [{ reaction: 'fire', visitorIds: [bootstrap.visitor.id] }]);
+  assert.equal((await call(`/api/rooms/${lounge.id}/messages/${question.id}/reactions/skull`, undefined, 'PUT')).status, 400);
+  const deleted = await (await call(`/api/rooms/${lounge.id}/messages/${question.id}`, undefined, 'DELETE')).json();
+  assert.equal(deleted.deleted, true);
+  assert.equal(deleted.body, '');
+  assert.deepEqual(deleted.reactions, []);
+  assert.equal((await call(`/api/rooms/${lounge.id}/messages/${question.id}`, { body: 'back' }, 'PATCH')).status, 409);
+  const page = (await (await call(`/api/rooms/${lounge.id}/messages?limit=5`)).json()).messages;
+  assert.equal(page.find((m: { id: string }) => m.id === answer.id).replyTo.deleted, true);
+  const someoneElse = page.find((m: { authorId: string }) => m.authorId !== bootstrap.visitor.id);
+  assert.equal((await call(`/api/rooms/${lounge.id}/messages/${someoneElse.id}`, undefined, 'DELETE')).status, 403);
+});
+
 test('live upgrades require the instance session and enforce the public frame-size contract', async () => {
   const { server, cookie } = await client();
   const { WebSocket } = await import('ws');
@@ -329,4 +368,30 @@ test('independent connections list the same person and exact mock disconnect pre
   assert.equal((await call('/__mock/action', { type: 'voice-disconnect', generation: bootstrap.generation })).status, 400);
   await call('/__mock/action', { type: 'voice-disconnect', generation: bootstrap.generation, connectionId: first.grantId });
   assert.deepEqual((await occupants()).map((p: { connectionId: string }) => p.connectionId), [bootstrap.peers[roomId][0].connectionId, bootstrap.peers[roomId][1].connectionId, second.grantId]);
+});
+
+test('aborting the built-in delayed voice POST leaves no mock connection or occupancy', { timeout: 3000 }, async () => {
+  const { call, bootstrap } = await client();
+  const roomId = bootstrap.rooms[0].id;
+  const voice = `/api/rooms/${roomId}/voice`;
+  const readOccupancy = async () => (await (await call('/api/rooms')).json()).rooms[0].occupancy;
+  const original = await readOccupancy();
+  const delayMs = 150;
+  await call('/__mock/action', { type: 'faults', faults: { delayMs } });
+  const controller = new AbortController();
+  const aborted = assert.rejects(call(voice, {}, 'POST', controller.signal), { name: 'AbortError' });
+  let state;
+  do {
+    state = await (await call('/__mock/state')).json();
+  } while (state.faults.delayMs !== 0);
+  controller.abort();
+  await aborted;
+  await new Promise((resolve) => setTimeout(resolve, delayMs));
+  assert.deepEqual((await (await call('/__mock/state')).json()).voiceConnections, {});
+  assert.deepEqual(await readOccupancy(), original);
+
+  const response = await call(voice, {});
+  assert.equal(response.status, 200);
+  const { grantId } = await response.json();
+  assert.deepEqual((await (await call('/__mock/state')).json()).voiceConnections, { [grantId]: roomId });
 });

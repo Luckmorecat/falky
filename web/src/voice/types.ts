@@ -1,4 +1,5 @@
 import type { CameraSettings } from './camera';
+import type { ReactionId } from './reactions';
 import type { ShareSettings } from './share';
 import type { ShareStatsTrack } from './shareStats';
 
@@ -33,14 +34,18 @@ export interface VoiceSnapshot {
   deafened: boolean;
   /** In voice without a microphone: refused, or none exists. */
   listenOnly: boolean;
+  /** Native playback needs a gesture before the current call can be heard. */
+  audioBlocked: boolean;
   sharing: boolean;
   camera: boolean;
+  /** The call is acquiring or replacing its local camera track. */
+  cameraStarting?: boolean;
   quality: 'good' | 'poor' | 'lost' | 'unknown';
 }
 
 export const idleVoice: VoiceSnapshot = {
   status: 'idle', roomId: null, joiningRoomId: null, joinedAt: 0, people: [], speakers: [],
-  muted: false, deafened: false, listenOnly: false, sharing: false, camera: false, quality: 'unknown',
+  muted: false, deafened: false, listenOnly: false, audioBlocked: false, sharing: false, camera: false, quality: 'unknown',
 };
 
 export type VoiceProblem =
@@ -58,6 +63,7 @@ export interface VoiceHost {
   speakerId(): string;
   micProcessing(): { echoCancellation: boolean; noiseSuppression: boolean; autoGainControl: boolean };
   joinMuted(): boolean;
+  pushToTalk(): boolean;
   shareSettings(): ShareSettings;
   cameraSettings(): CameraSettings;
   volumeOf(connectionId: string): number;
@@ -72,8 +78,10 @@ export interface ShareTrack extends ShareStatsTrack {
 export interface VoiceClient {
   readonly snapshot: VoiceSnapshot;
   join(roomId: string): Promise<void>;
+  cancelJoin(): void;
   leave(): Promise<void>;
   end(): void;
+  setMuted(muted: boolean): Promise<void>;
   toggleMute(): Promise<void>;
   toggleDeafen(): Promise<void>;
   toggleShare(): Promise<void>;
@@ -83,8 +91,11 @@ export interface VoiceClient {
   setCamera(deviceId: string): Promise<void>;
   cameraTrack(connectionId: string): ShareTrack | null;
   level(connectionId: string): number;
+  retryAudio(): void;
   applyVolumes(): void;
   setMic(deviceId: string): Promise<void>;
   setSpeaker(deviceId: string): Promise<void>;
   applyMicProcessing(): Promise<void>;
+  /** Sends a reaction to everyone in voice and shows it on this client's own orb. */
+  react(id: ReactionId): void;
 }

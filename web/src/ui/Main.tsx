@@ -1,20 +1,33 @@
-import { useEffect, useRef, useState } from 'react';
-import { dismissNotice, setChatOpen } from '../app/controller';
-import { shortcuts } from '../app/shortcuts';
-import { useApp } from '../app/store';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { answerKnock, dismissKnock, voice } from '../app/controller';
+import { type AppState, useApp } from '../app/store';
 import { t } from '../strings';
-import { IconButton } from './IconButton';
+import { Button } from './Button';
 import { Chat } from './Chat';
+import { ChatTicker } from './ChatTicker';
 import { Dock } from './Dock';
 import { Icon } from './Icon';
 import { NameConflict } from './Screens';
 import { Rooms } from './Rooms';
 import { Stage } from './Stage';
 import { useShortcuts } from './useShortcuts';
-import { useDrawerLayout } from './useDrawerLayout';
+import { useTalk } from './useTalk';
 import { LiveBackground, type LiveBackgroundHandle } from './LiveBackground';
-import './Notices.css';
+import { Toast, TopNoticeSlot } from './Toast';
 import './Main.css';
+
+type MainVoice = Pick<AppState['voice'], 'roomId' | 'status' | 'joinedAt' | 'audioBlocked'>;
+
+function createVoiceSelector() {
+  let previous: MainVoice | undefined;
+  return ({ voice }: AppState): MainVoice => {
+    const { roomId, status, joinedAt, audioBlocked } = voice;
+    if (previous && previous.roomId === roomId && previous.status === status
+      && previous.joinedAt === joinedAt && previous.audioBlocked === audioBlocked) return previous;
+    previous = { roomId, status, joinedAt, audioBlocked };
+    return previous;
+  };
+}
 
 function Clock({ joinedAt }: { joinedAt: number }) {
   const [now, setNow] = useState(() => performance.now());
@@ -32,18 +45,17 @@ function Clock({ joinedAt }: { joinedAt: number }) {
 
 export function Main() {
   useShortcuts();
+  const holdToTalk = useTalk();
   const background = useRef<LiveBackgroundHandle>(null);
-  const chatButton = useRef<HTMLButtonElement>(null);
   const unreadCounter = useRef<HTMLSpanElement>(null);
-  const drawer = useDrawerLayout();
   const room = useApp((s) => s.rooms.find((r) => r.id === s.viewedRoomId) ?? null);
-  const voiceState = useApp((s) => s.voice);
-  const voiceRoomName = useApp((s) => s.rooms.find((r) => r.id === s.voice.roomId)?.name);
+  const selectVoice = useMemo(createVoiceSelector, []);
+  const { roomId: voiceRoomId, status: voiceStatus, joinedAt, audioBlocked } = useApp(selectVoice);
   const chatOpen = useApp((s) => s.chatOpen);
   const roomsOpen = useApp((s) => s.roomsOpen);
-  const unread = useApp((s) => (s.viewedRoomId ? (s.chats[s.viewedRoomId]?.unread ?? 0) : 0));
   const live = useApp((s) => s.live);
-  const notice = useApp((s) => s.notice);
+  const knockCall = useApp((s) => s.knock);
+  const rooms = useApp((s) => s.rooms);
   const nameTaken = useApp((s) => s.visitor?.nameTaken);
 
   useEffect(() => {
@@ -51,56 +63,59 @@ export function Main() {
     document.body.classList.toggle('rooms-open', roomsOpen);
   }, [chatOpen, roomsOpen]);
 
-  const inThisRoom = !!room && voiceState.roomId === room.id && voiceState.status !== 'idle';
-  const inVoiceElsewhere = !!voiceRoomName && voiceState.status !== 'idle' && !inThisRoom;
-  const banner = live === 'reconnecting' ? t.reconnecting : voiceState.status === 'reconnecting' ? t.voiceReconnecting : null;
+  const voiceRoomName = rooms.find((r) => r.id === voiceRoomId)?.name;
+  const inThisRoom = !!room && voiceRoomId === room.id && voiceStatus !== 'idle';
+  const inVoiceElsewhere = !!voiceRoomName && voiceStatus !== 'idle' && !inThisRoom;
+  const joining = voiceStatus === 'joining' && voiceRoomId === null;
+  const banner = joining ? t.joining
+    : live === 'reconnecting' ? t.reconnecting
+    : voiceStatus === 'reconnecting' ? t.voiceReconnecting : null;
 
   return (
     <div className="screen room-screen">
       <span className="build-version">{import.meta.env.VITE_BUILD_VERSION}</span>
-      <LiveBackground ref={background} unreadTarget={drawer ? chatButton : unreadCounter} />
-      <div className="topbar"><span className="mark">falky</span></div>
+      <LiveBackground ref={background} unreadTarget={unreadCounter} />
 
       <div className="main">
         <Rooms
           room={room}
           status={!room ? <span>{t.noRoomsBody}</span>
-            : inThisRoom && voiceState.joinedAt ? <Clock joinedAt={voiceState.joinedAt} />
+            : inThisRoom && joinedAt ? <Clock joinedAt={joinedAt} />
               : inVoiceElsewhere ? <span>{t.inOtherRoom(voiceRoomName)}</span>
                 : <span>{room.occupancy.length ? t.notInVoice : t.nobodyInVoice}</span>}
         />
         {room ? <Stage room={room} background={background} /> : <div className="stage" />}
         <div className="dock-space" />
-        <Dock room={room} />
+        <Dock room={room} unreadRef={unreadCounter} holdToTalk={holdToTalk} />
       </div>
 
-      <IconButton
-        ref={chatButton}
-        className="chat-btn"
-        aria-label={chatOpen ? t.closeChat : unread ? `${t.chat}: ${unread}` : t.chat}
-        aria-expanded={chatOpen}
-        data-tip={chatOpen ? t.closeChat : `${t.focusChat} (${shortcuts.chat.label} · ${shortcuts.chatEnter.label})`}
-        data-tip-side="bottom"
-        onClick={() => setChatOpen(!chatOpen)}
-      >
-        <span className="swap"><Icon name="chat" className="a" /><Icon name="x" className="b" /></span>
-        {unread > 0 && <span className="badge">{unread > 99 ? '99+' : unread}</span>}
-      </IconButton>
-      <Chat room={room} unreadCounterRef={unreadCounter} />
+      <Chat room={room} />
+      {room && <ChatTicker room={room} />}
 
-      <div className="float-top" aria-live="polite">
+      <TopNoticeSlot position="banner">
         {banner && <div className="banner"><span className="pulse" />{banner}</div>}
-        {notice && (
-          <div className="toast" key={notice.id} role="status">
-            <div>
-              <strong>{notice.title}</strong>
-              {notice.body && <p>{notice.body}</p>}
-            </div>
-            <IconButton size="small" aria-label={t.close} onClick={dismissNotice}><Icon name="x" /></IconButton>
-          </div>
-        )}
+      </TopNoticeSlot>
+      <Toast
+        open={audioBlocked && !!voiceRoomId && voiceStatus !== 'reconnecting'}
+        position="before"
+        className="audio-blocked"
+        title={t.audioPlaybackBlocked}
+        action={<Button data-enable-voice-audio data-cue="none" onClick={() => voice.retryAudio()}>{t.enableAudio}</Button>}
+      />
+      {knockCall && (
+        <Toast
+          key={knockCall.id}
+          open
+          role="alert"
+          className="knock-toast"
+          title={t.knockFrom(knockCall.fromName, rooms.find((r) => r.id === knockCall.roomId)?.name ?? '')}
+          action={<Button variant="join" data-cue="none" onClick={() => answerKnock(knockCall.id)}><Icon name="mic" /><span className="tx">{t.join}</span></Button>}
+          onDismiss={() => dismissKnock(knockCall.id)}
+        />
+      )}
+      <TopNoticeSlot position="form">
         {nameTaken && <NameConflict />}
-      </div>
+      </TopNoticeSlot>
     </div>
   );
 }

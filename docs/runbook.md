@@ -424,6 +424,28 @@ shell commands. Old CI commands such as `deploy frontend` and unguarded digest
 pairs are rejected. The snapshot reads durable release history and does not require old public health.
 Application secrets stay in each instance's private `.env`.
 
+## VPS TURN rollout
+
+Once the edge and coturn are ready, enable TURN on one instance at a time. Start
+with staging, or dev if staging is inactive. Use the same root-managed coturn
+key file for each instance on the VPS. Keep it at mode `0600` and back it up
+with the host's other secrets. LiveKit reads the key from a read-only mount and
+issues short-lived HMAC credentials.
+
+In that instance's `.env`, set `FALKY_TURN_HOST=turn.falky.lunari.win` and
+`FALKY_TURN_SECRET_FILE=/etc/netcup-turn/secret`. From the instance directory, run:
+
+```sh
+./compose.sh up --detach --no-deps --no-build --wait livekit
+./manage.sh status
+```
+
+LiveKit restarts, so active voice calls may be interrupted. Verify a forced
+TURN/TLS call, a TURN/UDP call and a normal direct call before enabling the
+remaining instances, with production last. To disable TURN, remove both
+settings and apply the same command. If the secret is replaced in place on
+the host, use `--force-recreate` in the `up` command so LiveKit loads it again.
+
 ## VPS operations and recovery
 
 Run these as `deployer` from `/srv/falky-dev`, `/srv/falky-staging` or `/srv/falky`.

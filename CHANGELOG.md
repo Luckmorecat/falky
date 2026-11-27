@@ -1,5 +1,68 @@
 # Changelog
 
+## [1.3.0](https://github.com/Luckmorecat/falky/compare/v1.2.0...v1.3.0) (2026-11-13)
+
+
+### Features
+
+* **accounts:** add device approval sign-in ([e0916dc](https://github.com/Luckmorecat/falky/commit/e0916dcb6c0c8d72e411f36cc59d594fbaf06f75))
+* **accounts:** add persistent passkey accounts ([cefc48c](https://github.com/Luckmorecat/falky/commit/cefc48c66f50c6db406e5641e9b99a7ef259d0fe))
+* **accounts:** add QR and link device sign-in ([6be6e10](https://github.com/Luckmorecat/falky/commit/6be6e1029215d3826ef6f2b7e45ee10ca8e3d70d))
+* **api:** expose authenticated chat attachment uploads ([10097ad](https://github.com/Luckmorecat/falky/commit/10097ad23235f87e92d2cb99805047ac33edc435))
+* **attachments:** add bounded static image processing ([18358cf](https://github.com/Luckmorecat/falky/commit/18358cf3ddffe533f4ce52289798a0e926a5456b))
+* **auth:** show device and IP details for pending sign-ins ([1c356f5](https://github.com/Luckmorecat/falky/commit/1c356f5c04bc9c8017a2bb4257d94390d680669c))
+* **chat:** persist attachments with FIFO storage quotas ([0c1cad2](https://github.com/Luckmorecat/falky/commit/0c1cad2ab065c9431c9128aa0bac2c15d0234833))
+* **deploy:** add isolated staging branch deployments ([6b303f4](https://github.com/Luckmorecat/falky/commit/6b303f4e8e527b1f3b763bf1be994fceb0a88206))
+* **identity:** issue a twelve-word recovery phrase ([98fde3f](https://github.com/Luckmorecat/falky/commit/98fde3f741b6429fde78790410abf57dc2cdb462))
+* **mock:** add authenticated account scenario ([b518b56](https://github.com/Luckmorecat/falky/commit/b518b56081143fbb63c8de11cb1a0afa5f433a36))
+* **mock:** serve chat attachments in the mock server ([8d02add](https://github.com/Luckmorecat/falky/commit/8d02addc37877c1a1383fea8ddc5eea63d9d2b39))
+* **storybook:** add interactive sign-in link flow states ([ebbea71](https://github.com/Luckmorecat/falky/commit/ebbea71109a1f473a325f5999062f5c245ef1143))
+* **voice:** expire disconnected grants after ten minutes ([5822418](https://github.com/Luckmorecat/falky/commit/5822418a7c8df2d87c4423b442a54e8001fc2796))
+* **voice:** persist grants and centralize recurring jobs ([752e1c6](https://github.com/Luckmorecat/falky/commit/752e1c6eff9f72e4b2c10ce7b1e15caad1471d9a))
+* **voice:** preserve grants when leaving voice ([8fe9c14](https://github.com/Luckmorecat/falky/commit/8fe9c14d20a5890427ae981ce051bb585eaf518e))
+* **voice:** support independent connections per session ([75e05f7](https://github.com/Luckmorecat/falky/commit/75e05f712ac698c559a8b8bd846d634b19abde8e))
+* **web:** add Beacon cues for unread chat ([d62f8d6](https://github.com/Luckmorecat/falky/commit/d62f8d615535690cf4bf5c77a0b5ce90d8977d56))
+* **web:** add passkey account entry and settings ([c438622](https://github.com/Luckmorecat/falky/commit/c4386229947b136717f4cd4ddef8b8f5d8c10cd9))
+* **web:** center OTP slots above sign-in approval ([74687d0](https://github.com/Luckmorecat/falky/commit/74687d08641c5c9ca1674b2638e02c723e86a844))
+* **web:** move sign-in link approval into a bottom drawer ([b580b61](https://github.com/Luckmorecat/falky/commit/b580b61f714fec795d8d3200d220b30018cccad1))
+* **web:** send and view images in the chat ([5d48df3](https://github.com/Luckmorecat/falky/commit/5d48df3a105fa046cd910397db6a82a58d3b8126))
+
+
+### Bug Fixes
+
+* **accounts:** address device approval review findings ([f5c06cc](https://github.com/Luckmorecat/falky/commit/f5c06ccecac701f64ec2bc2a31ad08a4f633ea8a))
+* **accounts:** preserve device sign-in retries and lifecycle ([7f0f74a](https://github.com/Luckmorecat/falky/commit/7f0f74a5a7182cdfa772bffb27bc90692eb116ac))
+* **accounts:** preserve replacement link allocations ([41b6492](https://github.com/Luckmorecat/falky/commit/41b6492ce0af1eb964b68a3b517d5c01bee1bd70))
+* **accounts:** recover QR sign-in retries ([6358778](https://github.com/Luckmorecat/falky/commit/635877801855bc8aaf15eec365863bdf28815625))
+* **accounts:** recover uncertain sign-in after expiry ([522928b](https://github.com/Luckmorecat/falky/commit/522928b1f56df370b0e312c472909e30d5e37b22))
+* **accounts:** retain committed credentials on cleanup failure ([fe1e7bd](https://github.com/Luckmorecat/falky/commit/fe1e7bdf6d74a0a4eaf5b97d70fe129d1eb3256b))
+* **accounts:** reuse one area for temporary sign-in links ([a2b4ff8](https://github.com/Luckmorecat/falky/commit/a2b4ff8f13006865e3e7813605ee399ccd121248))
+* **accounts:** secure device approval and split history cleanup ([ae7261a](https://github.com/Luckmorecat/falky/commit/ae7261abf575cb1413777ecd69d926593bdb4242))
+* **accounts:** stop polling rejected sign-in links ([068c33d](https://github.com/Luckmorecat/falky/commit/068c33d4d7556fcf455135ef71dbfdaed8f78411))
+* **accounts:** stop polling revoked sign-in links ([fe6d5c9](https://github.com/Luckmorecat/falky/commit/fe6d5c9aaf3a1d146c58c8b46eea9dc3cc2f2ee8))
+* **attachments:** preserve metadata lookup across retries ([e6a946b](https://github.com/Luckmorecat/falky/commit/e6a946bc8d3aa927ff9132c0d4943bb90589aead))
+* **build:** upgrade Go to 1.27.4 for security fixes ([fe5430a](https://github.com/Luckmorecat/falky/commit/fe5430a824a14b8e6655edb26cf5c5a60e18f0d0))
+* **deploy:** accept staging frontend build metadata ([787f55a](https://github.com/Luckmorecat/falky/commit/787f55a8f5b70c0d7b2b0acee2f87d328cb04910))
+* **identity:** accept passkeys without optional credProps ([ae39721](https://github.com/Luckmorecat/falky/commit/ae3972140ae6a4cccec9251878c13462203f0dbc))
+* **identity:** unify sessions and preserve guest voice ([5485727](https://github.com/Luckmorecat/falky/commit/5485727cca1c530629dd26b3240ef79468ab01b3))
+* **platform:** charge related quotas atomically ([865d253](https://github.com/Luckmorecat/falky/commit/865d25321ebd457017b2e3a12108d031e0191865))
+* **test:** give device request IP test a context ([f525bd6](https://github.com/Luckmorecat/falky/commit/f525bd6950a27471c281b27ff6c30fab6e6852f8))
+* **web:** allow blob images in the content security policy ([9249909](https://github.com/Luckmorecat/falky/commit/9249909109783536105d90282511b89ad346a4fc))
+* **web:** keep QR scanner above settings with delayed skeleton ([8d54e3a](https://github.com/Luckmorecat/falky/commit/8d54e3aeac8dc1d5f3b5846a3ba3dcd2b6dcb927))
+* **web:** land the closing lightbox picture on its thumbnail ([ecff894](https://github.com/Luckmorecat/falky/commit/ecff894dfec098c8d4e7ff8995e06274492fc598))
+* **web:** match superellipse corners in Safari ([268da58](https://github.com/Luckmorecat/falky/commit/268da5843c2f08974a4fe37c4e938c931006864c))
+* **web:** preserve drawer padding clicks and highlight code entry ([941de26](https://github.com/Luckmorecat/falky/commit/941de26a0a67b0b25c59d8f03c8429ed80c09754))
+* **web:** put device sign-in first in account settings ([bbd73f5](https://github.com/Luckmorecat/falky/commit/bbd73f5bd05417286c483df59b1e6719a423d59e))
+* **web:** simplify account actions and improve form spacing ([7e8ddf0](https://github.com/Luckmorecat/falky/commit/7e8ddf0495dca20e087ef177f237f8a7a6296e9a))
+* **web:** stop playing a sound on hover ([da25fe9](https://github.com/Luckmorecat/falky/commit/da25fe9cc32075ea6558be0762fe8bc6d608c204))
+* **web:** suppress auth dialog focus outline ([4f9cfa4](https://github.com/Luckmorecat/falky/commit/4f9cfa44a617fc4663cd37728157ad631ddfd884))
+
+
+### Performance Improvements
+
+* **attachments:** use browser caching with ETags ([36ee4d0](https://github.com/Luckmorecat/falky/commit/36ee4d02a0d0296d7dff3de1f45f1fae10217302))
+* **identity:** remove redundant sign-in indexes ([50c3768](https://github.com/Luckmorecat/falky/commit/50c376894b6dba953791f43b0d4c990def67b06c))
+
 ## [1.2.0](https://github.com/Luckmorecat/falky/compare/v1.1.0...v1.2.0) (2026-11-08)
 
 

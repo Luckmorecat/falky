@@ -1,18 +1,12 @@
-import { useEffect, useLayoutEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
+import { useEffect, useEffectEvent, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import { createPortal } from 'react-dom';
-import type { Attachment } from '../api/client';
+import type { Message } from '../api/client';
 import { formatBytes } from '../chat/gallery';
-import { useAttachmentImage } from '../chat/images';
+import { isImage, useAttachmentImage } from '../chat/images';
 import { t } from '../strings';
 import { Icon } from './Icon';
 import { IconButton } from './IconButton';
 import './Lightbox.css';
-
-export interface ViewerItem {
-  attachment: Attachment;
-  authorName: string;
-  createdAt: string;
-}
 
 interface View {
   scale: number;
@@ -65,7 +59,10 @@ function flip(thumb: HTMLElement, to: DOMRect): { transform: string; clipPath: s
  * about. Escape, the close button, a click beside the picture or a swipe down
  * puts it away.
  */
-export function Lightbox({ items, startId, onClose }: { items: ViewerItem[]; startId: string; onClose(): void }) {
+export function Lightbox({ messages, startId, onClose }: { messages: Message[] | undefined; startId: string; onClose(): void }) {
+  const items = useMemo(() => (messages ?? []).flatMap((m) => m.attachments
+    .filter(isImage)
+    .map((attachment) => ({ attachment, authorName: m.authorName, createdAt: m.createdAt }))), [messages]);
   const dialog = useRef<HTMLDialogElement>(null);
   const stage = useRef<HTMLDivElement>(null);
   const frame = useRef<HTMLDivElement>(null);
@@ -83,6 +80,7 @@ export function Lightbox({ items, startId, onClose }: { items: ViewerItem[]; sta
 
   const index = Math.max(0, items.findIndex((i) => i.attachment.id === currentId));
   const item = items[index];
+  const hasItem = item !== undefined;
   const { state: image, attempt, onError } = useAttachmentImage(item?.attachment ?? null);
   const count = items.length;
 
@@ -185,38 +183,40 @@ export function Lightbox({ items, startId, onClose }: { items: ViewerItem[]; sta
     setView(clamp({ scale: next, x: px - (px - v.x) * k, y: py - (py - v.y) * k }));
   };
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.metaKey || e.ctrlKey || e.altKey) return;
-      if (e.key === 'Escape') { e.preventDefault(); close(); }
-      else if (e.key === 'ArrowLeft') { e.preventDefault(); go(-1); }
-      else if (e.key === 'ArrowRight') { e.preventDefault(); go(1); }
-      else if (e.key === '+' || e.key === '=') zoomAt(viewRef.current.scale * 1.5);
-      else if (e.key === '-') zoomAt(viewRef.current.scale / 1.5);
-      else if (e.key === '0') setView(at1);
-    };
-    document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
+  const onKey = useEffectEvent((e: KeyboardEvent) => {
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    if (e.key === 'Escape') { e.preventDefault(); close(); }
+    else if (e.key === 'ArrowLeft') { e.preventDefault(); go(-1); }
+    else if (e.key === 'ArrowRight') { e.preventDefault(); go(1); }
+    else if (e.key === '+' || e.key === '=') zoomAt(viewRef.current.scale * 1.5);
+    else if (e.key === '-') zoomAt(viewRef.current.scale / 1.5);
+    else if (e.key === '0') setView(at1);
   });
+  useEffect(() => {
+    const handleKey = (e: KeyboardEvent) => onKey(e);
+    document.addEventListener('keydown', handleKey);
+    return () => document.removeEventListener('keydown', handleKey);
+  }, []);
 
+  const onWheel = useEffectEvent((e: WheelEvent) => {
+    e.preventDefault();
+    const v = viewRef.current;
+    if (!e.ctrlKey && v.scale > 1) {
+      // Scrolling moves about a zoomed picture; a pinch, or the wheel at first, zooms.
+      setView(clamp({ ...v, x: v.x - e.deltaX, y: v.y - e.deltaY }));
+      return;
+    }
+    const factor = Math.exp(-e.deltaY * (e.ctrlKey ? 0.01 : 0.0025));
+    zoomAt(v.scale * factor, e.clientX, e.clientY);
+  });
   // React's wheel listener is passive; this one may stop the page from scrolling.
   useEffect(() => {
     const box = stage.current;
     if (!box) return;
-    const onWheel = (e: WheelEvent) => {
-      e.preventDefault();
-      const v = viewRef.current;
-      if (!e.ctrlKey && v.scale > 1) {
-        // Scrolling moves about a zoomed picture; a pinch, or the wheel at first, zooms.
-        setView(clamp({ ...v, x: v.x - e.deltaX, y: v.y - e.deltaY }));
-        return;
-      }
-      const factor = Math.exp(-e.deltaY * (e.ctrlKey ? 0.01 : 0.0025));
-      zoomAt(v.scale * factor, e.clientX, e.clientY);
-    };
-    box.addEventListener('wheel', onWheel, { passive: false });
-    return () => box.removeEventListener('wheel', onWheel);
-  });
+    const handleWheel = (e: WheelEvent) => onWheel(e);
+    box.addEventListener('wheel', handleWheel, { passive: false });
+    return () => box.removeEventListener('wheel', handleWheel);
+  }, [hasItem]);
 
   const onPointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
     if (e.button !== 0 || closing) return;

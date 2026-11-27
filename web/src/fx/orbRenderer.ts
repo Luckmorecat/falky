@@ -175,9 +175,20 @@ void main() {
 const SOURCES: Record<OrbLook, string> = { flat: FLAT, volume: VOLUME };
 const UNIFORMS = ['uBase', 'uBright', 'uDeep', 'uCore', 'uSeed', 'uAngle', 'uFlow', 'uLevel', 'uPixel'];
 
-export function hexToRgb(hex: string): [number, number, number] {
-  const n = parseInt(hex.slice(1), 16);
-  return [(n >> 16 & 255) / 255, (n >> 8 & 255) / 255, (n & 255) / 255];
+const encode = (c: number) => Math.min(1, Math.max(0, c <= 0.0031308 ? 12.92 * c : 1.055 * c ** (1 / 2.4) - 0.055));
+
+/** An `oklch(L C H)` colour as sRGB parts of one, the way the shaders take it. */
+export function oklchToRgb(colour: string): [number, number, number] {
+  const [L, C, H] = colour.slice(6, -1).split(' ').map(Number) as [number, number, number];
+  const a = C * Math.cos(H * Math.PI / 180), b = C * Math.sin(H * Math.PI / 180);
+  const l = (L + 0.3963377774 * a + 0.2158037573 * b) ** 3;
+  const m = (L - 0.1055613458 * a - 0.0638541728 * b) ** 3;
+  const s = (L - 0.0894841775 * a - 1.2914855480 * b) ** 3;
+  return [
+    encode(4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s),
+    encode(-1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s),
+    encode(-0.0041960863 * l - 0.7034186147 * m + 1.7076147010 * s),
+  ];
 }
 
 /** Whether an orb is due for drawing, given how loud it is and when it last was. */
@@ -195,6 +206,7 @@ interface Painter {
   canvas: HTMLCanvasElement;
   /** Built when first needed; null once a look turned out not to build here. */
   programs: Partial<Record<OrbLook, Program | null>>;
+  boundProgram: WebGLProgram | null;
 }
 
 let painter: Painter | null = null;
@@ -227,7 +239,7 @@ function programFor(p: Painter, wanted: OrbLook): Program | null {
 }
 
 function setUp(canvas: HTMLCanvasElement, gl: WebGLRenderingContext): Painter | null {
-  const p: Painter = { gl, canvas, programs: {} };
+  const p: Painter = { gl, canvas, programs: {}, boundProgram: null };
   if (!programFor(p, 'flat')) return null;
   gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
   gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
@@ -282,6 +294,8 @@ export interface OrbOptions {
   canvas: HTMLCanvasElement;
   seed: number;
   colors: readonly [string, string, string, string];
+  /** The same palette for a light page; `colors` serves both when absent. */
+  colorsLight?: readonly [string, string, string, string];
   level?: () => number;
   /** Drawn once and left alone, for small marks. */
   still?: boolean;
@@ -290,6 +304,7 @@ export interface OrbOptions {
 interface LiveOrb extends OrbOptions {
   ctx: CanvasRenderingContext2D | null;
   rgb: [number, number, number][];
+  rgbLight: [number, number, number][];
   size: number;
   lvl: number;
   drawnLvl: number;
@@ -303,14 +318,19 @@ interface LiveOrb extends OrbOptions {
 const orbs = new Set<LiveOrb>();
 let stopTicking: (() => void) | null = null;
 
-function draw(orb: LiveOrb, p: Painter, { uniforms: u }: Program, pad: number, time: number): void {
-  const { gl } = p;
+function draw(orb: LiveOrb, p: Painter, { program, uniforms: u }: Program, pad: number, time: number): void {
   if (!orb.ctx || !orb.size) return;
+  const { gl } = p;
+  if (p.boundProgram !== program) {
+    gl.useProgram(program);
+    p.boundProgram = program;
+  }
   gl.viewport(0, 0, orb.size, orb.size);
-  gl.uniform3fv(u.uBase!, orb.rgb[0]!);
-  gl.uniform3fv(u.uBright!, orb.rgb[1]!);
-  gl.uniform3fv(u.uDeep!, orb.rgb[2]!);
-  gl.uniform3fv(u.uCore!, orb.rgb[3]!);
+  const rgb = pageLight ? orb.rgbLight : orb.rgb;
+  gl.uniform3fv(u.uBase!, rgb[0]!);
+  gl.uniform3fv(u.uBright!, rgb[1]!);
+  gl.uniform3fv(u.uDeep!, rgb[2]!);
+  gl.uniform3fv(u.uCore!, rgb[3]!);
   gl.uniform1f(u.uSeed!, (orb.seed % 997) / 13);
   gl.uniform1f(u.uAngle!, orb.angle);
   gl.uniform1f(u.uFlow!, orb.flow);
@@ -324,13 +344,20 @@ function draw(orb: LiveOrb, p: Painter, { uniforms: u }: Program, pad: number, t
   orb.stale = false;
 }
 
+/** Whether the page is light right now; a change repaints every orb in its colours for it. */
+let pageLight = false;
+
 function tick(time: number, dt: number): void {
+  const light = document.documentElement.dataset.theme === 'light';
+  if (light !== pageLight) {
+    pageLight = light;
+    for (const orb of orbs) orb.stale = true;
+  }
   const p = painter ?? getPainter();
   const reduced = effectsReduced();
   const shown = shownLook();
   const program = p && programFor(p, shown);
   const pad = shown === 'volume' ? VOLUME_PAD : 1;
-  if (p && program) p.gl.useProgram(program.program);
   for (const orb of orbs) {
     const target = orb.level ? orb.level() : 0;
     orb.lvl += (target - orb.lvl) * (1 - Math.exp(-dt * (target > orb.lvl ? 26 : 4.5)));
@@ -363,7 +390,8 @@ export function addOrb(options: OrbOptions): () => void {
   const orb: LiveOrb = {
     ...options,
     ctx: options.canvas.getContext('2d'),
-    rgb: options.colors.map(hexToRgb),
+    rgb: options.colors.map(oklchToRgb),
+    rgbLight: (options.colorsLight ?? options.colors).map(oklchToRgb),
     size: 0,
     lvl: 0,
     drawnLvl: 0,
@@ -381,6 +409,11 @@ export function addOrb(options: OrbOptions): () => void {
     if (size === orb.size) return;
     orb.size = options.canvas.width = options.canvas.height = size;
     orb.stale = true;
+    // Resizing clears the canvas after this frame was drawn; paint it again now, or it shows empty for a frame.
+    const p = painter ?? getPainter();
+    const shown = shownLook();
+    const program = p && programFor(p, shown);
+    if (p && program) draw(orb, p, program, shown === 'volume' ? VOLUME_PAD : 1, performance.now() / 1000);
   });
   resized.observe(options.canvas);
   orbs.add(orb);

@@ -25,6 +25,7 @@ export interface MockFaults {
   scannerDelayMs?: number;
   shareFailure: boolean;
   voiceReconnecting: boolean;
+  audioBlocked?: boolean;
 }
 export interface MockState {
   instanceId: string;
@@ -53,4 +54,5 @@ export type MockAction =
   | { type: 'faults'; faults: Partial<MockFaults> }
   | { type: 'name-conflict'; active: boolean }
   | { type: 'revoke' }
-  | { type: 'voice-disconnect'; generation: number; connectionId: string };
+  | { type: 'voice-disconnect'; generation: number; connectionId: string }
+  | { type: 'knock'; roomId: string; name: string };

@@ -12,6 +12,7 @@ rtc:
   # All UDP media on one port.
   udp_port: 7882
   use_external_ip: false
+  turn_servers: []
 
 # Participant and room events, signed with the shared key, to the server's
 # internal listener.

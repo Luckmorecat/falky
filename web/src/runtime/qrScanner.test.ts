@@ -3,6 +3,27 @@ import { startQRScanner } from './qrScanner';
 const scan = vi.hoisted(() => vi.fn());
 vi.mock('@zxing/browser', () => ({ BrowserQRCodeReader: class { scan = scan; } }));
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); scan.mockReset(); });
+it('does not request camera access when call capture has priority', async () => {
+  const getUserMedia = vi.fn(), failed = vi.fn();
+  vi.stubGlobal('navigator', { mediaDevices: { getUserMedia } });
+  startQRScanner(document.createElement('video'), vi.fn(), failed, () => false);
+  expect(getUserMedia).not.toHaveBeenCalled();
+  expect(failed).toHaveBeenCalledOnce();
+});
+it('stops a late scanner stream before playback if the call camera has started', async () => {
+  let accept!: (stream: MediaStream) => void;
+  let available = true;
+  const stop = vi.fn(), failed = vi.fn();
+  vi.stubGlobal('navigator', { mediaDevices: { getUserMedia: () => new Promise<MediaStream>(resolve => { accept = resolve; }) } });
+  const video = document.createElement('video');
+  const play = vi.spyOn(video, 'play').mockResolvedValue();
+  startQRScanner(video, vi.fn(), failed, () => available);
+  available = false;
+  accept({ getTracks: () => [{ stop }] } as unknown as MediaStream);
+  await vi.waitFor(() => expect(stop).toHaveBeenCalledOnce());
+  expect(play).not.toHaveBeenCalled();
+  expect(failed).toHaveBeenCalledOnce();
+});
 it('releases a camera that resolves after the reader has been exited', async () => {
   let accept!: (stream: MediaStream) => void;
   const stop = vi.fn();

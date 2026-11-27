@@ -89,6 +89,13 @@ const (
 	postInterval = time.Second
 )
 
+// Reaction changes are limited per visitor to a burst of reactBurst, then one
+// more each reactInterval.
+const (
+	reactBurst    = 20
+	reactInterval = 500 * time.Millisecond
+)
+
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	code := run(ctx, os.Args[1:], os.Getenv, os.Stdin, os.Stdout, os.Stderr)
@@ -411,9 +418,12 @@ func serveOn(ctx context.Context, logger *slog.Logger, cfg platform.Config, db *
 		Chat: chat.New(db,
 			chat.WithAttachments(store),
 			chat.WithPostLimit(platform.NewLimiter(postBurst, postInterval, time.Now)),
-			chat.WithPublisher(events.MessageCreated)),
+			chat.WithPublisher(events.MessageCreated),
+			chat.WithUpdatePublisher(events.MessageUpdated),
+			chat.WithReactLimit(platform.NewLimiter(reactBurst, reactInterval, time.Now))),
 		Voice:         vs,
 		LiveKitAPIURL: cfg.LiveKitAPIURL,
+		GeoIPURL:      cfg.GeoIPURL,
 		EnterLimit:    platform.NewLimiter(enterBurst, enterInterval, time.Now),
 		Live:          hub,
 		PublicOrigin:  cfg.PublicOrigin,

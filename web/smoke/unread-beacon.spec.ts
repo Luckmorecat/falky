@@ -15,6 +15,25 @@ test.beforeEach(async ({ page }) => {
     localStorage.setItem(prefix + 'theme', 'dark');
     localStorage.setItem(prefix + 'liveBackground', 'on');
   }, fixture);
+  await page.addInitScript(() => {
+    const locations = new WeakSet<WebGLUniformLocation>();
+    const gl = WebGLRenderingContext.prototype;
+    const locate = gl.getUniformLocation;
+    const set = gl.uniform4f;
+    gl.getUniformLocation = function (program, name) {
+      const location = locate.call(this, program, name);
+      if (location && name === 'uBeacon' && this.canvas instanceof HTMLCanvasElement && this.canvas.matches('.live-background')) {
+        locations.add(location);
+      }
+      return location;
+    };
+    gl.uniform4f = function (location, x, y, phase, strength) {
+      set.call(this, location, x, y, phase, strength);
+      if (location && locations.has(location) && this.canvas instanceof HTMLCanvasElement) {
+        this.canvas.dataset.beaconFrame = [phase, strength].join(',');
+      }
+    };
+  });
 });
 
 for (const viewport of [{ width: 390, height: 844 }, { width: 1440, height: 1000 }]) {
@@ -27,36 +46,34 @@ for (const viewport of [{ width: 390, height: 844 }, { width: 1440, height: 1000
     await expect(background).not.toHaveAttribute('data-beacon');
     await page.request.post(`${app.url}/__mock/action`, { data: { type: 'message', roomId: fixture.rooms[0]!.id, authorName: 'Sam', body: 'Ready when you are 👋' } });
     await expect(background).toHaveAttribute('data-beacon', '');
-    await expect(page.locator(viewport.width < 1180 ? '.chat-btn .badge' : '.chat-hint .badge')).toHaveText('1');
+    const badge = page.locator('.dock-chat .badge');
+    await expect(badge).toHaveText('1');
     await page.waitForTimeout(400);
     await page.screenshot({ path: info.outputPath('beacon.png') });
-    const clip = viewport.width < 1180
-      ? { x: 210, y: 0, width: 180, height: 90 }
-      : { x: 1110, y: 790, width: 300, height: 190 };
+    const box = (await badge.boundingBox())!;
+    const clip = { x: Math.max(0, box.x - 120), y: Math.max(0, box.y - 120), width: 240, height: 200 };
     const first = await page.screenshot({ clip });
     await page.waitForTimeout(350);
     expect((await page.screenshot({ clip })).equals(first)).toBe(false);
     await page.emulateMedia({ reducedMotion: 'reduce' });
-    await page.waitForTimeout(400);
-    const still = await page.screenshot({ clip });
-    await page.waitForTimeout(350);
-    expect((await page.screenshot({ clip })).equals(still)).toBe(true);
+    await expect(background).toHaveAttribute('data-beacon-frame', '-1,0.32');
     await page.keyboard.press('Slash');
     await expect(background).not.toHaveAttribute('data-beacon');
-    await expect(page.locator('.chat-btn')).toHaveAttribute('aria-expanded', 'true');
+    await expect(background).toHaveAttribute('data-beacon-frame', '0,0');
+    await expect(page.locator('.dock-chat')).toHaveAttribute('aria-expanded', 'true');
     if (viewport.width < 1180) await page.getByRole('button', { name: 'Close chat', exact: true }).click();
     else {
       await page.getByRole('textbox', { name: 'Message', exact: true }).focus();
       await page.keyboard.press('Escape');
     }
-    await expect(page.locator('.chat-btn')).toHaveAttribute('aria-expanded', 'false');
+    await expect(page.locator('.dock-chat')).toHaveAttribute('aria-expanded', 'false');
     await page.request.post(`${app.url}/__mock/action`, { data: { type: 'message', roomId: fixture.rooms[1]!.id, authorName: 'Sam', body: 'Unread in Games' } });
     await expect(page.getByRole('button', { name: 'Rooms: Lounge', exact: true }).getByTitle('New messages')).toBeAttached();
     await expect(background).not.toHaveAttribute('data-beacon');
     await page.keyboard.press('ArrowRight');
     await expect(background).toHaveAttribute('data-beacon', '');
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
-    await page.getByRole('tab', { name: 'System', exact: true }).click();
+    await page.getByRole('tab', { name: 'General', exact: true }).click();
     await page.getByRole('switch', { name: 'Fewer effects', exact: true }).click();
     await expect(background).not.toHaveAttribute('data-ready');
     await page.getByRole('switch', { name: 'Fewer effects', exact: true }).click();

@@ -2,6 +2,7 @@ import { useEffect } from 'react';
 import { setChatOpen, stepRoom, voice } from '../app/controller';
 import { shortcuts } from '../app/shortcuts';
 import { getState, setState } from '../app/store';
+import { EMOJI_REACTIONS } from '../voice/reactions';
 
 /** Installs the app's shortcuts for the lifetime of the main screen. */
 export function useShortcuts(): void {
@@ -26,6 +27,15 @@ export function useShortcuts(): void {
       if (e.code === shortcuts.mute.code && getState().voice.status === 'connected') void voice.toggleMute();
       else if (e.code === shortcuts.deafen.code && getState().voice.status === 'connected') void voice.toggleDeafen();
       else if (e.code === shortcuts.camera.code && getState().voice.status === 'connected') void voice.toggleCamera();
+      else if (e.code === shortcuts.leave.code) {
+        const v = getState().voice;
+        if (v.status === 'joining' && v.roomId === null) voice.cancelJoin();
+        else if (v.status !== 'idle') document.querySelector<HTMLButtonElement>('.dock .leave')?.click();
+      }
+      else if (e.code.startsWith(shortcuts.react.codePrefix) && !e.repeat && getState().voice.status === 'connected') {
+        const reaction = EMOJI_REACTIONS[Number(e.code.slice(shortcuts.react.codePrefix.length)) - 1];
+        if (reaction) voice.react(reaction.id);
+      }
       else if (e.key === shortcuts.previousRoom.key) stepRoom(-1);
       else if (e.key === shortcuts.nextRoom.key) stepRoom(1);
     };

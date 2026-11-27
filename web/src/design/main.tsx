@@ -16,9 +16,11 @@ import { hashString, PALETTE_NAMES } from '../fx/palette';
 import { t } from '../strings';
 import { idleVoice, type VoicePerson, type VoiceSnapshot } from '../voice/types';
 import { Main } from '../ui/Main';
+import { AccountFlowProvider } from '../ui/AccountFlow';
 import { Orb } from '../ui/Orb';
 import { Entry } from '../ui/Screens';
 import { Message } from '../ui/Message';
+import { ToastHost } from '../ui/Toast';
 
 const NAMES = ['Олена', 'Марк', 'Софія', 'Тарас', 'Ірина', 'Богдан', 'Катя', 'Дмитро'];
 const person = (i: number): VoicePerson => ({
@@ -40,6 +42,7 @@ voice.level = (id) => fakeLevel(id, performance.now() / 1000);
 const patchVoice = (patch: Partial<VoiceSnapshot>) => setState({ voice: { ...getState().voice, ...patch } });
 const inVoice = (people: VoicePerson[], roomId: string): VoiceSnapshot => ({ ...idleVoice, status: 'connected', roomId, joinedAt: performance.now() - 754_000, people, quality: 'good' });
 
+voice.setMuted = async (muted) => patchVoice({ muted });
 voice.toggleMute = async () => patchVoice({ muted: !getState().voice.muted });
 voice.toggleDeafen = async () => patchVoice({ deafened: !getState().voice.deafened });
 voice.toggleShare = async () => patchVoice({ sharing: !getState().voice.sharing });
@@ -58,16 +61,16 @@ function fakeCamera(): MediaStream {
   const paint = () => {
     const t = performance.now() / 1000;
     const sky = ctx.createLinearGradient(0, 0, 0, 360);
-    sky.addColorStop(0, '#3b4a63');
-    sky.addColorStop(1, '#c9a27e');
+    sky.addColorStop(0, 'oklch(0.407 0.046 260.5)');
+    sky.addColorStop(1, 'oklch(0.739 0.067 64.2)');
     ctx.fillStyle = sky;
     ctx.fillRect(0, 0, 640, 360);
     const x = 320 + Math.sin(t) * 14;
-    ctx.fillStyle = '#2a2f3a';
+    ctx.fillStyle = 'oklch(0.305 0.021 265.9)';
     ctx.beginPath();
     ctx.ellipse(x, 400, 130, 130, 0, 0, Math.PI * 2);
     ctx.fill();
-    ctx.fillStyle = '#e6bd9c';
+    ctx.fillStyle = 'oklch(0.826 0.065 60.6)';
     ctx.beginPath();
     ctx.ellipse(x, 170, 62, 78, 0, 0, Math.PI * 2);
     ctx.fill();
@@ -101,7 +104,7 @@ const messages: ChatMessage[] = [
   ['Софія', 2, 38, 'Я буду після восьмої'],
   ['Софія', 2, 37, 'Тільки мікрофон ще не налаштувала'],
   ['Олена', 0, 12, 'Глянула нові орби, живі якісь'],
-].map(([name, i, ago, body], n) => ({ id: `m${n}`, roomId: 'lounge', authorId: person(i as number).visitorId, authorName: name as string, body: body as string, attachments: [], createdAt: minutesAgo(ago as number) }));
+].map(([name, i, ago, body], n) => ({ id: `m${n}`, roomId: 'lounge', authorId: person(i as number).visitorId, authorName: name as string, body: body as string, attachments: [], deleted: false, reactions: [], createdAt: minutesAgo(ago as number) }));
 
 const SCENES = {
   orbs: 'Орби',
@@ -123,7 +126,7 @@ function stage(scene: Scene): void {
   const chats = Object.fromEntries(rooms.map((r) => [r.id, { ...emptyChat(), loaded: true, messages: r.id === 'lounge' ? messages : [] }]));
   const many = NAMES.map((_, i) => person(i));
   setState({
-    phase: 'ready', visitor: { id: self.visitorId, name: self.name, nameTaken: false, colour: { visitorId: self.visitorId, palette: 'sky', revision: 1 } }, live: 'open', chats, notice: null, roomsOpen: false,
+    phase: 'ready', visitor: { id: self.visitorId, name: self.name, nameTaken: false, colour: { visitorId: self.visitorId, palette: 'sky', revision: 1 } }, live: 'open', chats, roomsOpen: false,
     colours: Object.fromEntries(NAMES.map((_, i) => { const id = person(i).visitorId; return [id, { visitorId: id, palette: PALETTE_NAMES[i % PALETTE_NAMES.length]!, revision: 1 }]; })),
     rooms, viewedRoomId: scene === 'empty' ? 'work' : 'lounge', chatOpen: scene === 'chat', voice: idleVoice,
   });
@@ -144,7 +147,7 @@ function fakeIncoming(): void {
   const id = s.viewedRoomId;
   const chat = id ? s.chats[id] : undefined;
   if (!id || !chat) return;
-  const message: ChatMessage = { id: `n${++incoming}`, roomId: id, authorId: person(1).id, authorName: person(1).name, body: 'Заходьте, вже чекаємо', attachments: [], createdAt: new Date().toISOString() };
+  const message: ChatMessage = { id: `n${++incoming}`, roomId: id, authorId: person(1).id, authorName: person(1).name, body: 'Заходьте, вже чекаємо', attachments: [], deleted: false, reactions: [], createdAt: new Date().toISOString() };
   setState({ chats: { ...s.chats, [id]: { ...chat, messages: [...chat.messages, message], unread: chat.unread + 1 } } });
 }
 
@@ -179,18 +182,18 @@ function Design() {
   };
 
   return (
-    <>
+    <ToastHost>
       {scene === 'orbs' ? <OrbSheet /> : phase === 'entry' ? <Entry /> : phase === 'noaccess' ? <Message title={t.noAccessTitle} body={t.noAccessBody} /> : phase === 'revoked' ? <Message title={t.revokedTitle} body={t.revokedBody} /> : <Main key={scene} />}
-      <nav style={{ position: 'fixed', left: 12, bottom: 12, zIndex: 100, display: 'flex', flexDirection: 'column', gap: 2, padding: 6, borderRadius: 16, background: 'rgba(30,30,34,.92)', fontSize: 12 }}>
+      <nav style={{ position: 'fixed', left: 12, bottom: 12, zIndex: 100, display: 'flex', flexDirection: 'column', gap: 2, padding: 6, borderRadius: 16, background: 'oklch(0.237 0.008 285.8 / 0.92)', fontSize: 12 }}>
         {(Object.keys(SCENES) as Scene[]).map((s) => (
-          <button key={s} onClick={() => pick(s)} style={{ padding: '5px 10px', borderRadius: 10, textAlign: 'left', background: s === scene ? '#fff' : 'none', color: s === scene ? '#000' : '#fff' }}>{SCENES[s]}</button>
+          <button key={s} onClick={() => pick(s)} style={{ padding: '5px 10px', borderRadius: 10, textAlign: 'left', background: s === scene ? 'oklch(1 0 0)' : 'none', color: s === scene ? 'oklch(0 0 0)' : 'oklch(1 0 0)' }}>{SCENES[s]}</button>
         ))}
-        <button onClick={fakeIncoming} style={{ padding: '5px 10px', borderRadius: 10, textAlign: 'left', color: '#fff', opacity: .7 }}>+ повідомлення</button>
+        <button onClick={fakeIncoming} style={{ padding: '5px 10px', borderRadius: 10, textAlign: 'left', color: 'oklch(1 0 0)', opacity: .7 }}>+ повідомлення</button>
       </nav>
-    </>
+    </ToastHost>
   );
 }
 
 applyAppearance();
 installInterfaceSounds();
-createRoot(document.getElementById('root')!).render(<Design />);
+createRoot(document.getElementById('root')!).render(<AccountFlowProvider><Design /></AccountFlowProvider>);

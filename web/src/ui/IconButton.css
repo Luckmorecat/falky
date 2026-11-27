@@ -4,7 +4,8 @@
 .ib:active { transform: scale(.94); }
 @media (hover:hover) and (pointer:fine) { .ib:hover { background: var(--raised-2); } }
 .ib[aria-pressed="true"] { background: var(--invert); color: var(--on-invert); }
-.ib.off { background: var(--danger-bg); color: var(--danger); }
+/* Off is a quiet state, not an alarm: the crossed-out icon already says it. */
+.ib.off { color: var(--text-2); }
 .ib.sm { width: 40px; height: 40px; }
 .ib.sm svg.i { width: 18px; height: 18px; }
 

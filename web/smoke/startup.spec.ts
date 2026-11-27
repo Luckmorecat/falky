@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import type { MockState } from '../mock/protocol';
+import { authPreferences } from './account-browser';
 import { chromiumOptions } from './browser';
 import { launchMock } from './launcher';
 
@@ -7,6 +8,34 @@ test.use({ launchOptions: { ...chromiumOptions(), args: ['--use-angle=swiftshade
 let app: Awaited<ReturnType<typeof launchMock>>;
 test.beforeAll(async () => { app = await launchMock(0, { stats: false }); });
 test.afterAll(async () => { await app?.close(); });
+
+test('warms voice when a signed-out account flow starts', async ({ page, context }) => {
+  await authPreferences(page, app.url);
+  const cdp = await context.newCDPSession(page);
+  await cdp.send('Profiler.enable');
+  await cdp.send('Profiler.startPreciseCoverage', { callCount: true });
+  const warmupCalls = async () => {
+    const { result } = await cdp.send('Profiler.takePreciseCoverage');
+    const voice = result.find((script) => script.url.startsWith(`${app.url}/`) && new URL(script.url).pathname === '/src/mock/voice.ts');
+    return voice?.functions.find((fn) => fn.functionName === 'preloadVoice')?.ranges[0]?.count ?? 0;
+  };
+
+  try {
+    await page.goto(app.url);
+    await expect(page.getByRole('button', { name: 'Sign in with a passkey', exact: true })).toBeVisible();
+    await page.waitForFunction(() => performance.getEntriesByName('first-contentful-paint').length > 0);
+    await page.evaluate(async () => {
+      for (let frame = 0; frame < 3; frame++) await new Promise<number>(requestAnimationFrame);
+    });
+    expect(await warmupCalls()).toBe(0);
+
+    await page.getByRole('button', { name: /^Use another device/ }).click();
+    await expect(page.getByRole('dialog', { name: 'Use another device', exact: true })).toBeVisible();
+    await expect.poll(warmupCalls).toBeGreaterThan(0);
+  } finally {
+    await cdp.detach();
+  }
+});
 
 test('keeps background programs through empty and same-size source updates', async ({ page }) => {
   const state: MockState = await (await page.request.post(`${app.url}/__mock/bootstrap`, { data: { scenario: 'quiet' } })).json();
@@ -41,11 +70,58 @@ test('keeps background programs through empty and same-size source updates', asy
   // Membership growth rebuilds only the voice program, retaining the theme surface.
   await expect(field).toHaveAttribute('data-program-builds', '3');
   await page.getByRole('button', { name: 'Leave voice', exact: true }).click();
+  await page.getByRole('dialog').getByRole('button', { name: 'Leave', exact: true }).click();
   await expect(page.locator('.grid .orb')).toHaveCount(1);
   await expect(field).toHaveAttribute('data-program-builds', '4');
   await page.getByRole('button', { name: 'Join', exact: true }).click();
   await expect(page.locator('.grid .orb')).toHaveCount(2);
   await expect(field).toHaveAttribute('data-program-builds', '5');
+});
+
+test('reuses dot geometry across backing resizes and uploads a different lattice', async ({ page, context }) => {
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  const state: MockState = await (await page.request.post(`${app.url}/__mock/bootstrap`, { data: { scenario: 'quiet' } })).json();
+  await page.addInitScript(({ instanceId, generation }) => {
+    localStorage.setItem(`falky.mock-generation.${instanceId}`, String(generation));
+    localStorage.setItem(`falky.mock.${instanceId}.language`, 'en');
+    localStorage.setItem(`falky.mock.${instanceId}.liveBackground`, 'on');
+    const original = WebGLRenderingContext.prototype.bufferData;
+    WebGLRenderingContext.prototype.bufferData = function (target, source, usage) {
+      const canvas = this.canvas;
+      if (canvas instanceof HTMLCanvasElement && canvas.matches('.live-background') && source instanceof Float32Array && source.length > 12) {
+        canvas.dataset.dotUploads = String(Number(canvas.dataset.dotUploads ?? 0) + 1);
+        canvas.dataset.dotGrid = `${source.length / 2}:${source[source.length - 2]},${source[source.length - 1]}`;
+      }
+      Reflect.apply(original, this, [target, source, usage]);
+    };
+  }, state);
+  await page.goto(`${app.url}/?scenario=quiet`);
+  const field = page.locator('.live-background');
+  await expect(field).toHaveAttribute('data-dot-grid', '3600:1430,990');
+  await expect(field).toHaveAttribute('data-dot-uploads', '1');
+
+  await page.setViewportSize({ width: 1444, height: 1000 });
+  await expect(field).toHaveAttribute('width', '1444');
+  await expect(field).toHaveAttribute('data-dot-uploads', '1');
+
+  const cdp = await context.newCDPSession(page);
+  try {
+    const resize = (width: number, height: number) => cdp.send('Emulation.setDeviceMetricsOverride', {
+      width, height, deviceScaleFactor: 1.25, mobile: false,
+    });
+    await resize(1444, 1000);
+    await expect(field).toHaveAttribute('width', '1805');
+    await expect(field).toHaveAttribute('height', '1250');
+    await expect(field).toHaveAttribute('data-dot-uploads', '1');
+
+    await resize(1000, 1440);
+    await expect(field).toHaveAttribute('width', '1250');
+    await expect(field).toHaveAttribute('height', '1800');
+    await expect(field).toHaveAttribute('data-dot-grid', '3600:990,1430');
+    await expect(field).toHaveAttribute('data-dot-uploads', '2');
+  } finally {
+    await cdp.detach();
+  }
 });
 
 test('does not measure a hidden chat and restores the latest messages on opening', async ({ page }) => {
@@ -70,20 +146,20 @@ test('does not measure a hidden chat and restores the latest messages on opening
   await expect(page.locator('.feed .msg').first()).toBeAttached();
   await expect(page.locator('.chat')).toBeHidden();
   expect(await page.locator('html').getAttribute('data-feed-reads')).toBeNull();
-  await page.locator('.chat-btn').click();
+  await page.locator('.dock-chat').click();
   await expect(page.getByText('Welcome back! Try sending a message or joining voice.', { exact: true })).toBeVisible();
   expect(Number(await page.locator('html').getAttribute('data-feed-reads'))).toBeGreaterThan(0);
   await expect(page.locator('.to-latest')).toHaveAttribute('aria-hidden', 'true');
   await page.locator('.feed').evaluate((el) => { el.scrollTop -= 500; });
   await expect.poll(() => page.locator('.to-latest').getAttribute('aria-hidden')).toBe('false');
-  await page.locator('.chat-btn').click();
-  await expect(page.locator('.chat-btn')).toHaveAttribute('aria-expanded', 'false');
+  await page.locator('.dock-chat').click();
+  await expect(page.locator('.dock-chat')).toHaveAttribute('aria-expanded', 'false');
   await page.locator('html').evaluate((el) => { el.removeAttribute('data-feed-reads'); });
   await page.setViewportSize({ width: 430, height: 844 });
   await page.evaluate(() => document.fonts.ready);
   await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
   expect(await page.locator('html').getAttribute('data-feed-reads')).toBeNull();
-  await page.locator('.chat-btn').click();
+  await page.locator('.dock-chat').click();
   await expect(page.locator('.chat')).toBeVisible();
   await expect(page.locator('.to-latest')).toHaveAttribute('aria-hidden', 'false');
 });

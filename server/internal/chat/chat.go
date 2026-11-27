@@ -45,10 +45,23 @@ type Message struct {
 	// when they posted.
 	AuthorID   string
 	AuthorName string
-	// Body is the text as posted.
+	// Body is the text as posted, or as last edited; empty once deleted.
 	Body        string
 	CreatedAt   time.Time
 	Attachments []attachments.Metadata
+	// ReplyTo is the earlier message of the room this one answers, as that
+	// message reads now; nil when it answers none.
+	ReplyTo *Reply
+	// EditedAt is when the author last changed the text; zero when never.
+	EditedAt time.Time
+	// Deleted reports that the author deleted the message. A deleted message
+	// shows no text, attachments, reactions or reply.
+	Deleted bool
+	// Reactions lists each reaction someone gave, in the order of Reactions,
+	// with who gave it.
+	Reactions []ReactionGroup
+
+	replyToID string
 }
 
 // maxBodyLength is the longest message body, in characters.
@@ -69,7 +82,7 @@ var requestKeyPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 const timeLayout = "2006-01-02T15:04:05.000Z"
 
 // selectMessages selects the columns scanMessage reads, in its order.
-const selectMessages = "SELECT id, room_id, author_id, author_name, body, created_at FROM messages"
+const selectMessages = "SELECT id, room_id, author_id, author_name, body, created_at, reply_to, edited_at, deleted_at FROM messages"
 
 var (
 	// ErrInvalidBody reports a message body that breaks the message rules;
@@ -95,6 +108,8 @@ type Service struct {
 	postLimit   *platform.Limiter
 	attachments *attachments.Store
 	publish     func(Message)
+	update      func(Message)
+	reactLimit  *platform.Limiter
 	// publishing holds each Post from its write until it has published, so
 	// messages are published in the order they are committed.
 	publishing sync.Mutex
@@ -122,6 +137,19 @@ func WithPublisher(publish func(Message)) Option {
 	return func(s *Service) { s.publish = publish }
 }
 
+// WithUpdatePublisher makes Edit, Delete and React hand each message they
+// change to publish once committed, in commit order with new messages.
+// publish must not block.
+func WithUpdatePublisher(publish func(Message)) Option {
+	return func(s *Service) { s.update = publish }
+}
+
+// WithReactLimit limits reaction changes per identity with limiter, keyed by
+// visitor ID. Without it, reacting is not limited.
+func WithReactLimit(limiter *platform.Limiter) Option {
+	return func(s *Service) { s.reactLimit = limiter }
+}
+
 // WithAttachments joins ordered drafts and quota changes to the message transaction.
 func WithAttachments(store *attachments.Store) Option {
 	return func(s *Service) { s.attachments = store }
@@ -129,7 +157,7 @@ func WithAttachments(store *attachments.Store) Option {
 
 // New returns the service over db.
 func New(db *platform.DB, opts ...Option) *Service {
-	s := &Service{db: db, now: time.Now, publish: func(Message) {}}
+	s := &Service{db: db, now: time.Now, publish: func(Message) {}, update: func(Message) {}}
 	for _, opt := range opts {
 		opt(s)
 	}
@@ -147,6 +175,14 @@ func New(db *platform.DB, opts ...Option) *Service {
 // room, an ErrInvalidBody, ErrInvalidRequestKey, or ErrRateLimited when a new
 // message would exceed the post limit; a retry is never limited.
 func (s *Service) Post(ctx context.Context, author identity.Visitor, roomID, requestKey, body string, attachmentIDs ...string) (Message, bool, error) {
+	return s.Reply(ctx, author, roomID, requestKey, "", body, attachmentIDs...)
+}
+
+// Reply is Post for a message that answers the earlier message replyTo of the
+// same room; with replyTo empty it answers none. It fails with
+// ErrInvalidReply when replyTo is not a message of the room or was deleted,
+// and a retry must name the same replyTo.
+func (s *Service) Reply(ctx context.Context, author identity.Visitor, roomID, requestKey, replyTo, body string, attachmentIDs ...string) (Message, bool, error) {
 	if !requestKeyPattern.MatchString(requestKey) {
 		return Message{}, false, ErrInvalidRequestKey
 	}
@@ -182,13 +218,18 @@ func (s *Service) Post(ctx context.Context, author identity.Visitor, roomID, req
 			for i, a := range existing.Attachments {
 				persistedIDs[i] = a.ID
 			}
-			if existing.RoomID != roomID || existing.Body != body || !slices.Equal(persistedIDs, attachmentIDs) {
+			if existing.RoomID != roomID || existing.Body != body || existing.replyToID != replyTo || !slices.Equal(persistedIDs, attachmentIDs) {
 				return ErrRequestKeyReused
 			}
 			m = existing
-			return nil
+			return decorate(ctx, tx, []*Message{&m})
 		case !errors.Is(err, sql.ErrNoRows):
 			return err
+		}
+		if replyTo != "" {
+			if err := checkReplyTarget(ctx, tx, roomID, replyTo); err != nil {
+				return err
+			}
 		}
 		if s.postLimit != nil && !s.postLimit.Allow(author.ID) {
 			return ErrRateLimited
@@ -204,11 +245,14 @@ func (s *Service) Post(ctx context.Context, author identity.Visitor, roomID, req
 		if err != nil {
 			return err
 		}
-		m = Message{ID: id, RoomID: roomID, AuthorID: author.ID, AuthorName: author.Name, Body: body, CreatedAt: now, Attachments: []attachments.Metadata{}}
+		m = Message{ID: id, RoomID: roomID, AuthorID: author.ID, AuthorName: author.Name, Body: body, CreatedAt: now, Attachments: []attachments.Metadata{}, Reactions: []ReactionGroup{}, replyToID: replyTo}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO messages
-			(id, room_id, author_id, author_name, body, request_key, created_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?)`,
-			m.ID, m.RoomID, m.AuthorID, m.AuthorName, m.Body, requestKey, now.Format(timeLayout)); err != nil {
+			(id, room_id, author_id, author_name, body, request_key, created_at, reply_to)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+			m.ID, m.RoomID, m.AuthorID, m.AuthorName, m.Body, requestKey, now.Format(timeLayout), sql.NullString{String: replyTo, Valid: replyTo != ""}); err != nil {
+			return err
+		}
+		if err := decorate(ctx, tx, []*Message{&m}); err != nil {
 			return err
 		}
 		if s.attachments != nil {
@@ -221,7 +265,7 @@ func (s *Service) Post(ctx context.Context, author identity.Visitor, roomID, req
 		created = true
 		return nil
 	})
-	if errors.Is(err, ErrRequestKeyReused) || errors.Is(err, ErrRateLimited) {
+	if errors.Is(err, ErrRequestKeyReused) || errors.Is(err, ErrRateLimited) || errors.Is(err, ErrInvalidReply) {
 		return Message{}, false, err
 	}
 	if err != nil {
@@ -348,6 +392,13 @@ func (s *Service) History(ctx context.Context, roomID string, page Page) ([]Mess
 			messages[i].Attachments = append(messages[i].Attachments, linked[messages[i].ID]...)
 		}
 	}
+	ptrs := make([]*Message, len(messages))
+	for i := range messages {
+		ptrs[i] = &messages[i]
+	}
+	if err := decorate(ctx, tx, ptrs); err != nil {
+		return nil, fmt.Errorf("read history: %w", err)
+	}
 	if err = tx.Commit(); err != nil {
 		return nil, fmt.Errorf("read history: %w", err)
 	}
@@ -363,7 +414,8 @@ type scanner interface {
 func scanMessage(row scanner) (Message, error) {
 	var m Message
 	var createdAt string
-	if err := row.Scan(&m.ID, &m.RoomID, &m.AuthorID, &m.AuthorName, &m.Body, &createdAt); err != nil {
+	var replyTo, editedAt, deletedAt sql.NullString
+	if err := row.Scan(&m.ID, &m.RoomID, &m.AuthorID, &m.AuthorName, &m.Body, &createdAt, &replyTo, &editedAt, &deletedAt); err != nil {
 		return Message{}, err
 	}
 	t, err := time.Parse(timeLayout, createdAt)
@@ -371,7 +423,15 @@ func scanMessage(row scanner) (Message, error) {
 		return Message{}, fmt.Errorf("message %s: created_at: %w", m.ID, err)
 	}
 	m.CreatedAt = t
+	if editedAt.Valid {
+		if m.EditedAt, err = time.Parse(timeLayout, editedAt.String); err != nil {
+			return Message{}, fmt.Errorf("message %s: edited_at: %w", m.ID, err)
+		}
+	}
+	m.replyToID = replyTo.String
+	m.Deleted = deletedAt.Valid
 	m.Attachments = []attachments.Metadata{}
+	m.Reactions = []ReactionGroup{}
 	return m, nil
 }
 

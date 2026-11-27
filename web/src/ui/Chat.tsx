@@ -1,18 +1,20 @@
-import { type Ref, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import type { Attachment, Message, Room } from '../api/client';
-import { addFiles, discardMessage, loadOlder, markLatestRead, postMessage, retryMessage, setChatOpen } from '../app/controller';
+import { memo, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import type { Message, MessageReply, Room } from '../api/client';
+import { addFiles, compose, deleteMessage, discardMessage, knock, loadOlder, markLatestRead, postMessage, retryMessage, setChatOpen, stopComposing, toggleReaction, voice } from '../app/controller';
 import { shortcuts } from '../app/shortcuts';
 import { getState, useApp } from '../app/store';
 import { atBottom, followingLatest, rememberedPlace, rememberPlace, scrollToAnchor, sliceRange, stack, type Anchor } from '../chat/place';
 import { gallerySize } from '../chat/gallery';
 import { isImage } from '../chat/images';
+import { emojiFor, MESSAGE_REACTIONS } from '../chat/reactions';
 import { buildFeed, canPost, MESSAGE_MAX, messageLength, type FeedItem, type PendingMessage, splitLinks } from '../chat/timeline';
 import { type PaletteName, paletteStyle } from '../fx/palette';
 import { t } from '../strings';
 import { ComposerTray, Gallery, type OpenImage } from './Attachments';
 import { IconButton } from './IconButton';
 import { Icon } from './Icon';
-import { Lightbox, type ViewerItem } from './Lightbox';
+import { Lightbox } from './Lightbox';
+import { Orb } from './Orb';
 import { useDrawerLayout } from './useDrawerLayout';
 import './Chat.css';
 
@@ -35,7 +37,9 @@ function estimateHeight(row: FeedRow): number {
   const lines = text.trim() ? Math.max(1, Math.ceil(text.length / 36)) : 0;
   const head = row.continued ? 3 : 36;
   const media = (images.length ? gallerySize(images, 300).height + 4 : 0) + (attachments.length - images.length) * 52;
-  return head + lines * 20 + media + (row.kind === 'pending' ? 22 : 0);
+  const quote = (row.kind === 'message' ? row.message.replyTo : row.pending.replyTo) ? 44 : 0;
+  const reactions = row.kind === 'message' && row.message.reactions.length ? 34 : 0;
+  return head + lines * 20 + media + quote + reactions + (row.kind === 'pending' ? 22 : 0);
 }
 
 const leadOf = (rows: FeedRow[], index: number) => {
@@ -60,6 +64,20 @@ function textAnchor(el: HTMLElement): Anchor | null {
   return { key, offset: rowTop - edge, pad: text.getBoundingClientRect().top - rowTop };
 }
 
+const talkFns = new Map<string, () => number>();
+/** How loud someone is in voice right now, so their mark in the chat moves as they talk. One per person, so orbs are not rebuilt. */
+function talkOf(visitorId: string): () => number {
+  let fn = talkFns.get(visitorId);
+  if (!fn) {
+    fn = () => {
+      const person = getState().voice.people.find((p) => p.visitorId === visitorId);
+      return person && !person.muted && !person.deafened ? voice.level(person.id) : 0;
+    };
+    talkFns.set(visitorId, fn);
+  }
+  return fn;
+}
+
 function Body({ text }: { text: string }) {
   return (
     <div className="msg-text">
@@ -68,25 +86,190 @@ function Body({ text }: { text: string }) {
   );
 }
 
-const MessageRow = memo(function MessageRow({ message, own, continued, lead, palette, onOpen }: { message: Message; own: boolean; continued: boolean; lead: boolean; palette: PaletteName | undefined; onOpen: OpenImage }) {
+function Quote({ reply }: { reply: MessageReply }) {
   return (
-    <article className={`msg${own ? ' own' : ''}${continued ? ' cont' : ''}${lead ? ' lead' : ''}`} style={paletteStyle(palette)}>
+    <div className="msg-quote">
+      <span className="msg-quote-author">{reply.authorName}</span>
+      <span className="msg-quote-text">{reply.deleted ? t.messageDeleted : reply.excerpt || t.imagesSummary(1)}</span>
+    </div>
+  );
+}
+
+type OpenMenu = (message: Message, own: boolean, row: HTMLElement) => void;
+type MenuTarget = { message: Message; own: boolean; row: HTMLElement };
+
+const LONG_PRESS_MS = 450;
+const LONG_PRESS_SLOP = 8;
+
+/** Next to the bubble (or the picture, when there is no text), centred on its first line, and kept inside the row when the text fills it. */
+function besideBody(row: HTMLElement, bar: HTMLElement, own: boolean) {
+  const body = ['.msg-text', '.msg-gallery', '.att-file', '.msg-quote'].map((q) => row.querySelector<HTMLElement>(q)).find(Boolean);
+  if (!body) return;
+  const r = row.getBoundingClientRect();
+  const b = body.getBoundingClientRect();
+  const w = bar.offsetWidth;
+  const x = own ? Math.max(0, b.left - r.left - w - 4) : Math.min(r.width - w, b.right - r.left + 4);
+  bar.style.left = `${x}px`;
+  bar.style.top = `${b.top - r.top + Math.min(b.height, 34) / 2 - bar.offsetHeight / 2}px`;
+}
+
+/** With a mouse, a few bare icons beside the message on hover; the rest is in its menu. */
+function MessageTools({ message, own, onMenu }: { message: Message; own: boolean; onMenu: OpenMenu }) {
+  const [picking, setPicking] = useState(false);
+  const bar = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const el = bar.current?.closest<HTMLElement>('.msg');
+    if (!el) return;
+    const place = () => { if (bar.current) besideBody(el, bar.current, own); };
+    place();
+    el.addEventListener('mouseenter', place);
+    return () => el.removeEventListener('mouseenter', place);
+  }, [own, picking]);
+  return (
+    <div ref={bar} className="msg-tools" role="toolbar" aria-label={t.messageActions} onMouseLeave={() => setPicking(false)}>
+      {picking ? MESSAGE_REACTIONS.map((r) => (
+        <button key={r.id} type="button" className="msg-tool emoji" aria-label={t.messageReactionNames[r.id]} title={t.messageReactionNames[r.id]} onClick={() => { setPicking(false); void toggleReaction(message, r.id); }}>{r.emoji}</button>
+      )) : (
+        <>
+          <button type="button" className="msg-tool" aria-label={t.messageReact} title={t.messageReact} onClick={() => setPicking(true)}><Icon name="smile" /></button>
+          <button type="button" className="msg-tool" aria-label={t.messageReply} title={t.messageReply} onClick={() => compose('reply', message)}><Icon name="reply" /></button>
+          <button type="button" className="msg-tool" aria-label={t.messageMore} title={t.messageMore} aria-haspopup="menu" onClick={(e) => { const el = e.currentTarget.closest<HTMLElement>('.msg'); if (el) onMenu(message, own, el); }}><Icon name="dots" /></button>
+        </>
+      )}
+    </div>
+  );
+}
+
+/** Right-click or a long press: the page dims, the message is shown again on top, reactions above it and what can be done below. */
+function MessageMenu({ target, selfId, onClose }: { target: MenuTarget; selfId: string; onClose: () => void }) {
+  const { message, own, row } = target;
+  const dialog = useRef<HTMLDialogElement>(null);
+  const [confirming, setConfirming] = useState(false);
+  const [place, setPlace] = useState<{ top: number; left?: number; right?: number } | null>(null);
+
+  useLayoutEffect(() => {
+    const el = dialog.current;
+    if (!el) return;
+    if (!el.open) el.showModal();
+    const body = row.querySelector<HTMLElement>('.msg-text, .msg-gallery, .att-file') ?? row;
+    const at = body.getBoundingClientRect();
+    const head = el.querySelector<HTMLElement>('.msg-menu-react')?.offsetHeight ?? 0;
+    const room = window.innerHeight - el.offsetHeight - 12;
+    const top = Math.max(12, Math.min(at.top - head - 8, room));
+    setPlace(own ? { top, right: Math.max(12, window.innerWidth - at.right) } : { top, left: Math.max(12, at.left) });
+  }, [row, own, confirming]);
+
+  const act = (fn: () => void) => { fn(); onClose(); };
+  const mine = new Set(message.reactions.filter((g) => g.visitorIds.includes(selfId)).map((g) => g.reaction));
+  const text = message.body.trim();
+  return (
+    <dialog ref={dialog} className={`msg-menu${own ? ' own' : ''}`} aria-label={t.messageActions}
+      style={place ?? { visibility: 'hidden' }}
+      onCancel={(e) => { e.preventDefault(); onClose(); }}
+      onKeyDown={(e) => { if (e.key === 'Escape') e.stopPropagation(); }}
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="msg-menu-react">
+        {MESSAGE_REACTIONS.map((r) => (
+          <button key={r.id} type="button" className={mine.has(r.id) ? 'mine' : ''} aria-pressed={mine.has(r.id)} aria-label={t.messageReactionNames[r.id]}
+            onClick={() => act(() => void toggleReaction(message, r.id))}>{r.emoji}</button>
+        ))}
+      </div>
+      <div className="msg-menu-preview">{text || t.imagesSummary(message.attachments.length)}</div>
+      <div className="msg-menu-list" role="menu">
+        {confirming ? (
+          <button type="button" role="menuitem" className="danger" autoFocus onClick={() => act(() => void deleteMessage(message))}>{t.deleteAsk}<Icon name="trash" /></button>
+        ) : (
+          <>
+            <button type="button" role="menuitem" onClick={() => act(() => compose('reply', message))}>{t.messageReply}<Icon name="reply" /></button>
+            {text && <button type="button" role="menuitem" onClick={() => act(() => void navigator.clipboard?.writeText(message.body))}>{t.messageCopy}<Icon name="copy" /></button>}
+            {own && <button type="button" role="menuitem" onClick={() => act(() => compose('edit', message))}>{t.messageEdit}<Icon name="edit" /></button>}
+            {own && <button type="button" role="menuitem" className="danger" onClick={() => setConfirming(true)}>{t.messageDelete}<Icon name="trash" /></button>}
+          </>
+        )}
+      </div>
+    </dialog>
+  );
+}
+
+/** A held finger opens the menu, as right-click does with a mouse; moving it scrolls instead. */
+function useLongPress(open: (el: HTMLElement) => void) {
+  const press = useRef<{ timer: number; x: number; y: number } | null>(null);
+  const cancel = () => { if (press.current) clearTimeout(press.current.timer); press.current = null; };
+  return {
+    onPointerDown: (e: ReactPointerEvent<HTMLElement>) => {
+      if (e.pointerType !== 'touch') return;
+      cancel();
+      const el = e.currentTarget;
+      press.current = { x: e.clientX, y: e.clientY, timer: window.setTimeout(() => { press.current = null; navigator.vibrate?.(8); open(el); }, LONG_PRESS_MS) };
+    },
+    onPointerMove: (e: ReactPointerEvent<HTMLElement>) => {
+      const p = press.current;
+      if (p && Math.hypot(e.clientX - p.x, e.clientY - p.y) > LONG_PRESS_SLOP) cancel();
+    },
+    onPointerUp: cancel,
+    onPointerCancel: cancel,
+    onContextMenu: (e: ReactMouseEvent<HTMLElement>) => {
+      if ((e.target as HTMLElement).closest('a')) return;
+      e.preventDefault();
+      cancel();
+      open(e.currentTarget);
+    },
+  };
+}
+
+function Reactions({ message, selfId }: { message: Message; selfId: string }) {
+  if (!message.reactions.length) return null;
+  return (
+    <div className="msg-reactions">
+      {message.reactions.map((g) => {
+        const mine = g.visitorIds.includes(selfId);
+        return (
+          <button key={g.reaction} type="button" className={`msg-reaction${mine ? ' mine' : ''}`} aria-pressed={mine}
+            aria-label={`${t.messageReactionNames[g.reaction]}: ${g.visitorIds.length}`} onClick={() => void toggleReaction(message, g.reaction)}>
+            <span aria-hidden="true">{emojiFor(g.reaction)}</span>{g.visitorIds.length}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+const MessageRow = memo(function MessageRow({ message, own, continued, lead, palette, onOpen, selfId, knockable, onMenu }: { message: Message; own: boolean; continued: boolean; lead: boolean; palette: PaletteName | undefined; onOpen: OpenImage; selfId: string; knockable: boolean; onMenu: OpenMenu }) {
+  const press = useLongPress((el) => onMenu(message, own, el));
+  return (
+    <article className={`msg${own ? ' own' : ''}${continued ? ' cont' : ''}${lead ? ' lead' : ''}${message.deleted ? ' deleted' : ''}`} style={paletteStyle(palette)} tabIndex={-1}
+      {...(message.deleted ? {} : press)}>
       {!continued && (
         <div className="msg-meta">
+          <span className="msg-avatar"><Orb seed={message.authorId} palette={palette} level={talkOf(message.authorId)} /></span>
           <span className="msg-author">{message.authorName}</span>
           <time className="msg-time" dateTime={message.createdAt}>{timeOf(message.createdAt)}</time>
+          {knockable && (
+            <button type="button" className="msg-knock" aria-label={t.knockAction(message.authorName)} title={t.knockAction(message.authorName)} onClick={() => void knock(message.roomId, message.authorId, message.authorName)}>
+              <Icon name="knock" />
+            </button>
+          )}
         </div>
       )}
-      {message.attachments.length > 0 && <Gallery attachments={message.attachments} onOpen={onOpen} />}
-      {message.body.trim() && <Body text={message.body} />}
+      {!message.deleted && <MessageTools message={message} own={own} onMenu={onMenu} />}
+      {message.replyTo && <Quote reply={message.replyTo} />}
+      {message.deleted ? <div className="msg-text gone">{t.messageDeleted}</div> : (
+        <>
+          {message.attachments.length > 0 && <Gallery attachments={message.attachments} onOpen={onOpen} />}
+          {message.body.trim() && <Body text={message.body} />}
+          {message.editedAt && <span className="msg-edited">{t.messageEdited}</span>}
+          <Reactions message={message} selfId={selfId} />
+        </>
+      )}
     </article>
   );
 });
 
-function PendingRow({ pending, continued, lead, name, palette }: { pending: PendingMessage; continued: boolean; lead: boolean; name: string; palette: PaletteName | undefined }) {
+function PendingRow({ pending, continued, lead, name, seed, palette }: { pending: PendingMessage; continued: boolean; lead: boolean; name: string; seed: string; palette: PaletteName | undefined }) {
   return (
     <article className={`msg own pending${continued ? ' cont' : ''}${lead ? ' lead' : ''}`} style={paletteStyle(palette)}>
-      {!continued && <div className="msg-meta"><span className="msg-author">{name}</span></div>}
+      {!continued && <div className="msg-meta"><span className="msg-avatar"><Orb seed={seed} palette={palette} level={talkOf(seed)} /></span><span className="msg-author">{name}</span></div>}
+      {pending.replyTo && <Quote reply={pending.replyTo} />}
       {pending.attachments.length > 0 && <Gallery attachments={pending.attachments} local />}
       {pending.body.trim() && <Body text={pending.body} />}
       <div className={`msg-state${pending.failed ? ' err' : ''}`}>
@@ -103,30 +286,24 @@ function PendingRow({ pending, continued, lead, name, palette }: { pending: Pend
 }
 
 /**
- * Always on the page, mostly past its right edge, with the start of its lines
- * showing and blurring away. A mouse anywhere over the strip it comes into, or
- * focus in it, brings it in; only then does it count as read. It has no
- * background and nothing else moves, so the page's dots stay and the interface
- * keeps out of its way for good. The strip itself stands still, so the chat
- * sliding under the mouse cannot make it flicker. On a phone there is no hover,
- * so it opens over the page by a button.
+ * Opened by its button in the dock, like the other controls, and only then
+ * counted as read. With a mouse it is a card standing over the dock that Escape
+ * or a click elsewhere puts away; on a phone it covers the page.
  */
-export function Chat({ room, unreadCounterRef }: { room: Room | null; unreadCounterRef?: Ref<HTMLSpanElement> }) {
+export function Chat({ room }: { room: Room | null }) {
   const open = useApp((s) => s.chatOpen);
   const lang = useApp((s) => s.settings.language);
-  const unread = useApp((s) => (s.viewedRoomId ? (s.chats[s.viewedRoomId]?.unread ?? 0) : 0));
   const drawer = useDrawerLayout();
-  const aside = useRef<HTMLElement>(null);
-  const hovering = useRef(false);
-  const settling = useRef<ReturnType<typeof setTimeout> | null>(null);
-  /** Someone wrote while the chat is back: it shows itself for a moment. */
-  const [nudged, setNudged] = useState(false);
-  const lastSeen = useRef<{ roomId?: string; messageId?: string }>({});
+  const strip = useRef<HTMLDivElement>(null);
+  const composer = useRef<HTMLDivElement>(null);
   const chat = useApp((s) => (room ? s.chats[room.id] : undefined));
   const newAfterId = useApp((s) => s.newAfterId);
   const visitor = useApp((s) => s.visitor);
   const colours = useApp((s) => s.colours);
   const selfId = visitor?.id ?? '';
+  // Only from inside this room's voice, and never to whoever is already in it.
+  const voiceHere = useApp((s) => s.voice.status === 'connected' && !!room && s.voice.roomId === room.id);
+  const canKnock = (authorId: string) => voiceHere && authorId !== selfId && !room?.occupancy.some((p) => p.visitorId === authorId);
   const paletteFor = (id: string) => colours[id]?.palette;
   const feed = useRef<HTMLDivElement>(null);
   const heights = useRef(new Map<string, number>());
@@ -134,6 +311,8 @@ export function Chat({ room, unreadCounterRef }: { room: Room | null; unreadCoun
   /** Older pages wait until the saved place has been applied, so the first paint at the top does not fetch them. */
   const placed = useRef(false);
   const placedRoom = useRef<string | null>(null);
+  /** The layout the feed was last placed for: scrolling alone never moves it, only a change of what is laid out. */
+  const placedLayout = useRef('');
   const adjusting = useRef(false);
   const [scrollPos, setScrollPos] = useState(0);
   const [measured, setMeasured] = useState(0);
@@ -152,9 +331,24 @@ export function Chat({ room, unreadCounterRef }: { room: Room | null; unreadCoun
   const announced = useRef('');
   const [live, setLive] = useState('');
 
+  const composingAny = useApp((s) => s.composing);
+  const composing = composingAny && room && composingAny.roomId === room.id ? composingAny : null;
+  const editing = composing?.kind === 'edit' ? composing.message : null;
   const draft = room ? (drafts[room.id] ?? '') : '';
-  const sendable = canPost(draft, readyCount) && !busy;
-  const items = useMemo(() => (chat ? buildFeed(chat, visitor?.id, newAfterId) : []), [chat, visitor?.id, newAfterId, lang]);
+  const sendable = editing ? canPost(draft, editing.attachments.length) : canPost(draft, readyCount) && !busy;
+  const messages = chat?.messages;
+  const pending = chat?.pending;
+  const authorId = visitor?.id;
+  // Read-state changes are also when the feed picks up a new day, time zone or system language.
+  const { dayStart, timeZone, locale } = useMemo(() => ({
+    dayStart: new Date().setHours(0, 0, 0, 0),
+    timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    locale: t.locale,
+  }), [chat, authorId, newAfterId, lang]);
+  const items = useMemo(
+    () => messages && pending ? buildFeed({ messages, pending }, authorId, newAfterId, new Date(dayStart)) : [],
+    [messages, pending, authorId, newAfterId, dayStart, timeZone, locale],
+  );
   const rows = useMemo<FeedRow[]>(() => {
     const list: FeedRow[] = [];
     if (chat?.loadingOlder) list.push({ kind: 'loading', key: 'loading' });
@@ -162,9 +356,13 @@ export function Chat({ room, unreadCounterRef }: { room: Room | null; unreadCoun
     return list;
   }, [chat?.loadingOlder, items]);
   const count = messageLength(draft);
+  const limits = useApp((s) => s.attachmentLimits);
+  const limitsText = t.attachLimits(limits.maxAttachments, Math.round(limits.maxFileBytes / 1024 / 1024));
   const keys = useMemo(() => rows.map((row) => row.key), [rows]);
-  const heightsNow = rows.map((row) => heights.current.get(row.key) ?? estimateHeight(row));
-  const laid = stack(heightsNow, frame.top, frame.bottom, frame.height);
+  const laid = useMemo(() => {
+    const rowHeights = rows.map((row) => heights.current.get(row.key) ?? estimateHeight(row));
+    return stack(rowHeights, frame.top, frame.bottom, frame.height);
+  }, [rows, frame, measured]);
   const visible = sliceRange(laid.tops, scrollPos, frame.height);
   const topGap = laid.tops[visible.start] ?? 0;
   const bottomGap = Math.max(0, laid.scrollHeight - (laid.tops[visible.end] ?? laid.scrollHeight));
@@ -182,7 +380,7 @@ export function Chat({ room, unreadCounterRef }: { room: Room | null; unreadCoun
 
   useLayoutEffect(() => {
     const el = feed.current;
-    if (!el || !room || (drawer && !open)) return;
+    if (!el || !room || !open) return;
     const measure = () => {
       if (placedRoom.current !== room.id) {
         placedRoom.current = room.id;
@@ -212,6 +410,17 @@ export function Chat({ room, unreadCounterRef }: { room: Room | null; unreadCoun
         return;
       }
       const place = rememberedPlace(room.id) ?? { following: true, anchor: null };
+      const layout = `${room.id}|${laid.scrollHeight}|${height}|${width}`;
+      // A scroll in flight is ahead of the place noted at its last event; setting it back would pull the feed against the hand.
+      if (placed.current && placedLayout.current === layout) {
+        const now = el.scrollTop;
+        if (Math.abs(scrollRef.current - now) > 0.5) {
+          scrollRef.current = now;
+          setScrollPos(now);
+        }
+        return;
+      }
+      placedLayout.current = layout;
       const max = Math.max(0, laid.scrollHeight - height);
       const next = place.following ? max : place.anchor ? scrollToAnchor(keys, laid.tops, place.anchor, max) : null;
       setAtBottomNow((prev) => (prev === place.following ? prev : place.following));
@@ -250,7 +459,7 @@ export function Chat({ room, unreadCounterRef }: { room: Room | null; unreadCoun
 
   useEffect(() => {
     const el = feed.current;
-    if (!el || (drawer && !open)) return;
+    if (!el || !open) return;
     let cancel: (() => void) | undefined;
     const measure = () => {
       const style = getComputedStyle(el);
@@ -270,45 +479,80 @@ export function Chat({ room, unreadCounterRef }: { room: Room | null; unreadCoun
   }, [room?.id, open, drawer]);
 
   useEffect(() => {
-    if (open && drawer && matchMedia('(pointer: fine)').matches) input.current?.focus({ preventScroll: true });
-  }, [open, room?.id, drawer]);
+    if (!open || !matchMedia('(pointer: fine)').matches) return;
+    // The page shows the chat a frame later, from Main's effect.
+    const id = requestAnimationFrame(() => input.current?.focus({ preventScroll: true }));
+    return () => cancelAnimationFrame(id);
+  }, [open, room?.id]);
+
+  useLayoutEffect(() => {
+    const panel = strip.current;
+    const controls = composer.current;
+    const field = input.current;
+    const viewport = panel?.closest<HTMLElement>('.app-viewport');
+    const notices = viewport?.querySelector('.float-top');
+    if (!open || !panel || !controls || !field || !viewport || !notices) return;
+    const latest = controls.querySelector<HTMLElement>('.to-latest');
+
+    const measure = () => {
+      const chat = panel.getBoundingClientRect();
+      const host = notices.getBoundingClientRect();
+      const overlaps = chat.left < host.right && chat.right > host.left;
+      viewport.toggleAttribute('data-chat-toast-overlap', overlaps);
+      if (!overlaps) {
+        viewport.removeAttribute('data-chat-latest-gutter');
+        return;
+      }
+      const frame = viewport.getBoundingClientRect();
+      const latestAbove = !atBottomNow && latest ? -latest.offsetTop : 0;
+      const gutterEnd = chat.left - frame.left + 12 + (latest?.offsetWidth ?? 0) + 6;
+      const noticeSpace = chat.bottom - frame.top - controls.offsetHeight - latestAbove;
+      const useGutter = drawer && latestAbove > 0 && noticeSpace < 120 && frame.width - gutterEnd >= 296;
+      if (useGutter) viewport.style.setProperty('--chat-latest-right', `${gutterEnd}px`);
+      viewport.toggleAttribute('data-chat-latest-gutter', useGutter);
+      const above = useGutter ? 0 : latestAbove;
+      const capacity = chat.bottom - frame.top - above;
+      viewport.style.setProperty('--chat-composer-capacity', `${capacity}px`);
+      viewport.style.setProperty('--chat-field-space', `${capacity - controls.offsetHeight + field.offsetHeight}px`);
+      // The strip stays put while its card slides in. Its bottom defines the final composer edge.
+      viewport.style.setProperty('--chat-composer-space', `${frame.bottom - chat.bottom + controls.offsetHeight + above}px`);
+    };
+    measure();
+    const resize = new ResizeObserver(measure);
+    resize.observe(viewport);
+    resize.observe(panel);
+    resize.observe(controls);
+    if (latest) resize.observe(latest);
+    const dock = viewport.querySelector('.dock');
+    if (dock) resize.observe(dock);
+    return () => {
+      resize.disconnect();
+      viewport.removeAttribute('data-chat-toast-overlap');
+      viewport.removeAttribute('data-chat-latest-gutter');
+      viewport.style.removeProperty('--chat-composer-capacity');
+      viewport.style.removeProperty('--chat-composer-space');
+      viewport.style.removeProperty('--chat-field-space');
+      viewport.style.removeProperty('--chat-latest-right');
+    };
+  }, [open, atBottomNow, drawer]);
 
   const newest = chat?.messages.at(-1);
+
+  // The card goes away when the person turns to the page, not while they look at a picture from it or use the dock.
   useEffect(() => {
-    const before = lastSeen.current;
-    lastSeen.current = { roomId: room?.id, messageId: newest?.id };
-    if (open || before.roomId !== room?.id) {
-      setNudged(false);
-      return;
-    }
-    // The first page of history is not news.
-    if (!newest || !before.messageId || before.messageId === newest.id || newest.authorId === visitor?.id) return;
-    setNudged(true);
-    const id = setTimeout(() => setNudged(false), 4000);
-    return () => clearTimeout(id);
-  }, [room?.id, newest?.id, newest?.authorId, open, visitor?.id]);
-
-  useEffect(() => () => {
-    if (settling.current) clearTimeout(settling.current);
-  }, []);
-
-  /** Forward at once when wanted; back only after a moment, so a passing mouse does no harm. */
-  const settle = () => {
-    if (drawer) return;
-    if (settling.current) clearTimeout(settling.current);
-    const wanted = () => hovering.current || viewingRef.current || !!aside.current?.contains(document.activeElement);
-    if (wanted()) {
-      if (!getState().chatOpen) setChatOpen(true);
-      return;
-    }
-    settling.current = setTimeout(() => {
-      if (!wanted() && getState().chatOpen) setChatOpen(false);
-    }, 280);
-  };
+    if (!open) return;
+    const away = (e: PointerEvent) => {
+      const target = e.target as Element | null;
+      if (viewingRef.current || strip.current?.contains(target) || target?.closest('.dock, dialog, .float-top')) return;
+      setChatOpen(false);
+    };
+    addEventListener('pointerdown', away);
+    return () => removeEventListener('pointerdown', away);
+  }, [open]);
 
   const onScroll = () => {
     const el = feed.current;
-    if (!el || !room || (drawer && !open)) return;
+    if (!el || !room || !open) return;
     const top = el.scrollTop;
     if (Math.abs(scrollRef.current - top) <= 0.5) return;
     scrollRef.current = top;
@@ -334,8 +578,24 @@ export function Chat({ room, unreadCounterRef }: { room: Room | null; unreadCoun
     if (room) setDrafts((d) => ({ ...d, [room.id]: value }));
   };
 
+  // Starting an edit puts its text in the field; leaving it clears what was being changed.
+  const editingId = editing?.id;
+  useEffect(() => {
+    if (!room || !editingId) return;
+    setDrafts((d) => ({ ...d, [room.id]: editing!.body }));
+    input.current?.focus({ preventScroll: true });
+    return () => setDrafts((d) => ({ ...d, [room.id]: '' }));
+  }, [room?.id, editingId]);
+  useEffect(() => {
+    if (composing?.kind === 'reply') input.current?.focus({ preventScroll: true });
+  }, [composing?.kind, composing?.message.id]);
+
   const send = () => {
     if (!room || !sendable) return;
+    if (editing) {
+      postMessage(room.id, draft);
+      return;
+    }
     rememberPlace(room.id, { following: true, anchor: null });
     postMessage(room.id, draft);
     setDraft('');
@@ -355,69 +615,67 @@ export function Chat({ room, unreadCounterRef }: { room: Room | null; unreadCoun
     if (!first && newest) setLive(`${newest.authorName}: ${newest.body.trim() ? newest.body : t.imagesSummary(newest.attachments.length)}`);
   }, [open, newest, room?.id]);
 
-  /** Every picture in the room, oldest first, so the viewer can step through them all. */
-  const viewerItems = useMemo<ViewerItem[]>(() => (chat?.messages ?? []).flatMap((m) => m.attachments
-    .filter(isImage)
-    .map((attachment: Attachment) => ({ attachment, authorName: m.authorName, createdAt: m.createdAt }))), [chat?.messages]);
-
   const openImage = useCallback<OpenImage>((id) => setViewing(id), []);
-  const closeViewer = () => {
-    setViewing(null);
-    // The chat stays while the person is still with it.
-    requestAnimationFrame(settle);
-  };
+  const [menu, setMenu] = useState<MenuTarget | null>(null);
+  const openMenu = useCallback<OpenMenu>((message, own, row) => setMenu({ message, own, row }), []);
+  const closeViewer = () => setViewing(null);
 
-  useEffect(() => { setViewing(null); }, [room?.id]);
+  useEffect(() => { setViewing(null); setMenu(null); }, [room?.id]);
+  useEffect(() => { if (!open) setMenu(null); }, [open]);
 
-  const hasFiles = (e: React.DragEvent) => e.dataTransfer.types.includes('Files');
+  // Files dragged anywhere over the page open the chat and land in it.
+  const roomId = room?.id;
+  useEffect(() => {
+    if (!roomId) return;
+    const files = (e: DragEvent) => !!e.dataTransfer?.types.includes('Files');
+    let depth = 0;
+    const enter = (e: DragEvent) => {
+      if (!files(e)) return;
+      e.preventDefault();
+      depth += 1;
+      setDropping(true);
+      if (!getState().chatOpen) setChatOpen(true);
+    };
+    const over = (e: DragEvent) => {
+      if (!files(e)) return;
+      e.preventDefault();
+      e.dataTransfer!.dropEffect = 'copy';
+    };
+    const leave = (e: DragEvent) => {
+      if (!files(e)) return;
+      depth = Math.max(0, depth - 1);
+      if (!depth) setDropping(false);
+    };
+    const drop = (e: DragEvent) => {
+      if (!files(e)) return;
+      e.preventDefault();
+      depth = 0;
+      setDropping(false);
+      if (e.dataTransfer?.files.length) addFiles(roomId, e.dataTransfer.files);
+      input.current?.focus({ preventScroll: true });
+    };
+    addEventListener('dragenter', enter);
+    addEventListener('dragover', over);
+    addEventListener('dragleave', leave);
+    addEventListener('drop', drop);
+    return () => {
+      removeEventListener('dragenter', enter);
+      removeEventListener('dragover', over);
+      removeEventListener('dragleave', leave);
+      removeEventListener('drop', drop);
+    };
+  }, [roomId]);
+
   const takeFiles = (list: FileList | File[] | null | undefined) => {
     if (room && list && list.length) addFiles(room.id, list);
   };
 
   return (
-    <div
-      className={`chat-strip${nudged ? ' nudge' : ''}`}
-      onPointerEnter={(e) => {
-        if (e.pointerType !== 'mouse') return;
-        hovering.current = true;
-        settle();
-      }}
-      onPointerLeave={(e) => {
-        if (e.pointerType !== 'mouse') return;
-        hovering.current = false;
-        settle();
-      }}
-      onDragEnter={(e) => {
-        if (!room || !hasFiles(e)) return;
-        e.preventDefault();
-        setDropping(true);
-        if (!getState().chatOpen) setChatOpen(true);
-      }}
-      onDragOver={(e) => {
-        if (!room || !hasFiles(e)) return;
-        e.preventDefault();
-        e.dataTransfer.dropEffect = 'copy';
-      }}
-      onDragLeave={(e) => {
-        if (e.currentTarget.contains(e.relatedTarget as Node | null)) return;
-        setDropping(false);
-        settle();
-      }}
-      onDrop={(e) => {
-        if (!hasFiles(e)) return;
-        e.preventDefault();
-        setDropping(false);
-        takeFiles(e.dataTransfer.files);
-        input.current?.focus({ preventScroll: true });
-      }}
-    >
+    <div ref={strip} className="chat-strip">
     <aside
-      ref={aside}
       className="chat"
       aria-label={t.chat}
-      {...(drawer && !open ? { inert: true } : {})}
-      onFocus={settle}
-      onBlur={settle}
+      {...(!open ? { inert: true } : {})}
     >
       <div className="live-msg" aria-live="polite">{live}</div>
       <div className="feed" ref={feed} onScroll={onScroll}>
@@ -435,8 +693,8 @@ export function Chat({ room, unreadCounterRef }: { room: Room | null; unreadCoun
                   {row.kind === 'loading' ? <div className="day">{t.loadingOlder}</div>
                     : row.kind === 'day' ? <div className="day">{row.label}</div>
                       : row.kind === 'new' ? <div className="new-line">{t.newMessages}</div>
-                        : row.kind === 'message' ? <MessageRow message={row.message} own={row.message.authorId === selfId} continued={row.continued} lead={lead} palette={paletteFor(row.message.authorId)} onOpen={openImage} />
-                          : <PendingRow pending={row.pending} continued={row.continued} lead={lead} name={visitor?.name ?? ''} palette={paletteFor(selfId)} />}
+                        : row.kind === 'message' ? <MessageRow message={row.message} own={row.message.authorId === selfId} continued={row.continued} lead={lead} palette={paletteFor(row.message.authorId)} onOpen={openImage} selfId={selfId} knockable={canKnock(row.message.authorId)} onMenu={openMenu} />
+                          : <PendingRow pending={row.pending} continued={row.continued} lead={lead} name={visitor?.name ?? ''} seed={selfId} palette={paletteFor(selfId)} />}
                 </div>
               );
             })}
@@ -444,24 +702,36 @@ export function Chat({ room, unreadCounterRef }: { room: Room | null; unreadCoun
           </>
         )}
       </div>
-      <button
-        className={`to-latest${atBottomNow ? '' : ' show'}`}
-        tabIndex={atBottomNow ? -1 : 0}
-        aria-hidden={atBottomNow}
-        onClick={followBottom}
-      >
-        <Icon name="down" />{t.toLatest}
-      </button>
       {dropping && (
         <div className="drop-zone" aria-hidden="true">
-          <div><Icon name="image" />{t.dropImages}</div>
+          <div><Icon name="image" />{t.dropImages}<small>{limitsText}</small></div>
         </div>
       )}
-      <div className="composer">
-        {room && <ComposerTray roomId={room.id} />}
+      <div ref={composer} className="composer">
+        <button
+          className={`to-latest${atBottomNow ? '' : ' show'}`}
+          tabIndex={atBottomNow ? -1 : 0}
+          aria-hidden={atBottomNow}
+          onClick={followBottom}
+        >
+          <Icon name="down" /><span className="tx">{t.toLatest}</span>
+        </button>
+        <div className="composer-context">
+          {composing && (
+            <div className="composing">
+              <Icon name={composing.kind === 'edit' ? 'edit' : 'reply'} />
+              <div className="composing-text">
+                <strong>{composing.kind === 'edit' ? t.editingMessage : t.replyingTo(composing.message.authorName)}</strong>
+                {composing.kind === 'reply' && <span>{composing.message.body.trim() || t.imagesSummary(composing.message.attachments.length)}</span>}
+              </div>
+              <IconButton size="small" aria-label={t.stopComposing} onClick={stopComposing}><Icon name="x" /></IconButton>
+            </div>
+          )}
+          {room && !editing && <ComposerTray roomId={room.id} />}
+        </div>
         {count > MESSAGE_MAX - 400 && <span className={`count${count > MESSAGE_MAX ? ' over' : ''}`}>{count} / {MESSAGE_MAX}</span>}
         <div className="field" data-tip={`${t.focusChat} (${shortcuts.chat.label} · ${shortcuts.chatEnter.label})`}>
-          <IconButton size="small" className="attach" aria-label={t.attachImage} disabled={!room} onClick={() => picker.current?.click()}><Icon name="image" /></IconButton>
+          <IconButton size="small" className="attach" aria-label={t.attachImage} data-tip={limitsText} disabled={!room} onClick={() => picker.current?.click()}><Icon name="plus" /></IconButton>
           <input
             ref={picker}
             type="file"
@@ -491,9 +761,22 @@ export function Chat({ room, unreadCounterRef }: { room: Room | null; unreadCoun
               takeFiles(pasted);
             }}
             onKeyDown={(e) => {
+              if (e.key === 'Escape' && composing) {
+                e.preventDefault();
+                stopComposing();
+                return;
+              }
               if (e.key === 'Escape') {
                 e.currentTarget.blur();
-                if (drawer) setChatOpen(false);
+                setChatOpen(false);
+              }
+              // As in most chats: Up in an empty field edits your last message.
+              if (e.key === 'ArrowUp' && !draft && !composing && chat) {
+                const last = [...chat.messages].reverse().find((m) => m.authorId === selfId && !m.deleted);
+                if (last) {
+                  e.preventDefault();
+                  compose('edit', last);
+                }
               }
               if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
                 e.preventDefault();
@@ -505,9 +788,8 @@ export function Chat({ room, unreadCounterRef }: { room: Room | null; unreadCoun
         </div>
       </div>
     </aside>
-    {viewing && <Lightbox items={viewerItems} startId={viewing} onClose={closeViewer} />}
-    <div className="chat-veil" aria-hidden="true"><i /><i /><i /><i /><b /><u /></div>
-    {unread > 0 && <div className="chat-hint" aria-hidden="true"><span ref={unreadCounterRef} className="badge">{unread > 99 ? '99+' : unread}</span></div>}
+    {menu && <MessageMenu target={menu} selfId={selfId} onClose={() => setMenu(null)} />}
+    {viewing && <Lightbox messages={messages} startId={viewing} onClose={closeViewer} />}
     </div>
   );
 }
