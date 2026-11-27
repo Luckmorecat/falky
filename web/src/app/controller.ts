@@ -52,15 +52,28 @@ function acceptVisitor(visitor: Visitor): void {
   mergeColours([visitor.colour]);
 }
 
+const chatAuthors = new WeakMap<readonly Message[], readonly string[]>();
+
+function loadedAuthorIds(messages: readonly Message[]): readonly string[] {
+  const cached = chatAuthors.get(messages);
+  if (cached) return cached;
+  const ids = [...new Set(messages.map((message) => message.authorId))];
+  chatAuthors.set(messages, ids);
+  return ids;
+}
+
 function knownVisitorIds(): string[] {
   const s = getState();
-  return [...new Set([
+  const ids = new Set([
     ...(s.visitor ? [s.visitor.id] : []),
     ...Object.keys(s.colours),
     ...s.rooms.flatMap((r) => r.occupancy.map((p) => p.visitorId)),
     ...s.voice.people.map((p) => p.visitorId),
-    ...Object.values(s.chats).flatMap((c) => c.messages.map((m) => m.authorId)),
-  ])];
+  ]);
+  for (const chat of Object.values(s.chats)) {
+    for (const authorId of loadedAuthorIds(chat.messages)) ids.add(authorId);
+  }
+  return [...ids];
 }
 
 /** Explicit-ID snapshots include offline authors; failed or omitted IDs remain retryable. */
