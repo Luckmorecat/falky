@@ -394,7 +394,11 @@ export function Settings({ open, onClose }: { open: boolean; onClose(): void }) 
     ['account', t.account.account, 'key'],
     ...(showKeys ? [['keys', t.tabKeys, 'keyboard'] as const] : []),
   ];
-  const [chosen, setChosen] = useState<Tab>('general');
+  const [{ chosen, mounted }, setTabState] = useState<{ chosen: Tab; mounted: ReadonlySet<Tab> }>(() => ({
+    chosen: 'general',
+    // Device sign-in approvals can open a drawer from the hidden Account panel.
+    mounted: new Set(['general', 'account']),
+  }));
   const [scanReturn, setScanReturn] = useState<'idle' | 'away' | 'pending'>('idle');
   const tab = tabs.some(([id]) => id === chosen) ? chosen : 'general';
 
@@ -417,19 +421,26 @@ export function Settings({ open, onClose }: { open: boolean; onClose(): void }) 
     tabButton(tab)?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   }, [tab]);
 
+  const chooseTab = (id: Tab) => {
+    setTabState((state) => state.chosen === id ? state : {
+      chosen: id,
+      mounted: state.mounted.has(id) ? state.mounted : new Set([...state.mounted, id]),
+    });
+  };
+
   const onTabKey = (e: ReactKeyboardEvent) => {
     const at = tabs.findIndex(([id]) => id === tab);
     const next = { ArrowDown: at + 1, ArrowUp: at - 1, ArrowRight: at + 1, ArrowLeft: at - 1, Home: 0, End: tabs.length - 1 }[e.key];
     if (next === undefined) return;
     e.preventDefault();
     const [id] = tabs[(next + tabs.length) % tabs.length]!;
-    setChosen(id);
+    chooseTab(id);
     tabButton(id)?.focus();
   };
 
   const panel = (id: Tab, body: ReactNode) => (
     <div key={id} id={`set-panel-${id}`} className="settings-panel" role="tabpanel" aria-labelledby={`set-tab-${id}`} tabIndex={0} hidden={tab !== id}>
-      {body}
+      {mounted.has(id) && body}
     </div>
   );
 
@@ -447,7 +458,7 @@ export function Settings({ open, onClose }: { open: boolean; onClose(): void }) 
         <h2 id="set-title">{t.settings}</h2>
         <div ref={tabList} className="tabs" role="tablist" aria-label={t.settings} aria-orientation={narrow ? 'horizontal' : 'vertical'} onKeyDown={onTabKey}>
           {tabs.map(([id, label, icon]) => (
-            <button key={id} id={`set-tab-${id}`} type="button" role="tab" aria-selected={tab === id} aria-controls={`set-panel-${id}`} tabIndex={tab === id ? 0 : -1} onClick={() => setChosen(id)}>
+            <button key={id} id={`set-tab-${id}`} type="button" role="tab" aria-selected={tab === id} aria-controls={`set-panel-${id}`} tabIndex={tab === id ? 0 : -1} onClick={() => chooseTab(id)}>
               <Icon name={icon} />
               <span className="tx">{label}</span>
             </button>

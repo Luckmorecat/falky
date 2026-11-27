@@ -130,16 +130,21 @@ test('link requests recover after issuer reload without copy authority; leading-
   const candidates = await Promise.all([devicePage(browser, state), devicePage(browser, state), devicePage(browser, state)]);
   try {
     const codes = [];
-    for (const candidate of candidates) codes.push(await receiveLink(candidate, link));
-    expect(codes[0]).toBe('0000'); expect(new Set(codes).size).toBe(3);
-    await expect(page.locator('.device-pending')).toHaveCount(3);
+    for (const candidate of candidates.slice(0, 2)) codes.push(await receiveLink(candidate, link));
+    expect(codes[0]).toBe('0000');
+    await expect(page.locator('.device-pending')).toHaveCount(2);
     const details = page.locator('.device-pending .device-request-details').first();
     await expect(details.getByText('Kyiv, Ukraine', { exact: true })).toHaveCSS('font-size', '13px');
     await expect(details.getByText('203.0.113.42')).toHaveCSS('font-size', '11px');
     await page.getByRole('textbox', { name: 'Four-digit code', exact: true }).fill('9999');
     await page.getByRole('button', { name: 'Approve sign-in', exact: true }).click();
     await expect(page.getByRole('alert')).toContainText('That code was not accepted');
-    await page.reload(); await accountSettings(page);
+    await page.reload();
+    await page.getByRole('button', { name: 'Settings', exact: true }).click();
+    await expect(page.locator('#set-tab-general')).toHaveAttribute('aria-selected', 'true');
+    codes.push(await receiveLink(candidates[2]!, link));
+    expect(new Set(codes).size).toBe(3);
+    await expect(page.getByRole('dialog', { name: 'Sign-in link', exact: true })).toBeVisible();
     await expect(page.locator('.device-pending')).toHaveCount(3);
     await expect(page.getByRole('textbox', { name: 'Sign-in link', exact: true })).toHaveCount(0);
     await expect(page.getByText('This link can no longer be copied.', { exact: false })).toBeVisible();

@@ -707,11 +707,19 @@ test('settings window: keyboard stays inside, tabs move by arrows, one confirmed
   const tabs = settings.getByRole('tab');
   await expect(tabs).toHaveText(['General', 'Voice', 'Sound & notifications', 'Video', 'Screen sharing', 'Profile', 'Account', 'Shortcuts']);
 
+  const voicePanel = settings.locator('#set-panel-voice');
+  const voiceBody = voicePanel.locator('.set-stack');
+  await expect(voicePanel).toBeAttached();
+  await expect(voiceBody).toHaveCount(0);
+
   await settingsTab(page, 'General');
   await page.keyboard.press('ArrowDown');
   await expect(settings.getByRole('tab', { name: 'Voice' })).toBeFocused();
   await expect(settings.getByRole('tab', { name: 'Voice' })).toHaveAttribute('aria-selected', 'true');
+  await expect(voiceBody).toBeVisible();
   await page.keyboard.press('ArrowUp');
+  await expect(voiceBody).toBeAttached();
+  await expect(voicePanel).toBeHidden();
   await page.keyboard.press('ArrowUp');
   await expect(settings.getByRole('tab', { name: 'Shortcuts' })).toBeFocused();
   await page.keyboard.press('Home');
