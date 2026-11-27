@@ -284,7 +284,12 @@ impl ScreenCaptureSink {
         let Ok(mut video) = self.0.video.try_lock() else {
             return;
         };
-        let mut buffer = I420Buffer::new(width, height);
+        let pending = video
+            .latest
+            .take()
+            .filter(|frame| (frame.width, frame.height) == (width, height));
+        let mut buffer =
+            pending.map_or_else(|| I420Buffer::new(width, height), |frame| frame.buffer);
         let (stride_y, stride_u, stride_v) = buffer.strides();
         let (y, u, v) = buffer.data_mut();
         // libyuv names packed formats by the little-endian word, not byte order.
@@ -510,6 +515,8 @@ mod tests {
         let (sink, capture) = screen_capture();
         sink.bgra(1, 1, 4, &[0, 0, 255, 255]);
         let first = capture.video().unwrap();
+        sink.bgra(2, 2, 8, &[126; 16]);
+        sink.bgra(1, 2, 4, &[126; 8]);
         sink.rgba(1, 2, 8, &[255, 0, 0, 255, 0, 0, 0, 0, 255, 0, 0, 255]);
         sink.rgba(1, 2, 8, &[255, 0, 0, 255]);
         let latest = capture.video().unwrap();
