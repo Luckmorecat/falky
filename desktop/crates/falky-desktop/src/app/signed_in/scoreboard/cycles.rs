@@ -73,12 +73,27 @@ async fn scoreboard_app_cycles() {
 #[tokio::test]
 #[ignore = "release scoreboard"]
 async fn scoreboard_voice_gain_reset() {
+    voice_gain_reset("voice_gain_reset", 1).await;
+}
+
+#[tokio::test]
+#[ignore = "release scoreboard"]
+async fn scoreboard_voice_gain_reset_warm() {
+    voice_gain_reset("voice_gain_reset_warm", 128).await;
+}
+
+async fn voice_gain_reset(name: &str, warmup: usize) {
     let mut session = fixture(Scene::Empty, &settings::Preferences::default());
     let mut snapshots = session.voice.snapshots();
-    reset_gain(&mut session, &mut snapshots, &"gain-warmup".into()).await;
+    {
+        let connection = "gain-warmup".into();
+        for _ in 0..warmup {
+            reset_gain(&mut session, &mut snapshots, &connection).await;
+        }
+    }
 
     let mut next = 0;
-    cycles("voice_gain_reset", async || {
+    cycles(name, async || {
         next += 1;
         let connection = format!("gain-fixture-{next:08}").into();
         reset_gain(&mut session, &mut snapshots, &connection).await;
