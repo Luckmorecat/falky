@@ -72,6 +72,47 @@ async fn scoreboard_app_cycles() {
 
 #[tokio::test]
 #[ignore = "release scoreboard"]
+async fn scoreboard_voice_gain_reset() {
+    let mut session = fixture(Scene::Empty, &settings::Preferences::default());
+    let mut snapshots = session.voice.snapshots();
+    reset_gain(&mut session, &mut snapshots, &"gain-warmup".into()).await;
+
+    let mut next = 0;
+    cycles("voice_gain_reset", async || {
+        next += 1;
+        let connection = format!("gain-fixture-{next:08}").into();
+        reset_gain(&mut session, &mut snapshots, &connection).await;
+    })
+    .await;
+}
+
+async fn reset_gain(
+    session: &mut SignedIn,
+    snapshots: &mut watch::Receiver<VoiceSnapshot>,
+    connection: &ConnectionId,
+) {
+    for percent in [75, 100] {
+        assert!(
+            session
+                .voice
+                .command(VoiceCommand::Gain(connection.clone(), percent))
+        );
+        let snapshot = tokio::time::timeout(
+            Duration::from_secs(2),
+            snapshots.wait_for(|snapshot| {
+                snapshot.gains.get(connection).copied().unwrap_or(100) == percent
+            }),
+        )
+        .await
+        .expect("voice actor publishes a gain change")
+        .expect("voice actor remains active")
+        .clone();
+        session.update_voice(snapshot);
+    }
+}
+
+#[tokio::test]
+#[ignore = "release scoreboard"]
 async fn scoreboard_share_cycles() {
     let mut renderer = headless_renderer().await;
     let preferences = settings::Preferences::default();
