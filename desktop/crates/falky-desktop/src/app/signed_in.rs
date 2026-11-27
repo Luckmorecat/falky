@@ -603,6 +603,7 @@ impl SignedIn {
         theme: EffectiveTheme,
         language: Language,
         viewport: Viewport,
+        simplified_orbs: bool,
     ) -> Subscription<Message> {
         let scope = self.live.scope.clone();
         self.shell
@@ -617,7 +618,7 @@ impl SignedIn {
                     chat_open: self.chat_open,
                     viewport,
                 },
-                true,
+                !simplified_orbs,
                 self.viewing_call() && self.share.watched.is_some(),
             )
             .with((scope, self.viewer_scope()))
@@ -709,6 +710,7 @@ impl SignedIn {
             },
             shell::Details {
                 push_to_talk: preferences.voice.push_to_talk,
+                simplified_orbs: preferences.simplified_orbs,
                 joined_at: self.voice_joined,
                 notice,
                 room_people: &room_people,

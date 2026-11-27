@@ -79,6 +79,7 @@ pub enum ConnectionNotice {
 pub struct Details<'a> {
     pub push_to_talk: bool,
     pub motion: bool,
+    pub simplified_orbs: bool,
     pub joined_at: Option<Instant>,
     pub notice: Option<ConnectionNotice>,
     pub room_people: &'a [RoomPeople<'a>],
@@ -91,6 +92,7 @@ impl Default for Details<'_> {
         Self {
             push_to_talk: false,
             motion: true,
+            simplified_orbs: false,
             joined_at: None,
             notice: None,
             room_people: &[],
@@ -247,7 +249,7 @@ impl State {
             && !input.voice.muted
             && !input.voice.deafened
             && input.voice.mic_level > 0.03;
-        let lively = input.stage.iter().any(stage::active) || microphone_active;
+        let lively = motion && (input.stage.iter().any(stage::active) || microphone_active);
         let interval = if lively || watching {
             Some(Duration::from_millis(17))
         } else if self.close_rooms_at.is_some() || (motion && !input.stage.is_empty()) {

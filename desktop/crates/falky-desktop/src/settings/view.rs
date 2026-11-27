@@ -233,6 +233,11 @@ fn general<'a>(props: &Props<'a>, colors: Colors) -> Content<'a> {
             themes.into(),
             text(t(Key::Language)).size(15).into(),
             language.into(),
+            toggle(
+                t(Key::SimplifiedOrbs),
+                props.prefs.simplified_orbs,
+                Message::SimplifiedOrbs,
+            ),
         ],
         None,
         colors,

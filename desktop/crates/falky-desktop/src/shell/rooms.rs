@@ -4,9 +4,7 @@ use super::orb::{Orb, Slot};
 use super::style;
 use super::{Action, ConnectionNotice, HEADING_FONT, NUMBER_FONT, View, at, label, single_line};
 use crate::ui_contract::{RoomIndicator, ShellAction};
-use iced::widget::{
-    Canvas, Row, center, column, container, mouse_area, row, scrollable, shader, tooltip,
-};
+use iced::widget::{Canvas, Row, center, column, container, mouse_area, row, scrollable, tooltip};
 use iced::{Color, Element, Fill, Rectangle};
 use std::f32::consts::PI;
 
@@ -204,7 +202,7 @@ fn chip<'a, Message: Clone + 'a>(
     let words = container(column![name, single_line(occupancy, 13.0, c.secondary)].spacing(2))
         .width(Fill)
         .clip(true);
-    let content = row![shader(mark).width(44).height(44), words]
+    let content = row![mark.view(44.0, ctx.details.simplified_orbs), words]
         .spacing(12)
         .align_y(iced::Center);
     let press = super::controls::press(

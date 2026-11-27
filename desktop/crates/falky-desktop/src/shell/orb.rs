@@ -1,13 +1,17 @@
 use super::style;
 use bytemuck::{Pod, Zeroable};
+use iced::widget::shader;
 use iced::widget::shader::{Pipeline, Primitive, Program, Viewport};
-use iced::{Color, Rectangle, mouse};
+use iced::{Color, Element, Rectangle, mouse};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::Mutex;
 
+mod simple;
+
 pub(super) const IDLE_SECONDS: f32 = 1.0 / 15.0;
 pub(super) const TALK_PADDING: f32 = 1.12;
+const SPEECH_SCALE: f32 = 0.09;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(super) enum Slot {
@@ -41,6 +45,14 @@ impl Orb {
             grayscale: false,
             still: true,
             reduced_motion: false,
+        }
+    }
+
+    pub fn view<'a, Message: 'a>(self, size: f32, simplified: bool) -> Element<'a, Message> {
+        if simplified {
+            Element::new(simple::SimpleOrb { orb: self, size })
+        } else {
+            shader(self).width(size).height(size).into()
         }
     }
 }
@@ -115,7 +127,7 @@ impl<Message> Program<Message> for Orb {
             (state.paint * 5.1 + f32::from((self.seed % 997) as u16)).sin() * 0.02 * level
         };
         let padding = if self.still { 1.0 } else { TALK_PADDING };
-        let scale = 1.0 + level * 0.09;
+        let scale = 1.0 + level * SPEECH_SCALE;
         OrbDraw {
             slot: self.slot,
             uniform: Uniform {

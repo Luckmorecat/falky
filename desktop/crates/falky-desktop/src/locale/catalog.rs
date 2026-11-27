@@ -178,6 +178,7 @@ catalog! {
     ThemeSystem => "System", "Системна";
     Language => "Language", "Мова";
     LanguageSystem => "System", "Як у системі";
+    SimplifiedOrbs => "Simplified orbs", "Спрощені сфери";
     EventSounds => "Event sounds", "Звуки подій";
     Notifications => "Message notifications", "Сповіщення про повідомлення";
     Save => "Save", "Зберегти";

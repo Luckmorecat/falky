@@ -7,9 +7,7 @@ use super::style::{self, alpha};
 use super::{Action, HEADING_FONT, ShareAction, ShareCaptureStatus, View, at, label, single_line};
 use crate::locale::{self, Key};
 use crate::ui_contract::StageParticipant;
-use iced::widget::{
-    Column, Row, Space, Stack, center, column, container, scrollable, shader, tooltip,
-};
+use iced::widget::{Column, Row, Space, Stack, center, column, container, scrollable, tooltip};
 use iced::{Center, Color, Element, Fill, Rectangle};
 
 fn heard_level(person: &StageParticipant<'_>) -> f32 {
@@ -172,12 +170,17 @@ fn tile<'a, Message: Clone + 'a>(
         .min((size - name_size - gap - 6.0) / TALK_PADDING)
         .max(1.0);
     let display_size = orb_size * TALK_PADDING;
+    let level = heard_level(person);
     let orb = Orb {
         slot: Slot::Stage(index),
         seed: style::hash_string(person.visitor_id.as_str()),
         colors: style::palette(person.palette, ctx.input.theme),
         now: ctx.state.seconds(),
-        target_level: heard_level(person),
+        target_level: if ctx.details.simplified_orbs && speaking(person) {
+            level.max(0.3)
+        } else {
+            level
+        },
         still: false,
         grayscale: dimmed
             || person.muted
@@ -186,7 +189,7 @@ fn tile<'a, Message: Clone + 'a>(
         reduced_motion: !ctx.details.motion,
         opacity,
     };
-    let drawing = shader(orb).width(display_size).height(display_size);
+    let drawing = orb.view(display_size, ctx.details.simplified_orbs);
     let mut image = if miniature {
         Stack::new().push(container(drawing).center_x(size))
     } else {

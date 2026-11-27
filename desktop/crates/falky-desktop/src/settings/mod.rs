@@ -126,6 +126,7 @@ pub enum Message {
     Tab(Tab),
     Theme(ThemePreference),
     Language(LanguagePreference),
+    SimplifiedOrbs(bool),
     InputDevice(String),
     OutputDevice(String),
     VoiceFlag(VoiceFlag, bool),
@@ -301,6 +302,7 @@ impl State {
             }
             Message::Theme(value) => prefs.theme = value,
             Message::Language(value) => prefs.language = value,
+            Message::SimplifiedOrbs(on) => prefs.simplified_orbs = on,
             Message::InputDevice(id) => prefs.voice.mic_id = id,
             Message::OutputDevice(id) => prefs.voice.speaker_id = id,
             Message::VoiceFlag(flag, on) => match flag {

@@ -3,7 +3,7 @@ use super::orb::{Orb, Slot};
 use super::style;
 use super::{HEADING_FONT, View, at, single_line};
 use crate::ui_contract::ShellAction;
-use iced::widget::{Column, Row, container, shader};
+use iced::widget::{Column, Row, container};
 use iced::{Center, Color, Element, Rectangle};
 
 pub(super) fn view<'a, Message: Clone + 'a>(
@@ -56,11 +56,13 @@ pub(super) fn view<'a, Message: Clone + 'a>(
             let tint = palette.map_or(c.secondary, |name| {
                 style::identity_name(name, ctx.input.theme)
             });
-            content = content.push(shader(avatar).width(18).height(18)).push(
-                container(single_line(item.author.clone(), 14.0, tint).font(HEADING_FONT))
-                    .max_width(width * 0.4)
-                    .clip(true),
-            );
+            content = content
+                .push(avatar.view(18.0, ctx.details.simplified_orbs))
+                .push(
+                    container(single_line(item.author.clone(), 14.0, tint).font(HEADING_FONT))
+                        .max_width(width * 0.4)
+                        .clip(true),
+                );
         }
         content =
             content.push(container(single_line(item.summary.clone(), 15.0, c.text)).clip(true));

@@ -15,6 +15,28 @@ fn visitor() -> Visitor {
 }
 
 #[test]
+fn simplified_orbs_toggle_is_a_local_preference() {
+    let mut state = State::default();
+    let mut prefs = Preferences::default();
+    let visitor = visitor();
+    let audio = AudioStatus::default();
+    state.open(&visitor);
+
+    for enabled in [true, false] {
+        assert_eq!(
+            state.update(
+                Message::SimplifiedOrbs(enabled),
+                &mut prefs,
+                &visitor,
+                &audio
+            ),
+            Some(Action::PreferencesChanged)
+        );
+        assert_eq!(prefs.simplified_orbs, enabled);
+    }
+}
+
+#[test]
 fn voice_settings_and_audio_test_are_routed_and_test_stops_on_close() {
     let mut state = State::default();
     let mut prefs = Preferences::default();

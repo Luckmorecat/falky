@@ -16,6 +16,7 @@ use super::share::{ShareSettings, ShareVolume};
 pub struct Preferences {
     pub theme: ThemePreference,
     pub language: LanguagePreference,
+    pub simplified_orbs: bool,
     pub voice: VoiceSettings,
     pub chimes: bool,
     pub notifications: bool,
@@ -30,6 +31,7 @@ impl Default for Preferences {
         Self {
             theme: ThemePreference::default(),
             language: LanguagePreference::default(),
+            simplified_orbs: false,
             voice: VoiceSettings::default(),
             chimes: true,
             notifications: false,
@@ -98,10 +100,12 @@ mod tests {
         let mut prefs = Preferences::load_from(&path).unwrap();
         assert_eq!(prefs.theme, ThemePreference::Dark);
         assert_eq!(prefs.language, LanguagePreference::System);
+        assert!(!prefs.simplified_orbs);
         assert!(prefs.chimes && !prefs.notifications);
         assert!(prefs.voice.away_mute && prefs.voice.echo_cancellation);
         prefs.theme = ThemePreference::Light;
         prefs.language = LanguagePreference::Uk;
+        prefs.simplified_orbs = true;
         prefs.voice.mic_id = "USB audio".into();
         prefs.voice.away_minutes = AwayMinutes::Five;
         prefs.shortcuts.mute = KeyBinding {
@@ -119,7 +123,8 @@ mod tests {
         assert_eq!(restarted.gains(&other).count(), 0);
         let json: serde_json::Value =
             serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-        assert_eq!(json.as_object().unwrap().len(), 9);
+        assert_eq!(json["simplifiedOrbs"], true);
+        assert_eq!(json.as_object().unwrap().len(), 10);
     }
 
     #[test]

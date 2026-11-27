@@ -139,7 +139,8 @@ async fn scoreboard_wakeups() {
     let preferences = settings::Preferences::default();
     for scene in [Scene::Empty, Scene::Silent, Scene::Stage, Scene::Share] {
         let session = fixture(scene, &preferences);
-        let subscription = session.shell_subscription(EXPECTED_THEME, Language::En, VIEWPORT);
+        let subscription =
+            session.shell_subscription(EXPECTED_THEME, Language::En, VIEWPORT, false);
         let mut ticks_per_second = 0.0;
         for recipe in into_recipes(subscription) {
             let mut events = recipe.stream(Box::pin(stream::empty()));

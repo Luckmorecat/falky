@@ -897,6 +897,7 @@ impl App {
                         self.effective_theme(),
                         self.language(),
                         self.viewport,
+                        self.preferences.simplified_orbs,
                     )
                 } else {
                     Subscription::none()
