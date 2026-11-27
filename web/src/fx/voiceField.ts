@@ -14,6 +14,8 @@ export function createVoiceField(count: number) {
   const voices = new Float32Array(count * 4);
   const history = new Float32Array(count * HISTORY);
   const active = new Float32Array(count);
+  const historyPeaks = new Float32Array(count);
+  const peakSampleTimes = new Float64Array(count);
   let lastSample = 0;
   let lastTime = 0;
   return {
@@ -37,9 +39,13 @@ export function createVoiceField(count: number) {
           const fraction = Math.max(0, Math.min(1, (sampleTime - previousTime) / Math.max(time - previousTime, .0001)));
           history[i * HISTORY] = previous + (level - previous) * fraction;
         }
-        let peak = level;
-        for (let j = 0; j < HISTORY; j++) peak = Math.max(peak, history[i * HISTORY + j]!);
-        active[i] = peak > .001 ? 1 : 0;
+        if (peakSampleTimes[i] !== lastSample) {
+          let peak = 0;
+          for (let j = 0; j < HISTORY; j++) peak = Math.max(peak, history[i * HISTORY + j]!);
+          historyPeaks[i] = peak;
+          peakSampleTimes[i] = lastSample;
+        }
+        active[i] = Math.max(level, historyPeaks[i]!) > .001 ? 1 : 0;
       }
       return { phase: Math.max(0, time - lastSample), moving: active.some((value) => value > 0) };
     },
@@ -47,6 +53,8 @@ export function createVoiceField(count: number) {
       for (let i = 0; i < count; i++) voices[i * 4 + 2] = 0;
       history.fill(0);
       active.fill(0);
+      historyPeaks.fill(0);
+      peakSampleTimes.fill(lastTime);
       lastSample = lastTime;
     },
   };
