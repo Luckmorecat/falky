@@ -39,6 +39,7 @@ enum Scene {
     Stage,
     Chat,
     Share,
+    FullscreenShare,
 }
 
 impl Scene {
@@ -49,11 +50,20 @@ impl Scene {
             Self::Stage => "stage",
             Self::Chat => "chat",
             Self::Share => "share",
+            Self::FullscreenShare => "fullscreen_share",
         }
     }
 
     fn has_voice(self) -> bool {
-        matches!(self, Self::Silent | Self::Stage | Self::Share)
+        matches!(self, Self::Silent | Self::Stage) || self.has_share()
+    }
+
+    fn has_share(self) -> bool {
+        matches!(self, Self::Share | Self::FullscreenShare)
+    }
+
+    fn has_chat(self) -> bool {
+        matches!(self, Self::Chat | Self::FullscreenShare)
     }
 }
 
@@ -70,7 +80,13 @@ async fn scoreboard_scenes() {
         platform: &platform,
         preferences: &preferences,
     };
-    for scene in [Scene::Empty, Scene::Stage, Scene::Chat, Scene::Share] {
+    for scene in [
+        Scene::Empty,
+        Scene::Stage,
+        Scene::Chat,
+        Scene::Share,
+        Scene::FullscreenShare,
+    ] {
         view.run(scene);
     }
 }
@@ -146,6 +162,11 @@ struct HeadlessView<'a> {
 impl HeadlessView<'_> {
     fn run(&mut self, scene: Scene) {
         let mut session = fixture(scene, self.preferences);
+        if scene == Scene::FullscreenShare {
+            session
+                .shell
+                .update(shell::Action::Share(shell::ShareAction::ToggleFullscreen));
+        }
         let pictures = scene_pictures(scene);
         let sample_frame = |index: usize| pictures.as_ref().map(|frames| &frames[index / 2 % 2]);
         let mut tree = Tree::empty();
@@ -213,6 +234,14 @@ impl HeadlessView<'_> {
                 &format!("scene.{}.playback", scene.name()),
                 &[&hashes.map(u64::to_le_bytes).concat()],
             );
+        }
+
+        if scene == Scene::FullscreenShare {
+            assert!(session.shell.exit_share_fullscreen());
+            assert!(session.chat_open);
+            session.shell.set_scoreboard_time(elapsed(0));
+            self.draw(&session, &mut tree, sample_frame(0));
+            save_screenshot("fullscreen_share.return_to_chat", &self.screenshot());
         }
     }
 
@@ -319,7 +348,7 @@ impl HeadlessView<'_> {
 }
 
 fn scene_pictures(scene: Scene) -> Option<[Arc<dyn shell::PlanarFrame>; 2]> {
-    (scene == Scene::Share).then(|| {
+    scene.has_share().then(|| {
         [0, 1].map(|variant| {
             Arc::new(perf_fixture::Picture::new(1920, 1080, variant)) as Arc<dyn shell::PlanarFrame>
         })
@@ -414,7 +443,7 @@ fn fixture(scene: Scene, preferences: &settings::Preferences) -> SignedIn {
     let mut session = SignedIn {
         live: LiveState::new(scope.clone(), account),
         chat: chat::Chat::new(scope, api.clone(), visitor, read.clone()),
-        chat_open: scene == Scene::Chat,
+        chat_open: scene.has_chat(),
         editor_focused: false,
         settings: settings::State::default(),
         shell: shell::State::default(),
@@ -442,7 +471,7 @@ fn fixture(scene: Scene, preferences: &settings::Preferences) -> SignedIn {
     if scene.has_voice() {
         snapshot.room = Some(room.clone());
         snapshot.connection = Some("connection-0".into());
-        let count = if scene == Scene::Share { 2 } else { 6 };
+        let count = if scene.has_share() { 2 } else { 6 };
         snapshot.participants = (0..count)
             .map(|index| VoiceParticipant {
                 connection_id: format!("connection-{index}").into(),
@@ -452,7 +481,7 @@ fn fixture(scene: Scene, preferences: &settings::Preferences) -> SignedIn {
                 muted: false,
                 deafened: false,
                 camera: false,
-                screen: scene == Scene::Share && index == 1,
+                screen: scene.has_share() && index == 1,
                 speaking: scene == Scene::Stage,
                 level: if scene == Scene::Stage {
                     0.55 + index as f32 * 0.033
@@ -461,7 +490,7 @@ fn fixture(scene: Scene, preferences: &settings::Preferences) -> SignedIn {
                 },
             })
             .collect();
-        snapshot.watched_share = (scene == Scene::Share).then(|| "connection-1".into());
+        snapshot.watched_share = scene.has_share().then(|| "connection-1".into());
     }
     let occupancy = snapshot
         .participants
@@ -478,7 +507,7 @@ fn fixture(scene: Scene, preferences: &settings::Preferences) -> SignedIn {
         occupancy,
     }];
     drop(session.chat.select_room(Some(room.clone())));
-    if scene == Scene::Chat {
+    if scene.has_chat() {
         drop(session.chat.set_open(true));
         chat::scoreboard::load_timeline(&mut session.chat, &room);
     }
