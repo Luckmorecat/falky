@@ -87,7 +87,7 @@ export function Stage({ room, background }: { room: Room; background?: RefObject
       const element = tiles.get(p.id)?.querySelector<HTMLElement>('.orb');
       return element && colours[p.visitorId] ? [{ element, palette: colours[p.visitorId]!.palette, level: () => {
         const person = getState().voice.people.find((person) => person.id === p.id);
-        return person && !person.muted && !person.deafened ? levelOf(p.id)() : 0;
+        return person && !person.muted && !person.deafened ? voice.level(p.id) : 0;
       } }] : [];
     });
     field.setSources(sources);
@@ -162,24 +162,13 @@ export function Stage({ room, background }: { room: Room; background?: RefObject
             deafened={p.deafened}
             mini={!!shown}
             adjustable={inThisRoom && p.live && !p.isSelf}
-            level={p.live ? levelOf(p.id) : undefined}
+            live={p.live}
             cameraTrackId={p.cameraTrackId}
           />
         ))}
       </div>
     </div>
   );
-}
-
-const levelFns = new Map<string, () => number>();
-/** One function per connection, so a block's animation is not rebuilt on each render. */
-function levelOf(id: string): () => number {
-  let fn = levelFns.get(id);
-  if (!fn) {
-    fn = () => voice.level(id);
-    levelFns.set(id, fn);
-  }
-  return fn;
 }
 
 interface NativeFullscreenVideo extends HTMLVideoElement {

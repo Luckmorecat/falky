@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { prefs } from '../app/prefs';
 import { setParticipantVolume, voice } from '../app/controller';
 import { useApp } from '../app/store';
@@ -18,8 +18,7 @@ export interface TileProps {
   name: string;
   palette?: PaletteName;
   isSelf?: boolean;
-  /** How loud they are now; absent outside the room's voice, where it is not known. */
-  level?: () => number;
+  live?: boolean;
   muted?: boolean;
   deafened?: boolean;
   /** Whether this client hears them, so their volume can change. */
@@ -56,11 +55,12 @@ function Camera({ id, trackId, mirror }: { id: string; trackId: string; mirror: 
 }
 
 /** A connection in the room: their orb, their name, and how they are heard. */
-export function Tile({ id, visitorId, name, palette, isSelf, level, muted, deafened, adjustable, mini, cameraTrackId }: TileProps) {
+export function Tile({ id, visitorId, name, palette, isSelf, live, muted, deafened, adjustable, mini, cameraTrackId }: TileProps) {
   const tile = useRef<HTMLElement>(null);
   const mirror = useApp((s) => s.settings.cameraMirror);
   const [volumeOpen, setVolumeOpen] = useState(false);
   const [volume, setVolume] = useState(() => prefs.volume(id));
+  const level = useCallback(() => voice.level(id), [id]);
 
   const nativeAudio = usesNativeAudio();
   const locallyMuted = !isSelf && volume === 0;
@@ -86,7 +86,7 @@ export function Tile({ id, visitorId, name, palette, isSelf, level, muted, deafe
         // No hover on a touch screen: a tap on the orb brings its controls up instead.
         onPointerUp={adjustable && !nativeAudio && !mini ? (e) => { if (e.pointerType !== 'mouse') setVolumeOpen(!volumeOpen); } : undefined}
       >
-        <Orb seed={visitorId} palette={palette} level={level}>
+        <Orb seed={visitorId} palette={palette} level={live ? level : undefined}>
           {cameraTrackId && <Camera id={id} trackId={cameraTrackId} mirror={!!isSelf && mirror} />}
         </Orb>
         {!mini && (deafened || muted || showLocalFlag) && <div className="t-flags">
