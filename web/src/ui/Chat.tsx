@@ -336,7 +336,19 @@ export function Chat({ room }: { room: Room | null }) {
   const editing = composing?.kind === 'edit' ? composing.message : null;
   const draft = room ? (drafts[room.id] ?? '') : '';
   const sendable = editing ? canPost(draft, editing.attachments.length) : canPost(draft, readyCount) && !busy;
-  const items = useMemo(() => (chat ? buildFeed(chat, visitor?.id, newAfterId) : []), [chat, visitor?.id, newAfterId, lang]);
+  const messages = chat?.messages;
+  const pending = chat?.pending;
+  const authorId = visitor?.id;
+  // Read-state changes are also when the feed picks up a new day, time zone or system language.
+  const { dayStart, timeZone, locale } = useMemo(() => ({
+    dayStart: new Date().setHours(0, 0, 0, 0),
+    timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    locale: t.locale,
+  }), [chat, authorId, newAfterId, lang]);
+  const items = useMemo(
+    () => messages && pending ? buildFeed({ messages, pending }, authorId, newAfterId, new Date(dayStart)) : [],
+    [messages, pending, authorId, newAfterId, dayStart, timeZone, locale],
+  );
   const rows = useMemo<FeedRow[]>(() => {
     const list: FeedRow[] = [];
     if (chat?.loadingOlder) list.push({ kind: 'loading', key: 'loading' });

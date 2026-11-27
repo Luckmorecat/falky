@@ -1,5 +1,5 @@
 import { test, expect, type Locator, type Page } from '@playwright/test';
-import type { MockAction, MockState } from '../mock/protocol';
+import type { MockAction, MockState, Schema } from '../mock/protocol';
 import { PALETTES } from '../src/fx/palette';
 import { launchMock } from './launcher';
 import { showBrowserToast } from './toast-browser';
@@ -906,6 +906,59 @@ async function closeChat(page: Page) {
   await page.locator('.dock-chat').click();
   await expect(page.locator('body')).not.toHaveClass(/chat-open/);
 }
+
+test('chat refreshes day labels across date, time zone and system language changes', async ({ page, context }) => {
+  const games = (await state(page)).rooms.find(({ name }) => name === 'Games')!;
+  const postedAt: Record<string, string> = {
+    'A summer evening': '2026-06-01T22:30:00Z',
+    'Around midnight': '2026-11-27T13:00:00Z',
+  };
+  for (const body of Object.keys(postedAt)) {
+    const seeded = await page.request.post(`${app.url}/__mock/action`, {
+      data: { type: 'message', roomId: games.id, authorName: 'Sam', body },
+    });
+    expect(seeded.ok()).toBe(true);
+  }
+  await page.route((url) => url.pathname === `/api/rooms/${games.id}/messages`, async (route) => {
+    const response = await route.fetch();
+    const { messages }: Schema['MessageList'] = await response.json();
+    await route.fulfill({ json: { messages: messages.map((message) => ({
+      ...message, createdAt: postedAt[message.body] ?? message.createdAt,
+    })) } });
+  });
+  const cdp = await context.newCDPSession(page);
+  await cdp.send('Emulation.setTimezoneOverride', { timezoneId: 'Europe/Berlin' });
+  await page.clock.setFixedTime(new Date('2026-11-27T14:00:00Z'));
+  await page.addInitScript(() => Object.defineProperty(navigator, 'languages', { value: ['en-GB'], configurable: true }));
+  await page.goto(app.url);
+  await room(page, 'Games');
+  await openChat(page);
+  const feed = page.locator('.feed');
+  await expect(feed.getByText('Around midnight', { exact: true })).toBeVisible();
+  await expect(feed.locator('.day')).toHaveText(['2 June', 'Today']);
+
+  await closeChat(page);
+  await cdp.send('Emulation.setTimezoneOverride', { timezoneId: 'Africa/Lagos' });
+  await openChat(page);
+  await expect(feed.locator('.day')).toHaveText(['1 June', 'Today']);
+
+  await closeChat(page);
+  await page.clock.setFixedTime(new Date('2026-11-28T14:00:00Z'));
+  await openChat(page);
+  await expect(feed.locator('.day')).toHaveText(['1 June', 'Yesterday']);
+
+  await closeChat(page);
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  await settingsTab(page, 'General');
+  await expect(page.getByRole('combobox', { name: 'Language', exact: true })).toHaveValue('system');
+  await page.evaluate(() => Object.defineProperty(navigator, 'languages', { value: ['uk-UA'], configurable: true }));
+  await page.getByRole('button', { name: 'Light', exact: true }).click();
+  await expect(page.locator('html')).toHaveAttribute('lang', 'uk');
+  await page.keyboard.press('Escape');
+  await openChat(page);
+  await expect(feed.getByText('Вчора', { exact: true })).toBeVisible();
+  await cdp.detach();
+});
 
 /** The message under the top edge of the feed, and how far its top sits from that edge. */
 async function readingAnchor(page: Page) {
