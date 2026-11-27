@@ -127,6 +127,7 @@ impl SoftwareFrame {
             .as_ref()
             .is_none_or(|previous| !Arc::ptr_eq(previous, frame))
         {
+            self.rgba = None;
             self.rgba = rgba(frame.as_ref());
             self.source = Some(Arc::clone(frame));
         }
@@ -528,6 +529,22 @@ mod tests {
         assert_eq!(pixels.as_ref(), expected);
         let other: Arc<dyn PlanarFrame> = Arc::new(PaddedPicture);
         assert_ne!(cache.handle(&other).unwrap().id(), handle.id());
+        let resized: Arc<dyn PlanarFrame> = Arc::new(crate::perf_fixture::Picture::new(2, 1, 0));
+        let new_handle = cache.handle(&resized).unwrap();
+        assert!(matches!(
+            new_handle,
+            image::Handle::Rgba {
+                width: 2,
+                height: 1,
+                ..
+            }
+        ));
+        assert_eq!(cache.handle(&resized).unwrap().id(), new_handle.id());
+        let invalid: Arc<dyn PlanarFrame> = Arc::new(crate::perf_fixture::Picture::new(0, 0, 0));
+        assert!(cache.handle(&invalid).is_none());
+        assert!(cache.handle(&invalid).is_none());
+        assert_ne!(cache.handle(&frame).unwrap().id(), handle.id());
+        assert_eq!(pixels.as_ref(), expected);
 
         let mut renderer = Renderer::new(Font::DEFAULT, Pixels(16.0), Some("tiny-skia"))
             .await
