@@ -128,6 +128,46 @@ async fn reset_gain(
 
 #[tokio::test]
 #[ignore = "release scoreboard"]
+async fn scoreboard_saved_voice_gains() {
+    const SAVED_GAINS: usize = 2_500;
+    let mut preferences = settings::Preferences::default();
+    let mut session = fixture(Scene::Empty, &preferences);
+    let scope = session.live.scope.clone();
+    for index in 0..SAVED_GAINS {
+        let id = format!("b18c2e3f-3c6c-4f72-a3c5-{index:012x}").into();
+        let percent = if index % 2 == 0 { 75 } else { 125 };
+        preferences.set_gain(&scope.origin, id, percent);
+    }
+    let settings = voice_settings(&preferences);
+
+    let window = perf::HeapWindow::start();
+    let gains = preferences
+        .gains(&scope.origin)
+        .map(|(id, gain)| (id.clone(), gain))
+        .collect();
+    let voice = Voice::start(scope, session.api.clone(), settings, gains);
+    let snapshots = voice.snapshots();
+    let initial = snapshots.borrow().clone();
+    session.update_voice(initial);
+    let retained = perf::live_bytes() - window.start;
+    let peak = window.finish();
+    perf::metric("voice.saved_gains.retained_bytes", retained);
+    perf::metric("voice.saved_gains.peak_bytes", peak);
+
+    assert_eq!(session.gains.len(), SAVED_GAINS);
+    assert!(
+        preferences
+            .gains(&session.live.scope.origin)
+            .all(|(id, gain)| { session.gains.get(id) == Some(&gain) })
+    );
+    drop(perf::repeat("voice.saved_gains.snapshot", 31, || {
+        snapshots.borrow().clone()
+    }));
+    drop(voice);
+}
+
+#[tokio::test]
+#[ignore = "release scoreboard"]
 async fn scoreboard_share_cycles() {
     let mut renderer = headless_renderer().await;
     let preferences = settings::Preferences::default();
