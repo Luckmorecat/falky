@@ -943,6 +943,15 @@ test('chat keeps each room reading place, pages without jumping, and virtualizes
   await expect(page.getByText('Welcome back! Try sending a message or joining voice.', { exact: true })).toBeVisible();
   await page.locator('.feed').evaluate((el) => { el.scrollTop = 720; });
   const lounge = await settledAnchor(page);
+  const feed = page.locator('.feed');
+  const composer = page.getByRole('textbox', { name: 'Message', exact: true });
+  const feedHeight = await feed.evaluate((el) => el.clientHeight);
+  await composer.fill('A draft while reading\nIt makes the composer grow\nThe reading place stays put');
+  await expect.poll(() => feed.evaluate((el) => el.clientHeight)).toBeLessThan(feedHeight);
+  await expectPlace(page, lounge);
+  await composer.fill('');
+  await expect.poll(() => feed.evaluate((el) => el.clientHeight)).toBe(feedHeight);
+  await expectPlace(page, lounge);
   await closeChat(page);
   await openChat(page);
   await expectPlace(page, lounge);

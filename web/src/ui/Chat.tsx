@@ -347,8 +347,10 @@ export function Chat({ room }: { room: Room | null }) {
   const limits = useApp((s) => s.attachmentLimits);
   const limitsText = t.attachLimits(limits.maxAttachments, Math.round(limits.maxFileBytes / 1024 / 1024));
   const keys = useMemo(() => rows.map((row) => row.key), [rows]);
-  const heightsNow = rows.map((row) => heights.current.get(row.key) ?? estimateHeight(row));
-  const laid = stack(heightsNow, frame.top, frame.bottom, frame.height);
+  const laid = useMemo(() => {
+    const rowHeights = rows.map((row) => heights.current.get(row.key) ?? estimateHeight(row));
+    return stack(rowHeights, frame.top, frame.bottom, frame.height);
+  }, [rows, frame, measured]);
   const visible = sliceRange(laid.tops, scrollPos, frame.height);
   const topGap = laid.tops[visible.start] ?? 0;
   const bottomGap = Math.max(0, laid.scrollHeight - (laid.tops[visible.end] ?? laid.scrollHeight));
