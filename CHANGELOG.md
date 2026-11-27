@@ -1,5 +1,48 @@
 # Changelog
 
+## [1.4.0](https://github.com/Luckmorecat/falky/compare/v1.3.0...v1.4.0) (2026-11-27)
+
+
+### Features
+
+* **auth:** show approximate location on sign-in approvals ([cc42cec](https://github.com/Luckmorecat/falky/commit/cc42cec66fcc749885468d3344999bc4ce182bb6))
+* **deploy:** enable per-instance LiveKit TURN ([cb67eb9](https://github.com/Luckmorecat/falky/commit/cb67eb96529f279890635a1c90d75d2ace0d902d))
+* **server:** knock to call someone into your voice ([56b9e24](https://github.com/Luckmorecat/falky/commit/56b9e24b0a4566f71e1e0b2ca95cea3cd4260789))
+* **server:** reply to, edit, delete and react to chat messages ([efb79d0](https://github.com/Luckmorecat/falky/commit/efb79d0bfc69a8af11fbcf09c52dce71507fcdf6))
+* **web:** adapt visitor colours to the light theme ([4505967](https://github.com/Luckmorecat/falky/commit/450596702848148f3449d7b4add56ea15b48d02d))
+* **web:** add app-wide toasts ([7053828](https://github.com/Luckmorecat/falky/commit/7053828b749c12e477d2cb185d68172e1993ba16))
+* **web:** burst reactions and a meme soundboard heard on every press ([77c68c5](https://github.com/Luckmorecat/falky/commit/77c68c5d1ad9414c37c6474bcb4669619808f521))
+* **web:** confirm before leaving voice ([d99fea3](https://github.com/Luckmorecat/falky/commit/d99fea3ceacb37c378e3e568a30d628091ccd574))
+* **web:** knock from the chat and answer a knock in one tap ([03dc288](https://github.com/Luckmorecat/falky/commit/03dc288795cdaa6bdf0b2a4c90639626467de862))
+* **web:** message actions beside the bubble and in a menu ([17592cd](https://github.com/Luckmorecat/falky/commit/17592cd7db697c6a4f2376c1908114be08dbaa18))
+* **web:** open chat from the dock as a card ([117b963](https://github.com/Luckmorecat/falky/commit/117b963b0f4b7085192f924147914566131990ef))
+* **web:** play soundboard sounds to the room ([7632f70](https://github.com/Luckmorecat/falky/commit/7632f704b5a500599753c8e8a04605aa692e13b9))
+* **web:** push to talk, away mute and a Leave shortcut ([132ee27](https://github.com/Luckmorecat/falky/commit/132ee27b353b396a1f17efeadf630c773a23dc4e))
+* **web:** reply to, edit, delete and react to chat messages ([cc81318](https://github.com/Luckmorecat/falky/commit/cc81318c992505aa9b0f9c7578c2974bbda15d05))
+* **web:** rework the settings window ([484c85d](https://github.com/Luckmorecat/falky/commit/484c85d6934112530196c69493bb02a5ead39138))
+* **web:** send emoji reactions that rise from your orb ([0c87a3b](https://github.com/Luckmorecat/falky/commit/0c87a3bc7cda397ed6ad50c621ac7e77327e15cd))
+
+
+### Bug Fixes
+
+* **web:** isolate native audio across subscriptions ([24fb0f2](https://github.com/Luckmorecat/falky/commit/24fb0f2a33d417cd9437f5de2b5d6ea306d681e0))
+* **web:** keep sound names from covering the reaction row ([7be6c5c](https://github.com/Luckmorecat/falky/commit/7be6c5c93a6264cd26d0e50dacf4375aa7357bde))
+* **web:** let push-to-talk retry microphone capture ([fc1c000](https://github.com/Luckmorecat/falky/commit/fc1c0006829a83fe407f50eaff0a7ee1eddbec19))
+* **web:** nest the chat's corners and drop the field's focus ring ([c9f2bb9](https://github.com/Luckmorecat/falky/commit/c9f2bb9644a49b4b9de93fc7594721eb4ebad882))
+* **web:** recover avatars after WebGL context loss ([f880c55](https://github.com/Luckmorecat/falky/commit/f880c55fb54690d4ca18760cb15d4aaa852b18f9))
+* **web:** recover blocked iOS voice playback ([df1bf47](https://github.com/Luckmorecat/falky/commit/df1bf47333b92a2ce5674cd65d6374e24302287d))
+* **web:** recover interrupted iOS voice sinks ([457a998](https://github.com/Luckmorecat/falky/commit/457a998f369ef63be1b0969fb79cf27f49036be8))
+* **web:** recover stale live connections ([f94e70e](https://github.com/Luckmorecat/falky/commit/f94e70ea7da72b3e4f836e32b845fb26da958625))
+* **web:** reveal the volume slider without a sideways lurch ([307b3d6](https://github.com/Luckmorecat/falky/commit/307b3d68eb3cdaeb5e75cade77f7b83617b3a023))
+* **web:** show first-join status in the top banner ([7d255a6](https://github.com/Luckmorecat/falky/commit/7d255a660b9307754820da503f187f78feada998))
+* **web:** slide the chat card in without scaling it ([d67b62d](https://github.com/Luckmorecat/falky/commit/d67b62d84e1c9282724c3e476eeb3a22470e2c8b))
+* **web:** soften the voice halo in the live background ([c666df2](https://github.com/Luckmorecat/falky/commit/c666df23955675d640a744e580f844acc8a24c74))
+* **web:** stabilize mobile calls and media ([2915dca](https://github.com/Luckmorecat/falky/commit/2915dca632c6462c9cfee3ff5e6db663d092eb3c))
+* **web:** stop the chat feed pulling back while scrolling ([933e791](https://github.com/Luckmorecat/falky/commit/933e79187f31bf228e4a0f0e46f0d66231cced14))
+* **web:** turn only the room chevron, not its plate ([d31f24c](https://github.com/Luckmorecat/falky/commit/d31f24cd5363571edc71722f237eaff4565a24d7))
+* **web:** use direct voice playback on iOS ([dfbb039](https://github.com/Luckmorecat/falky/commit/dfbb039ee028688c95b41f7a4948956cd8561569))
+* **web:** wait for mic setup on first room join ([87aab0f](https://github.com/Luckmorecat/falky/commit/87aab0fde086e1ef25a403fe46a9e14ee8fbe7bd))
+
 ## [1.3.0](https://github.com/Luckmorecat/falky/compare/v1.2.0...v1.3.0) (2026-11-13)
 
 
