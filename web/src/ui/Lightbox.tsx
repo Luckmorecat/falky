@@ -1,18 +1,12 @@
-import { useEffect, useEffectEvent, useLayoutEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
+import { useEffect, useEffectEvent, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import { createPortal } from 'react-dom';
-import type { Attachment } from '../api/client';
+import type { Message } from '../api/client';
 import { formatBytes } from '../chat/gallery';
-import { useAttachmentImage } from '../chat/images';
+import { isImage, useAttachmentImage } from '../chat/images';
 import { t } from '../strings';
 import { Icon } from './Icon';
 import { IconButton } from './IconButton';
 import './Lightbox.css';
-
-export interface ViewerItem {
-  attachment: Attachment;
-  authorName: string;
-  createdAt: string;
-}
 
 interface View {
   scale: number;
@@ -65,7 +59,10 @@ function flip(thumb: HTMLElement, to: DOMRect): { transform: string; clipPath: s
  * about. Escape, the close button, a click beside the picture or a swipe down
  * puts it away.
  */
-export function Lightbox({ items, startId, onClose }: { items: ViewerItem[]; startId: string; onClose(): void }) {
+export function Lightbox({ messages, startId, onClose }: { messages: Message[] | undefined; startId: string; onClose(): void }) {
+  const items = useMemo(() => (messages ?? []).flatMap((m) => m.attachments
+    .filter(isImage)
+    .map((attachment) => ({ attachment, authorName: m.authorName, createdAt: m.createdAt }))), [messages]);
   const dialog = useRef<HTMLDialogElement>(null);
   const stage = useRef<HTMLDivElement>(null);
   const frame = useRef<HTMLDivElement>(null);

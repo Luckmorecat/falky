@@ -72,10 +72,29 @@ test('direct images revalidate on reload and work in the gallery and lightbox', 
   await expect.poll(transform).not.toBe(zoomed);
   await page.keyboard.press('0');
   await expect.poll(transform).toBe(resting);
+
+  const state = await (await page.request.get(`${app.url}/__mock/state`)).json();
+  const roomId = state.rooms[0].id;
+  const next = viewer.locator('.viewer-nav.next');
+  await expect(next).toBeDisabled();
+  const incoming = await page.request.post(`${app.url}/__mock/action`, {
+    data: { type: 'message', roomId, body: 'New picture while viewing', authorName: 'Morgan', images: 1 },
+  });
+  expect(incoming.ok()).toBe(true);
+  await expect(next).toBeEnabled();
+  await page.keyboard.press('ArrowRight');
+  await expect(viewer.locator('.viewer-author')).toHaveText('Morgan');
+  await loaded(viewed);
   await page.keyboard.press('Escape');
   await expect(viewer).toHaveCount(0);
-  const state = await (await page.request.get(`${app.url}/__mock/state`)).json();
-  await page.request.post(`${app.url}/__mock/action`, { data: { type: 'expire-attachments', roomId: state.rooms[0].id } });
+
+  await page.locator('.feed .msg').filter({ hasText: 'New picture while viewing' }).locator('button.att-tile').click();
+  await loaded(viewed);
+  const expired = await page.request.post(`${app.url}/__mock/action`, { data: { type: 'expire-attachments', roomId } });
+  expect(expired.ok()).toBe(true);
+  await expect(viewer.locator('.viewer-gone')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(viewer).toHaveCount(0);
   await expect(page.locator('.feed .att-tile img')).toHaveCount(0);
   await expect(page.locator('.feed .att-gone').first()).toBeVisible();
   await cdp.detach();

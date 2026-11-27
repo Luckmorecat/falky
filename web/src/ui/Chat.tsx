@@ -1,5 +1,5 @@
 import { memo, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import type { Attachment, Message, MessageReply, Room } from '../api/client';
+import type { Message, MessageReply, Room } from '../api/client';
 import { addFiles, compose, deleteMessage, discardMessage, knock, loadOlder, markLatestRead, postMessage, retryMessage, setChatOpen, stopComposing, toggleReaction, voice } from '../app/controller';
 import { shortcuts } from '../app/shortcuts';
 import { getState, useApp } from '../app/store';
@@ -13,7 +13,7 @@ import { t } from '../strings';
 import { ComposerTray, Gallery, type OpenImage } from './Attachments';
 import { IconButton } from './IconButton';
 import { Icon } from './Icon';
-import { Lightbox, type ViewerItem } from './Lightbox';
+import { Lightbox } from './Lightbox';
 import { Orb } from './Orb';
 import { useDrawerLayout } from './useDrawerLayout';
 import './Chat.css';
@@ -615,11 +615,6 @@ export function Chat({ room }: { room: Room | null }) {
     if (!first && newest) setLive(`${newest.authorName}: ${newest.body.trim() ? newest.body : t.imagesSummary(newest.attachments.length)}`);
   }, [open, newest, room?.id]);
 
-  /** Every picture in the room, oldest first, so the viewer can step through them all. */
-  const viewerItems = useMemo<ViewerItem[]>(() => (chat?.messages ?? []).flatMap((m) => m.attachments
-    .filter(isImage)
-    .map((attachment: Attachment) => ({ attachment, authorName: m.authorName, createdAt: m.createdAt }))), [chat?.messages]);
-
   const openImage = useCallback<OpenImage>((id) => setViewing(id), []);
   const [menu, setMenu] = useState<MenuTarget | null>(null);
   const openMenu = useCallback<OpenMenu>((message, own, row) => setMenu({ message, own, row }), []);
@@ -794,7 +789,7 @@ export function Chat({ room }: { room: Room | null }) {
       </div>
     </aside>
     {menu && <MessageMenu target={menu} selfId={selfId} onClose={() => setMenu(null)} />}
-    {viewing && <Lightbox items={viewerItems} startId={viewing} onClose={closeViewer} />}
+    {viewing && <Lightbox messages={messages} startId={viewing} onClose={closeViewer} />}
     </div>
   );
 }
