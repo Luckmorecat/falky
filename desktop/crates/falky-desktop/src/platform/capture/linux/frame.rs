@@ -173,6 +173,38 @@ impl Pacing {
 mod tests {
     use super::*;
 
+    #[test]
+    #[ignore = "release scoreboard"]
+    fn scoreboard_linux_capture_downsize() {
+        use crate::perf;
+
+        fn frame(bytes: &[u8], width: u32, height: u32) -> Frame<'_> {
+            Frame::new(
+                bytes,
+                0,
+                bytes.len() as u32,
+                width as i32 * 4,
+                width,
+                height,
+                None,
+            )
+            .expect("valid PipeWire frame")
+        }
+
+        let high = perf::packed_pixels(3840, 2160, 3840 * 4);
+        let low = perf::packed_pixels(1920, 1080, 1920 * 4);
+        let (high, low) = (frame(&high, 3840, 2160), frame(&low, 1920, 1080));
+        let start = perf::live_bytes();
+        let mut scratch = Vec::new();
+        let (_, _, _, first) = high.pixels(options(2560, 1440), &mut scratch);
+        perf::golden("capture.linux.downsize.high", &[first]);
+        let (_, _, _, second) = low.pixels(options(2560, 1440), &mut scratch);
+        perf::golden("capture.linux.downsize.low", &[second]);
+        let retained = perf::live_bytes() - start;
+        std::hint::black_box(&scratch);
+        perf::metric("capture.linux.downsize.retained_bytes", retained);
+    }
+
     fn options(width: u32, height: u32) -> CaptureOptions {
         CaptureOptions {
             max_width: width,

@@ -1,5 +1,5 @@
 #[cfg(test)]
-mod scoreboard;
+pub(super) mod scoreboard;
 
 use std::{
     io::{self, Cursor, Write},

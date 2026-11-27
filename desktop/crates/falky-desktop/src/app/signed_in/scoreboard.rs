@@ -1,3 +1,5 @@
+mod cycles;
+
 use std::{path::Path, sync::Arc};
 
 use falky_core::{
@@ -58,15 +60,7 @@ impl Scene {
 #[tokio::test]
 #[ignore = "release scoreboard"]
 async fn scoreboard_scenes() {
-    {
-        let mut fonts = font_system().write().unwrap();
-        for font in [shell::ONEST, shell::ONEST_NATIVE, shell::REACTIONS] {
-            fonts.load_font(font.into());
-        }
-    }
-    let mut renderer = Renderer::new(shell::DEFAULT_FONT, Pixels(16.0), Some("wgpu"))
-        .await
-        .expect("headless wgpu for stage and inline share");
+    let mut renderer = headless_renderer().await;
     println!("falky-backend {}", renderer.name());
 
     let preferences = settings::Preferences::default();
@@ -79,6 +73,40 @@ async fn scoreboard_scenes() {
     for scene in [Scene::Empty, Scene::Stage, Scene::Chat, Scene::Share] {
         view.run(scene);
     }
+}
+
+async fn headless_renderer() -> Renderer {
+    {
+        let mut fonts = font_system().write().unwrap();
+        for font in [shell::ONEST, shell::ONEST_NATIVE, shell::REACTIONS] {
+            fonts.load_font(font.into());
+        }
+    }
+    Renderer::new(shell::DEFAULT_FONT, Pixels(16.0), Some("wgpu"))
+        .await
+        .expect("headless wgpu for stage and inline share")
+}
+
+#[tokio::test]
+#[ignore = "release scoreboard"]
+async fn scoreboard_scene_memory() {
+    let Ok(name) = std::env::var("FALKY_PERF_SCENE") else {
+        return;
+    };
+    let scene = [Scene::Empty, Scene::Stage, Scene::Chat, Scene::Share]
+        .into_iter()
+        .find(|scene| scene.name() == name)
+        .expect("known scene");
+    let mut renderer = headless_renderer().await;
+    let preferences = settings::Preferences::default();
+    let (platform, _) = platform::Platform::boot(window::Settings::default());
+    HeadlessView {
+        renderer: &mut renderer,
+        platform: &platform,
+        preferences: &preferences,
+    }
+    .run_memory(scene)
+    .await;
 }
 
 #[tokio::test]
@@ -118,13 +146,7 @@ struct HeadlessView<'a> {
 impl HeadlessView<'_> {
     fn run(&mut self, scene: Scene) {
         let mut session = fixture(scene, self.preferences);
-        let pictures: Option<[Arc<dyn shell::PlanarFrame>; 2]> =
-            (scene == Scene::Share).then(|| {
-                [0, 1].map(|variant| {
-                    Arc::new(perf_fixture::Picture::new(1920, 1080, variant))
-                        as Arc<dyn shell::PlanarFrame>
-                })
-            });
+        let pictures = scene_pictures(scene);
         let sample_frame = |index: usize| pictures.as_ref().map(|frames| &frames[index / 2 % 2]);
         let mut tree = Tree::empty();
         let mut phase_samples: [Vec<perf::Sample>; 4] =
@@ -139,10 +161,15 @@ impl HeadlessView<'_> {
 
         for index in 0..SAMPLES {
             session.shell.set_scoreboard_time(elapsed(index));
+            let window = perf::HeapWindow::start();
+            let start_bytes = window.start;
             let phases = self.draw(&session, &mut tree, sample_frame(index));
             let total = perf::Sample {
                 nanoseconds: phases.iter().map(|sample| sample.nanoseconds).sum(),
                 allocations: phases.iter().map(|sample| sample.allocations).sum(),
+                peak_bytes: window.finish(),
+                residue_bytes: perf::live_bytes() - start_bytes,
+                start_bytes,
             };
             for (samples, value) in phase_samples
                 .iter_mut()
@@ -186,6 +213,57 @@ impl HeadlessView<'_> {
                 &format!("scene.{}.playback", scene.name()),
                 &[&hashes.map(u64::to_le_bytes).concat()],
             );
+        }
+    }
+
+    async fn run_memory(&mut self, scene: Scene) {
+        let window = perf::HeapWindow::start();
+        let start = window.start;
+        let mut session = fixture(scene, self.preferences);
+        let pictures = scene_pictures(scene);
+        let mut tree = Tree::empty();
+        let mut retained = 0;
+        for frame in 1..=1000 {
+            let index = frame - 1;
+            session.shell.set_scoreboard_time(elapsed(index));
+            let picture = pictures.as_ref().map(|frames| &frames[index / 2 % 2]);
+            self.draw(&session, &mut tree, picture);
+            if matches!(frame, 1 | 100 | 1000) {
+                drop(self.screenshot());
+            }
+            if frame == 100 {
+                retained = perf::live_bytes() - start;
+            }
+        }
+        let growth = (perf::live_bytes() - start - retained) as f64 / 900.0;
+        let peak = window.finish();
+        #[cfg(target_os = "linux")]
+        let process = perf::process_bytes();
+
+        let mut snapshots = session.voice.snapshots();
+        drop((session, pictures, tree));
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while snapshots.changed().await.is_ok() {}
+        })
+        .await
+        .expect("scene voice actor shuts down");
+        drop(snapshots);
+        self.renderer.reset(Rectangle::with_size(Size::new(
+            VIEWPORT.width,
+            VIEWPORT.height,
+        )));
+        drop(self.screenshot());
+        let residue = perf::live_bytes() - start;
+
+        let name = scene.name();
+        perf::metric(&format!("scene.{name}.heap.retained_bytes"), retained);
+        perf::metric(&format!("scene.{name}.heap.peak_bytes"), peak);
+        perf::metric(&format!("scene.{name}.heap.residue_bytes"), residue);
+        perf::metric(&format!("scene.{name}.heap.growth_bytes_per_frame"), growth);
+        #[cfg(target_os = "linux")]
+        {
+            perf::metric(&format!("scene.{name}.process.pss_anon_bytes"), process.0);
+            perf::metric(&format!("scene.{name}.process.vm_hwm_bytes"), process.1);
         }
     }
 
@@ -238,6 +316,14 @@ impl HeadlessView<'_> {
         self.renderer
             .screenshot(Size::new(WIDTH, HEIGHT), 1.0, Color::BLACK)
     }
+}
+
+fn scene_pictures(scene: Scene) -> Option<[Arc<dyn shell::PlanarFrame>; 2]> {
+    (scene == Scene::Share).then(|| {
+        [0, 1].map(|variant| {
+            Arc::new(perf_fixture::Picture::new(1920, 1080, variant)) as Arc<dyn shell::PlanarFrame>
+        })
+    })
 }
 
 fn elapsed(index: usize) -> Duration {

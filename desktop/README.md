@@ -65,3 +65,24 @@ both inputs at the same directory for an A/A noise-floor run.
 
 On Linux, add `--process` to measure sign-in with Xvfb, xwininfo, ImageMagick
 and procfs. Use the same options for both sides of a comparison.
+
+The runner captures each scene's memory in a fresh process. Its Rust allocator
+tracks live requested bytes across threads, including successful reallocations.
+Scene retained bytes are sampled at frame 100. The 1,000-frame recording pass
+submits and reads back frames 1, 100, and 1,000. Growth is the change between the
+last two checkpoints divided by 900, and residue is measured after dropping the
+scene and drawing an empty frame with the same renderer. Hot paths report the
+highest per-operation peak and median residue. Standalone hot paths drop the
+return value before sampling residue. Phase samples retain outputs used by the
+next phase.
+The image cache reports its retained bytes and its own accounting at capacity.
+
+Cycle fixtures use application update messages and supply deterministic replies
+for network or clipboard work. The voice and watch cycles cover desktop state
+using synthetic voice snapshots, and the resolution cycle supplies decoded
+frames to the renderer. The runner reports residue at five and fifty cycles
+and the growth over cycles 1–5 and 5–50.
+
+Linux scene processes report anonymous PSS and peak RSS from procfs. The sign-in
+tier additionally reports file and shared-memory PSS and thread count. Compare
+times between binaries built with the same allocator instrumentation.

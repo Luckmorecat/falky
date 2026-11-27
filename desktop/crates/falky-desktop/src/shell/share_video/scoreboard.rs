@@ -35,3 +35,33 @@ fn scoreboard_software_video() {
         );
     }
 }
+
+#[test]
+#[ignore = "release scoreboard"]
+fn scoreboard_software_replacement() {
+    let high: Arc<dyn PlanarFrame> = Arc::new(Picture::new(3840, 2160, 0));
+    let low: Arc<dyn PlanarFrame> = Arc::new(Picture::new(1920, 1080, 1));
+    let handle = perf::repeat_with(
+        "share.software.replacement",
+        15,
+        || {
+            let mut cache = SoftwareFrame::default();
+            assert!(cache.handle(&high).is_some());
+            cache
+        },
+        |mut cache| cache.handle(&low).expect("valid software frame"),
+    );
+    let image::Handle::Rgba {
+        width,
+        height,
+        pixels,
+        ..
+    } = handle
+    else {
+        panic!("expected RGBA video");
+    };
+    perf::golden(
+        "share.software.replacement",
+        &[&width.to_le_bytes(), &height.to_le_bytes(), pixels.as_ref()],
+    );
+}

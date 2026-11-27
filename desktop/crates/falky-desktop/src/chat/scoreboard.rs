@@ -72,3 +72,32 @@ pub(crate) fn load_timeline(chat: &mut Chat, room: &RoomId) {
     }
     assert_eq!(chat.timeline.room(room).unwrap().messages().count(), ROWS);
 }
+
+pub(crate) fn image_reply(chat: &Chat, id: AttachmentId) -> Message {
+    let key = Key(id, Size::Viewer);
+    let generation = chat.fetching[&key].expect("open viewer requested an image");
+    let image = if chat.cache.peek(&key).is_some() {
+        Fetched::Unchanged
+    } else {
+        Fetched::Image(images::scoreboard::viewer_image())
+    };
+    completion(chat, Work::Image(generation, key, Ok(image)))
+}
+
+pub(crate) fn paste_reply(chat: &Chat, room: RoomId, pixels: Vec<u8>) -> Message {
+    let input = images::scoreboard::pixels_to_clipboard(pixels, chat.limits.input_bytes);
+    assert!(input.is_ok(), "valid scoreboard clipboard input");
+    completion(chat, Work::Paste(room, ClipboardContents::Image(input)))
+}
+
+pub(crate) fn only_draft(chat: &Chat, room: &RoomId) -> u64 {
+    let drafts = &chat.composers[room].drafts;
+    assert_eq!(drafts.len(), 1);
+    drafts[0].id
+}
+
+pub(crate) fn completion(chat: &Chat, work: Work) -> Message {
+    assert_eq!(chat.jobs.len(), 1, "one in-flight fixture request");
+    let &job = chat.jobs.keys().next().unwrap();
+    Message::Finished(job, chat.scope.clone(), Box::new(work))
+}

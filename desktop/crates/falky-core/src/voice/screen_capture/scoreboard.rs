@@ -56,3 +56,42 @@ fn hash_frame(name: &str, frame: &I420Buffer) {
         ],
     );
 }
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "release scoreboard"]
+fn scoreboard_native_video() {
+    let Ok(fixture) = std::env::var("FALKY_PERF_NATIVE_VIDEO") else {
+        return;
+    };
+    let output = match fixture.as_str() {
+        "decode_rotate" => {
+            let mut buffer = I420Buffer::new(3840, 2160);
+            let (y, u, v) = buffer.data_mut();
+            for (plane, stride) in [(y, 3), (u, 7), (v, 11)] {
+                for (index, value) in plane.iter_mut().enumerate() {
+                    *value = (index * stride) as u8;
+                }
+            }
+            let frame = BoxVideoFrame::new(VideoRotation::VideoRotation90, Box::new(buffer));
+            ShareFrame::decoded(frame).expect("valid 4K decoded frame")
+        }
+        "pending_replace" => {
+            let (width, height) = (2560usize, 1440usize);
+            let stride = width * 4;
+            let pixels = perf::packed_pixels(width, height, stride);
+            let (sink, capture) = screen_capture();
+            sink.bgra(width as u32, height as u32, stride, &pixels);
+            sink.rgba(width as u32, height as u32, stride, &pixels);
+            capture.video().expect("valid replacement capture frame")
+        }
+        _ => panic!("unknown native video fixture {fixture}"),
+    };
+    let (pss_anon, vm_hwm) = perf::process_bytes();
+    perf::metric(
+        &format!("capture.native.{fixture}.pss_anon_bytes"),
+        pss_anon,
+    );
+    perf::metric(&format!("capture.native.{fixture}.vm_hwm_bytes"), vm_hwm);
+    hash_frame(&format!("capture.native.{fixture}"), &output.buffer);
+}

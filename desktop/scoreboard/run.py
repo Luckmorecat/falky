@@ -9,6 +9,7 @@ import selectors
 import shutil
 import statistics
 import subprocess
+import sys
 import tempfile
 import time
 
@@ -16,6 +17,8 @@ DESKTOP = Path(__file__).resolve().parent.parent
 PERF = DESKTOP / ".perf"
 RESULT = re.compile(r"falky-(perf|golden|backend) (\S+)(?: (\S+))?\s*$")
 WORKSPACE_TESTS = {"falky-core": "core-scoreboard", "falky-desktop": "desktop-scoreboard"}
+SCENES = ("idle", "stage", "chat", "share")
+NATIVE_VIDEO = ("decode_rotate", "pending_replace")
 
 
 def build(destination):
@@ -62,18 +65,23 @@ def capture_run(binaries, export, process_tier):
         os.environ, LP_NUM_THREADS="2", WGPU_BACKEND="vulkan", TZ="UTC",
         FALKY_PERF_GOLDENS=str(export), MESA_SHADER_CACHE_DISABLE="true",
     )
+    environment.pop("FALKY_PERF_SCENE", None)
+    environment.pop("FALKY_PERF_NATIVE_VIDEO", None)
     metrics, hashes = {}, {}
     backend = None
-    for binary in WORKSPACE_TESTS.values():
-        with (export / f"{binary}.log").open("w") as log:
+
+    def capture(binary, selector, name, env):
+        nonlocal backend
+        path = export / f"{name}.log"
+        with path.open("w") as log:
             result = subprocess.run(
-                [binaries / binary, "scoreboard_", "--ignored", "--nocapture", "--test-threads=1"],
-                cwd=DESKTOP, env=environment, stdout=log, stderr=subprocess.STDOUT,
+                [binaries / binary, selector, "--ignored", "--nocapture", "--test-threads=1"],
+                cwd=DESKTOP, env=env, stdout=log, stderr=subprocess.STDOUT,
                 timeout=120,
             )
             if result.returncode:
                 raise RuntimeError(f"scoreboard test failed, see {log.name}")
-        for line in (export / f"{binary}.log").read_text().splitlines():
+        for line in path.read_text().splitlines():
             match = RESULT.search(line)
             if not match:
                 continue
@@ -86,6 +94,20 @@ def capture_run(binaries, export, process_tier):
                 hashes[name] = value
             else:
                 backend = name
+
+    for binary in WORKSPACE_TESTS.values():
+        capture(binary, "scoreboard_", binary, environment)
+    for scene in SCENES:
+        capture(
+            WORKSPACE_TESTS["falky-desktop"], "scoreboard_scene_memory", f"memory-{scene}",
+            dict(environment, FALKY_PERF_SCENE=scene),
+        )
+    if sys.platform == "linux":
+        for fixture in NATIVE_VIDEO:
+            capture(
+                WORKSPACE_TESTS["falky-core"], "scoreboard_native_video", f"memory-{fixture}",
+                dict(environment, FALKY_PERF_NATIVE_VIDEO=fixture),
+            )
     assert backend and metrics and hashes
     if process_tier:
         values, screenshot = signin_process(binaries / "falky-desktop", environment, export)
@@ -165,11 +187,12 @@ def observe_signin(executable, environment, export):
                 time.sleep(2)
                 end = cpu_ticks(app.pid)
                 elapsed = time.monotonic() - began_window
-                return {
+                values = {
                     "process.signin.cold_start_ms": (drew - began) * 1_000,
                     "process.signin.cpu_pct": ((end - start) / os.sysconf("SC_CLK_TCK")) / elapsed * 100,
-                    "process.signin.pss_kib": pss(app.pid),
-                }, screenshot
+                }
+                values.update(signin_memory(app.pid))
+                return values, screenshot
             finally:
                 terminate(app)
 
@@ -179,9 +202,21 @@ def cpu_ticks(pid):
     return int(fields[11]) + int(fields[12])
 
 
-def pss(pid):
-    data = Path(f"/proc/{pid}/smaps_rollup").read_text()
-    return int(re.search(r"^Pss:\s+(\d+) kB", data, re.MULTILINE).group(1))
+def signin_memory(pid):
+    def fields(file):
+        return dict(re.findall(r"^(\w+):\s+(\d+)\b", file.read_text(), re.MULTILINE))
+
+    proc = Path(f"/proc/{pid}")
+    pss = fields(proc / "smaps_rollup")
+    status = fields(proc / "status")
+    return {
+        "process.signin.pss_kib": int(pss["Pss"]),
+        "process.signin.pss_anon_bytes": int(pss["Pss_Anon"]) * 1024,
+        "process.signin.pss_file_bytes": int(pss["Pss_File"]) * 1024,
+        "process.signin.pss_shmem_bytes": int(pss["Pss_Shmem"]) * 1024,
+        "process.signin.vm_hwm_bytes": int(status["VmHWM"]) * 1024,
+        "process.signin.threads": int(status["Threads"]),
+    }
 
 
 def terminate(process):
@@ -196,8 +231,8 @@ def terminate(process):
 
 def delta(before, after):
     if before:
-        return (after - before) / before
-    return math.inf if after else 0.0
+        return (after - before) / abs(before)
+    return math.copysign(math.inf, after) if after else 0.0
 
 
 def aggregate(pairs, a_against_a):
