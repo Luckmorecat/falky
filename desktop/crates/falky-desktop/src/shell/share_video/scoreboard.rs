@@ -65,3 +65,38 @@ fn scoreboard_software_replacement() {
         &[&width.to_le_bytes(), &height.to_le_bytes(), pixels.as_ref()],
     );
 }
+
+#[test]
+#[ignore = "release scoreboard"]
+fn scoreboard_software_video_handoff() {
+    let mut cache = SoftwareFrame::default();
+    let start = perf::live_bytes();
+    let previous: Arc<dyn PlanarFrame> = Arc::new(Picture::new(3840, 2160, 0));
+    let displayed = cache.handle(&previous).expect("valid software frame");
+    drop(previous);
+    let retained = perf::live_bytes() - start;
+
+    let current: Arc<dyn PlanarFrame> = Arc::new(Picture::new(1920, 1080, 1));
+    let replacement = cache.handle(&current).expect("valid software frame");
+    assert_ne!(displayed.id(), replacement.id());
+    assert_eq!(cache.handle(&current).unwrap().id(), replacement.id());
+    for (name, handle) in [
+        ("share.software.handoff.previous", displayed),
+        ("share.software.handoff.replacement", replacement),
+    ] {
+        let image::Handle::Rgba {
+            width,
+            height,
+            pixels,
+            ..
+        } = handle
+        else {
+            panic!("expected RGBA video");
+        };
+        perf::golden(
+            name,
+            &[&width.to_le_bytes(), &height.to_le_bytes(), pixels.as_ref()],
+        );
+    }
+    perf::metric("share.software.handoff.retained_bytes", retained);
+}

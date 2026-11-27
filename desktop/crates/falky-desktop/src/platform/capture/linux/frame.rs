@@ -220,6 +220,60 @@ mod tests {
         perf::metric("capture.linux.downsize.retained_bytes", retained);
     }
 
+    #[test]
+    #[ignore = "release scoreboard"]
+    fn scoreboard_linux_capture_repacked_downsize() {
+        use crate::perf;
+
+        let high_bytes = perf::packed_pixels(3840, 2160, 3840 * 4);
+        let low_stride = 1920 * 4 + 16;
+        let low_bytes = perf::packed_pixels(1920, 1080, low_stride);
+        let high = Frame::new(
+            &high_bytes,
+            0,
+            high_bytes.len() as u32,
+            3840 * 4,
+            3840,
+            2160,
+            None,
+        )
+        .unwrap();
+        let low = Frame::new(
+            &low_bytes,
+            0,
+            low_bytes.len() as u32,
+            -(low_stride as i32),
+            1920,
+            1080,
+            None,
+        )
+        .unwrap();
+
+        let options = options(2560, 1440);
+        let start = perf::live_bytes();
+        let mut scratch = Default::default();
+        let (width, height, stride, pixels) = high.pixels(options, &mut scratch);
+        assert_eq!((width, height, stride), (2560, 1440, 2560 * 4));
+        let high_hash = perf::hash(&[pixels]);
+
+        let (width, height, stride, pixels) = low.pixels(options, &mut scratch);
+        let retained = perf::live_bytes() - start;
+        assert_eq!((width, height, stride), (1920, 1080, 1920 * 4));
+        assert_eq!(pixels.len(), stride * height as usize);
+        assert!(
+            pixels
+                .chunks_exact(stride)
+                .zip(low_bytes.chunks_exact(low_stride).rev())
+                .all(|(actual, expected)| actual == &expected[..stride])
+        );
+        perf::golden("capture.linux.repacked_downsize", &[pixels]);
+
+        let (width, height, stride, restarted) = high.pixels(options, &mut scratch);
+        assert_eq!((width, height, stride), (2560, 1440, 2560 * 4));
+        assert_eq!(perf::hash(&[restarted]), high_hash);
+        perf::metric("capture.linux.repacked_downsize.retained_bytes", retained);
+    }
+
     fn options(width: u32, height: u32) -> CaptureOptions {
         CaptureOptions {
             max_width: width,
