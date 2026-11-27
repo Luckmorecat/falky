@@ -91,13 +91,21 @@ async fn scoreboard_scenes() {
     }
 }
 
-async fn headless_renderer() -> Renderer {
-    {
-        let mut fonts = font_system().write().unwrap();
-        for font in [shell::ONEST, shell::ONEST_NATIVE, shell::REACTIONS] {
-            fonts.load_font(font.into());
-        }
+#[test]
+#[ignore = "release scoreboard"]
+fn scoreboard_bundled_font_memory() {
+    if std::env::var_os("FALKY_PERF_FONT_LOAD").is_none() {
+        return;
     }
+    let fonts = font_system();
+    let count = fonts.write().unwrap().raw().db().faces().count();
+    let ((), sample) = perf::measure(shell::load_bundled_fonts);
+    assert!(fonts.write().unwrap().raw().db().faces().count() > count);
+    perf::report("font.bundled.load", &[sample]);
+}
+
+async fn headless_renderer() -> Renderer {
+    shell::load_bundled_fonts();
     Renderer::new(shell::DEFAULT_FONT, Pixels(16.0), Some("wgpu"))
         .await
         .expect("headless wgpu for stage and inline share")

@@ -34,6 +34,17 @@ pub const ONEST: &[u8] = include_bytes!("../../assets/Onest.ttf");
 pub const ONEST_NATIVE: &[u8] = include_bytes!("../../assets/Onest-Native.ttc");
 pub const REACTIONS: &[u8] = include_bytes!("../../assets/FalkyReactions.ttf");
 pub const DEFAULT_FONT: Font = Font::with_name("Falky Onest Text");
+
+#[cfg(test)]
+pub(crate) fn load_bundled_fonts() {
+    use iced::advanced::graphics::text::font_system;
+
+    let mut fonts = font_system().write().unwrap();
+    for bytes in [ONEST, ONEST_NATIVE, REACTIONS] {
+        fonts.load_font(bytes.into());
+    }
+}
+
 pub const NUMBER_FONT: Font = Font::with_name("Falky Onest Numbers");
 pub const HEADING_FONT: Font = Font {
     weight: Weight::Medium,

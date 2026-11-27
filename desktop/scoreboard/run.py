@@ -65,6 +65,7 @@ def capture_run(binaries, export, process_tier):
         os.environ, LP_NUM_THREADS="2", WGPU_BACKEND="vulkan", TZ="UTC",
         FALKY_PERF_GOLDENS=str(export), MESA_SHADER_CACHE_DISABLE="true",
     )
+    environment.pop("FALKY_PERF_FONT_LOAD", None)
     environment.pop("FALKY_PERF_SCENE", None)
     environment.pop("FALKY_PERF_NATIVE_VIDEO", None)
     metrics, hashes = {}, {}
@@ -97,6 +98,10 @@ def capture_run(binaries, export, process_tier):
 
     for binary in WORKSPACE_TESTS.values():
         capture(binary, "scoreboard_", binary, environment)
+    capture(
+        WORKSPACE_TESTS["falky-desktop"], "scoreboard_bundled_font_memory", "memory-font-load",
+        dict(environment, FALKY_PERF_FONT_LOAD="1"),
+    )
     for scene in SCENES:
         capture(
             WORKSPACE_TESTS["falky-desktop"], "scoreboard_scene_memory", f"memory-{scene}",
