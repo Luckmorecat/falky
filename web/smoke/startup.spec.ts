@@ -78,6 +78,52 @@ test('keeps background programs through empty and same-size source updates', asy
   await expect(field).toHaveAttribute('data-program-builds', '5');
 });
 
+test('reuses dot geometry across backing resizes and uploads a different lattice', async ({ page, context }) => {
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  const state: MockState = await (await page.request.post(`${app.url}/__mock/bootstrap`, { data: { scenario: 'quiet' } })).json();
+  await page.addInitScript(({ instanceId, generation }) => {
+    localStorage.setItem(`falky.mock-generation.${instanceId}`, String(generation));
+    localStorage.setItem(`falky.mock.${instanceId}.language`, 'en');
+    localStorage.setItem(`falky.mock.${instanceId}.liveBackground`, 'on');
+    const original = WebGLRenderingContext.prototype.bufferData;
+    WebGLRenderingContext.prototype.bufferData = function (target, source, usage) {
+      const canvas = this.canvas;
+      if (canvas instanceof HTMLCanvasElement && canvas.matches('.live-background') && source instanceof Float32Array && source.length > 12) {
+        canvas.dataset.dotUploads = String(Number(canvas.dataset.dotUploads ?? 0) + 1);
+        canvas.dataset.dotGrid = `${source.length / 2}:${source[source.length - 2]},${source[source.length - 1]}`;
+      }
+      Reflect.apply(original, this, [target, source, usage]);
+    };
+  }, state);
+  await page.goto(`${app.url}/?scenario=quiet`);
+  const field = page.locator('.live-background');
+  await expect(field).toHaveAttribute('data-dot-grid', '3600:1430,990');
+  await expect(field).toHaveAttribute('data-dot-uploads', '1');
+
+  await page.setViewportSize({ width: 1444, height: 1000 });
+  await expect(field).toHaveAttribute('width', '1444');
+  await expect(field).toHaveAttribute('data-dot-uploads', '1');
+
+  const cdp = await context.newCDPSession(page);
+  try {
+    const resize = (width: number, height: number) => cdp.send('Emulation.setDeviceMetricsOverride', {
+      width, height, deviceScaleFactor: 1.25, mobile: false,
+    });
+    await resize(1444, 1000);
+    await expect(field).toHaveAttribute('width', '1805');
+    await expect(field).toHaveAttribute('height', '1250');
+    await expect(field).toHaveAttribute('data-dot-uploads', '1');
+
+    await resize(1000, 1440);
+    await expect(field).toHaveAttribute('width', '1250');
+    await expect(field).toHaveAttribute('height', '1800');
+    await expect(field).toHaveAttribute('data-dot-grid', '3600:990,1430');
+    await expect(field).toHaveAttribute('data-dot-uploads', '2');
+  } finally {
+    await cdp.detach();
+  }
+});
+
 test('does not measure a hidden chat and restores the latest messages on opening', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.request.post(`${app.url}/__mock/reset`, { data: { scenario: 'populated' } });

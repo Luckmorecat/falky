@@ -5,6 +5,9 @@ import { UNREAD_BEACON_GLSL, type BeaconFrame } from './unreadBeacon';
 import { THEME_WAVE_GLSL, type ThemeFrame } from './themeWave';
 import { createVoiceField, HISTORY, SAMPLE_INTERVAL, type VoiceSource } from './voiceField';
 
+const DOT_INSET = 10;
+const DOT_SPACING = 20;
+
 function vertexSource(count: number): string {
   return `
 precision highp float;
@@ -186,6 +189,8 @@ export function createBackground(canvas: HTMLCanvasElement, initialSources: Voic
   gl.clearColor(0, 0, 0, 0);
   let width = 0;
   let height = 0;
+  let dotColumns = -1;
+  let dotRows = -1;
   let points = 0;
   let geometryDirty = true;
   let measuredDpr = 0;
@@ -268,11 +273,19 @@ export function createBackground(canvas: HTMLCanvasElement, initialSources: Voic
         if (sizeChanged) {
           canvas.width = Math.round(width * dpr);
           canvas.height = Math.round(height * dpr);
-          const positions: number[] = [];
-          for (let y = 10; y < height; y += 20) for (let x = 10; x < width; x += 20) positions.push(x, y);
-          points = positions.length / 2;
-          gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
-          gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(positions), gl.STATIC_DRAW);
+          const columns = Math.max(0, Math.ceil((width - DOT_INSET) / DOT_SPACING));
+          const rows = Math.max(0, Math.ceil((height - DOT_INSET) / DOT_SPACING));
+          if (columns !== dotColumns || rows !== dotRows) {
+            const positions: number[] = [];
+            for (let y = DOT_INSET; y < height; y += DOT_SPACING) {
+              for (let x = DOT_INSET; x < width; x += DOT_SPACING) positions.push(x, y);
+            }
+            points = positions.length / 2;
+            gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+            gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(positions), gl.STATIC_DRAW);
+            dotColumns = columns;
+            dotRows = rows;
+          }
           gl.viewport(0, 0, canvas.width, canvas.height);
         }
         if (beaconTarget) {
