@@ -11,13 +11,25 @@ use falky_core::{
     },
 };
 use iced::{
-    Background, Border, Color, ContentFit, Element, Fill, Font, Length, Rectangle, Shadow, Vector,
-    advanced::widget::operation::{Operation, Outcome, Scrollable},
+    Background, Border, Color, ContentFit, Element, Fill, Font, Length, Pixels, Rectangle,
+    Renderer, Shadow, Theme, Vector,
+    advanced::{
+        Layout, Widget,
+        layout::{self, Limits},
+        renderer,
+        text::Renderer as TextRenderer,
+        widget::{
+            Tree,
+            operation::{Operation, Outcome, Scrollable},
+            tree,
+        },
+    },
     alignment::{Horizontal, Vertical},
     keyboard::{Key as KeyboardKey, key::Named},
+    mouse,
     widget::{
-        Id, button, column, container, image, mouse_area, opaque, rich_text, row, rule, scrollable,
-        space, span, stack, svg, text, text_editor, tooltip,
+        Id, Svg, button, column, container, image, mouse_area, opaque, rich_text, row, rule,
+        scrollable, space, span, stack, svg, text, text_editor, tooltip,
     },
 };
 
@@ -94,6 +106,7 @@ type IdentityColor<'a> = dyn Fn(&VisitorId) -> Option<Color> + 'a;
 struct RowPresentation {
     width: f32,
     language: Language,
+    theme: EffectiveTheme,
     palette: Colors,
     author_color: Color,
 }
@@ -208,6 +221,7 @@ impl Chat {
                         RowPresentation {
                             width: gallery_width,
                             language,
+                            theme,
                             palette,
                             author_color:
                                 identity_color(&message.author_id).unwrap_or(palette.body),
@@ -264,6 +278,7 @@ impl Chat {
         let RowPresentation {
             width,
             language,
+            theme,
             palette,
             author_color,
         } = presentation;
@@ -368,13 +383,12 @@ impl Chat {
         let action = if message.deleted {
             container(space().width(12))
         } else {
-            container(label_icon(
-                DOTS,
-                localized(language, "Message actions", "Дії з повідомленням"),
-                Some(Message::Actions(message.id.clone())),
-                palette,
-                false,
-            ))
+            let label = localized(language, "Message actions", "Дії з повідомленням");
+            let action = Message::Actions(message.id.clone());
+            container(match theme {
+                EffectiveTheme::Dark => message_action::<false>(label, action),
+                EffectiveTheme::Light => message_action::<true>(label, action),
+            })
         };
         if own {
             row![action, container(content).align_x(alignment).width(Fill)]
@@ -1316,19 +1330,13 @@ fn label_icon(
     palette: Colors,
     invert: bool,
 ) -> Element<'static, Message> {
-    let graphic = format!(
-        r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none">{path}</svg>"#
-    );
-    let glyph = svg(svg::Handle::from_memory(graphic.into_bytes()))
-        .width(18)
-        .height(18)
-        .style(move |_, _| svg::Style {
-            color: Some(if invert {
-                palette.invert
-            } else {
-                palette.muted
-            }),
-        });
+    let glyph = icon_svg(path).style(move |_, _| svg::Style {
+        color: Some(if invert {
+            palette.invert
+        } else {
+            palette.muted
+        }),
+    });
     tooltip(
         button(glyph)
             .on_press_maybe(message)
@@ -1347,6 +1355,105 @@ fn label_icon(
         tooltip::Position::Top,
     )
     .into()
+}
+
+fn icon_svg(path: &'static str) -> Svg<'static> {
+    let graphic = format!(
+        r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none">{path}</svg>"#
+    );
+    svg(svg::Handle::from_memory(graphic.into_bytes()))
+        .width(18)
+        .height(18)
+}
+
+fn action_palette<const LIGHT: bool>() -> Colors {
+    Colors {
+        wash: Color::TRANSPARENT,
+        ..Colors::new(if LIGHT {
+            EffectiveTheme::Light
+        } else {
+            EffectiveTheme::Dark
+        })
+    }
+}
+
+fn message_action<const LIGHT: bool>(
+    label: &'static str,
+    action: Message,
+) -> Element<'static, Message> {
+    let glyph = icon_svg(DOTS).style(|_, _| svg::Style {
+        color: Some(action_palette::<LIGHT>().muted),
+    });
+    tooltip(
+        button(glyph)
+            .on_press(action)
+            .padding(6)
+            .style(|_, status| button_style(action_palette::<LIGHT>(), status, false)),
+        Element::new(ActionLabel(label)),
+        tooltip::Position::Top,
+    )
+    .into()
+}
+
+struct ActionLabel(&'static str);
+
+type ActionLabelState = text::State<<Renderer as TextRenderer>::Paragraph>;
+
+impl Widget<Message, Theme, Renderer> for ActionLabel {
+    fn tag(&self) -> tree::Tag {
+        tree::Tag::of::<ActionLabelState>()
+    }
+
+    fn state(&self) -> tree::State {
+        tree::State::new(ActionLabelState::default())
+    }
+
+    fn size(&self) -> iced::Size<Length> {
+        iced::Size::new(Length::Shrink, Length::Shrink)
+    }
+
+    fn layout(&mut self, tree: &mut Tree, renderer: &Renderer, limits: &Limits) -> layout::Node {
+        text::layout(
+            tree.state.downcast_mut::<ActionLabelState>(),
+            renderer,
+            limits,
+            self.0,
+            text::Format {
+                size: Some(Pixels(12.0)),
+                ..text::Format::default()
+            },
+        )
+    }
+
+    fn draw(
+        &self,
+        tree: &Tree,
+        renderer: &mut Renderer,
+        _: &Theme,
+        defaults: &renderer::Style,
+        layout: Layout<'_>,
+        _: mouse::Cursor,
+        viewport: &Rectangle,
+    ) {
+        text::draw(
+            renderer,
+            defaults,
+            layout.bounds(),
+            tree.state.downcast_ref::<ActionLabelState>().raw(),
+            text::Style::default(),
+            viewport,
+        );
+    }
+
+    fn operate(
+        &mut self,
+        _: &mut Tree,
+        layout: Layout<'_>,
+        _: &Renderer,
+        operation: &mut dyn Operation,
+    ) {
+        operation.text(None, layout.bounds(), self.0);
+    }
 }
 
 pub fn image_widget_id(id: &AttachmentId) -> Id {
@@ -1449,6 +1556,108 @@ impl Operation<Measured> for Measure {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn message_action_matches_existing_tooltip_and_click() {
+        use iced::advanced::{
+            Shell, clipboard,
+            renderer::{Headless, Renderer as _},
+        };
+        use iced::{Event, Point, Size};
+
+        let mut renderer = Renderer::new(Font::DEFAULT, Pixels(16.0), Some("tiny-skia"))
+            .await
+            .unwrap();
+        let mut snapshots = |mut element: Element<'static, Message>, effective| {
+            let theme = crate::shell::theme(effective);
+            let size = Size::new(180, 130);
+            let logical = Size::new(size.width as f32, size.height as f32);
+            let viewport = Rectangle::with_size(logical);
+            let mut tree = Tree::new(element.as_widget());
+            let node = element
+                .as_widget_mut()
+                .layout(&mut tree, &renderer, &Limits::new(Size::ZERO, logical))
+                .move_to(Point::new(40.0, 65.0));
+            let inside = Point::new(54.0, 79.0);
+            let outside = Point::ORIGIN;
+            let mut messages = Vec::new();
+            let mut pictures = Vec::new();
+            for (point, event) in [
+                (outside, mouse::Event::CursorMoved { position: outside }),
+                (inside, mouse::Event::CursorMoved { position: inside }),
+                (inside, mouse::Event::ButtonPressed(mouse::Button::Left)),
+                (inside, mouse::Event::ButtonReleased(mouse::Button::Left)),
+                (outside, mouse::Event::CursorMoved { position: outside }),
+                (inside, mouse::Event::CursorMoved { position: inside }),
+            ] {
+                let cursor = mouse::Cursor::Available(point);
+                let layout = Layout::new(&node);
+                element.as_widget_mut().update(
+                    &mut tree,
+                    &Event::Mouse(event),
+                    layout,
+                    cursor,
+                    &renderer,
+                    &mut clipboard::Null,
+                    &mut Shell::new(&mut messages),
+                    &viewport,
+                );
+                renderer.reset(viewport);
+                let style = renderer::Style {
+                    text_color: theme.palette().text,
+                };
+                element.as_widget().draw(
+                    &tree,
+                    &mut renderer,
+                    &theme,
+                    &style,
+                    layout,
+                    cursor,
+                    &viewport,
+                );
+                let mut overlay = element.as_widget_mut().overlay(
+                    &mut tree,
+                    layout,
+                    &renderer,
+                    &viewport,
+                    Vector::ZERO,
+                );
+                assert_eq!(overlay.is_some(), point == inside);
+                if let Some(overlay) = &mut overlay {
+                    let overlay_node = overlay.as_overlay_mut().layout(&renderer, logical);
+                    overlay.as_overlay().draw(
+                        &mut renderer,
+                        &theme,
+                        &style,
+                        Layout::new(&overlay_node),
+                        cursor,
+                    );
+                }
+                drop(overlay);
+                pictures.push(renderer.screenshot(size, 1.0, Color::from_rgb8(96, 117, 143)));
+            }
+            assert!(
+                matches!(messages.as_slice(), [Message::Actions(id)] if id.as_str() == "message")
+            );
+            assert_ne!(pictures[0], pictures[1]);
+            assert_eq!(pictures[0], pictures[4]);
+            assert_eq!(pictures[1], pictures[5]);
+            pictures
+        };
+
+        for (theme, label) in [
+            (EffectiveTheme::Dark, "Message actions"),
+            (EffectiveTheme::Light, "Дії з повідомленням"),
+        ] {
+            let action = || Message::Actions("message".into());
+            let reference = label_icon(DOTS, label, Some(action()), Colors::new(theme), false);
+            let compact = match theme {
+                EffectiveTheme::Dark => message_action::<false>(label, action()),
+                EffectiveTheme::Light => message_action::<true>(label, action()),
+            };
+            assert_eq!(snapshots(compact, theme), snapshots(reference, theme));
+        }
+    }
 
     #[tokio::test]
     async fn empty_gallery_preserves_message_column_spacing() {
