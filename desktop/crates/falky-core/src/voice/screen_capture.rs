@@ -52,13 +52,26 @@ impl ShareFrame {
     }
 
     pub(super) fn decoded(frame: BoxVideoFrame) -> Option<Self> {
-        if !valid_size(frame.buffer.width(), frame.buffer.height()) {
+        let width = frame.buffer.width();
+        if !valid_size(width, frame.buffer.height()) {
             return None;
         }
-        let mut buffer = frame.buffer.to_i420();
-        if let Some(rotated) = rotate(&buffer, frame.rotation) {
-            buffer = rotated;
-        }
+        let source = frame.buffer.as_ref();
+        let rotated = match frame.rotation {
+            VideoRotation::VideoRotation0 => None,
+            rotation => {
+                let chroma = width.div_ceil(2);
+                // Wrapped decoder planes can omit padding after their last visible row.
+                source
+                    .as_i420()
+                    .filter(|i420| i420.strides() == (width, chroma, chroma))
+                    .and_then(|i420| rotate(i420, rotation))
+            }
+        };
+        let buffer = rotated.unwrap_or_else(|| {
+            let copy = source.to_i420();
+            rotate(&copy, frame.rotation).unwrap_or(copy)
+        });
         Some(Self::new(buffer, frame.timestamp_us))
     }
 
@@ -384,6 +397,41 @@ impl Drop for ScreenCapture {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn decoded_rotation_matches_the_owned_conversion_for_packed_and_padded_i420() {
+        use VideoRotation::*;
+
+        for (sy, su, sv) in [(5, 3, 3), (11, 7, 9)] {
+            for rotation in [
+                VideoRotation0,
+                VideoRotation90,
+                VideoRotation180,
+                VideoRotation270,
+            ] {
+                let mut input = I420Buffer::with_strides(5, 3, sy, su, sv);
+                let (y, u, v) = input.data_mut();
+                for (plane, step) in [(y, 3), (u, 7), (v, 13)] {
+                    for (index, sample) in plane.iter_mut().enumerate() {
+                        *sample = (index * step) as u8;
+                    }
+                }
+                let mut frame = BoxVideoFrame::new(rotation, Box::new(input));
+                frame.timestamp_us = 123_456;
+                let copy = frame.buffer.to_i420();
+                let expected = rotate(&copy, rotation).unwrap_or(copy);
+
+                let decoded = ShareFrame::decoded(frame).expect("valid frame");
+                assert_eq!(
+                    (decoded.width, decoded.height),
+                    (expected.width(), expected.height())
+                );
+                assert_eq!(decoded.buffer.strides(), expected.strides());
+                assert_eq!(decoded.planes(), expected.data());
+                assert_eq!(decoded.timestamp_us, 123_456);
+            }
+        }
+    }
 
     #[test]
     fn rotated_i420_preserves_visible_samples_with_odd_dimensions_and_distinct_strides() {
