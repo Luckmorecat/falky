@@ -213,8 +213,9 @@ let unavailable = false;
 let lost = false;
 let look: OrbLook = 'flat';
 
-function compile(gl: WebGLRenderingContext, type: number, source: string): WebGLShader {
-  const shader = gl.createShader(type)!;
+function compile(gl: WebGLRenderingContext, type: number, source: string): WebGLShader | null {
+  const shader = gl.createShader(type);
+  if (!shader) return null;
   gl.shaderSource(shader, source);
   gl.compileShader(shader);
   return shader;
@@ -224,9 +225,13 @@ function programFor(p: Painter, wanted: OrbLook): Program | null {
   const known = p.programs[wanted];
   if (known !== undefined) return known;
   const { gl } = p;
-  const program = gl.createProgram()!;
-  gl.attachShader(program, compile(gl, gl.VERTEX_SHADER, VERTEX));
-  gl.attachShader(program, compile(gl, gl.FRAGMENT_SHADER, SOURCES[wanted]));
+  const program = gl.createProgram();
+  if (!program) return null;
+  const vertex = compile(gl, gl.VERTEX_SHADER, VERTEX);
+  const fragment = compile(gl, gl.FRAGMENT_SHADER, SOURCES[wanted]);
+  if (!vertex || !fragment) return null;
+  gl.attachShader(program, vertex);
+  gl.attachShader(program, fragment);
   gl.bindAttribLocation(program, 0, 'aPos');
   gl.linkProgram(program);
   const built = gl.getProgramParameter(program, gl.LINK_STATUS)
@@ -240,7 +245,9 @@ function programFor(p: Painter, wanted: OrbLook): Program | null {
 function setUp(canvas: HTMLCanvasElement, gl: WebGLRenderingContext): Painter | null {
   const p: Painter = { gl, canvas, programs: {} };
   if (!programFor(p, 'flat')) return null;
-  gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
+  const vertices = gl.createBuffer();
+  if (!vertices) return null;
+  gl.bindBuffer(gl.ARRAY_BUFFER, vertices);
   gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
   gl.enableVertexAttribArray(0);
   gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
@@ -255,36 +262,40 @@ function getPainter(): Painter | null {
   painter = gl && setUp(canvas, gl);
   unavailable = !painter;
   if (gl) {
-    // A lost context keeps the last pictures on screen until it comes back.
     canvas.addEventListener('webglcontextlost', (e) => {
       e.preventDefault();
       lost = true;
       painter = null;
+      for (const orb of orbs) orb.root.classList.add('flat');
     });
     canvas.addEventListener('webglcontextrestored', () => {
       lost = false;
       painter = setUp(canvas, gl);
-      for (const orb of orbs) orb.stale = true;
+      unavailable = !painter;
+      if (painter) refreshOrbLook(painter);
     });
   }
   return painter;
 }
 
 /** The look this machine can show: the wanted one, unless its shader did not build here. */
-function shownLook(): OrbLook {
-  const p = getPainter();
-  return look === 'volume' && p && !programFor(p, 'volume') ? 'flat' : look;
+function shownLook(p: Painter | null): OrbLook {
+  return look === 'volume' && p && programFor(p, 'volume') ? 'volume' : 'flat';
+}
+
+function refreshOrbLook(p: Painter | null): void {
+  const shown = shownLook(p);
+  for (const orb of orbs) {
+    orb.root.classList.toggle('volume', shown === 'volume');
+    orb.stale = true;
+  }
 }
 
 /** Changes how every orb is lit, at once; the new canvas size follows by itself. */
 export function setOrbLook(next: OrbLook): void {
   if (next === look) return;
   look = next;
-  const shown = shownLook();
-  for (const orb of orbs) {
-    orb.root.classList.toggle('volume', shown === 'volume');
-    orb.stale = true;
-  }
+  refreshOrbLook(getPainter());
 }
 
 export interface OrbOptions {
@@ -332,10 +343,13 @@ function draw(orb: LiveOrb, p: Painter, { uniforms: u }: Program, pad: number, t
   gl.uniform1f(u.uLevel!, orb.lvl);
   gl.uniform1f(u.uPixel!, (2 * pad) / orb.size);
   gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+  // The context can be lost before the browser dispatches its loss event.
+  if (gl.isContextLost()) return;
   orb.ctx.clearRect(0, 0, orb.size, orb.size);
   orb.ctx.drawImage(p.canvas, 0, CANVAS_SIZE - orb.size, orb.size, orb.size, 0, 0, orb.size, orb.size);
   orb.lastDraw = time;
   orb.drawnLvl = orb.lvl;
+  if (orb.stale) orb.root.classList.remove('flat');
   orb.stale = false;
 }
 
@@ -348,9 +362,9 @@ function tick(time: number, dt: number): void {
     pageLight = light;
     for (const orb of orbs) orb.stale = true;
   }
-  const p = painter ?? getPainter();
+  const p = getPainter();
   const reduced = effectsReduced();
-  const shown = shownLook();
+  const shown = shownLook(p);
   const program = p && programFor(p, shown);
   const pad = shown === 'volume' ? VOLUME_PAD : 1;
   if (p && program) p.gl.useProgram(program.program);
@@ -398,16 +412,18 @@ export function addOrb(options: OrbOptions): () => void {
     stale: true,
     speaking: false,
   };
-  options.root.classList.toggle('flat', !getPainter());
-  options.root.classList.toggle('volume', !!getPainter() && shownLook() === 'volume');
+  const p = getPainter();
+  options.root.classList.toggle('flat', !p || !orb.ctx);
+  options.root.classList.toggle('volume', shownLook(p) === 'volume');
   const resized = new ResizeObserver(([entry]) => {
-    const size = Math.min(MAX_SIZE[shownLook()], Math.round((entry?.contentRect.width ?? 0) * devicePixelRatio));
+    const limit = MAX_SIZE[options.root.classList.contains('volume') ? 'volume' : 'flat'];
+    const size = Math.min(limit, Math.round((entry?.contentRect.width ?? 0) * devicePixelRatio));
     if (size === orb.size) return;
     orb.size = options.canvas.width = options.canvas.height = size;
     orb.stale = true;
     // Resizing clears the canvas after this frame was drawn; paint it again now, or it shows empty for a frame.
-    const p = painter ?? getPainter();
-    const shown = shownLook();
+    const p = getPainter();
+    const shown = shownLook(p);
     const program = p && programFor(p, shown);
     if (p && program) {
       p.gl.useProgram(program.program);

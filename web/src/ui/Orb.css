@@ -5,3 +5,4 @@
 /* Room for the glow it draws around itself; VOLUME_PAD in orbRenderer.ts. */
 .orb.volume canvas { inset: -18%; width: 136%; height: 136%; }
 .orb.flat { -webkit-mask: var(--squircle) center / 100% 100% no-repeat; mask: var(--squircle) center / 100% 100% no-repeat; background: radial-gradient(70% 70% at 36% 30%, var(--pal-core), transparent), radial-gradient(80% 80% at 66% 70%, var(--pal-deep), transparent), linear-gradient(160deg, var(--pal-bright), var(--pal-base)); }
+.orb.flat canvas { visibility: hidden; }
