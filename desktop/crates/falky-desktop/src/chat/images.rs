@@ -277,7 +277,25 @@ fn resize(image: DynamicImage, edge: u32) -> Decoded {
     };
     let width = small.width();
     let height = small.height();
-    let rgba = small.into_rgba8().into_raw();
+    let pixel_count = width as usize * height as usize;
+    let rgba_len = pixel_count * 4;
+    let rgba = match small {
+        DynamicImage::ImageRgb8(rgb) if rgb.as_raw().capacity() <= rgba_len => {
+            let mut pixels = rgb.into_raw();
+            pixels.truncate(pixel_count * 3);
+            pixels.reserve_exact(pixel_count);
+            pixels.resize(rgba_len, 255);
+            // Expand backwards so the output does not overwrite unread input.
+            for index in (0..pixel_count).rev() {
+                let source = index * 3;
+                let target = index * 4;
+                let rgba = [pixels[source], pixels[source + 1], pixels[source + 2], 255];
+                pixels[target..target + 4].copy_from_slice(&rgba);
+            }
+            pixels
+        }
+        other => other.into_rgba8().into_raw(),
+    };
     Decoded {
         bytes: rgba.len(),
         handle: Handle::from_rgba(width, height, rgba),
@@ -495,6 +513,22 @@ mod tests {
             assert_eq!(pasted.name, decoded.name);
             assert_eq!(pasted.bytes, decoded.bytes);
             assert_eq!(rgba_pixels(pasted.preview), rgba_pixels(decoded.preview));
+        }
+    }
+
+    #[test]
+    fn rgb_expansion_matches_rgba_conversion_with_trailing_bytes() {
+        for capacity in [20, 64] {
+            let mut bytes = Vec::with_capacity(capacity);
+            bytes.extend((0..20).map(|sample| sample * 7));
+            let image = DynamicImage::ImageRgb8(image::RgbImage::from_raw(3, 2, bytes).unwrap());
+            let expected = image.to_rgba8().into_raw();
+
+            let decoded = resize(image, 3);
+            let (width, height, pixels) = rgba_pixels(decoded.handle);
+            assert_eq!((width, height), (3, 2));
+            assert_eq!(decoded.bytes, expected.len());
+            assert_eq!(pixels.as_ref(), expected);
         }
     }
 
