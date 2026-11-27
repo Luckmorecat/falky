@@ -480,6 +480,63 @@ async fn exact_post_payload_replays_and_authenticated_content_revalidates() {
     fixture.await.unwrap();
 }
 
+#[test]
+#[ignore = "release scoreboard"]
+fn scoreboard_chat_page_transport() {
+    use crate::perf;
+
+    const SAMPLES: usize = 15;
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let (server, client) = runtime.block_on(connect_fixture());
+    let page = (1..=super::api::PAGE_SIZE)
+        .rev()
+        .map(|number| Message {
+            body: "A message with Ukrainian текст, emoji 🐦, and \"quotes\".\n"
+                .chars()
+                .cycle()
+                .take(MESSAGE_MAX)
+                .collect(),
+            ..message(&id(number))
+        })
+        .collect::<Vec<_>>();
+    let encoded = serde_json::json!({ "messages": &page }).to_string();
+    let response = format!(
+        "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: {}\r\nContent-Type: application/json\r\n\r\n{encoded}",
+        encoded.len(),
+    );
+    let before = id(super::api::PAGE_SIZE + 1);
+    let boundary = before.clone();
+    let fixture = runtime.spawn(async move {
+        for _ in 0..SAMPLES + 2 {
+            let mut stream = server.accept().await.unwrap().0;
+            let headers = request(&mut stream).await;
+            assert!(headers.starts_with(&format!(
+                "GET /api/rooms/room/messages?limit=100&before={boundary} "
+            )));
+            assert!(headers.contains("accept: application/json\r\n"));
+            stream.write_all(response.as_bytes()).await.unwrap();
+            stream.shutdown().await.unwrap();
+        }
+    });
+
+    let api = ChatApi(client);
+    let room = "room".into();
+    let before = before.into();
+    let result = perf::repeat("chat.transport.page", SAMPLES, || {
+        runtime.block_on(api.older(&room, &before)).unwrap()
+    });
+    runtime.block_on(fixture).unwrap();
+    assert!(result.full);
+    assert_eq!(result.messages, page);
+    perf::golden(
+        "chat.transport.page",
+        &[&serde_json::to_vec(&result.messages).unwrap()],
+    );
+}
+
 async fn connect_fixture() -> (TcpListener, ApiClient) {
     let server = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let origin = Origin::parse(&format!("http://{}", server.local_addr().unwrap())).unwrap();
