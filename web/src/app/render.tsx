@@ -16,6 +16,7 @@ function Screen() {
   const ownerRevision = useApp(s => s.ownerRevision);
   const paused = useApp(s => s.sessionPaused);
   const accountUI = useAccountUI();
+  const voiceWarmupPhase = phase === 'entry' && !accountUI.locked ? null : phase;
   // Words are read when rendering, so a new language needs only this render.
   useApp((s) => s.settings.language);
   const unread = useApp((s) => Object.values(s.chats).reduce((sum, c) => sum + c.unread, 0));
@@ -25,7 +26,7 @@ function Screen() {
   }, [unread]);
 
   useEffect(() => {
-    if (phase !== 'entry' && phase !== 'ready') return;
+    if (voiceWarmupPhase !== 'entry' && voiceWarmupPhase !== 'ready') return;
     let frame = 0;
     let observer: PerformanceObserver | undefined;
     function afterPaint() {
@@ -53,7 +54,7 @@ function Screen() {
       observer?.disconnect();
       cancelAnimationFrame(frame);
     };
-  }, [phase]);
+  }, [voiceWarmupPhase]);
 
   return (
     <ToastHost inert={phase === 'ready' && (paused || accountUI.locked)}>

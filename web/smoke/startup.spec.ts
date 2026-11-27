@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import type { MockState } from '../mock/protocol';
+import { authPreferences } from './account-browser';
 import { chromiumOptions } from './browser';
 import { launchMock } from './launcher';
 
@@ -7,6 +8,34 @@ test.use({ launchOptions: { ...chromiumOptions(), args: ['--use-angle=swiftshade
 let app: Awaited<ReturnType<typeof launchMock>>;
 test.beforeAll(async () => { app = await launchMock(0, { stats: false }); });
 test.afterAll(async () => { await app?.close(); });
+
+test('warms voice when a signed-out account flow starts', async ({ page, context }) => {
+  await authPreferences(page, app.url);
+  const cdp = await context.newCDPSession(page);
+  await cdp.send('Profiler.enable');
+  await cdp.send('Profiler.startPreciseCoverage', { callCount: true });
+  const warmupCalls = async () => {
+    const { result } = await cdp.send('Profiler.takePreciseCoverage');
+    const voice = result.find((script) => script.url.startsWith(`${app.url}/`) && new URL(script.url).pathname === '/src/mock/voice.ts');
+    return voice?.functions.find((fn) => fn.functionName === 'preloadVoice')?.ranges[0]?.count ?? 0;
+  };
+
+  try {
+    await page.goto(app.url);
+    await expect(page.getByRole('button', { name: 'Sign in with a passkey', exact: true })).toBeVisible();
+    await page.waitForFunction(() => performance.getEntriesByName('first-contentful-paint').length > 0);
+    await page.evaluate(async () => {
+      for (let frame = 0; frame < 3; frame++) await new Promise<number>(requestAnimationFrame);
+    });
+    expect(await warmupCalls()).toBe(0);
+
+    await page.getByRole('button', { name: /^Use another device/ }).click();
+    await expect(page.getByRole('dialog', { name: 'Use another device', exact: true })).toBeVisible();
+    await expect.poll(warmupCalls).toBeGreaterThan(0);
+  } finally {
+    await cdp.detach();
+  }
+});
 
 test('keeps background programs through empty and same-size source updates', async ({ page }) => {
   const state: MockState = await (await page.request.post(`${app.url}/__mock/bootstrap`, { data: { scenario: 'quiet' } })).json();
