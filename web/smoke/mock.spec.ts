@@ -838,6 +838,8 @@ test('two instances in one browser context isolate visitors and survive a fresh 
   let second = await launchMock();
   const other = await context.newPage();
   try {
+    // Vite's restart reload can reapply the old query before the mock poll sees the new instance.
+    await other.routeWebSocket((url) => url.pathname === '/' && url.searchParams.has('token'), () => {});
     await page.goto(app.url);
     await english(page);
     await send(page, 'Only the first instance');
